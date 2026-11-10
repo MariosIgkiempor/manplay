@@ -1,26 +1,28 @@
 import { Pause, Play } from "lucide-react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
+import { useDetailNav } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
-import { syncState } from "#/lib/albums.ts";
+import { albumKey, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
+import type { TrackSelection } from "#/lib/use-track-selection.ts";
 import { cn } from "#/lib/utils.ts";
 
 interface Props {
 	tracks: readonly Track[];
 	targetCount: number;
-	selected?: ReadonlySet<number>;
-	onToggle?: (id: number) => void;
+	selection?: TrackSelection;
 	onRemoveTag?: (track: Track, tag: string) => void;
 	renderAction?: (track: Track) => ReactNode;
 	/** Hide the artwork column (e.g. inside an album view). */
 	hideArt?: boolean;
 }
 
-function columns(selectable: boolean, hasAction: boolean): string {
+const stop = (e: MouseEvent) => e.stopPropagation();
+
+function columns(hasAction: boolean): string {
 	return [
-		selectable && "1.75rem",
 		"2rem",
 		"minmax(0,2.4fr)",
 		"minmax(0,1.5fr)",
@@ -32,6 +34,32 @@ function columns(selectable: boolean, hasAction: boolean): string {
 		.join(" ");
 }
 
+/** Inline link that opens a detail panel without touching row selection. */
+function LinkButton({
+	onClick,
+	children,
+	title,
+}: {
+	onClick: () => void;
+	children: ReactNode;
+	title: string;
+}) {
+	return (
+		<button
+			type="button"
+			title={title}
+			className="max-w-full truncate text-left hover:text-foreground hover:underline"
+			onClick={(e) => {
+				e.stopPropagation();
+				onClick();
+			}}
+			onDoubleClick={stop}
+		>
+			{children}
+		</button>
+	);
+}
+
 function TagChips({
 	track,
 	onRemoveTag,
@@ -39,6 +67,7 @@ function TagChips({
 	track: Track;
 	onRemoveTag: ((track: Track, tag: string) => void) | undefined;
 }) {
+	const go = useDetailNav();
 	return (
 		<div className="flex flex-wrap gap-1">
 			{track.tags.map((tag) => (
@@ -46,13 +75,27 @@ function TagChips({
 					key={tag}
 					className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs"
 				>
-					{tag}
+					<button
+						type="button"
+						className="hover:underline"
+						onClick={(e) => {
+							e.stopPropagation();
+							go({ kind: "tag", name: tag });
+						}}
+						onDoubleClick={stop}
+					>
+						{tag}
+					</button>
 					{onRemoveTag && (
 						<button
 							type="button"
 							aria-label={`Remove tag ${tag}`}
 							className="text-muted-foreground hover:text-foreground"
-							onClick={() => onRemoveTag(track, tag)}
+							onClick={(e) => {
+								e.stopPropagation();
+								onRemoveTag(track, tag);
+							}}
+							onDoubleClick={stop}
 						>
 							×
 						</button>
@@ -63,7 +106,8 @@ function TagChips({
 	);
 }
 
-interface RowProps extends Omit<Props, "tracks"> {
+interface RowProps extends Omit<Props, "tracks" | "selection"> {
+	selection: TrackSelection | undefined;
 	track: Track;
 	onPlay: () => void;
 }
@@ -71,34 +115,42 @@ interface RowProps extends Omit<Props, "tracks"> {
 function TrackRow({
 	track,
 	targetCount,
-	selected,
-	onToggle,
+	selection,
 	onRemoveTag,
 	renderAction,
 	hideArt,
 	onPlay,
 }: RowProps) {
 	const player = usePlayer();
+	const go = useDetailNav();
 	const isCurrent = player.current?.id === track.id;
-	const selectable = selected !== undefined && onToggle !== undefined;
+	const isSelected = selection?.selected.has(track.id) ?? false;
 	const PlayIcon = isCurrent && player.playing ? Pause : Play;
+
+	const onKeyDown = (e: KeyboardEvent) => {
+		if (e.key === "Enter") {
+			onPlay();
+		} else if (e.key === " ") {
+			e.preventDefault();
+			selection?.toggle(track.id);
+		}
+	};
 
 	return (
 		<div
+			role="option"
+			aria-selected={isSelected}
+			tabIndex={0}
 			className={cn(
-				"group grid items-center gap-3 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60",
-				isCurrent && "bg-muted",
+				"group grid cursor-default items-center gap-3 rounded-md px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+				isSelected ? "bg-primary/20" : "hover:bg-muted/60",
+				isCurrent && !isSelected && "bg-muted",
 			)}
-			style={{ gridTemplateColumns: columns(selectable, renderAction !== undefined) }}
+			style={{ gridTemplateColumns: columns(renderAction !== undefined) }}
+			onClick={(e) => selection?.click(track.id, e)}
+			onDoubleClick={onPlay}
+			onKeyDown={onKeyDown}
 		>
-			{selectable && (
-				<input
-					type="checkbox"
-					aria-label={`Select ${track.title}`}
-					checked={selected.has(track.id)}
-					onChange={() => onToggle(track.id)}
-				/>
-			)}
 			<button
 				type="button"
 				aria-label={isCurrent && player.playing ? `Pause ${track.title}` : `Play ${track.title}`}
@@ -108,7 +160,15 @@ function TrackRow({
 						? "text-primary"
 						: "opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
 				)}
-				onClick={isCurrent ? player.toggle : onPlay}
+				onClick={(e) => {
+					e.stopPropagation();
+					if (isCurrent) {
+						player.toggle();
+					} else {
+						onPlay();
+					}
+				}}
+				onDoubleClick={stop}
 			>
 				<PlayIcon className="size-4" />
 			</button>
@@ -121,13 +181,23 @@ function TrackRow({
 					>
 						{track.title}
 					</div>
-					<div className="truncate text-muted-foreground text-xs" title={track.artist}>
-						{track.artist}
+					<div className="truncate text-muted-foreground text-xs">
+						<LinkButton
+							title={track.artist}
+							onClick={() => go({ kind: "artist", name: track.artist })}
+						>
+							{track.artist}
+						</LinkButton>
 					</div>
 				</div>
 			</div>
-			<div className="truncate text-muted-foreground" title={track.album}>
-				{track.album}
+			<div className="truncate text-muted-foreground">
+				<LinkButton
+					title={track.album}
+					onClick={() => go({ kind: "album", key: albumKey(track.artist, track.album) })}
+				>
+					{track.album}
+				</LinkButton>
 			</div>
 			<TagChips track={track} onRemoveTag={onRemoveTag} />
 			<SyncBadge state={syncState([track], targetCount)} />
@@ -136,15 +206,34 @@ function TrackRow({
 	);
 }
 
-export function TrackList({ tracks, ...rest }: Props) {
+export function TrackList({ tracks, selection, ...rest }: Props) {
 	const player = usePlayer();
 	if (tracks.length === 0) {
 		return <p className="px-2 py-8 text-center text-muted-foreground text-sm">No tracks.</p>;
 	}
+	const onKeyDown = (e: KeyboardEvent) => {
+		if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a" && selection) {
+			e.preventDefault();
+			selection.selectAll();
+		}
+	};
 	return (
-		<div className="space-y-0.5">
+		<div
+			role="listbox"
+			aria-multiselectable
+			aria-label="Tracks"
+			tabIndex={-1}
+			className="select-none space-y-0.5 outline-none"
+			onKeyDown={onKeyDown}
+		>
 			{tracks.map((track, i) => (
-				<TrackRow key={track.id} track={track} {...rest} onPlay={() => player.play(tracks, i)} />
+				<TrackRow
+					key={track.id}
+					track={track}
+					selection={selection}
+					{...rest}
+					onPlay={() => player.play(tracks, i)}
+				/>
 			))}
 		</div>
 	);

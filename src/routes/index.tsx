@@ -2,16 +2,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { FolderSearch, Search } from "lucide-react";
 import { useMemo, useState } from "react";
-import { AlbumDetail } from "#/components/album-detail.tsx";
 import { AlbumGrid } from "#/components/album-grid.tsx";
-import { SelectionBar } from "#/components/selection-bar.tsx";
+import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { SyncStatusPill } from "#/components/sync-status-pill.tsx";
-import { TrackList } from "#/components/track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { type View, ViewToggle } from "#/components/view-toggle.tsx";
-import { type Album, groupAlbums } from "#/lib/albums.ts";
-import { listTags, pickAndScan, type Track, untagTrack } from "#/lib/api.ts";
+import { useDetail } from "#/context/detail-context.ts";
+import { groupAlbums } from "#/lib/albums.ts";
+import { listTags, pickAndScan, type Track } from "#/lib/api.ts";
 import { useSyncRun, useSyncTargets, useTracks } from "#/lib/queries.ts";
 
 export const Route = createFileRoute("/")({ component: Library });
@@ -24,11 +23,10 @@ function matches(t: Track, q: string, tag: string): boolean {
 
 function Library() {
 	const queryClient = useQueryClient();
+	const detail = useDetail();
 	const [view, setView] = useState<View>("albums");
 	const [search, setSearch] = useState("");
 	const [tagFilter, setTagFilter] = useState("");
-	const [openKey, setOpenKey] = useState<string | null>(null);
-	const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
 
 	const tracks = useTracks();
 	const tags = useQuery({ queryKey: ["tags"], queryFn: listTags });
@@ -46,29 +44,12 @@ function Library() {
 			}
 		},
 	});
-	const untag = useMutation({
-		mutationFn: ({ name, trackId }: { name: string; trackId: number }) => untagTrack(name, trackId),
-		onSuccess: async () => {
-			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
-			await queryClient.invalidateQueries({ queryKey: ["tags"] });
-		},
-	});
 
 	const visible = useMemo(() => {
 		const q = search.trim().toLowerCase();
 		return (tracks.data ?? []).filter((t) => matches(t, q, tagFilter));
 	}, [tracks.data, search, tagFilter]);
 	const albums = useMemo(() => groupAlbums(visible), [visible]);
-	const openAlbum: Album | undefined = albums.find((a) => a.key === openKey);
-
-	const toggle = (id: number) => {
-		const next = new Set(selected);
-		if (!next.delete(id)) {
-			next.add(id);
-		}
-		setSelected(next);
-	};
-	const onRemoveTag = (t: Track, name: string) => untag.mutate({ name, trackId: t.id });
 
 	return (
 		<main className="space-y-5 p-6">
@@ -106,7 +87,7 @@ function Library() {
 				</div>
 			</header>
 
-			{[scan, syncRun, untag].map(
+			{[scan, syncRun].map(
 				(m) =>
 					m.isError && (
 						<p key={m.submittedAt} className="text-destructive text-sm">
@@ -114,27 +95,15 @@ function Library() {
 						</p>
 					),
 			)}
-			{selected.size > 0 && (
-				<SelectionBar selected={selected} onClear={() => setSelected(new Set())} />
-			)}
 
-			{view === "albums" && openAlbum ? (
-				<AlbumDetail
-					album={openAlbum}
+			{view === "albums" ? (
+				<AlbumGrid
+					albums={albums}
 					targetCount={targetCount}
-					onBack={() => setOpenKey(null)}
-					onRemoveTag={onRemoveTag}
+					onOpen={(a) => detail.open({ kind: "album", key: a.key })}
 				/>
-			) : view === "albums" ? (
-				<AlbumGrid albums={albums} targetCount={targetCount} onOpen={(a) => setOpenKey(a.key)} />
 			) : (
-				<TrackList
-					tracks={visible}
-					targetCount={targetCount}
-					selected={selected}
-					onToggle={toggle}
-					onRemoveTag={onRemoveTag}
-				/>
+				<SelectableTrackList tracks={visible} />
 			)}
 		</main>
 	);

@@ -15,9 +15,20 @@ const FOLDER_NAMES: &[&str] = &["cover", "folder", "front", "album", "artwork"];
 const FOLDER_EXTS: &[&str] = &["jpg", "jpeg", "png"];
 const THUMB_SIZE: u32 = 400;
 
-fn folder_image(dir: &Path) -> Option<Vec<u8>> {
-    let mut candidates: Vec<_> = fs::read_dir(dir)
-        .ok()?
+/// Result of looking for raw artwork bytes.
+enum Lookup {
+    Found(Vec<u8>),
+    /// Looked everywhere readable and there is definitely none.
+    Absent,
+    /// Could not read something (permissions, unmounted volume, ...). Never cache this.
+    Unreadable,
+}
+
+fn folder_image(dir: &Path) -> Lookup {
+    let Ok(read) = fs::read_dir(dir) else {
+        return Lookup::Unreadable;
+    };
+    let mut candidates: Vec<_> = read
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| {
@@ -34,13 +45,21 @@ fn folder_image(dir: &Path) -> Option<Vec<u8>> {
         })
         .collect();
     candidates.sort();
-    candidates.first().and_then(|p| fs::read(p).ok())
+    match candidates.first() {
+        None => Lookup::Absent,
+        Some(p) => fs::read(p).map_or(Lookup::Unreadable, Lookup::Found),
+    }
 }
 
-fn embedded_image(track: &Path) -> Option<Vec<u8>> {
-    let tagged = read_from_path(track).ok()?;
-    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
-    tag.pictures().first().map(|p| p.data().to_vec())
+fn embedded_image(track: &Path) -> Lookup {
+    let Ok(tagged) = read_from_path(track) else {
+        return Lookup::Unreadable;
+    };
+    tagged
+        .tags()
+        .iter()
+        .find_map(|t| t.pictures().first())
+        .map_or(Lookup::Absent, |p| Lookup::Found(p.data().to_vec()))
 }
 
 fn cache_key(dir: &Path) -> String {
@@ -60,6 +79,9 @@ fn encode_thumbnail(raw: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// JPEG thumbnail for the album containing `track`, or `None` if it has no art.
+///
+/// "No art" is remembered on disk only when every lookup succeeded; read failures
+/// are retried next time so a permissions hiccup cannot hide artwork forever.
 pub fn thumbnail(track: &Path, cache_dir: &Path) -> Option<Vec<u8>> {
     let dir = track.parent()?;
     let key = cache_key(dir);
@@ -71,20 +93,34 @@ pub fn thumbnail(track: &Path, cache_dir: &Path) -> Option<Vec<u8>> {
     if miss.exists() {
         return None;
     }
+
+    let folder = folder_image(dir);
+    let raw = match folder {
+        Lookup::Found(bytes) => Lookup::Found(bytes),
+        other => match embedded_image(track) {
+            Lookup::Found(bytes) => Lookup::Found(bytes),
+            Lookup::Unreadable => Lookup::Unreadable,
+            Lookup::Absent => other,
+        },
+    };
+
     // Cache writes are best-effort; failing to cache must not hide the art.
     let _ = fs::create_dir_all(cache_dir);
-    let thumb = folder_image(dir)
-        .or_else(|| embedded_image(track))
-        .and_then(|raw| encode_thumbnail(&raw));
-    match &thumb {
-        Some(bytes) => {
-            let _ = fs::write(&hit, bytes);
+    match raw {
+        Lookup::Found(bytes) => {
+            let thumb = encode_thumbnail(&bytes);
+            let _ = match &thumb {
+                Some(t) => fs::write(&hit, t),
+                None => fs::write(&miss, b""), // undecodable format: permanent
+            };
+            thumb
         }
-        None => {
+        Lookup::Absent => {
             let _ = fs::write(&miss, b"");
+            None
         }
+        Lookup::Unreadable => None,
     }
-    thumb
 }
 
 #[cfg(test)]
@@ -94,7 +130,9 @@ mod tests {
     /// Runs only when `MANPLAY_ART_TRACK` points at an audio file.
     #[test]
     fn thumbnail_for_real_track() {
-        let Ok(track) = std::env::var("MANPLAY_ART_TRACK") else { return };
+        let Ok(track) = std::env::var("MANPLAY_ART_TRACK") else {
+            return;
+        };
         let cache = std::env::temp_dir().join("manplay-art-test");
         let bytes = thumbnail(Path::new(&track), &cache);
         eprintln!("art bytes: {:?}", bytes.as_ref().map(Vec::len));

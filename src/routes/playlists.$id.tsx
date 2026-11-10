@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { TrackList } from "#/components/track-list.tsx";
+import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	deletePlaylist,
@@ -8,9 +8,7 @@ import {
 	playlistTracks,
 	removeFromPlaylist,
 	renamePlaylist,
-	untagTrack,
 } from "#/lib/api.ts";
-import { useSyncTargets } from "#/lib/queries.ts";
 
 export const Route = createFileRoute("/playlists/$id")({ component: PlaylistPage });
 
@@ -25,7 +23,6 @@ function PlaylistPage() {
 		queryKey: ["playlist-tracks", playlistId],
 		queryFn: () => playlistTracks(playlistId),
 	});
-	const targets = useSyncTargets();
 	const playlist = playlists.data?.find((p) => p.id === playlistId);
 
 	const refresh = async () => {
@@ -39,14 +36,6 @@ function PlaylistPage() {
 	const rename = useMutation({
 		mutationFn: (name: string) => renamePlaylist(playlistId, name),
 		onSuccess: refresh,
-	});
-	const untag = useMutation({
-		mutationFn: ({ name, trackId }: { name: string; trackId: number }) => untagTrack(name, trackId),
-		onSuccess: async () => {
-			await refresh();
-			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
-			await queryClient.invalidateQueries({ queryKey: ["tags"] });
-		},
 	});
 	const destroy = useMutation({
 		mutationFn: () => deletePlaylist(playlistId),
@@ -85,7 +74,7 @@ function PlaylistPage() {
 					</Button>
 				</div>
 			</header>
-			{[remove, rename, destroy, untag].map(
+			{[remove, rename, destroy].map(
 				(m) =>
 					m.isError && (
 						<p key={m.submittedAt} className="text-destructive text-sm">
@@ -93,12 +82,17 @@ function PlaylistPage() {
 						</p>
 					),
 			)}
-			<TrackList
+			<SelectableTrackList
 				tracks={tracks.data ?? []}
-				targetCount={targets.data?.length ?? 0}
-				onRemoveTag={(t, name) => untag.mutate({ name, trackId: t.id })}
 				renderAction={(t) => (
-					<Button variant="ghost" size="sm" onClick={() => remove.mutate(t.id)}>
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={(e) => {
+							e.stopPropagation();
+							remove.mutate(t.id);
+						}}
+					>
 						Remove
 					</Button>
 				)}

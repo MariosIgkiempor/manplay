@@ -12,7 +12,7 @@ export interface Album {
 export function groupAlbums(tracks: readonly Track[]): Album[] {
 	const map = new Map<string, Album>();
 	for (const t of tracks) {
-		const key = `${t.artist}\u0000${t.album}`;
+		const key = albumKey(t.artist, t.album);
 		const existing = map.get(key);
 		if (existing) {
 			existing.tracks.push(t);
@@ -38,4 +38,8 @@ export function syncState(tracks: readonly Track[], targetCount: number): SyncSt
 	}
 	const any = tracks.some((t) => t.syncedCount > 0);
 	return any ? "partial" : "pending";
+}
+
+export function albumKey(artist: string, album: string): string {
+	return `${artist}\u0000${album}`;
 }
