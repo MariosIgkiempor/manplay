@@ -32,7 +32,22 @@ pub struct Item {
     pub rel: Vec<String>,
 }
 
+/// A synced file whose track has been missing past the grace period.
+pub struct Victim {
+    pub track_id: i64,
+    pub rel: Vec<String>,
+}
+
+#[derive(Default)]
+pub struct Cleanup {
+    /// Tracks whose remote copy is now gone.
+    pub deleted: Vec<i64>,
+    pub errors: Vec<String>,
+}
+
 pub struct Outcome {
+    /// False when the destination could not be reached at all.
+    pub reachable: bool,
     pub summary: Summary,
     /// `(track_id, size)` for every file confirmed present on the target.
     pub present: Vec<(i64, i64)>,
@@ -58,6 +73,7 @@ pub async fn run(app: &AppHandle, client: &Client, target: &SyncTarget, items: &
     }
     let mut made: HashSet<Vec<String>> = HashSet::new();
     let mut out = Outcome {
+        reachable: true,
         summary: Summary::default(),
         present: Vec::new(),
     };
@@ -102,8 +118,27 @@ pub async fn run(app: &AppHandle, client: &Client, target: &SyncTarget, items: &
     out
 }
 
+/// Removes remote copies that this app previously synced for tracks that are long gone locally.
+/// Only exact mapped file paths are deleted; folders and unknown files are never touched.
+pub async fn cleanup(client: &Client, target: &SyncTarget, victims: &[Victim]) -> Cleanup {
+    let base: Vec<String> = [target.tailnet.clone(), target.machine.clone()]
+        .into_iter()
+        .chain(target.path.iter().cloned())
+        .collect();
+    let mut out = Cleanup::default();
+    for v in victims {
+        let dest: Vec<String> = base.iter().chain(v.rel.iter()).cloned().collect();
+        match webdav::delete(client, &dest).await {
+            Ok(()) => out.deleted.push(v.track_id),
+            Err(e) => out.errors.push(format!("remove {}: {e}", v.rel.join("/"))),
+        }
+    }
+    out
+}
+
 fn unreachable_outcome(reason: &str) -> Outcome {
     Outcome {
+        reachable: false,
         summary: Summary {
             failed: vec![format!("destination unreachable: {reason}")],
             ..Summary::default()

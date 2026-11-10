@@ -45,6 +45,19 @@ export async function getLibraryRoot(): Promise<string | null> {
 		.parse(await invoke("get_library_root"));
 }
 
+const libraryStatusSchema = z.object({ missing: int, graceDays: int });
+
+export type LibraryStatus = z.infer<typeof libraryStatusSchema>;
+
+export async function libraryStatus(): Promise<LibraryStatus> {
+	return libraryStatusSchema.parse(await invoke("library_status"));
+}
+
+/** Ends the grace period for missing tracks; the next sync removes their remote copies. */
+export async function removeMissingNow(): Promise<void> {
+	await invoke("remove_missing_now");
+}
+
 /** URL of the album artwork thumbnail for a track (404s when there is none). */
 export function artUrl(trackId: number): string {
 	return convertFileSrc(String(trackId), "art");
@@ -171,6 +184,7 @@ const runSchema = z.object({
 	uploaded: int,
 	skipped: int,
 	failed: int,
+	deleted: int,
 	firstError: z.string().nullable(),
 });
 

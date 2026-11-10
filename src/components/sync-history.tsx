@@ -29,6 +29,7 @@ export function SyncHistory({ runs }: { runs: readonly SyncRun[] }) {
 						</div>
 						<div className="shrink-0 text-muted-foreground text-xs tabular-nums">
 							{r.uploaded} uploaded · {r.skipped} up to date
+							{r.deleted > 0 && ` · ${r.deleted} removed`}
 							{r.failed > 0 && ` · ${r.failed} failed`}
 						</div>
 						<div className="w-24 shrink-0 text-right text-muted-foreground text-xs">

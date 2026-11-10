@@ -88,7 +88,24 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              PRIMARY KEY (track_id, tag_id)
          );",
     )?;
+    add_column(&conn, "tracks", "missing_since", "INTEGER")?;
+    add_column(&conn, "sync_runs", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
     Ok(conn)
+}
+
+fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), Error> {
+    let exists = conn
+        .prepare(&format!("PRAGMA table_info({table})"))?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == column);
+    if !exists {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
@@ -101,7 +118,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                  artist = excluded.artist,
                  album = excluded.album,
                  title = excluded.title,
-                 size = excluded.size",
+                 size = excluded.size,
+                 missing_since = NULL",
         )?;
         for t in tracks {
             stmt.execute(params![t.path, t.artist, t.album, t.title, t.size])?;
@@ -134,7 +152,8 @@ fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
 
 pub fn list(conn: &Connection) -> Result<Vec<Track>, Error> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {TRACK_COLS} FROM tracks t ORDER BY t.artist, t.album, t.path"
+        "SELECT {TRACK_COLS} FROM tracks t WHERE t.missing_since IS NULL
+         ORDER BY t.artist, t.album, t.path"
     ))?;
     let rows = stmt.query_map([], track_from_row)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -150,8 +169,9 @@ pub struct Playlist {
 
 pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT p.id, p.name, COUNT(pt.track_id)
+        "SELECT p.id, p.name, COUNT(t.id)
          FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
+         LEFT JOIN tracks t ON t.id = pt.track_id AND t.missing_since IS NULL
          GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -218,7 +238,7 @@ pub fn remove_from_playlist(
 pub fn playlist_tracks(conn: &Connection, playlist_id: i64) -> Result<Vec<Track>, Error> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {TRACK_COLS} FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
-         WHERE pt.playlist_id = ?1 ORDER BY pt.position"
+         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL ORDER BY pt.position"
     ))?;
     let rows = stmt.query_map(params![playlist_id], track_from_row)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -234,8 +254,9 @@ pub struct Tag {
 
 pub fn list_tags(conn: &Connection) -> Result<Vec<Tag>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT g.id, g.name, COUNT(tt.track_id)
+        "SELECT g.id, g.name, COUNT(t.id)
          FROM tags g LEFT JOIN track_tags tt ON tt.tag_id = g.id
+         LEFT JOIN tracks t ON t.id = tt.track_id AND t.missing_since IS NULL
          GROUP BY g.id ORDER BY g.name",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -313,7 +334,8 @@ pub struct TrackFile {
 }
 
 pub fn all_files(conn: &Connection) -> Result<Vec<TrackFile>, Error> {
-    let mut stmt = conn.prepare("SELECT id, path FROM tracks ORDER BY path")?;
+    let mut stmt =
+        conn.prepare("SELECT id, path FROM tracks WHERE missing_since IS NULL ORDER BY path")?;
     let rows = stmt.query_map([], |r| {
         Ok(TrackFile {
             id: r.get(0)?,
@@ -378,7 +400,7 @@ pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
     let mut stmt = conn.prepare(
         "SELECT st.id, st.tailnet, st.machine, st.path,
                 (SELECT COUNT(*) FROM synced_files sf JOIN tracks t ON t.id = sf.track_id
-                 WHERE sf.target_id = st.id AND sf.size = t.size)
+                 WHERE sf.target_id = st.id AND sf.size = t.size AND t.missing_since IS NULL)
          FROM sync_targets st ORDER BY st.machine COLLATE NOCASE, st.path",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -408,6 +430,7 @@ pub struct RunRecord {
     pub uploaded: usize,
     pub skipped: usize,
     pub failed: usize,
+    pub deleted: usize,
     pub first_error: Option<String>,
 }
 
@@ -416,8 +439,15 @@ pub fn record_run(
     conn: &mut Connection,
     run: &RunRecord,
     synced: &[(i64, i64)],
+    deleted_tracks: &[i64],
 ) -> Result<(), Error> {
     let tx = conn.transaction()?;
+    for track_id in deleted_tracks {
+        tx.execute(
+            "DELETE FROM synced_files WHERE target_id = ?1 AND track_id = ?2",
+            params![run.target_id, track_id],
+        )?;
+    }
     {
         let mut stmt = tx.prepare(
             "INSERT INTO synced_files (target_id, track_id, size, synced_at)
@@ -431,8 +461,8 @@ pub fn record_run(
     }
     tx.execute(
         "INSERT INTO sync_runs
-             (target_id, started_at, finished_at, uploaded, skipped, failed, first_error)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (target_id, started_at, finished_at, uploaded, skipped, failed, deleted, first_error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             run.target_id,
             run.started_at,
@@ -440,6 +470,7 @@ pub fn record_run(
             i64::try_from(run.uploaded).unwrap_or(i64::MAX),
             i64::try_from(run.skipped).unwrap_or(i64::MAX),
             i64::try_from(run.failed).unwrap_or(i64::MAX),
+            i64::try_from(run.deleted).unwrap_or(i64::MAX),
             run.first_error
         ],
     )?;
@@ -459,13 +490,14 @@ pub struct RunView {
     pub uploaded: i64,
     pub skipped: i64,
     pub failed: i64,
+    pub deleted: i64,
     pub first_error: Option<String>,
 }
 
 pub fn history(conn: &Connection, limit: i64) -> Result<Vec<RunView>, Error> {
     let mut stmt = conn.prepare(
         "SELECT r.id, r.target_id, st.machine, st.path, r.started_at, r.finished_at,
-                r.uploaded, r.skipped, r.failed, r.first_error
+                r.uploaded, r.skipped, r.failed, r.first_error, r.deleted
          FROM sync_runs r JOIN sync_targets st ON st.id = r.target_id
          ORDER BY r.id DESC LIMIT ?1",
     )?;
@@ -482,7 +514,104 @@ pub fn history(conn: &Connection, limit: i64) -> Result<Vec<RunView>, Error> {
             skipped: r.get(7)?,
             failed: r.get(8)?,
             first_error: r.get(9)?,
+            deleted: r.get(10)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+// ---- missing files: soft delete, grace period, backups ---------------------
+
+/// `(id, path)` of every track that is currently present (not marked missing).
+pub fn present_tracks(conn: &Connection) -> Result<Vec<(i64, String)>, Error> {
+    let mut stmt = conn.prepare("SELECT id, path FROM tracks WHERE missing_since IS NULL")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn mark_missing(conn: &mut Connection, ids: &[i64], now: i64) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare("UPDATE tracks SET missing_since = ?2 WHERE id = ?1")?;
+        for id in ids {
+            stmt.execute(params![id, now])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn missing_count(conn: &Connection) -> Result<i64, Error> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM tracks WHERE missing_since IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
+/// Treats every missing track as past its grace period (the user asked to remove them now).
+pub fn expire_missing_now(conn: &Connection) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE tracks SET missing_since = 0 WHERE missing_since IS NOT NULL",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Synced copies of tracks that have been missing since `cutoff` or earlier.
+pub fn expired_synced(
+    conn: &Connection,
+    target_id: i64,
+    cutoff: i64,
+) -> Result<Vec<(i64, String)>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.path FROM synced_files sf JOIN tracks t ON t.id = sf.track_id
+         WHERE sf.target_id = ?1 AND t.missing_since IS NOT NULL AND t.missing_since <= ?2",
+    )?;
+    let rows = stmt.query_map(params![target_id, cutoff], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+const PURGEABLE: &str = "missing_since IS NOT NULL AND missing_since <= ?1
+    AND NOT EXISTS (SELECT 1 FROM synced_files sf WHERE sf.track_id = tracks.id)";
+
+/// Expired missing tracks with no remaining remote copies; removing them also drops
+/// their playlist entries and tags.
+pub fn purgeable_count(conn: &Connection, cutoff: i64) -> Result<i64, Error> {
+    Ok(conn.query_row(
+        &format!("SELECT COUNT(*) FROM tracks WHERE {PURGEABLE}"),
+        params![cutoff],
+        |r| r.get(0),
+    )?)
+}
+
+pub fn purge_expired(conn: &Connection, cutoff: i64) -> Result<usize, Error> {
+    Ok(conn.execute(
+        &format!("DELETE FROM tracks WHERE {PURGEABLE}"),
+        params![cutoff],
+    )?)
+}
+
+/// Copies the database to `dir/library-<stamp>.db` and keeps only the newest `keep` copies.
+pub fn backup(conn: &Connection, dir: &Path, stamp: i64, keep: usize) -> Result<(), Error> {
+    std::fs::create_dir_all(dir)?;
+    let target = dir.join(format!("library-{stamp}.db"));
+    conn.execute("VACUUM INTO ?1", params![target.to_string_lossy()])?;
+
+    let mut backups: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("library-"))
+        })
+        .collect();
+    backups.sort();
+    let excess = backups.len().saturating_sub(keep);
+    for old in backups.into_iter().take(excess) {
+        // Pruning old backups is best-effort.
+        let _ = std::fs::remove_file(old);
+    }
+    Ok(())
 }

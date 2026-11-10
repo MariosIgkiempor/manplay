@@ -8,6 +8,7 @@ mod sync;
 mod tailscale;
 mod webdav;
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,22 +21,98 @@ use crate::error::Error;
 
 struct AppState {
     db: Mutex<Connection>,
+    data_dir: PathBuf,
     http: reqwest::Client,
     syncing: AtomicBool,
 }
 
 const SETTING_ROOT: &str = "library_root";
+/// How long a track must stay missing before its record and remote copies are removed.
+const GRACE_SECS: i64 = 7 * 24 * 60 * 60;
+const GRACE_DAYS: i64 = 7;
+const BACKUPS_KEEP: usize = 5;
 
 /// Scans `root` off the UI thread, stores the results, and remembers `root` as the library folder.
 async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error> {
     let scan_root = root.clone();
-    let tracks = tauri::async_runtime::spawn_blocking(move || scan::scan(&scan_root))
+    let result = tauri::async_runtime::spawn_blocking(move || scan::scan(&scan_root))
         .await
         .map_err(|e| Error::Msg(e.to_string()))?;
     let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
-    db::upsert(&mut conn, &tracks)?;
+    db::upsert(&mut conn, &result.tracks)?;
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
-    Ok(tracks.len())
+    reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
+    Ok(result.tracks.len())
+}
+
+/// Soft-deletes tracks the scan could not find, then purges ones that have been gone
+/// past the grace period. The database is backed up before either step changes anything.
+fn reconcile_missing(
+    conn: &mut Connection,
+    data_dir: &Path,
+    root: &Path,
+    scan: &scan::ScanResult,
+) -> Result<(), Error> {
+    let now = unix_now();
+    let backups = data_dir.join("backups");
+
+    // Only a clean, non-empty scan may declare files missing. A scan with read errors, or an
+    // empty one (unmounted drive, revoked permission), says nothing reliable about what is gone.
+    if scan.errors == 0 && !scan.tracks.is_empty() {
+        let found: HashSet<&str> = scan.tracks.iter().map(|t| t.path.as_str()).collect();
+        let gone: Vec<i64> = db::present_tracks(conn)?
+            .into_iter()
+            .filter(|(_, p)| Path::new(p).starts_with(root) && !found.contains(p.as_str()))
+            .map(|(id, _)| id)
+            .collect();
+        if !gone.is_empty() {
+            db::backup(conn, &backups, now, BACKUPS_KEEP)?;
+            db::mark_missing(conn, &gone, now)?;
+        }
+    }
+
+    purge_expired(conn, &backups, now)
+}
+
+/// Removes missing tracks past the grace period that have no remote copies left.
+fn purge_expired(conn: &Connection, backups: &Path, now: i64) -> Result<(), Error> {
+    let cutoff = now - GRACE_SECS;
+    if db::purgeable_count(conn, cutoff)? > 0 {
+        db::backup(conn, backups, now, BACKUPS_KEEP)?;
+        db::purge_expired(conn, cutoff)?;
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryStatus {
+    missing: i64,
+    grace_days: i64,
+}
+
+#[tauri::command]
+fn library_status(state: State<'_, AppState>) -> Result<LibraryStatus, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    Ok(LibraryStatus {
+        missing: db::missing_count(&conn)?,
+        grace_days: GRACE_DAYS,
+    })
+}
+
+/// Ends the grace period for all missing tracks. Never-synced ones are purged immediately;
+/// the rest go once the next sync has removed their remote copies.
+#[tauri::command]
+fn remove_missing_now(state: State<'_, AppState>) -> Result<(), Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::backup(
+        &conn,
+        &state.data_dir.join("backups"),
+        unix_now(),
+        BACKUPS_KEEP,
+    )?;
+    db::expire_missing_now(&conn)?;
+    purge_expired(&conn, &state.data_dir.join("backups"), unix_now())
 }
 
 /// Scans a newly chosen folder and makes it the library folder.
@@ -241,9 +318,12 @@ async fn sync_run(
     state: State<'_, AppState>,
     target_id: Option<i64>,
 ) -> Result<(), Error> {
-    let (targets, items) = {
+    let (targets, items, mut victims) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        (db::get_targets(&conn, target_id)?, collect_items(&conn)?)
+        let targets = db::get_targets(&conn, target_id)?;
+        let items = collect_items(&conn)?;
+        let victims = collect_victims(&conn, &targets)?;
+        (targets, items, victims)
     };
     if targets.is_empty() {
         return Err(Error::Msg("no sync target selected".to_owned()));
@@ -260,7 +340,14 @@ async fn sync_run(
 
     for target in &targets {
         let started_at = unix_now();
-        let outcome = sync::run(&app, &state.http, target, &items).await;
+        let mut outcome = sync::run(&app, &state.http, target, &items).await;
+        let cleanup = if outcome.reachable {
+            let list = victims.remove(&target.id).unwrap_or_default();
+            sync::cleanup(&state.http, target, &list).await
+        } else {
+            sync::Cleanup::default()
+        };
+        outcome.summary.failed.extend(cleanup.errors);
         let record = db::RunRecord {
             target_id: target.id,
             started_at,
@@ -268,12 +355,45 @@ async fn sync_run(
             uploaded: outcome.summary.uploaded,
             skipped: outcome.summary.skipped,
             failed: outcome.summary.failed.len(),
+            deleted: cleanup.deleted.len(),
             first_error: outcome.summary.failed.first().cloned(),
         };
         let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
-        db::record_run(&mut conn, &record, &outcome.present)?;
+        db::record_run(&mut conn, &record, &outcome.present, &cleanup.deleted)?;
     }
-    Ok(())
+
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    purge_expired(&conn, &state.data_dir.join("backups"), unix_now())
+}
+
+/// Remote copies of long-missing tracks, per target. Only files this app recorded syncing
+/// (and that map under the current library folder) are ever considered.
+fn collect_victims(
+    conn: &Connection,
+    targets: &[db::SyncTarget],
+) -> Result<HashMap<i64, Vec<sync::Victim>>, Error> {
+    let Some(root) = db::get_setting(conn, SETTING_ROOT)? else {
+        return Ok(HashMap::new());
+    };
+    let root = Path::new(&root);
+    let cutoff = unix_now() - GRACE_SECS;
+    let mut out = HashMap::new();
+    for t in targets {
+        let victims = db::expired_synced(conn, t.id, cutoff)?
+            .into_iter()
+            .filter_map(|(track_id, path)| {
+                let rel = Path::new(&path)
+                    .strip_prefix(root)
+                    .ok()?
+                    .iter()
+                    .map(|s| s.to_str().map(str::to_owned))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(sync::Victim { track_id, rel })
+            })
+            .collect();
+        out.insert(t.id, victims);
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -330,6 +450,7 @@ pub fn run() {
                 .map_err(|e| Error::Msg(e.to_string()))?;
             app.manage(AppState {
                 db: Mutex::new(conn),
+                data_dir: dir.clone(),
                 http,
                 syncing: AtomicBool::new(false),
             });
@@ -338,6 +459,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             scan_library,
             get_library_root,
+            library_status,
+            remove_missing_now,
             rescan_library,
             list_tracks,
             list_playlists,
@@ -362,4 +485,184 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unused_self)] // test fixtures: panicking is the failure mode
+mod tests {
+    use super::*;
+    use crate::db::NewTrack;
+    use crate::scan::ScanResult;
+
+    struct Fixture {
+        dir: PathBuf,
+        conn: Connection,
+    }
+
+    impl Fixture {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("manplay-test-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap_or_default();
+            let conn = db::open(&dir.join("library.db")).expect("open db");
+            Self { dir, conn }
+        }
+
+        fn root(&self) -> PathBuf {
+            PathBuf::from("/music")
+        }
+
+        fn scan_of(&self, names: &[&str], errors: usize) -> ScanResult {
+            ScanResult {
+                tracks: names
+                    .iter()
+                    .map(|n| NewTrack {
+                        path: format!("/music/{n}"),
+                        artist: "a".into(),
+                        album: "b".into(),
+                        title: (*n).into(),
+                        size: 1,
+                    })
+                    .collect(),
+                errors,
+            }
+        }
+
+        fn apply(&mut self, scan: &ScanResult) {
+            let root = self.root();
+            db::upsert(&mut self.conn, &scan.tracks).expect("upsert");
+            reconcile_missing(&mut self.conn, &self.dir, &root, scan).expect("reconcile");
+        }
+
+        fn visible(&self) -> usize {
+            db::list(&self.conn).expect("list").len()
+        }
+
+        fn backups(&self) -> usize {
+            std::fs::read_dir(self.dir.join("backups")).map_or(0, Iterator::count)
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn clean_scan_soft_deletes_missing_tracks_after_backing_up() {
+        let mut f = Fixture::new("softdelete");
+        f.apply(&f.scan_of(&["1", "2", "3"], 0));
+        assert_eq!(f.visible(), 3);
+        assert_eq!(f.backups(), 0);
+
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        assert_eq!(f.visible(), 2);
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
+        assert_eq!(f.backups(), 1);
+    }
+
+    #[test]
+    fn scan_with_errors_marks_nothing() {
+        let mut f = Fixture::new("errors");
+        f.apply(&f.scan_of(&["1", "2", "3"], 0));
+        f.apply(&f.scan_of(&["1"], 2));
+        assert_eq!(f.visible(), 3);
+        assert_eq!(f.backups(), 0);
+    }
+
+    #[test]
+    fn empty_scan_marks_nothing() {
+        let mut f = Fixture::new("empty");
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        f.apply(&f.scan_of(&[], 0));
+        assert_eq!(f.visible(), 2);
+    }
+
+    #[test]
+    fn tracks_outside_the_scanned_root_are_left_alone() {
+        let mut f = Fixture::new("outside");
+        let other = ScanResult {
+            tracks: vec![NewTrack {
+                path: "/elsewhere/x".into(),
+                artist: "a".into(),
+                album: "b".into(),
+                title: "x".into(),
+                size: 1,
+            }],
+            errors: 0,
+        };
+        db::upsert(&mut f.conn, &other.tracks).expect("upsert");
+        f.apply(&f.scan_of(&["1"], 0));
+        assert_eq!(f.visible(), 2);
+    }
+
+    #[test]
+    fn reappearing_file_comes_back_with_its_tags_and_playlists() {
+        let mut f = Fixture::new("reappear");
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        let id = db::list(&f.conn).expect("list")[0].id;
+        db::tag_tracks(&mut f.conn, "keep", &[id]).expect("tag");
+        let pl = db::create_playlist(&f.conn, "p").expect("playlist");
+        db::add_to_playlist(&mut f.conn, pl, &[id]).expect("add");
+
+        f.apply(&f.scan_of(&["2"], 0)); // track 1 disappears
+        assert_eq!(db::playlist_tracks(&f.conn, pl).expect("pl").len(), 0);
+
+        f.apply(&f.scan_of(&["1", "2"], 0)); // and comes back
+        let back = db::playlist_tracks(&f.conn, pl).expect("pl");
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].tags, vec!["keep".to_owned()]);
+    }
+
+    #[test]
+    fn purge_waits_for_grace_period_and_remote_copies() {
+        let mut f = Fixture::new("purge");
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        let ids: Vec<i64> = db::list(&f.conn)
+            .expect("list")
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        let target = db::add_target(
+            &f.conn,
+            &db::NewTarget {
+                tailnet: "t".into(),
+                machine: "m".into(),
+                path: vec!["s".into()],
+            },
+        )
+        .expect("target");
+        let record = db::RunRecord {
+            target_id: target,
+            started_at: 1,
+            finished_at: 1,
+            uploaded: 2,
+            skipped: 0,
+            failed: 0,
+            deleted: 0,
+            first_error: None,
+        };
+        db::record_run(&mut f.conn, &record, &[(ids[0], 1), (ids[1], 1)], &[]).expect("run");
+
+        f.apply(&f.scan_of(&["2"], 0)); // track 1 now missing, marked just now
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
+
+        // Inside the grace period nothing is purged.
+        purge_expired(&f.conn, &f.dir.join("backups"), unix_now()).expect("purge");
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
+
+        // Past the grace period it is still kept while a remote copy is recorded.
+        let later = unix_now() + GRACE_SECS + 10;
+        purge_expired(&f.conn, &f.dir.join("backups"), later).expect("purge");
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
+        let victims = db::expired_synced(&f.conn, target, later - GRACE_SECS).expect("victims");
+        assert_eq!(victims.len(), 1);
+
+        // Once the remote copy is deleted, the track record can go.
+        db::record_run(&mut f.conn, &record, &[], &[victims[0].0]).expect("run");
+        purge_expired(&f.conn, &f.dir.join("backups"), later).expect("purge");
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 0);
+    }
 }

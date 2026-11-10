@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { FolderOpen, RefreshCw, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { AlbumGrid } from "#/components/album-grid.tsx";
+import { MissingBanner } from "#/components/missing-banner.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { SyncStatusPill } from "#/components/sync-status-pill.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -107,6 +108,7 @@ function Library() {
 				</div>
 			</header>
 
+			<MissingBanner />
 			{lastScanError && !scanning && <p className="text-destructive text-sm">{lastScanError}</p>}
 			{syncRun.isError && <p className="text-destructive text-sm">{String(syncRun.error)}</p>}
 

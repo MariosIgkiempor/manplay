@@ -117,6 +117,16 @@ pub async fn mkcol(client: &Client, segments: &[String]) -> Result<(), Error> {
     }
 }
 
+/// Deletes a single remote file. A file that is already gone counts as success.
+pub async fn delete(client: &Client, segments: &[String]) -> Result<(), Error> {
+    let resp = client.delete(url(segments)).send().await?;
+    match resp.status() {
+        StatusCode::NOT_FOUND => Ok(()),
+        s if s.is_success() => Ok(()),
+        s => Err(Error::Msg(format!("webdav DELETE {s}"))),
+    }
+}
+
 pub async fn put(client: &Client, segments: &[String], file: &Path) -> Result<(), Error> {
     let handle = tokio::fs::File::open(file).await?;
     let len = handle.metadata().await?.len();
@@ -169,5 +179,15 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(inner.len(), 1);
         assert_eq!(inner.first().map(|e| e.name.as_str()), Some("a b#1.txt"));
+
+        delete(&client, &file).await.unwrap_or_default();
+        assert_eq!(remote_size(&client, &file).await.ok(), Some(None));
+        // Deleting something already gone is fine, and leaves the folder alone.
+        assert!(delete(&client, &file).await.is_ok());
+        assert!(
+            exists(&client, &seg(&["tn", "m", "share", "Ärtist"]))
+                .await
+                .unwrap_or(false)
+        );
     }
 }
