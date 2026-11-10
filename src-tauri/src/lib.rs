@@ -26,13 +26,48 @@ struct AppState {
 
 const SETTING_ROOT: &str = "library_root";
 
-#[tauri::command]
-fn scan_library(state: State<'_, AppState>, root: PathBuf) -> Result<usize, Error> {
-    let tracks = scan::scan(&root);
+/// Scans `root` off the UI thread, stores the results, and remembers `root` as the library folder.
+async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error> {
+    let scan_root = root.clone();
+    let tracks = tauri::async_runtime::spawn_blocking(move || scan::scan(&scan_root))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?;
     let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
     db::upsert(&mut conn, &tracks)?;
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
     Ok(tracks.len())
+}
+
+/// Scans a newly chosen folder and makes it the library folder.
+#[tauri::command]
+async fn scan_library(state: State<'_, AppState>, root: PathBuf) -> Result<usize, Error> {
+    scan_and_store(&state, root).await
+}
+
+#[tauri::command]
+fn get_library_root(state: State<'_, AppState>) -> Result<Option<String>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::get_setting(&conn, SETTING_ROOT)
+}
+
+/// Rescans the remembered library folder. `None` when no folder was ever chosen.
+#[tauri::command]
+async fn rescan_library(state: State<'_, AppState>) -> Result<Option<usize>, Error> {
+    let saved = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::get_setting(&conn, SETTING_ROOT)?
+    };
+    let Some(root) = saved else {
+        return Ok(None);
+    };
+    let root = PathBuf::from(root);
+    if !root.is_dir() {
+        return Err(Error::Msg(format!(
+            "library folder not found or not readable: {}",
+            root.display()
+        )));
+    }
+    scan_and_store(&state, root).await.map(Some)
 }
 
 #[tauri::command]
@@ -171,6 +206,10 @@ fn collect_items(conn: &Connection) -> Result<Vec<sync::Item>, Error> {
         .into_iter()
         .filter_map(|f| {
             let local = PathBuf::from(f.path);
+            // Files deleted since the last scan are skipped rather than reported as failures.
+            if !local.exists() {
+                return None;
+            }
             let rel = local
                 .strip_prefix(root)
                 .ok()?
@@ -298,6 +337,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             scan_library,
+            get_library_root,
+            rescan_library,
             list_tracks,
             list_playlists,
             create_playlist,

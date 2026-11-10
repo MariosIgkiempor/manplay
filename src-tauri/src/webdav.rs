@@ -52,6 +52,11 @@ async fn propfind(
     }
 }
 
+/// Whether the folder exists and the Taildrive machine is reachable.
+pub async fn exists(client: &Client, segments: &[String]) -> Result<bool, Error> {
+    Ok(propfind(client, segments, "0").await?.is_some())
+}
+
 pub async fn list(client: &Client, segments: &[String]) -> Result<Vec<Entry>, Error> {
     let Some(body) = propfind(client, segments, "1").await? else {
         return Ok(Vec::new());

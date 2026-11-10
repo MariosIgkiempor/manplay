@@ -47,6 +47,15 @@ pub async fn run(app: &AppHandle, client: &Client, target: &SyncTarget, items: &
         .chain(target.path.iter().cloned())
         .collect();
     let total = items.len();
+    match webdav::exists(client, &base).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return unreachable_outcome(
+                "folder not found (is the machine online and the folder still shared?)",
+            );
+        }
+        Err(e) => return unreachable_outcome(&e.to_string()),
+    }
     let mut made: HashSet<Vec<String>> = HashSet::new();
     let mut out = Outcome {
         summary: Summary::default(),
@@ -91,6 +100,16 @@ pub async fn run(app: &AppHandle, client: &Client, target: &SyncTarget, items: &
         },
     );
     out
+}
+
+fn unreachable_outcome(reason: &str) -> Outcome {
+    Outcome {
+        summary: Summary {
+            failed: vec![format!("destination unreachable: {reason}")],
+            ..Summary::default()
+        },
+        present: Vec::new(),
+    }
 }
 
 /// Returns `(uploaded, local size)`.

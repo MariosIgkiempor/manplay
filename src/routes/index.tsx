@@ -1,6 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutationState, useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { FolderSearch, Search } from "lucide-react";
+import { FolderOpen, RefreshCw, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { AlbumGrid } from "#/components/album-grid.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
@@ -10,8 +10,15 @@ import { Input } from "#/components/ui/input.tsx";
 import { type View, ViewToggle } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
-import { listTags, pickAndScan, type Track } from "#/lib/api.ts";
-import { useSyncRun, useSyncTargets, useTracks } from "#/lib/queries.ts";
+import { listTags, type Track } from "#/lib/api.ts";
+import {
+	SCAN_KEY,
+	useLibraryRoot,
+	useScan,
+	useSyncRun,
+	useSyncTargets,
+	useTracks,
+} from "#/lib/queries.ts";
 
 export const Route = createFileRoute("/")({ component: Library });
 
@@ -22,7 +29,6 @@ function matches(t: Track, q: string, tag: string): boolean {
 }
 
 function Library() {
-	const queryClient = useQueryClient();
 	const detail = useDetail();
 	const [view, setView] = useState<View>("albums");
 	const [search, setSearch] = useState("");
@@ -33,17 +39,14 @@ function Library() {
 	const targets = useSyncTargets();
 	const targetCount = targets.data?.length ?? 0;
 	const syncRun = useSyncRun();
-
-	const scan = useMutation({
-		mutationFn: pickAndScan,
-		onSuccess: async (count) => {
-			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
-			// Mirror new files to every destination in the background.
-			if (count !== null && targetCount > 0) {
-				syncRun.mutate(undefined);
-			}
-		},
-	});
+	const root = useLibraryRoot();
+	const scan = useScan();
+	// Also true while the automatic launch-time rescan is running.
+	const scanning = useIsMutating({ mutationKey: SCAN_KEY }) > 0;
+	const lastScanError = useMutationState({
+		filters: { mutationKey: SCAN_KEY, status: "error" },
+		select: (m) => String(m.state.error),
+	}).at(-1);
 
 	const visible = useMemo(() => {
 		const q = search.trim().toLowerCase();
@@ -54,7 +57,14 @@ function Library() {
 	return (
 		<main className="space-y-5 p-6">
 			<header className="flex flex-wrap items-center justify-between gap-3">
-				<h1 className="font-bold text-2xl">Library</h1>
+				<div className="min-w-0">
+					<h1 className="font-bold text-2xl">Library</h1>
+					{root.data && (
+						<p className="truncate text-muted-foreground text-xs" title={root.data}>
+							{root.data}
+						</p>
+					)}
+				</div>
 				<div className="flex flex-wrap items-center gap-2">
 					<SyncStatusPill />
 					<div className="relative">
@@ -80,21 +90,25 @@ function Library() {
 						))}
 					</select>
 					<ViewToggle view={view} onChange={setView} />
-					<Button variant="outline" onClick={() => scan.mutate()} disabled={scan.isPending}>
-						<FolderSearch />
-						{scan.isPending ? "Scanning…" : "Scan folder"}
+					{root.data && (
+						<Button variant="outline" onClick={() => scan.mutate("saved")} disabled={scanning}>
+							<RefreshCw className={scanning ? "animate-spin" : ""} />
+							{scanning ? "Scanning…" : "Rescan"}
+						</Button>
+					)}
+					<Button
+						variant={root.data ? "ghost" : "outline"}
+						onClick={() => scan.mutate("pick")}
+						disabled={scanning}
+					>
+						<FolderOpen />
+						{root.data ? "Change folder" : "Choose folder"}
 					</Button>
 				</div>
 			</header>
 
-			{[scan, syncRun].map(
-				(m) =>
-					m.isError && (
-						<p key={m.submittedAt} className="text-destructive text-sm">
-							{String(m.error)}
-						</p>
-					),
-			)}
+			{lastScanError && !scanning && <p className="text-destructive text-sm">{lastScanError}</p>}
+			{syncRun.isError && <p className="text-destructive text-sm">{String(syncRun.error)}</p>}
 
 			{view === "albums" ? (
 				<AlbumGrid

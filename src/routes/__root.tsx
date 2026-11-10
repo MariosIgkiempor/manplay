@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { AutoRefresh } from "#/components/auto-refresh.tsx";
 import { DetailPanel } from "#/components/detail-panel.tsx";
 import { PlayerBar } from "#/components/player-bar.tsx";
 import { Sidebar } from "#/components/sidebar.tsx";
@@ -34,6 +35,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 					<PlayerProvider>
 						<SyncProgressProvider>
 							<DetailProvider>
+								<AutoRefresh />
 								<div className="flex h-screen flex-col">
 									<div className="flex min-h-0 flex-1">
 										<Sidebar />

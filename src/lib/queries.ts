@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { listSyncTargets, listTracks, syncRun } from "#/lib/api.ts";
+import {
+	getLibraryRoot,
+	listSyncTargets,
+	listTracks,
+	pickAndScan,
+	rescanLibrary,
+	syncRun,
+} from "#/lib/api.ts";
 
 export function useTracks() {
 	return useQuery({ queryKey: ["tracks"], queryFn: listTracks });
@@ -18,6 +25,41 @@ export function useSyncRun() {
 			await queryClient.invalidateQueries({ queryKey: ["sync-history"] });
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
+		},
+	});
+}
+
+export function useLibraryRoot() {
+	return useQuery({ queryKey: ["library-root"], queryFn: getLibraryRoot });
+}
+
+export const SCAN_KEY = ["scan"] as const;
+
+export type ScanMode = "saved" | "pick";
+
+/**
+ * Scans the library: `"saved"` rescans the remembered folder, `"pick"` asks for a new one.
+ * New files are mirrored to every sync destination afterwards.
+ */
+export function useScan() {
+	const queryClient = useQueryClient();
+	const sync = useSyncRun();
+	return useMutation({
+		mutationKey: SCAN_KEY,
+		mutationFn: (mode: ScanMode) => (mode === "pick" ? pickAndScan() : rescanLibrary()),
+		onSuccess: async (count) => {
+			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
+			await queryClient.invalidateQueries({ queryKey: ["library-root"] });
+			if (count === null) {
+				return;
+			}
+			const targets = await queryClient.ensureQueryData({
+				queryKey: ["sync-targets"],
+				queryFn: listSyncTargets,
+			});
+			if (targets.length > 0) {
+				sync.mutate(undefined);
+			}
 		},
 	});
 }

@@ -33,6 +33,18 @@ export async function pickAndScan(): Promise<number | null> {
 	return int.parse(await invoke("scan_library", { root }));
 }
 
+/** Rescans the remembered library folder. Returns null when no folder has been chosen yet. */
+export async function rescanLibrary(): Promise<number | null> {
+	return int.nullable().parse(await invoke("rescan_library"));
+}
+
+export async function getLibraryRoot(): Promise<string | null> {
+	return z
+		.string()
+		.nullable()
+		.parse(await invoke("get_library_root"));
+}
+
 /** URL of the album artwork thumbnail for a track (404s when there is none). */
 export function artUrl(trackId: number): string {
 	return convertFileSrc(String(trackId), "art");
