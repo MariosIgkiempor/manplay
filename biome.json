@@ -1,0 +1,123 @@
+{
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"ignoreUnknown": false,
+		"includes": ["**", "!**/src/routeTree.gen.ts", "!**/src-tauri", "!**/dist", "!**/.tanstack"]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"lineWidth": 100
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on",
+				"useSortedKeys": "off"
+			}
+		}
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double"
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"domains": {
+			"react": "all",
+			"project": "all",
+			"types": "all"
+		},
+		"rules": {
+			"recommended": true,
+			"correctness": {
+				"noUnusedImports": "error",
+				"noUnusedVariables": "error",
+				"noUnusedFunctionParameters": "error",
+				"noUndeclaredVariables": "error",
+				"useExhaustiveDependencies": "error",
+				"useHookAtTopLevel": "error"
+			},
+			"suspicious": {
+				"noExplicitAny": "error",
+				"noConsole": "error",
+				"noEvolvingTypes": "error",
+				"noImplicitAnyLet": "error",
+				"noMisleadingInstantiator": "error",
+				"useAwait": "error",
+				"noConfusingVoidType": "error",
+				"noTsIgnore": "error",
+				"noImportCycles": "error"
+			},
+			"style": {
+				"noNonNullAssertion": "error",
+				"noParameterAssign": "error",
+				"noEnum": "error",
+				"useConsistentArrayType": "error",
+				"useImportType": "error",
+				"useExportType": "error",
+				"useNodejsImportProtocol": "error",
+				"useShorthandFunctionType": "error",
+				"useConsistentBuiltinInstantiation": "error",
+				"useThrowOnlyError": "error",
+				"noInferrableTypes": "error",
+				"noUselessElse": "error",
+				"useConst": "error",
+				"useNamingConvention": "off"
+			},
+			"complexity": {
+				"noExcessiveCognitiveComplexity": {
+					"level": "error",
+					"options": {
+						"maxAllowedComplexity": 12
+					}
+				},
+				"noForEach": "error",
+				"useLiteralKeys": "error",
+				"noUselessStringConcat": "error"
+			},
+			"nursery": {
+				"noNestedPromises": "error",
+				"noShadow": "error",
+				"noUnnecessaryConditions": "error",
+				"useExhaustiveSwitchCases": "error",
+				"noFloatingPromises": "error",
+				"noMisusedPromises": "error",
+				"useNullishCoalescing": "error"
+			},
+			"performance": {
+				"noAccumulatingSpread": "error",
+				"noBarrelFile": "error"
+			},
+			"a11y": {
+				"recommended": true
+			}
+		}
+	},
+	"css": {
+		"parser": {
+			"tailwindDirectives": true
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["src/components/ui/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"useComponentExportOnlyModules": "off"
+					},
+					"performance": {
+						"noBarrelFile": "off"
+					}
+				}
+			}
+		}
+	]
+}
