@@ -6,10 +6,12 @@ import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import {
 	addToPlaylist,
+	getSyncTarget,
 	listPlaylists,
 	listTags,
 	listTracks,
 	pickAndScan,
+	syncNow,
 	tagTracks,
 	untagTrack,
 } from "#/lib/api.ts";
@@ -50,9 +52,17 @@ function Library() {
 		}
 	};
 
+	const target = useQuery({ queryKey: ["sync-target"], queryFn: getSyncTarget });
+	const sync = useMutation({ mutationFn: syncNow });
 	const scan = useMutation({
 		mutationFn: pickAndScan,
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tracks"] }),
+		onSuccess: async (count) => {
+			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
+			// Mirror new files to the sync target in the background.
+			if (count !== null && target.data) {
+				sync.mutate();
+			}
+		},
 	});
 	const add = useMutation({
 		mutationFn: (playlistId: number) => addToPlaylist(playlistId, [...selected]),
@@ -134,6 +144,10 @@ function Library() {
 				</div>
 			</header>
 			{scan.isError && <p className="text-destructive text-sm">{String(scan.error)}</p>}
+			{sync.isPending && (
+				<p className="text-muted-foreground text-sm">Syncing to {target.data?.machine}…</p>
+			)}
+			{sync.isError && <p className="text-destructive text-sm">{String(sync.error)}</p>}
 			{tag.isError && <p className="text-destructive text-sm">{String(tag.error)}</p>}
 			{add.isError && <p className="text-destructive text-sm">{String(add.error)}</p>}
 			<TrackTable

@@ -35,6 +35,9 @@ export function Sidebar() {
 			<Link to="/" className={linkClass} activeOptions={{ exact: true }} activeProps={activeClass}>
 				Library
 			</Link>
+			<Link to="/sync" className={linkClass} activeProps={activeClass}>
+				Sync
+			</Link>
 			<div className="font-medium text-muted-foreground text-xs uppercase">Playlists</div>
 			<nav className="flex-1 space-y-0.5 overflow-y-auto">
 				{playlists.data?.map((p) => (

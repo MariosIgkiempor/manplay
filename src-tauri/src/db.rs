@@ -48,6 +48,10 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              position    INTEGER NOT NULL,
              PRIMARY KEY (playlist_id, track_id)
          );
+         CREATE TABLE IF NOT EXISTS settings (
+             key   TEXT PRIMARY KEY,
+             value TEXT NOT NULL
+         );
          CREATE TABLE IF NOT EXISTS tags (
              id   INTEGER PRIMARY KEY,
              name TEXT NOT NULL UNIQUE COLLATE NOCASE
@@ -249,4 +253,34 @@ pub fn untag_track(conn: &Connection, name: &str, track_id: i64) -> Result<(), E
 pub fn delete_tag(conn: &Connection, id: i64) -> Result<(), Error> {
     conn.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
     Ok(())
+}
+
+pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>, Error> {
+    match conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    ) {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+pub fn set_setting(conn: &Connection, key: &str, value: Option<&str>) -> Result<(), Error> {
+    match value {
+        Some(v) => conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, v],
+        )?,
+        None => conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?,
+    };
+    Ok(())
+}
+
+pub fn all_paths(conn: &Connection) -> Result<Vec<String>, Error> {
+    let mut stmt = conn.prepare("SELECT path FROM tracks ORDER BY path")?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }

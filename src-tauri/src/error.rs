@@ -8,6 +8,10 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("tauri: {0}")]
     Tauri(#[from] tauri::Error),
+    #[error("http: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("{0}")]
+    Msg(String),
     #[error("state lock poisoned")]
     Lock,
 }
