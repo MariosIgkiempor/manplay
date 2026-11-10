@@ -19,6 +19,7 @@ pub struct Track {
     pub synced_count: i64,
 }
 
+#[derive(Default)]
 pub struct NewTrack {
     pub path: String,
     pub artist: String,
@@ -27,6 +28,9 @@ pub struct NewTrack {
     pub size: i64,
     /// See `scan::fingerprint`; `None` when the file could not be sampled.
     pub fingerprint: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub bitrate: Option<i64>,
+    pub sample_rate: Option<i64>,
 }
 
 pub fn open(path: &Path) -> Result<Connection, Error> {
@@ -92,6 +96,9 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     )?;
     add_column(&conn, "tracks", "missing_since", "INTEGER")?;
     add_column(&conn, "tracks", "fingerprint", "TEXT")?;
+    add_column(&conn, "tracks", "duration_ms", "INTEGER")?;
+    add_column(&conn, "tracks", "bitrate", "INTEGER")?;
+    add_column(&conn, "tracks", "sample_rate", "INTEGER")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
          CREATE TABLE IF NOT EXISTS stale_remote (
@@ -124,14 +131,18 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO tracks (path, artist, album, title, size, fingerprint)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO tracks (path, artist, album, title, size, fingerprint,
+                                 duration_ms, bitrate, sample_rate)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(path) DO UPDATE SET
                  artist = excluded.artist,
                  album = excluded.album,
                  title = excluded.title,
                  size = excluded.size,
                  fingerprint = COALESCE(excluded.fingerprint, fingerprint),
+                 duration_ms = COALESCE(excluded.duration_ms, duration_ms),
+                 bitrate = COALESCE(excluded.bitrate, bitrate),
+                 sample_rate = COALESCE(excluded.sample_rate, sample_rate),
                  missing_since = NULL",
         )?;
         for t in tracks {
@@ -141,7 +152,10 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                 t.album,
                 t.title,
                 t.size,
-                t.fingerprint
+                t.fingerprint,
+                t.duration_ms,
+                t.bitrate,
+                t.sample_rate
             ])?;
         }
     }
@@ -684,7 +698,10 @@ pub fn apply_move(
     tx.execute("DELETE FROM synced_files WHERE track_id = ?1", params![id])?;
     tx.execute(
         "UPDATE tracks SET path = ?2, artist = ?3, album = ?4, title = ?5, size = ?6,
-                fingerprint = ?7, missing_since = NULL WHERE id = ?1",
+                fingerprint = ?7, missing_since = NULL,
+                duration_ms = COALESCE(?8, duration_ms), bitrate = COALESCE(?9, bitrate),
+                sample_rate = COALESCE(?10, sample_rate)
+         WHERE id = ?1",
         params![
             id,
             new.path,
@@ -692,7 +709,10 @@ pub fn apply_move(
             new.album,
             new.title,
             new.size,
-            new.fingerprint
+            new.fingerprint,
+            new.duration_ms,
+            new.bitrate,
+            new.sample_rate
         ],
     )?;
     tx.commit()?;
@@ -722,4 +742,64 @@ pub fn clear_stale(
         )?;
     }
     Ok(())
+}
+
+// ---- rekordbox export -------------------------------------------------------
+
+pub struct ExportTrack {
+    pub id: i64,
+    pub path: String,
+    pub artist: String,
+    pub album: String,
+    pub title: String,
+    pub size: i64,
+    pub duration_ms: Option<i64>,
+    pub bitrate: Option<i64>,
+    pub sample_rate: Option<i64>,
+}
+
+pub struct ExportPlaylist {
+    pub name: String,
+    pub track_ids: Vec<i64>,
+}
+
+/// Everything the rekordbox export needs: present tracks and playlists in their saved order.
+pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPlaylist>), Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, artist, album, title, size, duration_ms, bitrate, sample_rate
+         FROM tracks WHERE missing_since IS NULL ORDER BY artist, album, path",
+    )?;
+    let tracks = stmt
+        .query_map([], |r| {
+            Ok(ExportTrack {
+                id: r.get(0)?,
+                path: r.get(1)?,
+                artist: r.get(2)?,
+                album: r.get(3)?,
+                title: r.get(4)?,
+                size: r.get(5)?,
+                duration_ms: r.get(6)?,
+                bitrate: r.get(7)?,
+                sample_rate: r.get(8)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut pl_stmt =
+        conn.prepare("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE")?;
+    let heads = pl_stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut member_stmt = conn.prepare(
+        "SELECT pt.track_id FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
+         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL ORDER BY pt.position",
+    )?;
+    let mut playlists = Vec::new();
+    for (id, name) in heads {
+        let track_ids = member_stmt
+            .query_map(params![id], |r| r.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        playlists.push(ExportPlaylist { name, track_ids });
+    }
+    Ok((tracks, playlists))
 }

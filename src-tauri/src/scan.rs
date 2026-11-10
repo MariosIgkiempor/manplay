@@ -2,7 +2,8 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use lofty::file::TaggedFileExt;
+use lofty::file::{AudioFile, TaggedFileExt};
+use lofty::properties::FileProperties;
 use lofty::read_from_path;
 use lofty::tag::Accessor;
 use walkdir::WalkDir;
@@ -66,6 +67,8 @@ fn read_track(root: &Path, entry: &walkdir::DirEntry) -> Option<NewTrack> {
     let stem = path.file_stem()?.to_str()?.to_owned();
     let title = tag_text(Accessor::title).unwrap_or(stem);
     let len = entry.metadata().ok()?.len();
+    let props = tagged.as_ref().map(AudioFile::properties);
+    let millis = props.and_then(|p| i64::try_from(p.duration().as_millis()).ok());
     Some(NewTrack {
         path: path.to_str()?.to_owned(),
         artist,
@@ -73,6 +76,9 @@ fn read_track(root: &Path, entry: &walkdir::DirEntry) -> Option<NewTrack> {
         title,
         size: i64::try_from(len).ok()?,
         fingerprint: fingerprint(path, len),
+        duration_ms: millis.filter(|m| *m > 0),
+        bitrate: props.and_then(FileProperties::audio_bitrate).map(i64::from),
+        sample_rate: props.and_then(FileProperties::sample_rate).map(i64::from),
     })
 }
 
@@ -97,6 +103,7 @@ pub fn scan(root: &Path) -> ScanResult {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)] // tests: panicking is the failure mode
 mod tests {
     use super::*;
 
@@ -151,5 +158,43 @@ mod tests {
         assert_eq!(fp(&dir.join("missing.bin")), None);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Minimal valid WAV: mono, 8-bit, `rate` Hz, `secs` seconds of silence.
+    fn wav(rate: u32, secs: u32) -> Vec<u8> {
+        let data_len = rate * secs;
+        let mut v = Vec::new();
+        v.extend_from_slice(b"RIFF");
+        v.extend_from_slice(&(36 + data_len).to_le_bytes());
+        v.extend_from_slice(b"WAVEfmt ");
+        v.extend_from_slice(&16_u32.to_le_bytes());
+        v.extend_from_slice(&1_u16.to_le_bytes()); // PCM
+        v.extend_from_slice(&1_u16.to_le_bytes()); // mono
+        v.extend_from_slice(&rate.to_le_bytes());
+        v.extend_from_slice(&rate.to_le_bytes()); // byte rate
+        v.extend_from_slice(&1_u16.to_le_bytes()); // block align
+        v.extend_from_slice(&8_u16.to_le_bytes()); // bits
+        v.extend_from_slice(b"data");
+        v.extend_from_slice(&data_len.to_le_bytes());
+        v.resize(v.len() + data_len as usize, 128);
+        v
+    }
+
+    #[test]
+    fn scan_reads_duration_and_sample_rate() {
+        let root = std::env::temp_dir().join(format!("manplay-props-{}", std::process::id()));
+        let album = root.join("Artist").join("Album");
+        std::fs::create_dir_all(&album).unwrap_or_default();
+        std::fs::write(album.join("01 tone.wav"), wav(8000, 2)).unwrap_or_default();
+
+        let result = scan(&root);
+        assert_eq!(result.errors, 0);
+        let track = result.tracks.first().expect("one track");
+        assert_eq!(track.artist, "Artist");
+        assert_eq!(track.sample_rate, Some(8000));
+        let ms = track.duration_ms.expect("duration");
+        assert!((1900..=2100).contains(&ms), "duration was {ms} ms");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

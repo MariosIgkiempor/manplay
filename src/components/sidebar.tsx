@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { CloudUpload, Library, ListMusic, Music, Plus } from "lucide-react";
+import { CloudUpload, Disc3, Library, ListMusic, Music, Plus } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -11,7 +11,13 @@ const linkClass =
 	"flex items-center gap-2 truncate rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground";
 const activeProps = { className: "bg-muted font-medium text-foreground" } as const;
 
-function NavLink({ children, ...props }: { to: "/" | "/sync"; children: ReactNode }) {
+function NavLink({
+	children,
+	...props
+}: {
+	to: "/" | "/sync" | "/rekordbox";
+	children: ReactNode;
+}) {
 	return (
 		<Link
 			{...props}
@@ -62,6 +68,10 @@ export function Sidebar() {
 					<CloudUpload className="size-4" />
 					Sync
 					{syncing && <span className="ml-auto size-2 animate-pulse rounded-full bg-primary" />}
+				</NavLink>
+				<NavLink to="/rekordbox">
+					<Disc3 className="size-4" />
+					Rekordbox
 				</NavLink>
 			</nav>
 			<div className="px-2 font-medium text-muted-foreground text-xs uppercase tracking-wide">

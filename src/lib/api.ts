@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { z } from "zod";
 
 const int = z.number().int();
@@ -216,4 +216,38 @@ export function onSyncProgress(handler: (p: SyncProgress) => void): Promise<() =
 			handler(parsed.data);
 		}
 	});
+}
+
+// ---- rekordbox ------------------------------------------------------------
+
+const rekordboxSchema = z.object({
+	path: z.string().nullable(),
+	exportedAt: int.nullable(),
+	playlists: int,
+	tracks: int,
+	error: z.string().nullable(),
+});
+
+export type RekordboxStatus = z.infer<typeof rekordboxSchema>;
+
+export async function rekordboxStatus(): Promise<RekordboxStatus> {
+	return rekordboxSchema.parse(await invoke("rekordbox_status"));
+}
+
+/** Asks where to save the rekordbox XML. Returns null if cancelled. */
+export function pickRekordboxFile(): Promise<string | null> {
+	return save({
+		title: "Where should manplay save the rekordbox library?",
+		defaultPath: "manplay-rekordbox.xml",
+		filters: [{ name: "rekordbox xml", extensions: ["xml"] }],
+	});
+}
+
+/** Sets (or clears, with null) the export file; it is written immediately. */
+export async function setRekordboxPath(path: string | null): Promise<RekordboxStatus> {
+	return rekordboxSchema.parse(await invoke("rekordbox_set_path", { path }));
+}
+
+export async function exportRekordbox(): Promise<RekordboxStatus> {
+	return rekordboxSchema.parse(await invoke("rekordbox_export"));
 }

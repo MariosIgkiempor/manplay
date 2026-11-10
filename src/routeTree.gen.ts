@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as RekordboxRouteImport } from './routes/rekordbox'
 import { Route as SyncRouteImport } from './routes/sync'
 import { Route as PlaylistsIdRouteImport } from './routes/playlists.$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RekordboxRoute = RekordboxRouteImport.update({
+  id: '/rekordbox',
+  path: '/rekordbox',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SyncRoute = SyncRouteImport.update({
@@ -31,30 +37,34 @@ const PlaylistsIdRoute = PlaylistsIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/rekordbox': typeof RekordboxRoute
   '/sync': typeof SyncRoute
   '/playlists/$id': typeof PlaylistsIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/rekordbox': typeof RekordboxRoute
   '/sync': typeof SyncRoute
   '/playlists/$id': typeof PlaylistsIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/rekordbox': typeof RekordboxRoute
   '/sync': typeof SyncRoute
   '/playlists/$id': typeof PlaylistsIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/sync' | '/playlists/$id'
+  fullPaths: '/' | '/rekordbox' | '/sync' | '/playlists/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/sync' | '/playlists/$id'
-  id: '__root__' | '/' | '/sync' | '/playlists/$id'
+  to: '/' | '/rekordbox' | '/sync' | '/playlists/$id'
+  id: '__root__' | '/' | '/rekordbox' | '/sync' | '/playlists/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  RekordboxRoute: typeof RekordboxRoute
   SyncRoute: typeof SyncRoute
   PlaylistsIdRoute: typeof PlaylistsIdRoute
 }
@@ -66,6 +76,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/rekordbox': {
+      id: '/rekordbox'
+      path: '/rekordbox'
+      fullPath: '/rekordbox'
+      preLoaderRoute: typeof RekordboxRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sync': {
@@ -87,6 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  RekordboxRoute: RekordboxRoute,
   SyncRoute: SyncRoute,
   PlaylistsIdRoute: PlaylistsIdRoute,
 }

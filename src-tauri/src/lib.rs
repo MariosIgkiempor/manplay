@@ -3,6 +3,7 @@
 mod art;
 mod db;
 mod error;
+mod rekordbox;
 mod scan;
 mod sync;
 mod tailscale;
@@ -43,6 +44,8 @@ async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error>
     db::upsert(&mut conn, &result.tracks)?;
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
     reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
+    drop(conn);
+    auto_export(state);
     Ok(result.tracks.len())
 }
 
@@ -235,17 +238,23 @@ fn list_playlists(state: State<'_, AppState>) -> Result<Vec<Playlist>, Error> {
 
 #[tauri::command]
 fn create_playlist(state: State<'_, AppState>, name: String) -> Result<i64, Error> {
-    with_db!(state, |c| db::create_playlist(c, name.trim()))
+    let id = with_db!(state, |c| db::create_playlist(c, name.trim()))?;
+    auto_export(&state);
+    Ok(id)
 }
 
 #[tauri::command]
 fn rename_playlist(state: State<'_, AppState>, id: i64, name: String) -> Result<(), Error> {
-    with_db!(state, |c| db::rename_playlist(c, id, name.trim()))
+    with_db!(state, |c| db::rename_playlist(c, id, name.trim()))?;
+    auto_export(&state);
+    Ok(())
 }
 
 #[tauri::command]
 fn delete_playlist(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
-    with_db!(state, |c| db::delete_playlist(c, id))
+    with_db!(state, |c| db::delete_playlist(c, id))?;
+    auto_export(&state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -254,7 +263,9 @@ fn add_to_playlist(
     playlist_id: i64,
     track_ids: Vec<i64>,
 ) -> Result<(), Error> {
-    with_db!(state, |c| db::add_to_playlist(c, playlist_id, &track_ids))
+    with_db!(state, |c| db::add_to_playlist(c, playlist_id, &track_ids))?;
+    auto_export(&state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -267,7 +278,9 @@ fn remove_from_playlist(
         c,
         playlist_id,
         track_id
-    ))
+    ))?;
+    auto_export(&state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -487,6 +500,120 @@ fn is_syncing(state: State<'_, AppState>) -> bool {
     state.syncing.load(Ordering::SeqCst)
 }
 
+// ---- rekordbox ---------------------------------------------------------------
+
+const SETTING_RB_PATH: &str = "rekordbox_xml_path";
+const SETTING_RB_LAST: &str = "rekordbox_last_export";
+
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RekordboxLast {
+    exported_at: Option<i64>,
+    playlists: usize,
+    tracks: usize,
+    error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RekordboxStatus {
+    path: Option<String>,
+    #[serde(flatten)]
+    last: RekordboxLast,
+}
+
+fn rekordbox_status_of(conn: &Connection) -> Result<RekordboxStatus, Error> {
+    let last = db::get_setting(conn, SETTING_RB_LAST)?
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
+    Ok(RekordboxStatus {
+        path: db::get_setting(conn, SETTING_RB_PATH)?,
+        last,
+    })
+}
+
+fn store_last(conn: &Connection, last: &RekordboxLast) -> Result<(), Error> {
+    let raw = serde_json::to_string(last).map_err(|e| Error::Msg(e.to_string()))?;
+    db::set_setting(conn, SETTING_RB_LAST, Some(&raw))
+}
+
+/// Writes the rekordbox XML to the configured file. `Ok(false)` when no file is configured.
+/// The file is written atomically so rekordbox never reads a half-written library.
+fn run_export(state: &AppState) -> Result<bool, Error> {
+    let (path, tracks, playlists) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let Some(path) = db::get_setting(&conn, SETTING_RB_PATH)? else {
+            return Ok(false);
+        };
+        let (tracks, playlists) = db::export_data(&conn)?;
+        (PathBuf::from(path), tracks, playlists)
+    };
+    let xml = rekordbox::build_xml(&tracks, &playlists);
+    let tmp = path.with_extension("xml.tmp");
+    let written = std::fs::write(&tmp, xml).and_then(|()| std::fs::rename(&tmp, &path));
+
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    let mut last: RekordboxLast = rekordbox_status_of(&conn)?.last;
+    match written {
+        Ok(()) => {
+            last = RekordboxLast {
+                exported_at: Some(unix_now()),
+                playlists: playlists.len(),
+                tracks: tracks.len(),
+                error: None,
+            };
+            store_last(&conn, &last)?;
+            Ok(true)
+        }
+        Err(e) => {
+            last.error = Some(format!("could not write {}: {e}", path.display()));
+            store_last(&conn, &last)?;
+            Err(Error::Io(e))
+        }
+    }
+}
+
+/// Keeps the exported file current after playlist or library changes. Failures are recorded
+/// in the export status (shown on the Rekordbox page) rather than failing the user's action.
+fn auto_export(state: &AppState) {
+    let _ = run_export(state);
+}
+
+#[tauri::command]
+fn rekordbox_status(state: State<'_, AppState>) -> Result<RekordboxStatus, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    rekordbox_status_of(&conn)
+}
+
+/// Chooses (or clears, with `None`) the XML file, and writes it right away.
+#[tauri::command]
+fn rekordbox_set_path(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<RekordboxStatus, Error> {
+    {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::set_setting(&conn, SETTING_RB_PATH, path.as_deref())?;
+        if path.is_none() {
+            db::set_setting(&conn, SETTING_RB_LAST, None)?;
+        }
+    }
+    run_export(&state)?;
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    rekordbox_status_of(&conn)
+}
+
+#[tauri::command]
+fn rekordbox_export(state: State<'_, AppState>) -> Result<RekordboxStatus, Error> {
+    if !run_export(&state)? {
+        return Err(Error::Msg(
+            "choose where to save the rekordbox file first".to_owned(),
+        ));
+    }
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    rekordbox_status_of(&conn)
+}
+
 fn art_response(app: &AppHandle, id: Option<i64>) -> tauri::http::Response<Vec<u8>> {
     let not_found = || {
         tauri::http::Response::builder()
@@ -567,7 +694,10 @@ pub fn run() {
             remove_sync_target,
             sync_history,
             sync_run,
-            is_syncing
+            is_syncing,
+            rekordbox_status,
+            rekordbox_set_path,
+            rekordbox_export
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -610,6 +740,7 @@ mod tests {
                         title: (*n).into(),
                         size: 1,
                         fingerprint: Some(format!("fp-{}", n.rsplit('/').next().unwrap_or(n))),
+                        ..NewTrack::default()
                     })
                     .collect(),
                 errors,
@@ -679,6 +810,7 @@ mod tests {
                 title: "x".into(),
                 size: 1,
                 fingerprint: Some("fp-x".into()),
+                ..NewTrack::default()
             }],
             errors: 0,
         };
@@ -855,5 +987,71 @@ mod tests {
 
         db::clear_stale(&f.conn, target, &stale).expect("clear");
         assert_eq!(db::stale_for(&f.conn, target).expect("stale"), vec![]);
+    }
+
+    #[test]
+    fn export_writes_the_xml_file_with_playlists_and_updates_status() {
+        let mut f = Fixture::new("rekordbox");
+        f.apply(&f.scan_of(&["1", "2", "3"], 0));
+        let ids: Vec<i64> = db::list(&f.conn)
+            .expect("list")
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        let pl = db::create_playlist(&f.conn, "Friday").expect("playlist");
+        db::add_to_playlist(&mut f.conn, pl, &[ids[2], ids[0]]).expect("add");
+
+        let out = f.dir.join("out").join("rekordbox.xml");
+        std::fs::create_dir_all(out.parent().expect("parent")).expect("mkdir");
+        db::set_setting(&f.conn, SETTING_RB_PATH, out.to_str()).expect("setting");
+
+        let dir = f.dir.clone();
+        let conn = std::mem::replace(&mut f.conn, Connection::open_in_memory().expect("mem"));
+        let state = AppState {
+            db: Mutex::new(conn),
+            data_dir: dir,
+            http: reqwest::Client::new(),
+            syncing: AtomicBool::new(false),
+        };
+        assert!(run_export(&state).expect("export"));
+
+        let xml = std::fs::read_to_string(&out).expect("file written");
+        let doc = roxmltree::Document::parse(&xml).expect("well-formed");
+        assert_eq!(
+            doc.descendants()
+                .filter(|n| n.has_tag_name("TRACK") && n.has_attribute("Location"))
+                .count(),
+            3
+        );
+        let node = doc
+            .descendants()
+            .find(|n| n.has_tag_name("NODE") && n.attribute("Name") == Some("Friday"))
+            .expect("playlist node");
+        assert_eq!(node.attribute("Entries"), Some("2"));
+        assert!(
+            !out.with_extension("xml.tmp").exists(),
+            "temp file is renamed away"
+        );
+
+        let conn = state.db.lock().expect("lock");
+        let status = rekordbox_status_of(&conn).expect("status");
+        assert_eq!(status.last.playlists, 1);
+        assert_eq!(status.last.tracks, 3);
+        assert!(status.last.error.is_none());
+    }
+
+    #[test]
+    fn export_is_a_no_op_until_a_file_is_chosen() {
+        let mut f = Fixture::new("rekordbox-off");
+        f.apply(&f.scan_of(&["1"], 0));
+        let dir = f.dir.clone();
+        let conn = std::mem::replace(&mut f.conn, Connection::open_in_memory().expect("mem"));
+        let state = AppState {
+            db: Mutex::new(conn),
+            data_dir: dir,
+            http: reqwest::Client::new(),
+            syncing: AtomicBool::new(false),
+        };
+        assert!(!run_export(&state).expect("no-op"));
     }
 }
