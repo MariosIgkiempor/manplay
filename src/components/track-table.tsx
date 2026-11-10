@@ -13,12 +13,13 @@ interface Props {
 	tracks: Track[];
 	selected?: ReadonlySet<number>;
 	onToggle?: (id: number) => void;
+	onRemoveTag?: (track: Track, tag: string) => void;
 	renderAction?: (track: Track) => ReactNode;
 }
 
-export function TrackTable({ tracks, selected, onToggle, renderAction }: Props) {
+export function TrackTable({ tracks, selected, onToggle, onRemoveTag, renderAction }: Props) {
 	const selectable = selected !== undefined && onToggle !== undefined;
-	const cols = 3 + (selectable ? 1 : 0) + (renderAction ? 1 : 0);
+	const cols = 4 + (selectable ? 1 : 0) + (renderAction ? 1 : 0);
 
 	return (
 		<Table className="table-fixed">
@@ -28,6 +29,7 @@ export function TrackTable({ tracks, selected, onToggle, renderAction }: Props) 
 					<TableHead>Artist</TableHead>
 					<TableHead>Album</TableHead>
 					<TableHead>Title</TableHead>
+					<TableHead>Tags</TableHead>
 					{renderAction && <TableHead className="w-24" />}
 				</TableRow>
 			</TableHeader>
@@ -59,6 +61,28 @@ export function TrackTable({ tracks, selected, onToggle, renderAction }: Props) 
 							</TableCell>
 							<TableCell className="truncate" title={t.title}>
 								{t.title}
+							</TableCell>
+							<TableCell>
+								<div className="flex flex-wrap gap-1">
+									{t.tags.map((tag) => (
+										<span
+											key={tag}
+											className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs"
+										>
+											{tag}
+											{onRemoveTag && (
+												<button
+													type="button"
+													aria-label={`Remove tag ${tag}`}
+													className="text-muted-foreground hover:text-foreground"
+													onClick={() => onRemoveTag(t, tag)}
+												>
+													×
+												</button>
+											)}
+										</span>
+									))}
+								</div>
 							</TableCell>
 							{renderAction && <TableCell>{renderAction(t)}</TableCell>}
 						</TableRow>

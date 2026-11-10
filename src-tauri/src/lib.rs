@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use rusqlite::Connection;
 use tauri::{Manager, State};
 
-use crate::db::{Playlist, Track};
+use crate::db::{Playlist, Tag, Track};
 use crate::error::Error;
 
 struct AppState {
@@ -86,6 +86,26 @@ fn playlist_tracks(state: State<'_, AppState>, playlist_id: i64) -> Result<Vec<T
     with_db!(state, |c| db::playlist_tracks(c, playlist_id))
 }
 
+#[tauri::command]
+fn list_tags(state: State<'_, AppState>) -> Result<Vec<Tag>, Error> {
+    with_db!(state, |c| db::list_tags(c))
+}
+
+#[tauri::command]
+fn tag_tracks(state: State<'_, AppState>, name: String, track_ids: Vec<i64>) -> Result<(), Error> {
+    with_db!(state, |c| db::tag_tracks(c, name.trim(), &track_ids))
+}
+
+#[tauri::command]
+fn untag_track(state: State<'_, AppState>, name: String, track_id: i64) -> Result<(), Error> {
+    with_db!(state, |c| db::untag_track(c, &name, track_id))
+}
+
+#[tauri::command]
+fn delete_tag(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
+    with_db!(state, |c| db::delete_tag(c, id))
+}
+
 /// # Panics
 /// Panics if the Tauri application fails to start.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -111,7 +131,11 @@ pub fn run() {
             delete_playlist,
             add_to_playlist,
             remove_from_playlist,
-            playlist_tracks
+            playlist_tracks,
+            list_tags,
+            tag_tracks,
+            untag_track,
+            delete_tag
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

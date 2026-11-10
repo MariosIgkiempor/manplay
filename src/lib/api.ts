@@ -9,6 +9,7 @@ const trackSchema = z.object({
 	album: z.string(),
 	title: z.string(),
 	size: z.number().int(),
+	tags: z.array(z.string()),
 });
 
 export type Track = z.infer<typeof trackSchema>;
@@ -66,4 +67,28 @@ export async function removeFromPlaylist(playlistId: number, trackId: number): P
 
 export async function playlistTracks(playlistId: number): Promise<Track[]> {
 	return z.array(trackSchema).parse(await invoke("playlist_tracks", { playlistId }));
+}
+
+const tagSchema = z.object({
+	id: z.number().int(),
+	name: z.string(),
+	trackCount: z.number().int(),
+});
+
+export type Tag = z.infer<typeof tagSchema>;
+
+export async function listTags(): Promise<Tag[]> {
+	return z.array(tagSchema).parse(await invoke("list_tags"));
+}
+
+export async function tagTracks(name: string, trackIds: number[]): Promise<void> {
+	await invoke("tag_tracks", { name, trackIds });
+}
+
+export async function untagTrack(name: string, trackId: number): Promise<void> {
+	await invoke("untag_track", { name, trackId });
+}
+
+export async function deleteTag(id: number): Promise<void> {
+	await invoke("delete_tag", { id });
 }

@@ -8,6 +8,7 @@ import {
 	playlistTracks,
 	removeFromPlaylist,
 	renamePlaylist,
+	untagTrack,
 } from "#/lib/api.ts";
 
 export const Route = createFileRoute("/playlists/$id")({ component: PlaylistPage });
@@ -36,6 +37,14 @@ function PlaylistPage() {
 	const rename = useMutation({
 		mutationFn: (name: string) => renamePlaylist(playlistId, name),
 		onSuccess: refresh,
+	});
+	const untag = useMutation({
+		mutationFn: ({ name, trackId }: { name: string; trackId: number }) => untagTrack(name, trackId),
+		onSuccess: async () => {
+			await refresh();
+			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
+			await queryClient.invalidateQueries({ queryKey: ["tags"] });
+		},
 	});
 	const destroy = useMutation({
 		mutationFn: () => deletePlaylist(playlistId),
@@ -74,7 +83,7 @@ function PlaylistPage() {
 					</Button>
 				</div>
 			</header>
-			{[remove, rename, destroy].map(
+			{[remove, rename, destroy, untag].map(
 				(m) =>
 					m.isError && (
 						<p key={m.submittedAt} className="text-destructive text-sm">
@@ -84,6 +93,7 @@ function PlaylistPage() {
 			)}
 			<TrackTable
 				tracks={tracks.data ?? []}
+				onRemoveTag={(t, name) => untag.mutate({ name, trackId: t.id })}
 				renderAction={(t) => (
 					<Button variant="ghost" size="sm" onClick={() => remove.mutate(t.id)}>
 						Remove
