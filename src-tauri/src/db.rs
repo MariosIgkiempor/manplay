@@ -25,6 +25,8 @@ pub struct NewTrack {
     pub album: String,
     pub title: String,
     pub size: i64,
+    /// See `scan::fingerprint`; `None` when the file could not be sampled.
+    pub fingerprint: Option<String>,
 }
 
 pub fn open(path: &Path) -> Result<Connection, Error> {
@@ -89,6 +91,16 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
          );",
     )?;
     add_column(&conn, "tracks", "missing_since", "INTEGER")?;
+    add_column(&conn, "tracks", "fingerprint", "TEXT")?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
+         CREATE TABLE IF NOT EXISTS stale_remote (
+             target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
+             track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+             rel       TEXT NOT NULL,
+             PRIMARY KEY (target_id, track_id, rel)
+         );",
+    )?;
     add_column(&conn, "sync_runs", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
     Ok(conn)
 }
@@ -112,17 +124,25 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO tracks (path, artist, album, title, size)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO tracks (path, artist, album, title, size, fingerprint)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(path) DO UPDATE SET
                  artist = excluded.artist,
                  album = excluded.album,
                  title = excluded.title,
                  size = excluded.size,
+                 fingerprint = COALESCE(excluded.fingerprint, fingerprint),
                  missing_since = NULL",
         )?;
         for t in tracks {
-            stmt.execute(params![t.path, t.artist, t.album, t.title, t.size])?;
+            stmt.execute(params![
+                t.path,
+                t.artist,
+                t.album,
+                t.title,
+                t.size,
+                t.fingerprint
+            ])?;
         }
     }
     tx.commit()?;
@@ -592,10 +612,16 @@ pub fn purge_expired(conn: &Connection, cutoff: i64) -> Result<usize, Error> {
     )?)
 }
 
-/// Copies the database to `dir/library-<stamp>.db` and keeps only the newest `keep` copies.
+/// Copies the database to `dir/library-<stamp>-<n>.db` and keeps only the newest `keep` copies.
 pub fn backup(conn: &Connection, dir: &Path, stamp: i64, keep: usize) -> Result<(), Error> {
     std::fs::create_dir_all(dir)?;
-    let target = dir.join(format!("library-{stamp}.db"));
+    // Several backups can happen within one second (a move, then a purge), so never reuse a name.
+    let target = (0_u32..1000)
+        .map(|n| dir.join(format!("library-{stamp:012}-{n:03}.db")))
+        .find(|p| !p.exists())
+        .ok_or_else(|| {
+            Error::Msg("no free backup file name (1000 backups in one second?)".to_owned())
+        })?;
     conn.execute("VACUUM INTO ?1", params![target.to_string_lossy()])?;
 
     let mut backups: Vec<_> = std::fs::read_dir(dir)?
@@ -612,6 +638,88 @@ pub fn backup(conn: &Connection, dir: &Path, stamp: i64, keep: usize) -> Result<
     for old in backups.into_iter().take(excess) {
         // Pruning old backups is best-effort.
         let _ = std::fs::remove_file(old);
+    }
+    Ok(())
+}
+
+// ---- moves and renames ------------------------------------------------------
+
+pub struct Known {
+    pub id: i64,
+    pub path: String,
+    pub fingerprint: Option<String>,
+}
+
+/// Every track row, present or soft-deleted.
+pub fn all_known(conn: &Connection) -> Result<Vec<Known>, Error> {
+    let mut stmt = conn.prepare("SELECT id, path, fingerprint FROM tracks")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Known {
+            id: r.get(0)?,
+            path: r.get(1)?,
+            fingerprint: r.get(2)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Points an existing track at its new file. Tags and playlists stay because the row (and id)
+/// is kept. Remote copies at the old location are queued for deletion, and the track is marked
+/// not-yet-synced so the next sync uploads it to the new location first.
+pub fn apply_move(
+    conn: &mut Connection,
+    id: i64,
+    new: &NewTrack,
+    old_rel: Option<&[String]>,
+) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    if let Some(rel) = old_rel {
+        let rel_json = serde_json::to_string(rel).map_err(|e| Error::Msg(e.to_string()))?;
+        tx.execute(
+            "INSERT OR IGNORE INTO stale_remote (target_id, track_id, rel)
+             SELECT target_id, track_id, ?2 FROM synced_files WHERE track_id = ?1",
+            params![id, rel_json],
+        )?;
+    }
+    tx.execute("DELETE FROM synced_files WHERE track_id = ?1", params![id])?;
+    tx.execute(
+        "UPDATE tracks SET path = ?2, artist = ?3, album = ?4, title = ?5, size = ?6,
+                fingerprint = ?7, missing_since = NULL WHERE id = ?1",
+        params![
+            id,
+            new.path,
+            new.artist,
+            new.album,
+            new.title,
+            new.size,
+            new.fingerprint
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Old remote locations (from moved tracks) waiting for deletion on `target_id`.
+pub fn stale_for(conn: &Connection, target_id: i64) -> Result<Vec<(i64, Vec<String>)>, Error> {
+    let mut stmt = conn.prepare("SELECT track_id, rel FROM stale_remote WHERE target_id = ?1")?;
+    let rows = stmt.query_map(params![target_id], |r| {
+        let raw: String = r.get(1)?;
+        Ok((r.get(0)?, parse_path(&raw)))
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn clear_stale(
+    conn: &Connection,
+    target_id: i64,
+    done: &[(i64, Vec<String>)],
+) -> Result<(), Error> {
+    for (track_id, rel) in done {
+        let rel_json = serde_json::to_string(rel).map_err(|e| Error::Msg(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM stale_remote WHERE target_id = ?1 AND track_id = ?2 AND rel = ?3",
+            params![target_id, track_id, rel_json],
+        )?;
     }
     Ok(())
 }

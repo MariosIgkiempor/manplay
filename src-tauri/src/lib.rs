@@ -39,10 +39,77 @@ async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error>
         .await
         .map_err(|e| Error::Msg(e.to_string()))?;
     let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
+    detect_moves(&mut conn, &state.data_dir, &root, &result)?;
     db::upsert(&mut conn, &result.tracks)?;
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
     reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
     Ok(result.tracks.len())
+}
+
+/// Path relative to the library root, as it appears on sync destinations.
+fn rel_path(root: &Path, path: &str) -> Option<Vec<String>> {
+    Path::new(path)
+        .strip_prefix(root)
+        .ok()?
+        .iter()
+        .map(|s| s.to_str().map(str::to_owned))
+        .collect()
+}
+
+/// Recognises renamed or moved files: a file at a brand-new path whose fingerprint matches
+/// exactly one known track that is no longer at its old path is that track, moved. The track
+/// row is updated in place, so tags, playlists and its id survive. Ambiguous matches and
+/// copies (the old path still exists) are treated as new tracks.
+///
+/// Returns the number of moves applied. Safe on untrusted scans: it only acts on a positive
+/// fingerprint match, never on absence.
+fn detect_moves(
+    conn: &mut Connection,
+    data_dir: &Path,
+    root: &Path,
+    scan: &scan::ScanResult,
+) -> Result<usize, Error> {
+    let known = db::all_known(conn)?;
+    let known_paths: HashSet<&str> = known.iter().map(|k| k.path.as_str()).collect();
+    let found: HashSet<&str> = scan.tracks.iter().map(|t| t.path.as_str()).collect();
+
+    // fingerprint -> tracks that have vanished from disk
+    let mut vanished: HashMap<&str, Vec<&db::Known>> = HashMap::new();
+    for k in &known {
+        if let Some(fp) = k
+            .fingerprint
+            .as_deref()
+            .filter(|_| !found.contains(k.path.as_str()))
+        {
+            vanished.entry(fp).or_default().push(k);
+        }
+    }
+
+    let mut moves: Vec<(&db::Known, &db::NewTrack)> = Vec::new();
+    for t in &scan.tracks {
+        let Some(fp) = t.fingerprint.as_deref() else {
+            continue;
+        };
+        if known_paths.contains(t.path.as_str()) {
+            continue;
+        }
+        // Take the candidate so a second identical new file cannot claim the same track.
+        if let Some(list) = vanished.get_mut(fp).filter(|l| l.len() == 1)
+            && let Some(old) = list.pop()
+        {
+            moves.push((old, t));
+        }
+    }
+    if moves.is_empty() {
+        return Ok(0);
+    }
+
+    db::backup(conn, &data_dir.join("backups"), unix_now(), BACKUPS_KEEP)?;
+    for (old, new) in &moves {
+        let old_rel = rel_path(root, &old.path);
+        db::apply_move(conn, old.id, new, old_rel.as_deref())?;
+    }
+    Ok(moves.len())
 }
 
 /// Soft-deletes tracks the scan could not find, then purges ones that have been gone
@@ -347,7 +414,25 @@ async fn sync_run(
         } else {
             sync::Cleanup::default()
         };
+        // Old locations of moved files go only once the new copy is confirmed on the target.
+        let confirmed: HashSet<i64> = outcome.present.iter().map(|(id, _)| *id).collect();
+        let moved_cleanup = if outcome.reachable {
+            let pending = {
+                let conn = state.db.lock().map_err(|_| Error::Lock)?;
+                db::stale_for(&conn, target.id)?
+            };
+            let list: Vec<sync::Victim> = pending
+                .into_iter()
+                .filter(|(id, _)| confirmed.contains(id))
+                .map(|(track_id, rel)| sync::Victim { track_id, rel })
+                .collect();
+            sync::cleanup(&state.http, target, &list).await
+        } else {
+            sync::Cleanup::default()
+        };
         outcome.summary.failed.extend(cleanup.errors);
+        outcome.summary.failed.extend(moved_cleanup.errors);
+        let removed_ids: Vec<i64> = cleanup.deleted.iter().map(|(id, _)| *id).collect();
         let record = db::RunRecord {
             target_id: target.id,
             started_at,
@@ -355,11 +440,12 @@ async fn sync_run(
             uploaded: outcome.summary.uploaded,
             skipped: outcome.summary.skipped,
             failed: outcome.summary.failed.len(),
-            deleted: cleanup.deleted.len(),
+            deleted: cleanup.deleted.len() + moved_cleanup.deleted.len(),
             first_error: outcome.summary.failed.first().cloned(),
         };
         let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
-        db::record_run(&mut conn, &record, &outcome.present, &cleanup.deleted)?;
+        db::record_run(&mut conn, &record, &outcome.present, &removed_ids)?;
+        db::clear_stale(&conn, target.id, &moved_cleanup.deleted)?;
     }
 
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
@@ -523,6 +609,7 @@ mod tests {
                         album: "b".into(),
                         title: (*n).into(),
                         size: 1,
+                        fingerprint: Some(format!("fp-{}", n.rsplit('/').next().unwrap_or(n))),
                     })
                     .collect(),
                 errors,
@@ -531,6 +618,7 @@ mod tests {
 
         fn apply(&mut self, scan: &ScanResult) {
             let root = self.root();
+            detect_moves(&mut self.conn, &self.dir, &root, scan).expect("moves");
             db::upsert(&mut self.conn, &scan.tracks).expect("upsert");
             reconcile_missing(&mut self.conn, &self.dir, &root, scan).expect("reconcile");
         }
@@ -590,6 +678,7 @@ mod tests {
                 album: "b".into(),
                 title: "x".into(),
                 size: 1,
+                fingerprint: Some("fp-x".into()),
             }],
             errors: 0,
         };
@@ -664,5 +753,107 @@ mod tests {
         db::record_run(&mut f.conn, &record, &[], &[victims[0].0]).expect("run");
         purge_expired(&f.conn, &f.dir.join("backups"), later).expect("purge");
         assert_eq!(db::missing_count(&f.conn).expect("count"), 0);
+    }
+
+    fn ids_by_title(f: &Fixture) -> HashMap<String, i64> {
+        db::list(&f.conn)
+            .expect("list")
+            .into_iter()
+            .map(|t| (t.title, t.id))
+            .collect()
+    }
+
+    #[test]
+    fn rename_keeps_identity_tags_and_playlists() {
+        let mut f = Fixture::new("rename");
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        let id = ids_by_title(&f)["1"];
+        db::tag_tracks(&mut f.conn, "keep", &[id]).expect("tag");
+        let pl = db::create_playlist(&f.conn, "p").expect("playlist");
+        db::add_to_playlist(&mut f.conn, pl, &[id]).expect("add");
+
+        f.apply(&f.scan_of(&["new/1", "2"], 0)); // "1" moved to new/1
+
+        assert_eq!(f.visible(), 2);
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 0);
+        let moved = db::playlist_tracks(&f.conn, pl).expect("pl");
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0].id, id);
+        assert_eq!(moved[0].path, "/music/new/1");
+        assert_eq!(moved[0].tags, vec!["keep".to_owned()]);
+        assert!(f.backups() >= 1);
+    }
+
+    #[test]
+    fn a_copy_is_a_new_track_not_a_move() {
+        let mut f = Fixture::new("copy");
+        f.apply(&f.scan_of(&["1"], 0));
+        f.apply(&f.scan_of(&["1", "copy/1"], 0));
+        assert_eq!(f.visible(), 2);
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 0);
+    }
+
+    #[test]
+    fn ambiguous_matches_are_not_guessed() {
+        let mut f = Fixture::new("ambiguous");
+        f.apply(&f.scan_of(&["x/1", "y/1", "keep"], 0));
+        f.apply(&f.scan_of(&["z/1", "keep"], 0)); // both x/1 and y/1 vanish, z/1 appears
+        let titles = ids_by_title(&f);
+        assert!(titles.contains_key("z/1"));
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 2);
+    }
+
+    #[test]
+    fn missing_track_that_reappears_elsewhere_is_recognised() {
+        let mut f = Fixture::new("late-move");
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        let id = ids_by_title(&f)["1"];
+        f.apply(&f.scan_of(&["2"], 0)); // "1" goes missing
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
+        f.apply(&f.scan_of(&["moved/1", "2"], 0)); // and shows up at a new path
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 0);
+        assert_eq!(ids_by_title(&f)["moved/1"], id);
+    }
+
+    #[test]
+    fn move_queues_the_old_remote_copy_and_resets_sync_state() {
+        let mut f = Fixture::new("stale");
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        let id = ids_by_title(&f)["1"];
+        let target = db::add_target(
+            &f.conn,
+            &db::NewTarget {
+                tailnet: "t".into(),
+                machine: "m".into(),
+                path: vec!["s".into()],
+            },
+        )
+        .expect("target");
+        let record = db::RunRecord {
+            target_id: target,
+            started_at: 1,
+            finished_at: 1,
+            uploaded: 1,
+            skipped: 0,
+            failed: 0,
+            deleted: 0,
+            first_error: None,
+        };
+        db::record_run(&mut f.conn, &record, &[(id, 1)], &[]).expect("run");
+        assert_eq!(db::list(&f.conn).expect("list")[0].synced_count, 1);
+
+        f.apply(&f.scan_of(&["new/1", "2"], 0));
+
+        let moved = db::list(&f.conn)
+            .expect("list")
+            .into_iter()
+            .find(|t| t.id == id)
+            .expect("track");
+        assert_eq!(moved.synced_count, 0, "must be re-synced at the new path");
+        let stale = db::stale_for(&f.conn, target).expect("stale");
+        assert_eq!(stale, vec![(id, vec!["1".to_owned()])]);
+
+        db::clear_stale(&f.conn, target, &stale).expect("clear");
+        assert_eq!(db::stale_for(&f.conn, target).expect("stale"), vec![]);
     }
 }

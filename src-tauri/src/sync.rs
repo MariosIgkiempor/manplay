@@ -40,8 +40,8 @@ pub struct Victim {
 
 #[derive(Default)]
 pub struct Cleanup {
-    /// Tracks whose remote copy is now gone.
-    pub deleted: Vec<i64>,
+    /// `(track id, relative path)` of remote copies that are now gone.
+    pub deleted: Vec<(i64, Vec<String>)>,
     pub errors: Vec<String>,
 }
 
@@ -129,7 +129,7 @@ pub async fn cleanup(client: &Client, target: &SyncTarget, victims: &[Victim]) -
     for v in victims {
         let dest: Vec<String> = base.iter().chain(v.rel.iter()).cloned().collect();
         match webdav::delete(client, &dest).await {
-            Ok(()) => out.deleted.push(v.track_id),
+            Ok(()) => out.deleted.push((v.track_id, v.rel.clone())),
             Err(e) => out.errors.push(format!("remove {}: {e}", v.rel.join("/"))),
         }
     }
