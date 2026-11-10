@@ -157,7 +157,9 @@ fn collect_items(conn: &Connection) -> Result<(Option<sync::Target>, Vec<sync::I
     let target = db::get_setting(conn, SETTING_TARGET)?
         .and_then(|r| serde_json::from_str::<sync::Target>(&r).ok());
     let Some(root) = db::get_setting(conn, SETTING_ROOT)? else {
-        return Ok((target, Vec::new()));
+        return Err(Error::Msg(
+            "library folder unknown: click Scan folder in Library once, then sync".to_owned(),
+        ));
     };
     let root = Path::new(&root);
     let items = db::all_paths(conn)?
@@ -183,6 +185,11 @@ async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<sync::Su
         collect_items(&conn)?
     };
     let target = target.ok_or_else(|| Error::Msg("no sync target selected".to_owned()))?;
+    if items.is_empty() {
+        return Err(Error::Msg(
+            "no tracks under the library folder to sync".to_owned(),
+        ));
+    }
     if state.syncing.swap(true, Ordering::SeqCst) {
         return Err(Error::Msg("a sync is already running".to_owned()));
     }
