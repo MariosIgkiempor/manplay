@@ -36,6 +36,16 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              album  TEXT NOT NULL,
              title  TEXT NOT NULL,
              size   INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS playlists (
+             id   INTEGER PRIMARY KEY,
+             name TEXT NOT NULL UNIQUE
+         );
+         CREATE TABLE IF NOT EXISTS playlist_tracks (
+             playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+             track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+             position    INTEGER NOT NULL,
+             PRIMARY KEY (playlist_id, track_id)
          );",
     )?;
     Ok(conn)
@@ -67,6 +77,100 @@ pub fn list(conn: &Connection) -> Result<Vec<Track>, Error> {
          ORDER BY artist, album, path",
     )?;
     let rows = stmt.query_map([], |r| {
+        Ok(Track {
+            id: r.get(0)?,
+            path: r.get(1)?,
+            artist: r.get(2)?,
+            album: r.get(3)?,
+            title: r.get(4)?,
+            size: r.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Playlist {
+    pub id: i64,
+    pub name: String,
+    pub track_count: i64,
+}
+
+pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.name, COUNT(pt.track_id)
+         FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
+         GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Playlist {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            track_count: r.get(2)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn create_playlist(conn: &Connection, name: &str) -> Result<i64, Error> {
+    conn.execute("INSERT INTO playlists (name) VALUES (?1)", params![name])?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn rename_playlist(conn: &Connection, id: i64, name: &str) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE playlists SET name = ?2 WHERE id = ?1",
+        params![id, name],
+    )?;
+    Ok(())
+}
+
+pub fn delete_playlist(conn: &Connection, id: i64) -> Result<(), Error> {
+    conn.execute("DELETE FROM playlists WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// Appends tracks to the end; tracks already in the playlist are skipped.
+pub fn add_to_playlist(
+    conn: &mut Connection,
+    playlist_id: i64,
+    track_ids: &[i64],
+) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position)
+             VALUES (?1, ?2, (SELECT COALESCE(MAX(position), -1) + 1
+                              FROM playlist_tracks WHERE playlist_id = ?1))",
+        )?;
+        for id in track_ids {
+            stmt.execute(params![playlist_id, id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn remove_from_playlist(
+    conn: &Connection,
+    playlist_id: i64,
+    track_id: i64,
+) -> Result<(), Error> {
+    conn.execute(
+        "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2",
+        params![playlist_id, track_id],
+    )?;
+    Ok(())
+}
+
+pub fn playlist_tracks(conn: &Connection, playlist_id: i64) -> Result<Vec<Track>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.path, t.artist, t.album, t.title, t.size
+         FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
+         WHERE pt.playlist_id = ?1 ORDER BY pt.position",
+    )?;
+    let rows = stmt.query_map(params![playlist_id], |r| {
         Ok(Track {
             id: r.get(0)?,
             path: r.get(1)?,

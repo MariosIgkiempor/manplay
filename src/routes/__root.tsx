@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { Sidebar } from "#/components/sidebar.tsx";
 import appCss from "../styles.css?url";
 
 const queryClient = new QueryClient();
@@ -24,7 +25,12 @@ function RootDocument({ children }: { children: ReactNode }) {
 				<HeadContent />
 			</head>
 			<body>
-				<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+				<QueryClientProvider client={queryClient}>
+					<div className="flex h-screen">
+						<Sidebar />
+						<div className="flex-1 overflow-y-auto">{children}</div>
+					</div>
+				</QueryClientProvider>
 				<Scripts />
 			</body>
 		</html>
