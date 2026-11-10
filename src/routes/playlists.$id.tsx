@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { TrackTable } from "#/components/track-table.tsx";
+import { TrackList } from "#/components/track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	deletePlaylist,
@@ -10,6 +10,7 @@ import {
 	renamePlaylist,
 	untagTrack,
 } from "#/lib/api.ts";
+import { useSyncTargets } from "#/lib/queries.ts";
 
 export const Route = createFileRoute("/playlists/$id")({ component: PlaylistPage });
 
@@ -24,6 +25,7 @@ function PlaylistPage() {
 		queryKey: ["playlist-tracks", playlistId],
 		queryFn: () => playlistTracks(playlistId),
 	});
+	const targets = useSyncTargets();
 	const playlist = playlists.data?.find((p) => p.id === playlistId);
 
 	const refresh = async () => {
@@ -91,8 +93,9 @@ function PlaylistPage() {
 						</p>
 					),
 			)}
-			<TrackTable
+			<TrackList
 				tracks={tracks.data ?? []}
+				targetCount={targets.data?.length ?? 0}
 				onRemoveTag={(t, name) => untag.mutate({ name, trackId: t.id })}
 				renderAction={(t) => (
 					<Button variant="ghost" size="sm" onClick={() => remove.mutate(t.id)}>

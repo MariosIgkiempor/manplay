@@ -2,21 +2,13 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+use crate::db::SyncTarget;
 use crate::webdav;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Target {
-    pub tailnet: String,
-    pub machine: String,
-    /// Folder under the machine: first segment is the Taildrive share name.
-    pub path: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub uploaded: usize,
@@ -27,31 +19,38 @@ pub struct Summary {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Progress<'a> {
+    target_id: i64,
     done: usize,
     total: usize,
     current: &'a str,
 }
 
 pub struct Item {
+    pub track_id: i64,
     pub local: PathBuf,
     /// Path relative to the library root, e.g. `["artist", "album", "01.wav"]`.
     pub rel: Vec<String>,
 }
 
+pub struct Outcome {
+    pub summary: Summary,
+    /// `(track_id, size)` for every file confirmed present on the target.
+    pub present: Vec<(i64, i64)>,
+}
+
 const MAX_REPORTED_FAILURES: usize = 20;
 
 /// One-way mirror: uploads files that are missing or differ in size. Never deletes.
-pub async fn run(app: &AppHandle, client: &Client, target: &Target, items: Vec<Item>) -> Summary {
+pub async fn run(app: &AppHandle, client: &Client, target: &SyncTarget, items: &[Item]) -> Outcome {
     let base: Vec<String> = [target.tailnet.clone(), target.machine.clone()]
         .into_iter()
         .chain(target.path.iter().cloned())
         .collect();
     let total = items.len();
     let mut made: HashSet<Vec<String>> = HashSet::new();
-    let mut summary = Summary {
-        uploaded: 0,
-        skipped: 0,
-        failed: Vec::new(),
+    let mut out = Outcome {
+        summary: Summary::default(),
+        present: Vec::new(),
     };
 
     for (i, item) in items.iter().enumerate() {
@@ -60,17 +59,24 @@ pub async fn run(app: &AppHandle, client: &Client, target: &Target, items: Vec<I
         let _ = app.emit(
             "sync-progress",
             Progress {
+                target_id: target.id,
                 done: i,
                 total,
                 current: &label,
             },
         );
         match upload_one(client, &base, item, &mut made).await {
-            Ok(true) => summary.uploaded += 1,
-            Ok(false) => summary.skipped += 1,
+            Ok((uploaded, size)) => {
+                if uploaded {
+                    out.summary.uploaded += 1;
+                } else {
+                    out.summary.skipped += 1;
+                }
+                out.present.push((item.track_id, size));
+            }
             Err(e) => {
-                if summary.failed.len() < MAX_REPORTED_FAILURES {
-                    summary.failed.push(format!("{label}: {e}"));
+                if out.summary.failed.len() < MAX_REPORTED_FAILURES {
+                    out.summary.failed.push(format!("{label}: {e}"));
                 }
             }
         }
@@ -78,24 +84,27 @@ pub async fn run(app: &AppHandle, client: &Client, target: &Target, items: Vec<I
     let _ = app.emit(
         "sync-progress",
         Progress {
+            target_id: target.id,
             done: total,
             total,
             current: "",
         },
     );
-    summary
+    out
 }
 
+/// Returns `(uploaded, local size)`.
 async fn upload_one(
     client: &Client,
     base: &[String],
     item: &Item,
     made: &mut HashSet<Vec<String>>,
-) -> Result<bool, crate::error::Error> {
+) -> Result<(bool, i64), crate::error::Error> {
     let dest: Vec<String> = base.iter().chain(item.rel.iter()).cloned().collect();
     let local_len = tokio::fs::metadata(&item.local).await?.len();
+    let size = i64::try_from(local_len).unwrap_or(i64::MAX);
     if webdav::remote_size(client, &dest).await? == Some(local_len) {
-        return Ok(false);
+        return Ok((false, size));
     }
     // Create each parent folder below the target folder once.
     for depth in (base.len() + 1)..dest.len() {
@@ -106,5 +115,5 @@ async fn upload_one(
         }
     }
     webdav::put(client, &dest, &item.local).await?;
-    Ok(true)
+    Ok((true, size))
 }

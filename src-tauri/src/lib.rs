@@ -1,5 +1,6 @@
 #![allow(clippy::needless_pass_by_value)] // Tauri command args are taken by value
 
+mod art;
 mod db;
 mod error;
 mod scan;
@@ -14,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use rusqlite::Connection;
 use tauri::{AppHandle, Manager, State};
 
-use crate::db::{Playlist, Tag, Track};
+use crate::db::{NewTarget, Playlist, RunView, SyncTarget, Tag, Track};
 use crate::error::Error;
 
 struct AppState {
@@ -24,7 +25,6 @@ struct AppState {
 }
 
 const SETTING_ROOT: &str = "library_root";
-const SETTING_TARGET: &str = "sync_target";
 
 #[tauri::command]
 fn scan_library(state: State<'_, AppState>, root: PathBuf) -> Result<usize, Error> {
@@ -135,56 +135,80 @@ async fn drive_list(
 }
 
 #[tauri::command]
-fn get_sync_target(state: State<'_, AppState>) -> Result<Option<sync::Target>, Error> {
-    let raw = with_db!(state, |c| db::get_setting(c, SETTING_TARGET))?;
-    Ok(raw.and_then(|r| serde_json::from_str(&r).ok()))
+fn list_sync_targets(state: State<'_, AppState>) -> Result<Vec<SyncTarget>, Error> {
+    with_db!(state, |c| db::list_targets(c))
 }
 
 #[tauri::command]
-fn set_sync_target(state: State<'_, AppState>, target: Option<sync::Target>) -> Result<(), Error> {
-    let raw = target
-        .map(|t| serde_json::to_string(&t))
-        .transpose()
-        .map_err(|e| Error::Msg(e.to_string()))?;
-    with_db!(state, |c| db::set_setting(
-        c,
-        SETTING_TARGET,
-        raw.as_deref()
-    ))
+fn add_sync_target(state: State<'_, AppState>, target: NewTarget) -> Result<i64, Error> {
+    with_db!(state, |c| db::add_target(c, &target))
 }
 
-fn collect_items(conn: &Connection) -> Result<(Option<sync::Target>, Vec<sync::Item>), Error> {
-    let target = db::get_setting(conn, SETTING_TARGET)?
-        .and_then(|r| serde_json::from_str::<sync::Target>(&r).ok());
+#[tauri::command]
+fn remove_sync_target(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
+    with_db!(state, |c| db::remove_target(c, id))
+}
+
+#[tauri::command]
+fn sync_history(state: State<'_, AppState>, limit: i64) -> Result<Vec<RunView>, Error> {
+    with_db!(state, |c| db::history(c, limit))
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+}
+
+fn collect_items(conn: &Connection) -> Result<Vec<sync::Item>, Error> {
     let Some(root) = db::get_setting(conn, SETTING_ROOT)? else {
         return Err(Error::Msg(
             "library folder unknown: click Scan folder in Library once, then sync".to_owned(),
         ));
     };
     let root = Path::new(&root);
-    let items = db::all_paths(conn)?
+    Ok(db::all_files(conn)?
         .into_iter()
-        .filter_map(|p| {
-            let local = PathBuf::from(p);
+        .filter_map(|f| {
+            let local = PathBuf::from(f.path);
             let rel = local
                 .strip_prefix(root)
                 .ok()?
                 .iter()
                 .map(|s| s.to_str().map(str::to_owned))
                 .collect::<Option<Vec<_>>>()?;
-            Some(sync::Item { local, rel })
+            Some(sync::Item {
+                track_id: f.id,
+                local,
+                rel,
+            })
         })
-        .collect();
-    Ok((target, items))
+        .collect())
 }
 
+/// Clears the "sync running" flag even if the sync future is dropped or errors.
+struct SyncGuard<'a>(&'a AtomicBool);
+
+impl Drop for SyncGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Syncs one target, or all of them when `target_id` is `None`.
 #[tauri::command]
-async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<sync::Summary, Error> {
-    let (target, items) = {
+async fn sync_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: Option<i64>,
+) -> Result<(), Error> {
+    let (targets, items) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        collect_items(&conn)?
+        (db::get_targets(&conn, target_id)?, collect_items(&conn)?)
     };
-    let target = target.ok_or_else(|| Error::Msg("no sync target selected".to_owned()))?;
+    if targets.is_empty() {
+        return Err(Error::Msg("no sync target selected".to_owned()));
+    }
     if items.is_empty() {
         return Err(Error::Msg(
             "no tracks under the library folder to sync".to_owned(),
@@ -193,9 +217,56 @@ async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<sync::Su
     if state.syncing.swap(true, Ordering::SeqCst) {
         return Err(Error::Msg("a sync is already running".to_owned()));
     }
-    let summary = sync::run(&app, &state.http, &target, items).await;
-    state.syncing.store(false, Ordering::SeqCst);
-    Ok(summary)
+    let _guard = SyncGuard(&state.syncing);
+
+    for target in &targets {
+        let started_at = unix_now();
+        let outcome = sync::run(&app, &state.http, target, &items).await;
+        let record = db::RunRecord {
+            target_id: target.id,
+            started_at,
+            finished_at: unix_now(),
+            uploaded: outcome.summary.uploaded,
+            skipped: outcome.summary.skipped,
+            failed: outcome.summary.failed.len(),
+            first_error: outcome.summary.failed.first().cloned(),
+        };
+        let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::record_run(&mut conn, &record, &outcome.present)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn is_syncing(state: State<'_, AppState>) -> bool {
+    state.syncing.load(Ordering::SeqCst)
+}
+
+fn art_response(app: &AppHandle, id: Option<i64>) -> tauri::http::Response<Vec<u8>> {
+    let not_found = || {
+        tauri::http::Response::builder()
+            .status(404)
+            .body(Vec::new())
+            .unwrap_or_default()
+    };
+    let Some(id) = id else { return not_found() };
+    let state = app.state::<AppState>();
+    let path = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|c| db::track_path(&c, id).ok().flatten());
+    let cache = app.path().app_cache_dir().map(|d| d.join("art"));
+    let bytes = path
+        .zip(cache.ok())
+        .and_then(|(p, dir)| art::thumbnail(Path::new(&p), &dir));
+    bytes.map_or_else(not_found, |b| {
+        tauri::http::Response::builder()
+            .header("Content-Type", "image/jpeg")
+            .header("Cache-Control", "max-age=31536000")
+            .body(b)
+            .unwrap_or_default()
+    })
 }
 
 /// # Panics
@@ -205,6 +276,11 @@ async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<sync::Su
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol("art", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let id = request.uri().path().trim_matches('/').parse::<i64>().ok();
+            std::thread::spawn(move || responder.respond(art_response(&app, id)));
+        })
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -236,9 +312,12 @@ pub fn run() {
             delete_tag,
             tailscale_status,
             drive_list,
-            get_sync_target,
-            set_sync_target,
-            sync_now
+            list_sync_targets,
+            add_sync_target,
+            remove_sync_target,
+            sync_history,
+            sync_run,
+            is_syncing
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

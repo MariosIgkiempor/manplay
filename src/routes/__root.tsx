@@ -1,7 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { PlayerBar } from "#/components/player-bar.tsx";
 import { Sidebar } from "#/components/sidebar.tsx";
+import { PlayerProvider } from "#/context/player-provider.tsx";
+import { SyncProgressProvider } from "#/context/sync-progress-provider.tsx";
 import appCss from "../styles.css?url";
 
 const queryClient = new QueryClient();
@@ -24,12 +27,19 @@ function RootDocument({ children }: { children: ReactNode }) {
 			<head>
 				<HeadContent />
 			</head>
-			<body>
+			<body className="overflow-hidden">
 				<QueryClientProvider client={queryClient}>
-					<div className="flex h-screen">
-						<Sidebar />
-						<div className="flex-1 overflow-y-auto">{children}</div>
-					</div>
+					<PlayerProvider>
+						<SyncProgressProvider>
+							<div className="flex h-screen flex-col">
+								<div className="flex min-h-0 flex-1">
+									<Sidebar />
+									<div className="min-w-0 flex-1 overflow-y-auto">{children}</div>
+								</div>
+								<PlayerBar />
+							</div>
+						</SyncProgressProvider>
+					</PlayerProvider>
 				</QueryClientProvider>
 				<Scripts />
 			</body>

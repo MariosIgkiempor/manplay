@@ -15,6 +15,8 @@ pub struct Track {
     pub title: String,
     pub size: i64,
     pub tags: Vec<String>,
+    /// Number of sync targets that currently hold an up-to-date copy.
+    pub synced_count: i64,
 }
 
 pub struct NewTrack {
@@ -52,6 +54,30 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              key   TEXT PRIMARY KEY,
              value TEXT NOT NULL
          );
+         CREATE TABLE IF NOT EXISTS sync_targets (
+             id      INTEGER PRIMARY KEY,
+             tailnet TEXT NOT NULL,
+             machine TEXT NOT NULL,
+             path    TEXT NOT NULL,
+             UNIQUE (tailnet, machine, path)
+         );
+         CREATE TABLE IF NOT EXISTS synced_files (
+             target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
+             track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+             size      INTEGER NOT NULL,
+             synced_at INTEGER NOT NULL,
+             PRIMARY KEY (target_id, track_id)
+         );
+         CREATE TABLE IF NOT EXISTS sync_runs (
+             id          INTEGER PRIMARY KEY,
+             target_id   INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
+             started_at  INTEGER NOT NULL,
+             finished_at INTEGER NOT NULL,
+             uploaded    INTEGER NOT NULL,
+             skipped     INTEGER NOT NULL,
+             failed      INTEGER NOT NULL,
+             first_error TEXT
+         );
          CREATE TABLE IF NOT EXISTS tags (
              id   INTEGER PRIMARY KEY,
              name TEXT NOT NULL UNIQUE COLLATE NOCASE
@@ -87,7 +113,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
 
 const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
     (SELECT group_concat(g.name, char(31)) FROM track_tags tt
-     JOIN tags g ON g.id = tt.tag_id WHERE tt.track_id = t.id)";
+     JOIN tags g ON g.id = tt.tag_id WHERE tt.track_id = t.id),
+    (SELECT COUNT(*) FROM synced_files sf WHERE sf.track_id = t.id AND sf.size = t.size)";
 
 fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
     let tags: Option<String> = r.get(6)?;
@@ -101,6 +128,7 @@ fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         tags: tags
             .map(|s| s.split('\u{1f}').map(str::to_owned).collect())
             .unwrap_or_default(),
+        synced_count: r.get(7)?,
     })
 }
 
@@ -279,8 +307,182 @@ pub fn set_setting(conn: &Connection, key: &str, value: Option<&str>) -> Result<
     Ok(())
 }
 
-pub fn all_paths(conn: &Connection) -> Result<Vec<String>, Error> {
-    let mut stmt = conn.prepare("SELECT path FROM tracks ORDER BY path")?;
-    let rows = stmt.query_map([], |r| r.get(0))?;
+pub struct TrackFile {
+    pub id: i64,
+    pub path: String,
+}
+
+pub fn all_files(conn: &Connection) -> Result<Vec<TrackFile>, Error> {
+    let mut stmt = conn.prepare("SELECT id, path FROM tracks ORDER BY path")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(TrackFile {
+            id: r.get(0)?,
+            path: r.get(1)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn track_path(conn: &Connection, id: i64) -> Result<Option<String>, Error> {
+    match conn.query_row("SELECT path FROM tracks WHERE id = ?1", params![id], |r| {
+        r.get(0)
+    }) {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewTarget {
+    pub tailnet: String,
+    pub machine: String,
+    /// First segment is the Taildrive share name.
+    pub path: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncTarget {
+    pub id: i64,
+    pub tailnet: String,
+    pub machine: String,
+    pub path: Vec<String>,
+    pub synced_tracks: i64,
+}
+
+fn parse_path(raw: &str) -> Vec<String> {
+    serde_json::from_str(raw).unwrap_or_default()
+}
+
+pub fn add_target(conn: &Connection, t: &NewTarget) -> Result<i64, Error> {
+    let path = serde_json::to_string(&t.path).map_err(|e| Error::Msg(e.to_string()))?;
+    conn.execute(
+        "INSERT OR IGNORE INTO sync_targets (tailnet, machine, path) VALUES (?1, ?2, ?3)",
+        params![t.tailnet, t.machine, path],
+    )?;
+    Ok(conn.query_row(
+        "SELECT id FROM sync_targets WHERE tailnet = ?1 AND machine = ?2 AND path = ?3",
+        params![t.tailnet, t.machine, path],
+        |r| r.get(0),
+    )?)
+}
+
+pub fn remove_target(conn: &Connection, id: i64) -> Result<(), Error> {
+    conn.execute("DELETE FROM sync_targets WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT st.id, st.tailnet, st.machine, st.path,
+                (SELECT COUNT(*) FROM synced_files sf JOIN tracks t ON t.id = sf.track_id
+                 WHERE sf.target_id = st.id AND sf.size = t.size)
+         FROM sync_targets st ORDER BY st.machine COLLATE NOCASE, st.path",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let raw: String = r.get(3)?;
+        Ok(SyncTarget {
+            id: r.get(0)?,
+            tailnet: r.get(1)?,
+            machine: r.get(2)?,
+            path: parse_path(&raw),
+            synced_tracks: r.get(4)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn get_targets(conn: &Connection, only: Option<i64>) -> Result<Vec<SyncTarget>, Error> {
+    Ok(list_targets(conn)?
+        .into_iter()
+        .filter(|t| only.is_none_or(|id| id == t.id))
+        .collect())
+}
+
+pub struct RunRecord {
+    pub target_id: i64,
+    pub started_at: i64,
+    pub finished_at: i64,
+    pub uploaded: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub first_error: Option<String>,
+}
+
+/// Stores the run and marks every confirmed-present track as synced.
+pub fn record_run(
+    conn: &mut Connection,
+    run: &RunRecord,
+    synced: &[(i64, i64)],
+) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO synced_files (target_id, track_id, size, synced_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(target_id, track_id) DO UPDATE SET
+                 size = excluded.size, synced_at = excluded.synced_at",
+        )?;
+        for (track_id, size) in synced {
+            stmt.execute(params![run.target_id, track_id, size, run.finished_at])?;
+        }
+    }
+    tx.execute(
+        "INSERT INTO sync_runs
+             (target_id, started_at, finished_at, uploaded, skipped, failed, first_error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            run.target_id,
+            run.started_at,
+            run.finished_at,
+            i64::try_from(run.uploaded).unwrap_or(i64::MAX),
+            i64::try_from(run.skipped).unwrap_or(i64::MAX),
+            i64::try_from(run.failed).unwrap_or(i64::MAX),
+            run.first_error
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunView {
+    pub id: i64,
+    pub target_id: i64,
+    pub machine: String,
+    pub path: Vec<String>,
+    pub started_at: i64,
+    pub finished_at: i64,
+    pub uploaded: i64,
+    pub skipped: i64,
+    pub failed: i64,
+    pub first_error: Option<String>,
+}
+
+pub fn history(conn: &Connection, limit: i64) -> Result<Vec<RunView>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.target_id, st.machine, st.path, r.started_at, r.finished_at,
+                r.uploaded, r.skipped, r.failed, r.first_error
+         FROM sync_runs r JOIN sync_targets st ON st.id = r.target_id
+         ORDER BY r.id DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |r| {
+        let raw: String = r.get(3)?;
+        Ok(RunView {
+            id: r.get(0)?,
+            target_id: r.get(1)?,
+            machine: r.get(2)?,
+            path: parse_path(&raw),
+            started_at: r.get(4)?,
+            finished_at: r.get(5)?,
+            uploaded: r.get(6)?,
+            skipped: r.get(7)?,
+            failed: r.get(8)?,
+            first_error: r.get(9)?,
+        })
+    })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }

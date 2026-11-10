@@ -1,16 +1,21 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { z } from "zod";
 
+const int = z.number().int();
+
+// ---- tracks ---------------------------------------------------------------
+
 const trackSchema = z.object({
-	id: z.number().int(),
+	id: int,
 	path: z.string(),
 	artist: z.string(),
 	album: z.string(),
 	title: z.string(),
-	size: z.number().int(),
+	size: int,
 	tags: z.array(z.string()),
+	syncedCount: int,
 });
 
 export type Track = z.infer<typeof trackSchema>;
@@ -25,17 +30,22 @@ export async function pickAndScan(): Promise<number | null> {
 	if (root === null) {
 		return null;
 	}
-	return z
-		.number()
-		.int()
-		.parse(await invoke("scan_library", { root }));
+	return int.parse(await invoke("scan_library", { root }));
 }
 
-const playlistSchema = z.object({
-	id: z.number().int(),
-	name: z.string(),
-	trackCount: z.number().int(),
-});
+/** URL of the album artwork thumbnail for a track (404s when there is none). */
+export function artUrl(trackId: number): string {
+	return convertFileSrc(String(trackId), "art");
+}
+
+/** URL the webview can stream audio from. */
+export function audioUrl(path: string): string {
+	return convertFileSrc(path);
+}
+
+// ---- playlists ------------------------------------------------------------
+
+const playlistSchema = z.object({ id: int, name: z.string(), trackCount: int });
 
 export type Playlist = z.infer<typeof playlistSchema>;
 
@@ -44,10 +54,7 @@ export async function listPlaylists(): Promise<Playlist[]> {
 }
 
 export async function createPlaylist(name: string): Promise<number> {
-	return z
-		.number()
-		.int()
-		.parse(await invoke("create_playlist", { name }));
+	return int.parse(await invoke("create_playlist", { name }));
 }
 
 export async function renamePlaylist(id: number, name: string): Promise<void> {
@@ -70,11 +77,9 @@ export async function playlistTracks(playlistId: number): Promise<Track[]> {
 	return z.array(trackSchema).parse(await invoke("playlist_tracks", { playlistId }));
 }
 
-const tagSchema = z.object({
-	id: z.number().int(),
-	name: z.string(),
-	trackCount: z.number().int(),
-});
+// ---- tags -----------------------------------------------------------------
+
+const tagSchema = z.object({ id: int, name: z.string(), trackCount: int });
 
 export type Tag = z.infer<typeof tagSchema>;
 
@@ -94,6 +99,8 @@ export async function deleteTag(id: number): Promise<void> {
 	await invoke("delete_tag", { id });
 }
 
+// ---- tailscale / taildrive ------------------------------------------------
+
 const machineSchema = z.object({
 	name: z.string(),
 	hostName: z.string(),
@@ -102,10 +109,7 @@ const machineSchema = z.object({
 	isSelf: z.boolean(),
 });
 
-const statusSchema = z.object({
-	tailnet: z.string(),
-	machines: z.array(machineSchema),
-});
+const statusSchema = z.object({ tailnet: z.string(), machines: z.array(machineSchema) });
 
 export type Machine = z.infer<typeof machineSchema>;
 
@@ -119,37 +123,60 @@ export async function driveList(tailnet: string, machine: string, path: string[]
 	return z.array(entrySchema).parse(await invoke("drive_list", { tailnet, machine, path }));
 }
 
-const targetSchema = z.object({
+// ---- sync -----------------------------------------------------------------
+
+const newTargetSchema = z.object({
 	tailnet: z.string(),
 	machine: z.string(),
 	path: z.array(z.string()),
 });
 
+export type NewTarget = z.infer<typeof newTargetSchema>;
+
+const targetSchema = newTargetSchema.extend({ id: int, syncedTracks: int });
+
 export type SyncTarget = z.infer<typeof targetSchema>;
 
-export async function getSyncTarget(): Promise<SyncTarget | null> {
-	return targetSchema.nullable().parse(await invoke("get_sync_target"));
+export async function listSyncTargets(): Promise<SyncTarget[]> {
+	return z.array(targetSchema).parse(await invoke("list_sync_targets"));
 }
 
-export async function setSyncTarget(target: SyncTarget | null): Promise<void> {
-	await invoke("set_sync_target", { target });
+export async function addSyncTarget(target: NewTarget): Promise<number> {
+	return int.parse(await invoke("add_sync_target", { target }));
 }
 
-const summarySchema = z.object({
-	uploaded: z.number().int(),
-	skipped: z.number().int(),
-	failed: z.array(z.string()),
+export async function removeSyncTarget(id: number): Promise<void> {
+	await invoke("remove_sync_target", { id });
+}
+
+const runSchema = z.object({
+	id: int,
+	targetId: int,
+	machine: z.string(),
+	path: z.array(z.string()),
+	startedAt: int,
+	finishedAt: int,
+	uploaded: int,
+	skipped: int,
+	failed: int,
+	firstError: z.string().nullable(),
 });
 
-export type SyncSummary = z.infer<typeof summarySchema>;
+export type SyncRun = z.infer<typeof runSchema>;
 
-export async function syncNow(): Promise<SyncSummary> {
-	return summarySchema.parse(await invoke("sync_now"));
+export async function syncHistory(limit: number): Promise<SyncRun[]> {
+	return z.array(runSchema).parse(await invoke("sync_history", { limit }));
+}
+
+/** Syncs one target, or every target when `targetId` is omitted. */
+export async function syncRun(targetId?: number): Promise<void> {
+	await invoke("sync_run", { targetId: targetId ?? null });
 }
 
 const progressSchema = z.object({
-	done: z.number().int(),
-	total: z.number().int(),
+	targetId: int,
+	done: int,
+	total: int,
 	current: z.string(),
 });
 
