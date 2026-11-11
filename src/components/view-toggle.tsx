@@ -1,8 +1,8 @@
-import { Disc3, ListMusic } from "lucide-react";
+import { Disc3, FolderTree, ListMusic } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "#/lib/utils.ts";
 
-export type View = "albums" | "songs";
+export type View = "albums" | "songs" | "files";
 
 export function ViewToggle({ view, onChange }: { view: View; onChange: (v: View) => void }) {
 	const item = (v: View, label: string, icon: ReactNode) => (
@@ -22,6 +22,7 @@ export function ViewToggle({ view, onChange }: { view: View; onChange: (v: View)
 		<div className="flex rounded-lg bg-muted p-0.5">
 			{item("albums", "Albums", <Disc3 className="size-4" />)}
 			{item("songs", "Songs", <ListMusic className="size-4" />)}
+			{item("files", "Files", <FolderTree className="size-4" />)}
 		</div>
 	);
 }

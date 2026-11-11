@@ -1,4 +1,5 @@
 import { Play } from "lucide-react";
+import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { useDetailNav } from "#/context/detail-context.ts";
@@ -23,45 +24,55 @@ function AlbumTile({
 	const player = usePlayer();
 	const go = useDetailNav();
 	return (
-		<div className="group min-w-0">
-			<div className="relative">
-				<button
-					type="button"
-					className="block w-full overflow-hidden rounded-lg border"
-					onClick={onOpen}
-					aria-label={`Open ${album.album}`}
-				>
-					<AlbumArt
-						trackId={album.coverTrackId}
-						className="w-full transition group-hover:scale-[1.03]"
-					/>
-				</button>
-				<button
-					type="button"
-					aria-label={`Play ${album.album}`}
-					className="absolute right-2 bottom-2 flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 shadow-lg transition focus-visible:opacity-100 group-hover:opacity-100"
-					onClick={() => player.play(album.tracks, 0)}
-				>
-					<Play className="size-5" />
-				</button>
-			</div>
-			<div className="mt-2 flex items-start justify-between gap-2">
-				<div className="min-w-0">
-					<div className="truncate font-medium text-sm" title={album.album}>
-						{album.album}
-					</div>
+		<AddToPlaylistMenu
+			tracks={album.tracks}
+			label={`${album.album} · ${album.tracks.length} songs`}
+		>
+			<div className="group min-w-0">
+				<div className="relative">
 					<button
 						type="button"
-						className="block max-w-full truncate text-left text-muted-foreground text-xs hover:text-foreground hover:underline"
-						title={album.artist}
-						onClick={() => go({ kind: "artist", name: album.artist })}
+						className="block w-full overflow-hidden rounded-lg border"
+						onClick={onOpen}
+						aria-label={`Open ${album.album}`}
 					>
-						{album.artist}
+						<AlbumArt
+							trackId={album.coverTrackId}
+							className="w-full transition group-hover:scale-[1.03]"
+						/>
+					</button>
+					<button
+						type="button"
+						aria-label={`Play ${album.album}`}
+						className="absolute right-2 bottom-2 flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 shadow-lg transition focus-visible:opacity-100 group-hover:opacity-100"
+						onClick={() => player.play(album.tracks, 0)}
+					>
+						<Play className="size-5" />
 					</button>
 				</div>
-				<SyncBadge state={syncState(album.tracks, targetCount)} />
+				<div className="mt-2 flex items-start justify-between gap-2">
+					<div className="min-w-0">
+						<button
+							type="button"
+							className="block max-w-full truncate text-left font-medium text-sm hover:underline"
+							title={album.album}
+							onClick={onOpen}
+						>
+							{album.album}
+						</button>
+						<button
+							type="button"
+							className="block max-w-full truncate text-left text-muted-foreground text-xs hover:text-foreground hover:underline"
+							title={album.artist}
+							onClick={() => go({ kind: "artist", name: album.artist })}
+						>
+							{album.artist}
+						</button>
+					</div>
+					<SyncBadge state={syncState(album.tracks, targetCount)} />
+				</div>
 			</div>
-		</div>
+		</AddToPlaylistMenu>
 	);
 }
 

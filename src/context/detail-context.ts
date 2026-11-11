@@ -18,6 +18,9 @@ export interface DetailApi {
 
 export const DetailContext = createContext<DetailApi | null>(null);
 
+/** Element at the bottom edge of the current view where track lists pin their status bar. */
+export const StatusSlotContext = createContext<HTMLElement | null>(null);
+
 /** True for components rendered inside the slide-over panel. */
 export const PanelScopeContext = createContext(false);
 

@@ -46,7 +46,7 @@ export function AlbumPanel({ albumKey }: { albumKey: string }) {
 				}
 				tracks={album.tracks}
 			/>
-			<SelectableTrackList tracks={album.tracks} hideArt />
+			<SelectableTrackList tracks={album.tracks} hideArt hideArtist hideAlbum showDuration />
 		</div>
 	);
 }

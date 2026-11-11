@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { z } from "zod";
 
 const int = z.number().int();
@@ -16,6 +16,9 @@ const trackSchema = z.object({
 	size: int,
 	tags: z.array(z.string()),
 	syncedCount: int,
+	durationMs: int.nullable(),
+	bitrate: int.nullable(),
+	sampleRate: int.nullable(),
 });
 
 export type Track = z.infer<typeof trackSchema>;
@@ -61,6 +64,11 @@ export async function removeMissingNow(): Promise<void> {
 /** URL of the album artwork thumbnail for a track (404s when there is none). */
 export function artUrl(trackId: number): string {
 	return convertFileSrc(String(trackId), "art");
+}
+
+/** Artwork for a file or folder in the library (a folder uses the first track inside it). */
+export function pathArtUrl(path: string): string {
+	return convertFileSrc(path, "art");
 }
 
 /** URL the webview can stream audio from. */
@@ -250,4 +258,90 @@ export async function setRekordboxPath(path: string | null): Promise<RekordboxSt
 
 export async function exportRekordbox(): Promise<RekordboxStatus> {
 	return rekordboxSchema.parse(await invoke("rekordbox_export"));
+}
+
+// ---- iTunes import --------------------------------------------------------
+
+const itunesReportSchema = z.object({
+	ranAt: int,
+	converted: z.array(
+		z.object({ artist: z.string(), album: z.string(), title: z.string(), dest: z.string() }),
+	),
+	skipped: int,
+	failed: z.array(z.object({ file: z.string(), error: z.string() })),
+	error: z.string().nullable(),
+});
+
+const itunesSchema = z.object({
+	path: z.string().nullable(),
+	last: itunesReportSchema.nullable(),
+});
+
+export type ItunesStatus = z.infer<typeof itunesSchema>;
+
+export async function itunesStatus(): Promise<ItunesStatus> {
+	return itunesSchema.parse(await invoke("itunes_status"));
+}
+
+/** Asks for the iTunes folder. Returns null if cancelled. */
+export function pickItunesFolder(): Promise<string | null> {
+	return open({ directory: true, multiple: false, title: "Choose your iTunes media folder" });
+}
+
+export async function setItunesPath(path: string | null): Promise<ItunesStatus> {
+	return itunesSchema.parse(await invoke("itunes_set_path", { path }));
+}
+
+/** Converts new iTunes songs into the library. Null when iTunes or the library is not set up. */
+export async function itunesImport(): Promise<ItunesStatus | null> {
+	return itunesSchema.nullable().parse(await invoke("itunes_import"));
+}
+
+// ---- file browser ---------------------------------------------------------
+
+const fsEntrySchema = z.object({
+	name: z.string(),
+	isDir: z.boolean(),
+	size: z.number(),
+	modified: int.nullable(),
+});
+
+export type FsEntry = z.infer<typeof fsEntrySchema>;
+
+/** Lists a folder inside the library (folders first). */
+export async function fsList(path: string): Promise<FsEntry[]> {
+	return z.array(fsEntrySchema).parse(await invoke("fs_list", { path }));
+}
+
+export async function fsMakeDir(parent: string, name: string): Promise<void> {
+	await invoke("fs_make_dir", { parent, name });
+}
+
+export async function fsRename(path: string, newName: string): Promise<void> {
+	await invoke("fs_rename", { path, newName });
+}
+
+/** Copies into `dest`; a name already taken there gets " copy" added. */
+export async function fsCopy(paths: string[], dest: string): Promise<void> {
+	await invoke("fs_copy", { paths, dest });
+}
+
+/** Moves to the system Trash. */
+export async function fsTrash(paths: string[]): Promise<void> {
+	await invoke("fs_trash", { paths });
+}
+
+/** Native yes/no prompt before deleting. */
+export function confirmTrash(names: string[]): Promise<boolean> {
+	const what = names.length === 1 ? `“${names[0]}”` : `${names.length} items`;
+	return ask(`Move ${what} to the Trash?`, {
+		title: "Delete",
+		kind: "warning",
+		okLabel: "Move to Trash",
+	});
+}
+
+/** Moves files and folders into `dest`. Fails without changing anything on a name clash. */
+export async function fsMove(paths: string[], dest: string): Promise<void> {
+	await invoke("fs_move", { paths, dest });
 }

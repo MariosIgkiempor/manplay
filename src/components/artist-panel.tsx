@@ -36,7 +36,7 @@ export function ArtistPanel({ name }: { name: string }) {
 			</section>
 			<section className="space-y-3">
 				<h3 className="font-semibold">Tracks</h3>
-				<SelectableTrackList tracks={artistTracks} />
+				<SelectableTrackList tracks={artistTracks} hideArtist showDuration />
 			</section>
 		</div>
 	);

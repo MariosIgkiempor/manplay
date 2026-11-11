@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	fsCopy,
+	fsMakeDir,
+	fsMove,
+	fsRename,
+	fsTrash,
 	getLibraryRoot,
+	itunesImport,
 	libraryStatus,
 	listSyncTargets,
 	listTracks,
@@ -90,5 +96,82 @@ export function useScan() {
 				sync.mutate(undefined);
 			}
 		},
+	});
+}
+
+/** Imports new iTunes songs, then refreshes the library and syncs the new files. */
+export function useItunesImport() {
+	const queryClient = useQueryClient();
+	const sync = useSyncRun();
+	return useMutation({
+		mutationKey: ["itunes-import"],
+		mutationFn: itunesImport,
+		onSuccess: async (status) => {
+			if (status === null) {
+				return;
+			}
+			queryClient.setQueryData(["itunes"], status);
+			if ((status.last?.converted.length ?? 0) === 0) {
+				return;
+			}
+			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
+			await queryClient.invalidateQueries({ queryKey: ["library-status"] });
+			const targets = await queryClient.ensureQueryData({
+				queryKey: ["sync-targets"],
+				queryFn: listSyncTargets,
+			});
+			if (targets.length > 0) {
+				sync.mutate(undefined);
+			}
+		},
+	});
+}
+
+/** Everything that can change when files move on disk (the backend rescans afterwards). */
+async function refreshAfterFsChange(queryClient: ReturnType<typeof useQueryClient>) {
+	await Promise.all(
+		["fs", "tracks", "playlists", "tags", "library-status"].map((k) =>
+			queryClient.invalidateQueries({ queryKey: [k] }),
+		),
+	);
+}
+
+export function useFsMakeDir() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ parent, name }: { parent: string; name: string }) => fsMakeDir(parent, name),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: ["fs"] }),
+	});
+}
+
+export function useFsRename() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ path, newName }: { path: string; newName: string }) => fsRename(path, newName),
+		onSettled: () => refreshAfterFsChange(queryClient),
+	});
+}
+
+export function useFsCopy() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ paths, dest }: { paths: string[]; dest: string }) => fsCopy(paths, dest),
+		onSettled: () => refreshAfterFsChange(queryClient),
+	});
+}
+
+export function useFsTrash() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (paths: string[]) => fsTrash(paths),
+		onSettled: () => refreshAfterFsChange(queryClient),
+	});
+}
+
+export function useFsMove() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ paths, dest }: { paths: string[]; dest: string }) => fsMove(paths, dest),
+		onSettled: () => refreshAfterFsChange(queryClient),
 	});
 }

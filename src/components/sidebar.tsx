@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { CloudUpload, Disc3, Library, ListMusic, Music, Plus } from "lucide-react";
+import {
+	CloudUpload,
+	Disc3,
+	Download,
+	Library,
+	ListMusic,
+	Music,
+	Plus,
+	Settings,
+} from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -15,7 +24,7 @@ function NavLink({
 	children,
 	...props
 }: {
-	to: "/" | "/sync" | "/rekordbox";
+	to: "/" | "/sync" | "/rekordbox" | "/itunes" | "/settings";
 	children: ReactNode;
 }) {
 	return (
@@ -69,6 +78,10 @@ export function Sidebar() {
 					Sync
 					{syncing && <span className="ml-auto size-2 animate-pulse rounded-full bg-primary" />}
 				</NavLink>
+				<NavLink to="/itunes">
+					<Download className="size-4" />
+					iTunes
+				</NavLink>
 				<NavLink to="/rekordbox">
 					<Disc3 className="size-4" />
 					Rekordbox
@@ -99,6 +112,12 @@ export function Sidebar() {
 				</Button>
 			</form>
 			{create.isError && <p className="text-destructive text-xs">{String(create.error)}</p>}
+			<nav className="border-t pt-2">
+				<NavLink to="/settings">
+					<Settings className="size-4" />
+					Settings
+				</NavLink>
+			</nav>
 		</aside>
 	);
 }

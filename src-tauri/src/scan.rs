@@ -12,7 +12,7 @@ use crate::db::NewTrack;
 
 const EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "aif", "aiff", "m4a"];
 
-fn is_audio(path: &Path) -> bool {
+pub fn is_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
@@ -48,22 +48,34 @@ pub struct ScanResult {
     pub errors: usize,
 }
 
-fn read_track(root: &Path, entry: &walkdir::DirEntry) -> Option<NewTrack> {
-    let path = entry.path();
+/// Artist and album as named by the folders: the two folders directly above the file
+/// (`…/Artist/Album/track.ext`), so wrappers like `Media.localized/Music/` are ignored.
+/// A file directly inside an artist folder gets the album "Unknown". `None` only for files
+/// sitting loose in `root`.
+pub fn folder_names(root: &Path, path: &Path) -> Option<(String, String)> {
     let rel = path.strip_prefix(root).ok()?;
     let parts: Vec<&str> = rel.iter().filter_map(|p| p.to_str()).collect();
+    match parts.as_slice() {
+        [.., artist, album, _] => Some(((*artist).to_owned(), (*album).to_owned())),
+        [artist, _] => Some(((*artist).to_owned(), "Unknown".to_owned())),
+        _ => None,
+    }
+}
+
+fn read_track(root: &Path, entry: &walkdir::DirEntry) -> Option<NewTrack> {
+    let path = entry.path();
+    let folders = folder_names(root, path);
     let tagged = read_from_path(path).ok();
     let tag = tagged.as_ref().and_then(|f| f.primary_tag());
     let tag_text = |get: fn(&lofty::tag::Tag) -> Option<std::borrow::Cow<'_, str>>| {
         tag.and_then(get).map(std::borrow::Cow::into_owned)
     };
-    let (artist, album) = match parts.as_slice() {
-        [artist, album, _] => ((*artist).to_owned(), (*album).to_owned()),
-        _ => (
+    let (artist, album) = folders.unwrap_or_else(|| {
+        (
             tag_text(Accessor::artist).unwrap_or_else(|| "Unknown".to_owned()),
             tag_text(Accessor::album).unwrap_or_else(|| "Unknown".to_owned()),
-        ),
-    };
+        )
+    });
     let stem = path.file_stem()?.to_str()?.to_owned();
     let title = tag_text(Accessor::title).unwrap_or(stem);
     let len = entry.metadata().ok()?.len();
@@ -82,8 +94,8 @@ fn read_track(root: &Path, entry: &walkdir::DirEntry) -> Option<NewTrack> {
     })
 }
 
-/// Library layout is `root/artist/album/track.ext`. Folder names win when the
-/// file sits at that depth; otherwise fall back to tags, then "Unknown".
+/// Library layout is `…/artist/album/track.ext`. Folder names win for anything inside an
+/// artist folder; only files loose in the root fall back to tags, then "Unknown".
 pub fn scan(root: &Path) -> ScanResult {
     let mut result = ScanResult {
         tracks: Vec::new(),
@@ -158,6 +170,20 @@ mod tests {
         assert_eq!(fp(&dir.join("missing.bin")), None);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn folders_name_artist_and_album_even_when_nested() {
+        let root = Path::new("/lib");
+        let names = |p: &str| folder_names(root, Path::new(p));
+        let some = |a: &str, b: &str| Some((a.to_owned(), b.to_owned()));
+        assert_eq!(names("/lib/A/B/t.mp3"), some("A", "B"));
+        assert_eq!(
+            names("/lib/Media.localized/Music/A/B/t.m4a"),
+            some("A", "B")
+        );
+        assert_eq!(names("/lib/A/t.mp3"), some("A", "Unknown"));
+        assert_eq!(names("/lib/t.mp3"), None);
     }
 
     /// Minimal valid WAV: mono, 8-bit, `rate` Hz, `secs` seconds of silence.

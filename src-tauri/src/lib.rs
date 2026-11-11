@@ -3,6 +3,8 @@
 mod art;
 mod db;
 mod error;
+mod fsops;
+mod itunes;
 mod rekordbox;
 mod scan;
 mod sync;
@@ -500,6 +502,91 @@ fn is_syncing(state: State<'_, AppState>) -> bool {
     state.syncing.load(Ordering::SeqCst)
 }
 
+// ---- file browser ------------------------------------------------------------
+
+fn library_root(state: &AppState) -> Result<PathBuf, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::get_setting(&conn, SETTING_ROOT)?
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::Msg("choose a library folder in Library first".to_owned()))
+}
+
+#[tauri::command]
+async fn fs_list(state: State<'_, AppState>, path: PathBuf) -> Result<Vec<fsops::FsEntry>, Error> {
+    let root = library_root(&state)?;
+    tauri::async_runtime::spawn_blocking(move || fsops::list(&root, &path))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+/// Rescans so the database follows a change on disk: renamed and moved files keep their
+/// tags and playlists (see `detect_moves`). The change itself already succeeded, so a failed
+/// rescan is only logged.
+async fn refresh_after_fs_change(state: &AppState, root: PathBuf) {
+    if let Err(e) = scan_and_store(state, root).await {
+        log::warn!("rescan after file change failed: {e}");
+    }
+}
+
+#[tauri::command]
+async fn fs_make_dir(
+    state: State<'_, AppState>,
+    parent: PathBuf,
+    name: String,
+) -> Result<(), Error> {
+    let root = library_root(&state)?;
+    fsops::make_dir(&root, &parent, &name)?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn fs_rename(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    new_name: String,
+) -> Result<(), Error> {
+    let root = library_root(&state)?;
+    fsops::rename(&root, &path, &new_name)?;
+    refresh_after_fs_change(&state, root).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn fs_copy(
+    state: State<'_, AppState>,
+    paths: Vec<PathBuf>,
+    dest: PathBuf,
+) -> Result<(), Error> {
+    let root = library_root(&state)?;
+    fsops::copy_into(&root, &paths, &dest)?;
+    refresh_after_fs_change(&state, root).await;
+    Ok(())
+}
+
+/// Moves to the system Trash. Tracks that vanish are soft-deleted by the rescan, as usual.
+#[tauri::command]
+async fn fs_trash(state: State<'_, AppState>, paths: Vec<PathBuf>) -> Result<(), Error> {
+    let root = library_root(&state)?;
+    let r = root.clone();
+    tauri::async_runtime::spawn_blocking(move || fsops::trash(&r, &paths))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    refresh_after_fs_change(&state, root).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn fs_move(
+    state: State<'_, AppState>,
+    paths: Vec<PathBuf>,
+    dest: PathBuf,
+) -> Result<(), Error> {
+    let root = library_root(&state)?;
+    fsops::move_into(&root, &paths, &dest)?;
+    refresh_after_fs_change(&state, root).await;
+    Ok(())
+}
+
 // ---- rekordbox ---------------------------------------------------------------
 
 const SETTING_RB_PATH: &str = "rekordbox_xml_path";
@@ -614,20 +701,145 @@ fn rekordbox_export(state: State<'_, AppState>) -> Result<RekordboxStatus, Error
     rekordbox_status_of(&conn)
 }
 
-fn art_response(app: &AppHandle, id: Option<i64>) -> tauri::http::Response<Vec<u8>> {
+// ---- iTunes import -----------------------------------------------------------
+
+const SETTING_ITUNES_PATH: &str = "itunes_path";
+const SETTING_ITUNES_LAST: &str = "itunes_last_import";
+const ITUNES_KEEP: usize = 50;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ItunesStatus {
+    path: Option<String>,
+    last: Option<itunes::ImportReport>,
+}
+
+fn itunes_status_of(conn: &Connection) -> Result<ItunesStatus, Error> {
+    Ok(ItunesStatus {
+        path: db::get_setting(conn, SETTING_ITUNES_PATH)?,
+        last: db::get_setting(conn, SETTING_ITUNES_LAST)?
+            .and_then(|raw| serde_json::from_str(&raw).ok()),
+    })
+}
+
+#[tauri::command]
+fn itunes_status(state: State<'_, AppState>) -> Result<ItunesStatus, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    itunes_status_of(&conn)
+}
+
+/// Chooses (or clears, with `None`) the iTunes folder to import from.
+#[tauri::command]
+fn itunes_set_path(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<ItunesStatus, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::set_setting(&conn, SETTING_ITUNES_PATH, path.as_deref())?;
+    if path.is_none() {
+        db::set_setting(&conn, SETTING_ITUNES_LAST, None)?;
+    }
+    itunes_status_of(&conn)
+}
+
+/// Converts new iTunes songs into the library, then rescans so they show up.
+/// `Ok(None)` when no iTunes folder or library folder is configured.
+#[tauri::command]
+async fn itunes_import(state: State<'_, AppState>) -> Result<Option<ItunesStatus>, Error> {
+    let (source, library, known) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let source = db::get_setting(&conn, SETTING_ITUNES_PATH)?;
+        let library = db::get_setting(&conn, SETTING_ROOT)?;
+        let (Some(source), Some(library)) = (source, library) else {
+            return Ok(None);
+        };
+        (
+            PathBuf::from(source),
+            PathBuf::from(library),
+            itunes::Known::load(&conn)?,
+        )
+    };
+    let now = unix_now();
+    let lib = library.clone();
+    let (mut report, imported) = tauri::async_runtime::spawn_blocking(move || {
+        let mut imported = Vec::new();
+        let report = itunes::import(&source, &lib, known, now, |c, dest| {
+            imported.push((c.clone(), dest.to_path_buf()));
+            Ok(())
+        });
+        (report, imported)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?;
+
+    {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        for (c, dest) in &imported {
+            itunes::record_imported(&conn, c, dest, now)?;
+        }
+    }
+    if !report.converted.is_empty() {
+        scan_and_store(&state, library).await?;
+    }
+    report.converted.truncate(ITUNES_KEEP);
+    report.failed.truncate(ITUNES_KEEP);
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    let raw = serde_json::to_string(&report).map_err(|e| Error::Msg(e.to_string()))?;
+    db::set_setting(&conn, SETTING_ITUNES_LAST, Some(&raw))?;
+    itunes_status_of(&conn).map(Some)
+}
+
+/// What an `art://` request asks for: a track id, or a path in the library (file browser).
+enum ArtTarget {
+    None,
+    Track(i64),
+    Path(PathBuf),
+}
+
+impl ArtTarget {
+    fn parse(uri_path: &str) -> Self {
+        let raw = uri_path.strip_prefix('/').unwrap_or(uri_path);
+        if let Ok(id) = raw.parse::<i64>() {
+            return Self::Track(id);
+        }
+        percent_encoding::percent_decode_str(raw)
+            .decode_utf8()
+            .map_or(Self::None, |p| Self::Path(PathBuf::from(p.as_ref())))
+    }
+}
+
+/// The audio file whose artwork represents `path` (itself, or the first track inside a folder).
+/// Only paths inside the library folder qualify.
+fn fs_art_source(state: &AppState, path: &Path) -> Option<String> {
+    let root = library_root(state).ok()?;
+    let resolved = fsops::inside(&root, path).ok()?;
+    let track = if resolved.is_dir() {
+        fsops::first_audio(&resolved)?
+    } else if scan::is_audio(&resolved) {
+        resolved
+    } else {
+        return None;
+    };
+    track.to_str().map(str::to_owned)
+}
+
+fn art_response(app: &AppHandle, target: ArtTarget) -> tauri::http::Response<Vec<u8>> {
     let not_found = || {
         tauri::http::Response::builder()
             .status(404)
             .body(Vec::new())
             .unwrap_or_default()
     };
-    let Some(id) = id else { return not_found() };
     let state = app.state::<AppState>();
-    let path = state
-        .db
-        .lock()
-        .ok()
-        .and_then(|c| db::track_path(&c, id).ok().flatten());
+    let path = match target {
+        ArtTarget::None => None,
+        ArtTarget::Track(id) => state
+            .db
+            .lock()
+            .ok()
+            .and_then(|c| db::track_path(&c, id).ok().flatten()),
+        ArtTarget::Path(p) => fs_art_source(&state, &p),
+    };
     let cache = app.path().app_cache_dir().map(|d| d.join("art"));
     let bytes = path
         .zip(cache.ok())
@@ -650,8 +862,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .register_asynchronous_uri_scheme_protocol("art", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
-            let id = request.uri().path().trim_matches('/').parse::<i64>().ok();
-            std::thread::spawn(move || responder.respond(art_response(&app, id)));
+            let target = ArtTarget::parse(request.uri().path());
+            std::thread::spawn(move || responder.respond(art_response(&app, target)));
         })
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
@@ -697,7 +909,16 @@ pub fn run() {
             is_syncing,
             rekordbox_status,
             rekordbox_set_path,
-            rekordbox_export
+            rekordbox_export,
+            itunes_status,
+            itunes_set_path,
+            itunes_import,
+            fs_list,
+            fs_make_dir,
+            fs_rename,
+            fs_move,
+            fs_copy,
+            fs_trash
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

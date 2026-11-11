@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
-import { SelectionBar } from "#/components/selection-bar.tsx";
+import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TrackList } from "#/components/track-list.tsx";
 import { type Track, untagTrack } from "#/lib/api.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
@@ -30,9 +30,6 @@ export function SelectableTrackList({ tracks, ...rest }: ListProps) {
 
 	return (
 		<div className="space-y-3">
-			{selectedTracks.length > 0 && (
-				<SelectionBar tracks={selectedTracks} onClear={selection.clear} />
-			)}
 			{untag.isError && <p className="text-destructive text-sm">{String(untag.error)}</p>}
 			<TrackList
 				{...rest}
@@ -41,6 +38,10 @@ export function SelectableTrackList({ tracks, ...rest }: ListProps) {
 				selection={selection}
 				onRemoveTag={(t: Track, name: string) => untag.mutate({ name, trackId: t.id })}
 			/>
+			<StatusBar>
+				<Stat label="Total songs" value={tracks.length} />
+				{selectedTracks.length > 0 && <Stat label="Selected" value={selectedTracks.length} />}
+			</StatusBar>
 		</div>
 	);
 }

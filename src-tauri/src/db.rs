@@ -17,6 +17,9 @@ pub struct Track {
     pub tags: Vec<String>,
     /// Number of sync targets that currently hold an up-to-date copy.
     pub synced_count: i64,
+    pub duration_ms: Option<i64>,
+    pub bitrate: Option<i64>,
+    pub sample_rate: Option<i64>,
 }
 
 #[derive(Default)]
@@ -101,6 +104,13 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "tracks", "sample_rate", "INTEGER")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
+         CREATE TABLE IF NOT EXISTS itunes_imported (
+             source      TEXT NOT NULL,
+             size        INTEGER NOT NULL,
+             dest        TEXT NOT NULL,
+             imported_at INTEGER NOT NULL,
+             PRIMARY KEY (source, size)
+         );
          CREATE TABLE IF NOT EXISTS stale_remote (
              target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
              track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
@@ -166,7 +176,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
 const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
     (SELECT group_concat(g.name, char(31)) FROM track_tags tt
      JOIN tags g ON g.id = tt.tag_id WHERE tt.track_id = t.id),
-    (SELECT COUNT(*) FROM synced_files sf WHERE sf.track_id = t.id AND sf.size = t.size)";
+    (SELECT COUNT(*) FROM synced_files sf WHERE sf.track_id = t.id AND sf.size = t.size),
+    t.duration_ms, t.bitrate, t.sample_rate";
 
 fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
     let tags: Option<String> = r.get(6)?;
@@ -181,6 +192,9 @@ fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
             .map(|s| s.split('\u{1f}').map(str::to_owned).collect())
             .unwrap_or_default(),
         synced_count: r.get(7)?,
+        duration_ms: r.get(8)?,
+        bitrate: r.get(9)?,
+        sample_rate: r.get(10)?,
     })
 }
 

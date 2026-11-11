@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { AutoRefresh } from "#/components/auto-refresh.tsx";
 import { DetailPanel } from "#/components/detail-panel.tsx";
 import { PlayerBar } from "#/components/player-bar.tsx";
 import { Sidebar } from "#/components/sidebar.tsx";
+import { StatusSlotContext } from "#/context/detail-context.ts";
 import { DetailProvider } from "#/context/detail-provider.tsx";
 import { PlayerProvider } from "#/context/player-provider.tsx";
 import { SyncProgressProvider } from "#/context/sync-progress-provider.tsx";
@@ -25,6 +26,7 @@ export const Route = createRootRoute({
 });
 
 function RootDocument({ children }: { children: ReactNode }) {
+	const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
 	return (
 		<html lang="en" className="dark">
 			<head>
@@ -40,7 +42,10 @@ function RootDocument({ children }: { children: ReactNode }) {
 									<div className="flex min-h-0 flex-1">
 										<Sidebar />
 										<div className="relative min-w-0 flex-1 overflow-hidden">
-											<div className="h-full overflow-y-auto">{children}</div>
+											<StatusSlotContext.Provider value={statusSlot}>
+												<div className="h-full overflow-y-auto">{children}</div>
+											</StatusSlotContext.Provider>
+											<div ref={setStatusSlot} className="absolute inset-x-0 bottom-0 z-10" />
 											<DetailPanel />
 										</div>
 									</div>
