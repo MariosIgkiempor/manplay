@@ -6,7 +6,6 @@ import { LibraryHeader } from "#/components/library-header.tsx";
 import { LibraryList, ScanButtons } from "#/components/library-parts.tsx";
 import { MissingBanner } from "#/components/missing-banner.tsx";
 import { SearchPalette } from "#/components/search-palette.tsx";
-import { SyncStatusPill } from "#/components/sync-status-pill.tsx";
 import { type View, ViewToggle } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
@@ -76,7 +75,6 @@ function Library() {
 				subtitle={root.data ?? undefined}
 				controls={
 					<>
-						<SyncStatusPill />
 						<ViewToggle view={view} onChange={setView} />
 						<ScanButtons
 							hasRoot={!!root.data}

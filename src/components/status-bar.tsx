@@ -1,5 +1,6 @@
 import { type ReactNode, useContext } from "react";
 import { createPortal } from "react-dom";
+import { SyncStatusPill } from "#/components/sync-status-pill.tsx";
 import { StatusSlotContext } from "#/context/detail-context.ts";
 
 /** A labelled value in a status bar. */
@@ -12,7 +13,7 @@ export function Stat({ label, value }: { label: string; value: number | string }
 }
 
 /**
- * Pins `children` to the bottom edge of the current view (page or slide-over). Content
+ * Pins `children` (right-aligned, with sync progress on the left) to the bottom edge of the current view (page or slide-over). Content
  * scrolls behind it; the spacer keeps the last row clear.
  */
 export function StatusBar({ children }: { children: ReactNode }) {
@@ -23,7 +24,9 @@ export function StatusBar({ children }: { children: ReactNode }) {
 			{slot &&
 				createPortal(
 					<div className="flex items-center gap-4 border-t bg-background/70 px-4 py-2 text-muted-foreground text-xs backdrop-blur-md">
-						{children}
+						<SyncStatusPill />
+						{/* Pushed right so the stats do not move when a sync starts. */}
+						<div className="ml-auto flex items-center gap-4">{children}</div>
 					</div>,
 					slot,
 				)}
