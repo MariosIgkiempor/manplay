@@ -7,7 +7,15 @@
 	},
 	"files": {
 		"ignoreUnknown": false,
-		"includes": ["**", "!**/src/routeTree.gen.ts", "!**/src-tauri", "!**/dist", "!**/.tanstack"]
+		"includes": [
+			"**",
+			"!**/src/routeTree.gen.ts",
+			"!**/src-tauri",
+			"!**/website",
+			"!**/assets",
+			"!**/dist",
+			"!**/.tanstack"
+		]
 	},
 	"formatter": {
 		"enabled": true,
