@@ -24,7 +24,11 @@ const SAMPLE: u64 = 64 * 1024;
 /// the size plus two 64 KiB samples from inside the audio (so editing tags in place at the
 /// start or end of the file does not change it). Reads ~128 KiB per file, even for huge WAVs.
 pub fn fingerprint(path: &Path, size: u64) -> Option<String> {
-    let mut file = File::open(path).ok()?;
+    fingerprint_reader(&mut File::open(path).ok()?, size)
+}
+
+/// Same as [`fingerprint`] for any seekable source of `size` bytes (e.g. a file unpacked from a zip).
+pub fn fingerprint_reader<R: Read + Seek>(file: &mut R, size: u64) -> Option<String> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&size.to_le_bytes());
     let mut buf = vec![0_u8; usize::try_from(SAMPLE).ok()?];

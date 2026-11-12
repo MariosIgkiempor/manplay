@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 use crate::error::Error;
@@ -104,6 +104,10 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "tracks", "sample_rate", "INTEGER")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
+         CREATE TABLE IF NOT EXISTS import_cache (
+             folder TEXT PRIMARY KEY,
+             data   TEXT NOT NULL
+         );
          CREATE TABLE IF NOT EXISTS itunes_imported (
              source      TEXT NOT NULL,
              size        INTEGER NOT NULL,
@@ -816,4 +820,41 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
         playlists.push(ExportPlaylist { name, track_ids });
     }
     Ok((tracks, playlists))
+}
+
+/// Sizes and fingerprints of the tracks currently in the library, for spotting files that are
+/// already imported.
+pub fn content_index(conn: &Connection) -> Result<crate::import::ContentIndex, Error> {
+    let mut index = crate::import::ContentIndex::new();
+    let mut stmt = conn.prepare(
+        "SELECT size, fingerprint FROM tracks
+         WHERE missing_since IS NULL AND fingerprint IS NOT NULL",
+    )?;
+    for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+        let (size, fp) = row?;
+        if let Ok(size) = u64::try_from(size) {
+            index.entry(size).or_default().insert(fp);
+        }
+    }
+    Ok(index)
+}
+
+/// The saved import-scan cache for `folder`, as written by `put_import_cache`.
+pub fn get_import_cache(conn: &Connection, folder: &str) -> Result<Option<String>, Error> {
+    Ok(conn
+        .query_row(
+            "SELECT data FROM import_cache WHERE folder = ?1",
+            [folder],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+pub fn put_import_cache(conn: &Connection, folder: &str, data: &str) -> Result<(), Error> {
+    conn.execute(
+        "INSERT INTO import_cache (folder, data) VALUES (?1, ?2)
+         ON CONFLICT(folder) DO UPDATE SET data = excluded.data",
+        (folder, data),
+    )?;
+    Ok(())
 }

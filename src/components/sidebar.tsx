@@ -4,6 +4,7 @@ import {
 	CloudUpload,
 	Disc3,
 	Download,
+	FolderInput,
 	Library,
 	ListMusic,
 	Music,
@@ -24,7 +25,7 @@ function NavLink({
 	children,
 	...props
 }: {
-	to: "/" | "/sync" | "/rekordbox" | "/itunes" | "/settings";
+	to: "/" | "/import" | "/sync" | "/rekordbox" | "/itunes" | "/settings";
 	children: ReactNode;
 }) {
 	return (
@@ -72,6 +73,10 @@ export function Sidebar() {
 				<NavLink to="/">
 					<Library className="size-4" />
 					Library
+				</NavLink>
+				<NavLink to="/import">
+					<FolderInput className="size-4" />
+					Import
 				</NavLink>
 				<NavLink to="/sync">
 					<CloudUpload className="size-4" />

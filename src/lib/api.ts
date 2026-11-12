@@ -345,3 +345,106 @@ export function confirmTrash(names: string[]): Promise<boolean> {
 export async function fsMove(paths: string[], dest: string): Promise<void> {
 	await invoke("fs_move", { paths, dest });
 }
+
+// ---- import from downloads ---------------------------------------------------
+
+const sourceRefSchema = z.object({ path: z.string(), entry: z.string().nullable() });
+export type SourceRef = z.infer<typeof sourceRefSchema>;
+
+const importTrackSchema = z.object({
+	src: sourceRefSchema,
+	file: z.string(),
+	title: z.string(),
+	artist: z.string(),
+	size: z.number(),
+	status: z.enum(["new", "inLibrary", "duplicate"]),
+});
+
+const importGroupSchema = z.object({
+	id: int,
+	kind: z.enum(["album", "single"]),
+	origin: z.string(),
+	fromZip: z.boolean(),
+	modified: int,
+	artist: z.string(),
+	album: z.string(),
+	tracks: z.array(importTrackSchema),
+	images: z.array(sourceRefSchema),
+});
+
+const importScanSchema = z.object({
+	groups: z.array(importGroupSchema),
+	alreadyInLibrary: int,
+	errors: int,
+});
+
+export type ImportTrack = z.infer<typeof importTrackSchema>;
+export type ImportGroup = z.infer<typeof importGroupSchema>;
+export type ImportScan = z.infer<typeof importScanSchema>;
+
+const importReportSchema = z.object({
+	imported: int,
+	images: int,
+	failed: z.array(z.object({ file: z.string(), error: z.string() })),
+});
+
+export type ImportReport = z.infer<typeof importReportSchema>;
+
+export interface ImportRequest {
+	artist: string;
+	album: string;
+	tracks: SourceRef[];
+	images: SourceRef[];
+}
+
+export async function importGetFolder(): Promise<string | null> {
+	return z
+		.string()
+		.nullable()
+		.parse(await invoke("import_get_folder"));
+}
+
+export function pickImportFolder(): Promise<string | null> {
+	return open({ directory: true, multiple: false, title: "Choose a folder to import from" });
+}
+
+/**
+ * Finds music in `folder` (zips included) that is not in the library yet. Files unchanged since
+ * the last scan come from a cache; `fresh` ignores it and reads everything again.
+ */
+export async function importScan(folder: string, fresh = false): Promise<ImportScan> {
+	return importScanSchema.parse(await invoke("import_scan", { folder, fresh }));
+}
+
+/** Copies the chosen tracks into the library as Artist/Album. */
+export async function importRun(folder: string, groups: ImportRequest[]): Promise<ImportReport> {
+	return importReportSchema.parse(await invoke("import_run", { folder, groups }));
+}
+
+/** What the last scan of `folder` found, from the cache alone (instant). Null if never scanned. */
+export async function importCached(folder: string): Promise<ImportScan | null> {
+	return importScanSchema.nullable().parse(await invoke("import_cached", { folder }));
+}
+
+/** A local file the player can stream for an import candidate (zip entries are extracted first). */
+export async function importPreview(folder: string, src: SourceRef): Promise<string> {
+	return z.string().parse(await invoke("import_preview", { folder, src }));
+}
+
+const importProgressSchema = z.object({
+	phase: z.enum(["listing", "checking", "tags"]),
+	done: int,
+	total: int,
+});
+
+export type ImportProgress = z.infer<typeof importProgressSchema>;
+
+/** Subscribes to import-scan progress; returns an unsubscribe function. */
+export function onImportProgress(handler: (p: ImportProgress) => void): Promise<() => void> {
+	return listen("import-progress", (e) => {
+		const parsed = importProgressSchema.safeParse(e.payload);
+		if (parsed.success) {
+			handler(parsed.data);
+		}
+	});
+}

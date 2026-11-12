@@ -4,6 +4,7 @@ mod art;
 mod db;
 mod error;
 mod fsops;
+mod import;
 mod itunes;
 mod rekordbox;
 mod scan;
@@ -17,7 +18,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::Connection;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{NewTarget, Playlist, RunView, SyncTarget, Tag, Track};
 use crate::error::Error;
@@ -587,6 +588,137 @@ async fn fs_move(
     Ok(())
 }
 
+// ---- import from downloads ---------------------------------------------------
+
+const SETTING_IMPORT_FOLDER: &str = "import_folder";
+
+/// The folder to import from: the last one used, else the system Downloads folder.
+#[tauri::command]
+fn import_get_folder(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, Error> {
+    let saved = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::get_setting(&conn, SETTING_IMPORT_FOLDER)?
+    };
+    Ok(saved.or_else(|| {
+        app.path()
+            .download_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(str::to_owned))
+    }))
+}
+
+/// Looks through `folder` (and inside zips) for music that is not in the library. Files that
+/// have not changed since the last scan of this folder come from the cache unless `fresh`.
+/// Emits `import-progress` events while it works.
+#[tauri::command]
+async fn import_scan(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    folder: PathBuf,
+    fresh: bool,
+) -> Result<import::ImportScan, Error> {
+    if !folder.is_dir() {
+        return Err(Error::Msg(format!("not a folder: {}", folder.display())));
+    }
+    let key = folder.to_string_lossy().into_owned();
+    let (known, cache) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::set_setting(&conn, SETTING_IMPORT_FOLDER, folder.to_str())?;
+        let saved = if fresh {
+            None
+        } else {
+            db::get_import_cache(&conn, &key)?
+        };
+        (
+            db::content_index(&conn)?,
+            saved
+                .map(|j| import::Cache::from_json(&j))
+                .unwrap_or_default(),
+        )
+    };
+    let (found, json) = tauri::async_runtime::spawn_blocking(move || {
+        let report = |p: &import::Progress| {
+            let _ = app.emit("import-progress", p);
+        };
+        let opts = import::Options {
+            cached_only: false,
+            report: &report,
+        };
+        let (found, next) = import::scan(&folder, &known, &cache, &opts);
+        (found, next.to_json())
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?;
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::put_import_cache(&conn, &key, &json)?;
+    Ok(found)
+}
+
+/// What the last scan of `folder` found, rebuilt from the cache without reading any file.
+/// `None` when the folder was never scanned.
+#[tauri::command]
+async fn import_cached(
+    state: State<'_, AppState>,
+    folder: PathBuf,
+) -> Result<Option<import::ImportScan>, Error> {
+    let key = folder.to_string_lossy().into_owned();
+    let (known, saved) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        (
+            db::content_index(&conn)?,
+            db::get_import_cache(&conn, &key)?,
+        )
+    };
+    let Some(json) = saved else {
+        return Ok(None);
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let opts = import::Options {
+            cached_only: true,
+            report: &|_| {},
+        };
+        let cache = import::Cache::from_json(&json);
+        Some(import::scan(&folder, &known, &cache, &opts).0)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))
+}
+
+/// A local file the player can stream for an import candidate (zip entries are extracted
+/// to the cache folder first).
+#[tauri::command]
+async fn import_preview(
+    app: AppHandle,
+    folder: PathBuf,
+    src: import::SourceRef,
+) -> Result<String, Error> {
+    let dir = app.path().app_cache_dir()?.join("import-preview");
+    let path = tauri::async_runtime::spawn_blocking(move || import::preview(&folder, &src, &dir))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| Error::Msg("path is not valid text".to_owned()))
+}
+
+/// Copies the chosen tracks into `library/Artist/Album/`, then rescans the library.
+#[tauri::command]
+async fn import_run(
+    state: State<'_, AppState>,
+    folder: PathBuf,
+    groups: Vec<import::ImportRequest>,
+) -> Result<import::ImportReport, Error> {
+    let library = library_root(&state)?;
+    let lib = library.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || import::run(&folder, &lib, &groups))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?;
+    if report.imported > 0 {
+        refresh_after_fs_change(&state, library).await;
+    }
+    Ok(report)
+}
+
 // ---- rekordbox ---------------------------------------------------------------
 
 const SETTING_RB_PATH: &str = "rekordbox_xml_path";
@@ -918,7 +1050,12 @@ pub fn run() {
             fs_rename,
             fs_move,
             fs_copy,
-            fs_trash
+            fs_trash,
+            import_get_folder,
+            import_scan,
+            import_cached,
+            import_preview,
+            import_run
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

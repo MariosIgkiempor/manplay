@@ -16,7 +16,7 @@ export function Stat({ label, value }: { label: string; value: number | string }
  * Pins `children` (right-aligned, with sync progress on the left) to the bottom edge of the current view (page or slide-over). Content
  * scrolls behind it; the spacer keeps the last row clear.
  */
-export function StatusBar({ children }: { children: ReactNode }) {
+export function StatusBar({ children, leading }: { children: ReactNode; leading?: ReactNode }) {
 	const slot = useContext(StatusSlotContext);
 	return (
 		<>
@@ -25,6 +25,7 @@ export function StatusBar({ children }: { children: ReactNode }) {
 				createPortal(
 					<div className="flex items-center gap-4 border-t bg-background/70 px-4 py-2 text-muted-foreground text-xs backdrop-blur-md">
 						<SyncStatusPill />
+						{leading}
 						{/* Pushed right so the stats do not move when a sync starts. */}
 						<div className="ml-auto flex items-center gap-4">{children}</div>
 					</div>,

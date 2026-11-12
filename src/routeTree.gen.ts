@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ImportRouteImport } from './routes/import'
 import { Route as ItunesRouteImport } from './routes/itunes'
 import { Route as RekordboxRouteImport } from './routes/rekordbox'
 import { Route as SettingsRouteImport } from './routes/settings'
@@ -19,6 +20,11 @@ import { Route as PlaylistsIdRouteImport } from './routes/playlists.$id'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ImportRoute = ImportRouteImport.update({
+  id: '/import',
+  path: '/import',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ItunesRoute = ItunesRouteImport.update({
@@ -49,6 +55,7 @@ const PlaylistsIdRoute = PlaylistsIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/import': typeof ImportRoute
   '/itunes': typeof ItunesRoute
   '/rekordbox': typeof RekordboxRoute
   '/settings': typeof SettingsRoute
@@ -57,6 +64,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/import': typeof ImportRoute
   '/itunes': typeof ItunesRoute
   '/rekordbox': typeof RekordboxRoute
   '/settings': typeof SettingsRoute
@@ -66,6 +74,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/import': typeof ImportRoute
   '/itunes': typeof ItunesRoute
   '/rekordbox': typeof RekordboxRoute
   '/settings': typeof SettingsRoute
@@ -75,12 +84,26 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/itunes' | '/rekordbox' | '/settings' | '/sync' | '/playlists/$id'
+    | '/'
+    | '/import'
+    | '/itunes'
+    | '/rekordbox'
+    | '/settings'
+    | '/sync'
+    | '/playlists/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/itunes' | '/rekordbox' | '/settings' | '/sync' | '/playlists/$id'
+  to:
+    | '/'
+    | '/import'
+    | '/itunes'
+    | '/rekordbox'
+    | '/settings'
+    | '/sync'
+    | '/playlists/$id'
   id:
     | '__root__'
     | '/'
+    | '/import'
     | '/itunes'
     | '/rekordbox'
     | '/settings'
@@ -90,6 +113,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ImportRoute: typeof ImportRoute
   ItunesRoute: typeof ItunesRoute
   RekordboxRoute: typeof RekordboxRoute
   SettingsRoute: typeof SettingsRoute
@@ -104,6 +128,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/import': {
+      id: '/import'
+      path: '/import'
+      fullPath: '/import'
+      preLoaderRoute: typeof ImportRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/itunes': {
@@ -146,6 +177,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ImportRoute: ImportRoute,
   ItunesRoute: ItunesRoute,
   RekordboxRoute: RekordboxRoute,
   SettingsRoute: SettingsRoute,
