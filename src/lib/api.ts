@@ -346,6 +346,55 @@ export async function fsMove(paths: string[], dest: string): Promise<void> {
 	await invoke("fs_move", { paths, dest });
 }
 
+/** Opens System Settings at Full Disk Access (macOS). */
+export async function openPrivacySettings(): Promise<void> {
+	await invoke("open_privacy_settings");
+}
+
+// ---- library health -------------------------------------------------------
+
+const auditIssueSchema = z.object({
+	path: z.string(),
+	kind: z.enum(["notMp3", "tagVersion", "misplaced"]),
+	message: z.string(),
+	fixable: z.boolean(),
+	/** Set when the user can fix it by typing the missing artist and/or album. */
+	place: z.object({ artist: z.string().nullable(), album: z.string().nullable() }).nullable(),
+});
+
+export type AuditIssue = z.infer<typeof auditIssueSchema>;
+
+const fixReportSchema = z.object({
+	fixed: int,
+	failed: z.array(z.object({ path: z.string(), error: z.string() })),
+});
+
+export type FixReport = z.infer<typeof fixReportSchema>;
+
+/** Files that break the library conventions (MP3 only, ID3v2.3, Artist/Album layout). */
+export async function auditLibrary(): Promise<AuditIssue[]> {
+	return z.array(auditIssueSchema).parse(await invoke("audit_library"));
+}
+
+/** Files one song under an artist and album the user typed, creating the folders. */
+export async function auditPlace(path: string, artist: string, album: string): Promise<void> {
+	await invoke("audit_place", { path, artist, album });
+}
+
+/** Fixes each file; one failing file never stops or undoes the others. */
+export async function auditFix(paths: string[]): Promise<FixReport> {
+	return fixReportSchema.parse(await invoke("audit_fix", { paths }));
+}
+
+/** Native yes/no prompt listing what a fix will do. */
+export function confirmFix(lines: string[]): Promise<boolean> {
+	return ask(lines.join("\n"), {
+		title: "Fix library issues",
+		kind: "info",
+		okLabel: "Fix",
+	});
+}
+
 // ---- import from downloads ---------------------------------------------------
 
 const sourceRefSchema = z.object({ path: z.string(), entry: z.string().nullable() });

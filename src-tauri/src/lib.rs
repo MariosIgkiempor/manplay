@@ -1,6 +1,7 @@
 #![allow(clippy::needless_pass_by_value)] // Tauri command args are taken by value
 
 mod art;
+mod audit;
 mod db;
 mod error;
 mod fsops;
@@ -28,6 +29,7 @@ struct AppState {
     data_dir: PathBuf,
     http: reqwest::Client,
     syncing: AtomicBool,
+    fixing: AtomicBool,
 }
 
 const SETTING_ROOT: &str = "library_root";
@@ -588,6 +590,65 @@ async fn fs_move(
     Ok(())
 }
 
+/// Opens the macOS Full Disk Access pane, for when the system blocks the library folder.
+#[tauri::command]
+fn open_privacy_settings() -> Result<(), Error> {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+        .spawn()?;
+    Ok(())
+}
+
+// ---- library health ----------------------------------------------------------
+
+/// Lists files that break the library conventions (see `audit`).
+#[tauri::command]
+async fn audit_library(state: State<'_, AppState>) -> Result<Vec<audit::Issue>, Error> {
+    let root = library_root(&state)?;
+    let ffmpeg = itunes::find_ffmpeg().is_some();
+    tauri::async_runtime::spawn_blocking(move || audit::audit(&root, ffmpeg))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+/// Files one song under the artist and album the user typed.
+#[tauri::command]
+async fn audit_place(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    artist: String,
+    album: String,
+) -> Result<(), Error> {
+    let root = library_root(&state)?;
+    let r = root.clone();
+    tauri::async_runtime::spawn_blocking(move || audit::place_file(&r, &path, &artist, &album))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    refresh_after_fs_change(&state, root).await;
+    Ok(())
+}
+
+/// Fixes the given files one by one; failures are reported per file and never undo the rest.
+#[tauri::command]
+async fn audit_fix(
+    state: State<'_, AppState>,
+    paths: Vec<PathBuf>,
+) -> Result<audit::FixReport, Error> {
+    let root = library_root(&state)?;
+    if state.fixing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a fix is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.fixing);
+    let r = root.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        audit::fix_all(&r, &paths, itunes::find_ffmpeg().as_deref())
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?;
+    refresh_after_fs_change(&state, root).await;
+    Ok(report)
+}
+
 // ---- import from downloads ---------------------------------------------------
 
 const SETTING_IMPORT_FOLDER: &str = "import_folder";
@@ -1012,6 +1073,7 @@ pub fn run() {
                 data_dir: dir.clone(),
                 http,
                 syncing: AtomicBool::new(false),
+                fixing: AtomicBool::new(false),
             });
             Ok(())
         })
@@ -1053,6 +1115,10 @@ pub fn run() {
             fs_move,
             fs_copy,
             fs_trash,
+            open_privacy_settings,
+            audit_library,
+            audit_fix,
+            audit_place,
             import_get_folder,
             import_scan,
             import_cached,
@@ -1372,6 +1438,7 @@ mod tests {
             data_dir: dir,
             http: reqwest::Client::new(),
             syncing: AtomicBool::new(false),
+            fixing: AtomicBool::new(false),
         };
         assert!(run_export(&state).expect("export"));
 
@@ -1411,6 +1478,7 @@ mod tests {
             data_dir: dir,
             http: reqwest::Client::new(),
             syncing: AtomicBool::new(false),
+            fixing: AtomicBool::new(false),
         };
         assert!(!run_export(&state).expect("no-op"));
     }

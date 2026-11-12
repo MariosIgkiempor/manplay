@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	auditFix,
+	auditLibrary,
+	auditPlace,
 	fsCopy,
 	fsMakeDir,
 	fsMove,
@@ -130,7 +133,7 @@ export function useItunesImport() {
 /** Everything that can change when files move on disk (the backend rescans afterwards). */
 async function refreshAfterFsChange(queryClient: ReturnType<typeof useQueryClient>) {
 	await Promise.all(
-		["fs", "tracks", "playlists", "tags", "library-status"].map((k) =>
+		["fs", "tracks", "playlists", "tags", "library-status", "audit"].map((k) =>
 			queryClient.invalidateQueries({ queryKey: [k] }),
 		),
 	);
@@ -172,6 +175,32 @@ export function useFsMove() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: ({ paths, dest }: { paths: string[]; dest: string }) => fsMove(paths, dest),
+		onSettled: () => refreshAfterFsChange(queryClient),
+	});
+}
+
+/** Library health findings; re-run automatically after any file change. */
+export function useAudit() {
+	return useQuery({
+		queryKey: ["audit"],
+		queryFn: auditLibrary,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+}
+
+export function useAuditFix() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (paths: string[]) => auditFix(paths),
+		onSettled: () => refreshAfterFsChange(queryClient),
+	});
+}
+
+export function useAuditPlace() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ path, artist, album }: { path: string; artist: string; album: string }) =>
+			auditPlace(path, artist, album),
 		onSettled: () => refreshAfterFsChange(queryClient),
 	});
 }

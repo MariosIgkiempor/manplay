@@ -1,5 +1,4 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { useQuery } from "@tanstack/react-query";
 import {
 	ArrowRight,
 	ArrowUp,
@@ -15,25 +14,34 @@ import {
 	Scissors,
 	Square,
 	Trash2,
+	Wrench,
 } from "lucide-react";
 import {
 	type DragEvent,
 	type KeyboardEvent,
 	type MouseEvent,
 	useEffect,
-	useMemo,
 	useRef,
 	useState,
 } from "react";
+import { ErrorText } from "#/components/error-text.tsx";
+import { IssuePopover } from "#/components/issue-popover.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
-import { confirmTrash, type FsEntry, fsList, pathArtUrl } from "#/lib/api.ts";
+import { type FsEntry, pathArtUrl } from "#/lib/api.ts";
+import type { IssueIndex } from "#/lib/audit.ts";
 import { isAudioName, joinPath, parentPath, relSegments } from "#/lib/fs-path.ts";
-import { useFsCopy, useFsMakeDir, useFsMove, useFsRename, useFsTrash } from "#/lib/queries.ts";
 import { applyClick, EMPTY_SELECTION, type Selection } from "#/lib/selection.ts";
+import type { TreeRow } from "#/lib/tree.ts";
+import { useFileDrag } from "#/lib/use-file-drag.ts";
+import type { FsClipboard } from "#/lib/use-fs-ops.ts";
+import { useFsOps } from "#/lib/use-fs-ops.ts";
+import { useIssueNav } from "#/lib/use-issue-nav.ts";
+import { useTree } from "#/lib/use-tree.ts";
 import { cn } from "#/lib/utils.ts";
 
-const DRAG_TYPE = "application/x-manplay-paths";
+/** Pixels of indent per tree level. */
+const INDENT = 16;
 
 function size(n: number): string {
 	if (n < 1024) {
@@ -49,10 +57,30 @@ function size(n: number): string {
 	return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
 
-/** Cut/copied items waiting to be pasted; shared by both panes. */
-export interface FsClipboard {
-	mode: "cut" | "copy";
-	paths: string[];
+/** Keeps pane shortcuts working after a click, unless the click was in a text box or a popover. */
+function focusUnlessTyping(ev: MouseEvent<HTMLElement>) {
+	const inside = ev.currentTarget.contains(ev.target as Node);
+	if (inside && !(ev.target instanceof HTMLInputElement)) {
+		ev.currentTarget.focus();
+	}
+}
+
+/** ArrowLeft on a row: close it if it is an open folder, else select its parent folder. */
+function collapseRow(
+	row: TreeRow | undefined,
+	expanded: ReadonlySet<string>,
+	base: string,
+	setOpen: (dir: string, open: boolean) => void,
+	select: (path: string) => void,
+) {
+	if (row === undefined) {
+		return;
+	}
+	if (row.entry.isDir && expanded.has(row.path)) {
+		setOpen(row.path, false);
+	} else if (row.parent !== base) {
+		select(row.parent);
+	}
 }
 
 interface PaneProps {
@@ -66,6 +94,11 @@ interface PaneProps {
 	/** The other pane's folder, when the view is split. */
 	otherPath: string | null;
 	onToggleSplit: () => void;
+	/** Library health findings, for the warning icons. */
+	health: IssueIndex;
+	fixing: boolean;
+	/** Fixes the fixable files at or under these paths (after asking the user). */
+	onFix: (scopes: string[]) => unknown;
 }
 
 export function FilePane({
@@ -78,195 +111,213 @@ export function FilePane({
 	onActivate,
 	otherPath,
 	onToggleSplit,
+	health,
+	fixing,
+	onFix,
 }: PaneProps) {
-	const listing = useQuery({ queryKey: ["fs", path], queryFn: () => fsList(path) });
-	const entries = useMemo(() => listing.data ?? [], [listing.data]);
-	const names = useMemo(() => entries.map((e) => e.name), [entries]);
+	const {
+		listing,
+		entries: listed,
+		rows,
+		rowByPath,
+		expanded,
+		isLoading,
+		setOpen,
+		forget,
+	} = useTree(path);
+	const visible = rows.map((r) => r.path);
 
 	const [sel, setSel] = useState<Selection<string>>(EMPTY_SELECTION);
 	const [renaming, setRenaming] = useState<string | null>(null);
-	const [creating, setCreating] = useState(false);
-	const [dropTarget, setDropTarget] = useState<string | null>(null);
+	/** Folder a new folder is being named in. */
+	const [creatingIn, setCreatingIn] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const sectionRef = useRef<HTMLElement>(null);
 
-	const makeDir = useFsMakeDir();
-	const rename = useFsRename();
-	const move = useFsMove();
-	const copy = useFsCopy();
-	const trash = useFsTrash();
-	const busy =
-		makeDir.isPending || rename.isPending || move.isPending || copy.isPending || trash.isPending;
-
-	// A new folder, or a refresh that drops names, must not leave stale selections behind.
-	const selected = useMemo(
-		() => new Set([...sel.selected].filter((n) => names.includes(n))),
-		[sel.selected, names],
-	);
+	// A refresh or a collapsed folder must not leave selections on rows that are gone.
+	const selected = new Set([...sel.selected].filter((p) => rowByPath.has(p)));
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the folder changes
 	useEffect(() => {
 		setSel(EMPTY_SELECTION);
 		setRenaming(null);
-		setCreating(false);
+		setCreatingIn(null);
 		setError(null);
 	}, [path]);
 
-	const fail = (e: unknown) => setError(String(e));
+	const { makeDir, rename, busy, fail, runMove, paste, remove } = useFsOps({
+		clipboard,
+		setClipboard,
+		setError,
+		setOpen,
+		forget,
+		clearSelection: () => setSel(EMPTY_SELECTION),
+	});
 	const atRoot = path === root;
+	/** The other pane is a different folder, so "move to other pane" does something. */
+	const movable = otherPath !== null && otherPath !== path;
 	const crumbs = relSegments(root, path);
 
-	const runMove = (paths: string[], dest: string) => {
-		setError(null);
-		move.mutate({ paths, dest }, { onError: fail, onSuccess: () => setSel(EMPTY_SELECTION) });
-	};
+	const drag = useFileDrag({
+		selected,
+		selectOnly: (p) => setSel({ selected: new Set([p]), anchor: p }),
+		onDrop: runMove,
+	});
 
-	const open = (e: FsEntry) => e.isDir && onNavigate(joinPath(path, e.name));
+	/** Folders open in place (chevron); double-click and Enter go into them. */
+	const enter = (r: TreeRow) => r.entry.isDir && onNavigate(r.path);
 
 	const onRowClick = (
-		e: FsEntry,
+		r: TreeRow,
 		ev: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean },
 	) => {
 		onActivate();
 		setSel((prev) =>
-			applyClick(prev, names, e.name, { shift: ev.shiftKey, toggle: ev.metaKey || ev.ctrlKey }),
+			applyClick(prev, visible, r.path, { shift: ev.shiftKey, toggle: ev.metaKey || ev.ctrlKey }),
 		);
 	};
 
-	const pathsOf = (e?: FsEntry) =>
-		(e && !selected.has(e.name) ? [e.name] : [...selected]).map((n) => joinPath(path, n));
+	const pathsOf = (r?: TreeRow) => (r && !selected.has(r.path) ? [r.path] : [...selected]);
+	const onlySelected = selected.size === 1 ? rowByPath.get([...selected][0] ?? "") : undefined;
+	/** Where "new folder" and "paste" land from the keyboard: the selected folder, else this one. */
+	const keyboardDest = onlySelected?.entry.isDir ? onlySelected.path : path;
 
 	const actions: PaneActionSet = {
-		open: (e) => open(e),
-		rename: (name) => setRenaming(name),
-		newFolder: () => setCreating(true),
+		open: (r) => enter(r),
+		rename: (p) => setRenaming(p),
+		newFolder: (parent) => {
+			setOpen(parent, true);
+			setCreatingIn(parent);
+		},
 		cut: (paths) => paths.length > 0 && setClipboard({ mode: "cut", paths }),
 		copy: (paths) => paths.length > 0 && setClipboard({ mode: "copy", paths }),
-		paste: (dest) => {
-			if (clipboard === null) {
-				return;
-			}
-			setError(null);
-			if (clipboard.mode === "copy") {
-				copy.mutate({ paths: clipboard.paths, dest }, { onError: fail });
-			} else {
-				move.mutate(
-					{ paths: clipboard.paths, dest },
-					{ onError: fail, onSuccess: () => setClipboard(null) },
-				);
-			}
-		},
-		remove: async (paths) => {
-			if (
-				paths.length === 0 ||
-				!(await confirmTrash(paths.map((p) => p.split(/[\\/]/).pop() ?? p)))
-			) {
-				return;
-			}
-			setError(null);
-			trash.mutate(paths, { onError: fail, onSuccess: () => setSel(EMPTY_SELECTION) });
-		},
+		paste,
+		remove,
 		moveToOther: (paths) => otherPath !== null && runMove(paths, otherPath),
+		fix: (paths) => onFix(paths),
 	};
 
+	const issueNav = useIssueNav({
+		visible,
+		health,
+		anchor: sel.anchor,
+		selected,
+		setSel,
+		onFix,
+		paneRef: sectionRef,
+	});
+
 	const onKeyDown = (ev: KeyboardEvent) => {
-		const action = keyAction(ev, renaming !== null || creating);
+		const action = keyAction(ev, renaming !== null || creatingIn !== null);
 		if (action === null) {
 			return;
 		}
-		const only = selected.size === 1 ? entries.find((e) => selected.has(e.name)) : undefined;
 		const run: Record<Exclude<KeyAction, null>, () => unknown> = {
-			rename: () => only && setRenaming(only.name),
-			open: () => only && open(only),
+			rename: () => onlySelected && setRenaming(onlySelected.path),
+			open: () => onlySelected && enter(onlySelected),
 			up: () => !atRoot && onNavigate(parentPath(path)),
-			all: () => setSel({ selected: new Set(names), anchor: null }),
+			all: () => setSel({ selected: new Set(visible), anchor: null }),
 			clear: () => setSel(EMPTY_SELECTION),
-			newFolder: () => setCreating(true),
+			newFolder: () => actions.newFolder(keyboardDest),
 			cut: () => actions.cut(pathsOf()),
 			copy: () => actions.copy(pathsOf()),
-			paste: () => actions.paste(path),
+			paste: () => actions.paste(keyboardDest),
 			delete: () => actions.remove(pathsOf()),
+			...issueNav.keys,
+			expand: () => onlySelected?.entry.isDir && setOpen(onlySelected.path, true),
+			collapse: () =>
+				collapseRow(onlySelected, expanded, path, setOpen, (p) =>
+					setSel({ selected: new Set([p]), anchor: p }),
+				),
 		};
 		ev.preventDefault();
 		run[action]();
 	};
 
-	const dragStart = (ev: DragEvent, e: FsEntry) => {
-		const dragged = selected.has(e.name) ? [...selected] : [e.name];
-		if (!selected.has(e.name)) {
-			setSel({ selected: new Set([e.name]), anchor: e.name });
-		}
-		ev.dataTransfer.setData(DRAG_TYPE, JSON.stringify(dragged.map((n) => joinPath(path, n))));
-		ev.dataTransfer.effectAllowed = "move";
-	};
-
-	const dropInto = (ev: DragEvent, dest: string) => {
-		ev.preventDefault();
-		ev.stopPropagation();
-		setDropTarget(null);
-		const raw = ev.dataTransfer.getData(DRAG_TYPE);
-		if (raw === "") {
-			return;
-		}
-		const paths = (JSON.parse(raw) as string[]).filter((p) => p !== dest);
-		if (paths.length > 0) {
-			runMove(paths, dest);
-		}
-	};
-
-	const allowDrop = (ev: DragEvent, key: string) => {
-		if (ev.dataTransfer.types.includes(DRAG_TYPE)) {
-			ev.preventDefault();
-			ev.stopPropagation();
-			setDropTarget(key);
-		}
-	};
-
-	const submitRename = (e: FsEntry, newName: string) => {
-		if (newName === e.name) {
+	const submitRename = (r: TreeRow, newName: string) => {
+		if (newName === r.entry.name) {
 			setRenaming(null);
 			return;
 		}
 		rename.mutate(
-			{ path: joinPath(path, e.name), newName },
+			{ path: r.path, newName },
 			{
 				onError: fail,
 				onSuccess: () => {
+					forget([r.path]);
 					setRenaming(null);
-					setSel({ selected: new Set([newName]), anchor: newName });
+					const to = joinPath(r.parent, newName);
+					setSel({ selected: new Set([to]), anchor: to });
 				},
 			},
 		);
 	};
 
+	const submitNewFolder = (parent: string, name: string) =>
+		makeDir.mutate(
+			{ parent, name },
+			{
+				onError: fail,
+				onSuccess: () => {
+					setCreatingIn(null);
+					const to = joinPath(parent, name);
+					setSel({ selected: new Set([to]), anchor: to });
+				},
+			},
+		);
+
 	const menuCtx = {
 		actions,
 		hasClipboard: clipboard !== null,
-		canMoveToOther: otherPath !== null && otherPath !== path,
+		canMoveToOther: movable,
+		fixing,
 	};
-	const menuFor = (e: FsEntry) =>
+	const fixableIn = (r: TreeRow): number =>
+		r.entry.isDir
+			? (health.folders.get(r.path)?.fixable ?? 0)
+			: Number(health.byPath.get(r.path)?.some((i) => i.fixable) ?? false);
+	const menuFor = (r: TreeRow) =>
 		buildMenu(menuCtx, {
-			entry: e,
-			paths: pathsOf(e),
-			dest: e.isDir ? joinPath(path, e.name) : path,
+			entry: r,
+			paths: pathsOf(r),
+			dest: r.entry.isDir ? r.path : r.parent,
+			fixable: fixableIn(r),
 		});
-	const paneMenu = buildMenu(menuCtx, { paths: [], dest: path });
-	const selectForMenu = (e: FsEntry) => {
+	const paneMenu = buildMenu(menuCtx, { paths: [], dest: path, fixable: 0 });
+	const selectForMenu = (r: TreeRow) => {
 		onActivate();
-		if (!selected.has(e.name)) {
-			setSel({ selected: new Set([e.name]), anchor: e.name });
+		if (!selected.has(r.path)) {
+			setSel({ selected: new Set([r.path]), anchor: r.path });
 		}
 	};
 
-	const selectedPaths = [...selected].map((n) => joinPath(path, n));
+	const newFolderRow = (parent: string, depth: number) => (
+		<NameRow
+			key={`new-${parent}`}
+			depth={depth}
+			icon={<Folder className="size-4 text-primary" />}
+			initial=""
+			placeholder="New folder"
+			onCancel={() => setCreatingIn(null)}
+			onSubmit={(name) => submitNewFolder(parent, name)}
+		/>
+	);
+
+	const selectedPaths = [...selected];
 
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: pane-level keyboard shortcuts
 		<section
+			ref={sectionRef}
+			tabIndex={-1}
 			className={cn(
-				"flex min-h-0 min-w-0 flex-1 flex-col border-r bg-card/40 last:border-r-0",
+				"flex min-h-0 min-w-0 flex-1 flex-col border-r bg-card/40 outline-none last:border-r-0",
 				active && "bg-card/70",
 			)}
 			onKeyDown={onKeyDown}
-			onMouseDown={onActivate}
+			onMouseDown={(ev) => {
+				onActivate();
+				focusUnlessTyping(ev);
+			}}
 		>
 			<div className="flex items-center gap-1 border-b p-2">
 				<Button
@@ -278,46 +329,14 @@ export function FilePane({
 				>
 					<ArrowUp />
 				</Button>
-				<nav className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5 text-sm">
-					<button
-						type="button"
-						className="rounded px-1 font-medium hover:bg-muted"
-						onClick={() => onNavigate(root)}
-						onDragOver={(ev) => allowDrop(ev, root)}
-						onDragLeave={() => setDropTarget(null)}
-						onDrop={(ev) => dropInto(ev, root)}
-					>
-						Library
-					</button>
-					{crumbs.map((seg, i) => {
-						const to = joinPath(root, ...crumbs.slice(0, i + 1));
-						return (
-							<span key={to} className="flex items-center gap-0.5">
-								<ChevronRight className="size-3 text-muted-foreground" />
-								<button
-									type="button"
-									className={cn(
-										"rounded px-1 hover:bg-muted",
-										dropTarget === to && "bg-primary/20",
-									)}
-									onClick={() => onNavigate(to)}
-									onDragOver={(ev) => allowDrop(ev, to)}
-									onDragLeave={() => setDropTarget(null)}
-									onDrop={(ev) => dropInto(ev, to)}
-								>
-									{seg}
-								</button>
-							</span>
-						);
-					})}
-				</nav>
+				<Breadcrumbs root={root} crumbs={crumbs} drag={drag} onNavigate={onNavigate} />
 				<PaneActions
 					busy={busy}
 					count={selected.size}
 					split={otherPath !== null}
-					canMove={otherPath !== null && otherPath !== path}
-					onNewFolder={() => setCreating(true)}
-					onRename={() => setRenaming([...selected][0] ?? null)}
+					canMove={movable}
+					onNewFolder={() => actions.newFolder(keyboardDest)}
+					onRename={() => setRenaming(selectedPaths[0] ?? null)}
 					onToggleSplit={onToggleSplit}
 					onMove={() => otherPath !== null && runMove(selectedPaths, otherPath)}
 				/>
@@ -326,79 +345,119 @@ export function FilePane({
 			{error && (
 				<p className="border-b bg-destructive/10 px-3 py-1.5 text-destructive text-xs">{error}</p>
 			)}
-			{listing.isError && (
-				<p className="px-3 py-2 text-destructive text-sm">{String(listing.error)}</p>
+			{listing?.isError && (
+				<ErrorText className="px-3 py-2 text-destructive text-sm" message={String(listing.error)} />
 			)}
 
 			<MenuShell items={paneMenu}>
 				{/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for the current folder */}
 				<div
-					className={cn("min-h-0 flex-1 overflow-y-auto", dropTarget === path && "bg-primary/10")}
-					onDragOver={(ev) => allowDrop(ev, path)}
-					onDragLeave={() => setDropTarget(null)}
-					onDrop={(ev) => dropInto(ev, path)}
+					className={cn(
+						"min-h-0 flex-1 overflow-y-auto",
+						drag.dropTarget === path && "bg-primary/10",
+					)}
+					onDragOver={(ev) => drag.allowDrop(ev, path)}
+					onDragLeave={drag.clearDrop}
+					onDrop={(ev) => drag.dropInto(ev, path)}
 				>
-					{creating && (
-						<NameRow
-							icon={<Folder className="size-4 text-primary" />}
-							initial=""
-							placeholder="New folder"
-							onCancel={() => setCreating(false)}
-							onSubmit={(name) =>
-								makeDir.mutate(
-									{ parent: path, name },
-									{
-										onError: fail,
-										onSuccess: () => {
-											setCreating(false);
-											setSel({ selected: new Set([name]), anchor: name });
-										},
-									},
-								)
-							}
-						/>
-					)}
-					{entries.map((e) =>
-						renaming === e.name ? (
-							<NameRow
-								key={e.name}
-								icon={<EntryIcon entry={e} />}
-								initial={e.name}
-								onCancel={() => setRenaming(null)}
-								onSubmit={(newName) => submitRename(e, newName)}
-							/>
-						) : (
-							<EntryRow
-								key={e.name}
-								entry={e}
-								path={joinPath(path, e.name)}
-								selected={selected.has(e.name)}
-								active={active}
-								dropping={dropTarget === joinPath(path, e.name)}
-								onDragStart={(ev) => dragStart(ev, e)}
-								onClick={(ev) => onRowClick(e, ev)}
-								onOpen={() => open(e)}
-								onDragOver={(ev) => allowDrop(ev, joinPath(path, e.name))}
-								onDragLeave={() => setDropTarget(null)}
-								onDrop={(ev) => dropInto(ev, joinPath(path, e.name))}
-								menu={menuFor(e)}
-								onContextMenu={() => selectForMenu(e)}
-								dimmed={
-									clipboard?.mode === "cut" && clipboard.paths.includes(joinPath(path, e.name))
-								}
-							/>
-						),
-					)}
-					{listing.isSuccess && entries.length === 0 && !creating && (
+					{creatingIn === path && newFolderRow(path, 0)}
+					{rows.flatMap((r) => {
+						const row =
+							renaming === r.path ? (
+								<NameRow
+									key={r.path}
+									depth={r.depth}
+									icon={<EntryIcon entry={r.entry} />}
+									initial={r.entry.name}
+									onCancel={() => setRenaming(null)}
+									onSubmit={(newName) => submitRename(r, newName)}
+								/>
+							) : (
+								<EntryRow
+									key={r.path}
+									row={r}
+									selected={selected.has(r.path)}
+									active={active}
+									expanded={expanded}
+									isLoading={isLoading}
+									health={health}
+									fixing={fixing}
+									onFix={onFix}
+									issueOpen={issueNav.issueOpen === r.path}
+									onIssueOpen={(open) => issueNav.toggleIssue(r.path, open)}
+									clipboard={clipboard}
+									dropTarget={drag.dropTarget}
+									onToggle={() => setOpen(r.path, !expanded.has(r.path))}
+									onDragStart={(ev) => drag.dragStart(ev, r.path)}
+									onClick={(ev) => onRowClick(r, ev)}
+									onOpen={() => enter(r)}
+									onDragOver={(ev) => drag.allowDrop(ev, r.path)}
+									onDragLeave={drag.clearDrop}
+									onDrop={(ev) => drag.dropInto(ev, r.path)}
+									menu={menuFor(r)}
+									onContextMenu={() => selectForMenu(r)}
+								/>
+							);
+						return r.entry.isDir && creatingIn === r.path
+							? [row, newFolderRow(r.path, r.depth + 1)]
+							: [row];
+					})}
+					{listing?.isSuccess && listed.length === 0 && creatingIn !== path && (
 						<p className="p-3 text-muted-foreground text-sm">Empty folder.</p>
 					)}
 				</div>
 			</MenuShell>
 			<div className="border-t px-3 py-1 text-muted-foreground text-xs">
-				{entries.length} item{entries.length === 1 ? "" : "s"}
+				{listed.length} item{listed.length === 1 ? "" : "s"}
 				{selected.size > 0 && ` · ${selected.size} selected`}
 			</div>
 		</section>
+	);
+}
+
+function Breadcrumbs({
+	root,
+	crumbs,
+	drag,
+	onNavigate,
+}: {
+	root: string;
+	crumbs: string[];
+	drag: ReturnType<typeof useFileDrag>;
+	onNavigate: (path: string) => void;
+}) {
+	const { dropTarget, allowDrop, clearDrop, dropInto } = drag;
+	return (
+		<nav className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5 text-sm">
+			<button
+				type="button"
+				className="rounded px-1 font-medium hover:bg-muted"
+				onClick={() => onNavigate(root)}
+				onDragOver={(ev) => allowDrop(ev, root)}
+				onDragLeave={clearDrop}
+				onDrop={(ev) => dropInto(ev, root)}
+			>
+				Library
+			</button>
+			{crumbs.map((seg, i) => {
+				const to = joinPath(root, ...crumbs.slice(0, i + 1));
+				return (
+					<span key={to} className="flex items-center gap-0.5">
+						<ChevronRight className="size-3 text-muted-foreground" />
+						<button
+							type="button"
+							className={cn("rounded px-1 hover:bg-muted", dropTarget === to && "bg-primary/20")}
+							onClick={() => onNavigate(to)}
+							onDragOver={(ev) => allowDrop(ev, to)}
+							onDragLeave={clearDrop}
+							onDrop={(ev) => dropInto(ev, to)}
+						>
+							{seg}
+						</button>
+					</span>
+				);
+			})}
+		</nav>
 	);
 }
 
@@ -480,6 +539,14 @@ type KeyAction =
 	| "copy"
 	| "paste"
 	| "delete"
+	| "expand"
+	| "collapse"
+	| "next"
+	| "prev"
+	| "nextIssue"
+	| "prevIssue"
+	| "issues"
+	| "fix"
 	| null;
 
 const KEYS: Record<string, KeyAction> = {
@@ -490,6 +557,14 @@ const KEYS: Record<string, KeyAction> = {
 	"mod+a": "all",
 	"mod+backspace": "delete",
 	delete: "delete",
+	arrowdown: "next",
+	arrowup: "prev",
+	"]": "nextIssue",
+	"[": "prevIssue",
+	i: "issues",
+	f: "fix",
+	arrowright: "expand",
+	arrowleft: "collapse",
 	f2: "rename",
 	enter: "open",
 	backspace: "up",
@@ -505,29 +580,38 @@ function keyAction(ev: KeyboardEvent, editing: boolean): KeyAction {
 }
 
 interface PaneActionSet {
-	open: (e: FsEntry) => unknown;
-	rename: (name: string) => unknown;
-	newFolder: () => unknown;
+	open: (r: TreeRow) => unknown;
+	rename: (path: string) => unknown;
+	newFolder: (parent: string) => unknown;
 	cut: (paths: string[]) => unknown;
 	copy: (paths: string[]) => unknown;
 	paste: (dest: string) => unknown;
 	remove: (paths: string[]) => unknown;
 	moveToOther: (paths: string[]) => unknown;
+	fix: (paths: string[]) => unknown;
 }
 
 /** Right-click menu entries for `entry` (or for empty space when there is none). */
 function buildMenu(
-	ctx: { actions: PaneActionSet; hasClipboard: boolean; canMoveToOther: boolean },
-	target: { entry?: FsEntry; paths: string[]; dest: string },
+	ctx: { actions: PaneActionSet; hasClipboard: boolean; canMoveToOther: boolean; fixing: boolean },
+	target: { entry?: TreeRow; paths: string[]; dest: string; fixable: number },
 ): MenuItem[] {
 	const { actions: a } = ctx;
 	const { entry, paths, dest } = target;
 	const items: MenuItem[] = [];
-	if (entry?.isDir) {
+	if (entry?.entry.isDir) {
 		items.push({ label: "Open", icon: FolderOpen, run: () => a.open(entry) });
 	}
+	if (entry && target.fixable > 0) {
+		items.push({
+			label: entry.entry.isDir ? `Fix issues inside (${target.fixable})` : "Fix issues",
+			icon: Wrench,
+			disabled: ctx.fixing,
+			run: () => a.fix(paths),
+		});
+	}
 	if (entry) {
-		items.push({ label: "Rename", icon: Pencil, shortcut: "F2", run: () => a.rename(entry.name) });
+		items.push({ label: "Rename", icon: Pencil, shortcut: "F2", run: () => a.rename(entry.path) });
 		items.push({ label: "Cut", icon: Scissors, shortcut: "⌘X", run: () => a.cut(paths) });
 		items.push({ label: "Copy", icon: Copy, shortcut: "⌘C", run: () => a.copy(paths) });
 	}
@@ -538,7 +622,12 @@ function buildMenu(
 		disabled: !ctx.hasClipboard,
 		run: () => a.paste(dest),
 	});
-	items.push({ label: "New folder", icon: FolderPlus, shortcut: "⌘N", run: () => a.newFolder() });
+	items.push({
+		label: "New folder",
+		icon: FolderPlus,
+		shortcut: "⌘N",
+		run: () => a.newFolder(dest),
+	});
 	if (entry && ctx.canMoveToOther) {
 		items.push({ label: "Move to other pane", icon: ArrowRight, run: () => a.moveToOther(paths) });
 	}
@@ -597,12 +686,58 @@ function PlainIcon({ entry }: { entry: FsEntry }) {
 	);
 }
 
-function EntryRow({
+/** Expand/collapse toggle of a folder row; files get a blank of the same width. */
+function Chevron({
 	entry,
-	path,
+	open,
+	loading,
+	onToggle,
+}: {
+	entry: FsEntry;
+	open: boolean;
+	loading: boolean;
+	onToggle: () => void;
+}) {
+	if (!entry.isDir) {
+		return <span className="-mx-1 size-5 shrink-0" />;
+	}
+	return (
+		<button
+			type="button"
+			tabIndex={-1}
+			aria-label={open ? "Collapse" : "Expand"}
+			className="-mx-1 flex size-5 shrink-0 items-center justify-center rounded hover:bg-muted"
+			onClick={(ev) => {
+				ev.stopPropagation();
+				onToggle();
+			}}
+			onDoubleClick={(ev) => ev.stopPropagation()}
+		>
+			<ChevronRight
+				className={cn(
+					"size-3.5 text-muted-foreground transition-transform",
+					open && "rotate-90",
+					loading && "animate-pulse",
+				)}
+			/>
+		</button>
+	);
+}
+
+function EntryRow({
+	row,
 	selected,
 	active,
-	dropping,
+	expanded,
+	isLoading,
+	health,
+	fixing,
+	onFix,
+	issueOpen,
+	onIssueOpen,
+	clipboard,
+	dropTarget,
+	onToggle,
 	onDragStart,
 	onClick,
 	onOpen,
@@ -611,13 +746,20 @@ function EntryRow({
 	onDrop,
 	menu,
 	onContextMenu,
-	dimmed,
 }: {
-	entry: FsEntry;
-	path: string;
+	row: TreeRow;
 	selected: boolean;
 	active: boolean;
-	dropping: boolean;
+	expanded: ReadonlySet<string>;
+	isLoading: (dir: string) => boolean;
+	health: IssueIndex;
+	fixing: boolean;
+	onFix: (scopes: string[]) => unknown;
+	issueOpen: boolean;
+	onIssueOpen: (open: boolean) => void;
+	clipboard: FsClipboard | null;
+	dropTarget: string | null;
+	onToggle: () => void;
 	onDragStart: (ev: DragEvent) => void;
 	onClick: (ev: MouseEvent) => void;
 	onOpen: () => void;
@@ -626,14 +768,19 @@ function EntryRow({
 	onDrop: (ev: DragEvent) => void;
 	menu: MenuItem[];
 	onContextMenu: () => void;
-	dimmed: boolean;
 }) {
+	const { entry, path, depth } = row;
+	const open = expanded.has(path);
+	const loading = open && isLoading(path);
+	const dropping = dropTarget === path;
+	const dimmed = clipboard?.mode === "cut" && clipboard.paths.includes(path);
 	const highlight = active ? "bg-primary/25" : "bg-muted";
 	return (
 		<MenuShell items={menu}>
 			{/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard handled at pane level */}
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: selectable, draggable row */}
 			<div
+				data-row-path={path}
 				draggable
 				onDragStart={onDragStart}
 				onClick={onClick}
@@ -645,15 +792,26 @@ function EntryRow({
 				onDragOver={entry.isDir ? onDragOver : undefined}
 				onDragLeave={onDragLeave}
 				onDrop={entry.isDir ? onDrop : undefined}
+				style={{ paddingLeft: `${12 + depth * INDENT}px` }}
 				className={cn(
-					"flex cursor-default select-none items-center gap-2 px-3 py-1 text-sm",
+					"flex cursor-default select-none items-center gap-2 py-1 pr-3 text-sm",
 					selected ? highlight : "hover:bg-muted/60",
 					dropping && "bg-primary/30 ring-1 ring-primary ring-inset",
 					dimmed && "opacity-50",
 				)}
 			>
+				<Chevron entry={entry} open={open} loading={loading} onToggle={onToggle} />
 				<EntryIcon entry={entry} path={path} />
 				<span className="min-w-0 flex-1 truncate">{entry.name}</span>
+				<IssuePopover
+					path={path}
+					isDir={entry.isDir}
+					health={health}
+					fixing={fixing}
+					onFix={onFix}
+					open={issueOpen}
+					onOpenChange={onIssueOpen}
+				/>
 				{!entry.isDir && <span className="text-muted-foreground text-xs">{size(entry.size)}</span>}
 			</div>
 		</MenuShell>
@@ -702,12 +860,14 @@ function MenuShell({ items, children }: { items: MenuItem[]; children: React.Rea
 }
 
 function NameRow({
+	depth,
 	icon,
 	initial,
 	placeholder,
 	onSubmit,
 	onCancel,
 }: {
+	depth: number;
 	icon: React.ReactNode;
 	initial: string;
 	placeholder?: string;
@@ -735,7 +895,8 @@ function NameRow({
 
 	return (
 		<form
-			className="flex items-center gap-2 px-2 py-0.5"
+			style={{ paddingLeft: `${8 + depth * INDENT}px` }}
+			className="flex items-center gap-2 py-0.5 pr-2"
 			onSubmit={(ev) => {
 				ev.preventDefault();
 				submit();
