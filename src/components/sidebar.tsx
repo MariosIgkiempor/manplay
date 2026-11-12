@@ -16,6 +16,7 @@ import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { createPlaylist, listPlaylists } from "#/lib/api.ts";
+import { useUpdateCheck } from "#/lib/updater.ts";
 
 const linkClass =
 	"flex items-center gap-2 truncate rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground";
@@ -44,6 +45,7 @@ export function Sidebar() {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const syncing = useSyncProgress().size > 0;
+	const updateAvailable = useUpdateCheck().data != null;
 	const [name, setName] = useState("");
 	const playlists = useQuery({ queryKey: ["playlists"], queryFn: listPlaylists });
 	const create = useMutation({
@@ -121,6 +123,11 @@ export function Sidebar() {
 				<NavLink to="/settings">
 					<Settings className="size-4" />
 					Settings
+					{updateAvailable && (
+						<span className="ml-auto rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">
+							Update
+						</span>
+					)}
 				</NavLink>
 			</nav>
 		</aside>

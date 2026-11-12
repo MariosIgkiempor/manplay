@@ -992,6 +992,8 @@ fn art_response(app: &AppHandle, target: ArtTarget) -> tauri::http::Response<Vec
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .register_asynchronous_uri_scheme_protocol("art", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let target = ArtTarget::parse(request.uri().path());
