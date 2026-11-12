@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	type ActivitySource,
+	activityHistory,
 	auditFix,
 	auditLibrary,
 	auditPlace,
@@ -10,12 +12,17 @@ import {
 	fsTrash,
 	getLibraryRoot,
 	itunesImport,
+	itunesPending,
 	libraryStatus,
 	listSyncTargets,
 	listTracks,
 	pickAndScan,
 	removeMissingNow,
 	rescanLibrary,
+	type ServiceId,
+	serviceFlags,
+	setServiceEnabled,
+	syncHistory,
 	syncRun,
 } from "#/lib/api.ts";
 
@@ -23,15 +30,28 @@ export function useTracks() {
 	return useQuery({ queryKey: ["tracks"], queryFn: listTracks });
 }
 
+const HISTORY_LIMIT = 200;
+
+export function useSyncHistory() {
+	return useQuery({ queryKey: ["sync-history"], queryFn: () => syncHistory(HISTORY_LIMIT) });
+}
+
+export function useActivity(source: ActivitySource) {
+	return useQuery({
+		queryKey: ["activity", source],
+		queryFn: () => activityHistory(source, HISTORY_LIMIT),
+	});
+}
+
 export function useSyncTargets() {
 	return useQuery({ queryKey: ["sync-targets"], queryFn: listSyncTargets });
 }
 
-/** Mutation that syncs one target (pass its id) or all targets (pass undefined). */
+/** Mutation that syncs the given target ids, or every target of an enabled service (pass undefined). */
 export function useSyncRun() {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: (targetId?: number) => syncRun(targetId),
+		mutationFn: (ids?: number[]) => syncRun(ids),
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["sync-history"] });
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
@@ -103,6 +123,11 @@ export function useScan() {
 }
 
 /** Imports new iTunes songs, then refreshes the library and syncs the new files. */
+/** Songs waiting in the iTunes folder (empty while iTunes is off or unset). */
+export function useItunesPending(enabled: boolean) {
+	return useQuery({ queryKey: ["itunes-pending"], queryFn: itunesPending, enabled });
+}
+
 export function useItunesImport() {
 	const queryClient = useQueryClient();
 	const sync = useSyncRun();
@@ -114,6 +139,7 @@ export function useItunesImport() {
 				return;
 			}
 			queryClient.setQueryData(["itunes"], status);
+			await queryClient.invalidateQueries({ queryKey: ["itunes-pending"] });
 			if ((status.last?.converted.length ?? 0) === 0) {
 				return;
 			}
@@ -203,4 +229,22 @@ export function useAuditPlace() {
 			auditPlace(path, artist, album),
 		onSettled: () => refreshAfterFsChange(queryClient),
 	});
+}
+
+/** Which services are switched on. A service never switched is on once it is set up. */
+export function useServices() {
+	const queryClient = useQueryClient();
+	const flags = useQuery({ queryKey: ["services"], queryFn: serviceFlags });
+	const set = useMutation({
+		mutationFn: ({ id, enabled }: { id: ServiceId; enabled: boolean }) =>
+			setServiceEnabled(id, enabled),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["services"] }),
+	});
+	return {
+		isEnabled: (id: ServiceId, configured: boolean) => {
+			const flag = flags.data?.[id];
+			return flag === undefined ? configured : flag === "on";
+		},
+		setEnabled: (id: ServiceId, enabled: boolean) => set.mutate({ id, enabled }),
+	};
 }

@@ -1,10 +1,11 @@
 import { createContext, useCallback, useContext } from "react";
+import type { ServiceId } from "#/lib/api.ts";
 
 export type DetailView =
 	| { kind: "album"; key: string }
 	| { kind: "artist"; name: string }
 	| { kind: "tag"; name: string }
-	| { kind: "add-destination" };
+	| { kind: "service"; service: ServiceId };
 
 export interface DetailApi {
 	view: DetailView | null;

@@ -115,6 +115,17 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              imported_at INTEGER NOT NULL,
              PRIMARY KEY (source, size)
          );
+         CREATE TABLE IF NOT EXISTS activity (
+             id          INTEGER PRIMARY KEY,
+             source      TEXT NOT NULL,
+             started_at  INTEGER NOT NULL,
+             finished_at INTEGER NOT NULL,
+             ok          INTEGER NOT NULL,
+             skipped     INTEGER NOT NULL,
+             failed      INTEGER NOT NULL,
+             items       TEXT NOT NULL DEFAULT '[]',
+             errors      TEXT NOT NULL DEFAULT '[]'
+         );
          CREATE TABLE IF NOT EXISTS stale_remote (
              target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
              track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
@@ -445,6 +456,23 @@ pub fn add_target(conn: &Connection, t: &NewTarget) -> Result<i64, Error> {
     )?)
 }
 
+/// Points a target at a new folder. Everything is re-uploaded there, so synced
+/// state is cleared; copies at the old location are left untouched.
+pub fn set_target_path(conn: &mut Connection, id: i64, path: &[String]) -> Result<(), Error> {
+    let raw = serde_json::to_string(path).map_err(|e| Error::Msg(e.to_string()))?;
+    let tx = conn.transaction()?;
+    let changed = tx.execute(
+        "UPDATE sync_targets SET path = ?2 WHERE id = ?1 AND path != ?2",
+        params![id, raw],
+    )?;
+    if changed > 0 {
+        tx.execute("DELETE FROM synced_files WHERE target_id = ?1", params![id])?;
+        tx.execute("DELETE FROM stale_remote WHERE target_id = ?1", params![id])?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn remove_target(conn: &Connection, id: i64) -> Result<(), Error> {
     conn.execute("DELETE FROM sync_targets WHERE id = ?1", params![id])?;
     Ok(())
@@ -470,11 +498,62 @@ pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn get_targets(conn: &Connection, only: Option<i64>) -> Result<Vec<SyncTarget>, Error> {
-    Ok(list_targets(conn)?
-        .into_iter()
-        .filter(|t| only.is_none_or(|id| id == t.id))
-        .collect())
+/// The services a user can switch on or off.
+pub const SERVICES: [&str; 5] = ["downloads", "itunes", "tailscale", "r2", "rekordbox"];
+
+fn service_key(id: &str) -> String {
+    format!("service.{id}")
+}
+
+/// Explicit on/off choices; a service never switched is absent.
+pub fn service_flags(conn: &Connection) -> Result<Vec<(String, String)>, Error> {
+    let mut flags = Vec::new();
+    for id in SERVICES {
+        if let Some(v) = get_setting(conn, &service_key(id))? {
+            flags.push((id.to_owned(), v));
+        }
+    }
+    Ok(flags)
+}
+
+pub fn set_service_enabled(conn: &Connection, id: &str, enabled: bool) -> Result<(), Error> {
+    if !SERVICES.contains(&id) {
+        return Err(Error::Msg(format!("unknown service {id}")));
+    }
+    set_setting(
+        conn,
+        &service_key(id),
+        Some(if enabled { "on" } else { "off" }),
+    )
+}
+
+/// Only an explicit "off" disables a service; unconfigured ones simply do nothing.
+pub fn service_off(conn: &Connection, id: &str) -> Result<bool, Error> {
+    Ok(get_setting(conn, &service_key(id))?.as_deref() == Some("off"))
+}
+
+/// Which service a target belongs to.
+pub fn target_service(t: &SyncTarget) -> &'static str {
+    if t.tailnet.starts_with("r2:") {
+        "r2"
+    } else {
+        "tailscale"
+    }
+}
+
+/// `only` picks explicit targets; with `None` every target of an enabled service.
+pub fn get_targets(conn: &Connection, only: Option<&[i64]>) -> Result<Vec<SyncTarget>, Error> {
+    let mut out = Vec::new();
+    for t in list_targets(conn)? {
+        let keep = match only {
+            Some(ids) => ids.contains(&t.id),
+            None => !service_off(conn, target_service(&t))?,
+        };
+        if keep {
+            out.push(t);
+        }
+    }
+    Ok(out)
 }
 
 pub struct RunRecord {
@@ -556,6 +635,87 @@ pub struct RunView {
     pub first_error: Option<String>,
     pub errors: Vec<String>,
     pub batch: i64,
+}
+
+/// One run of an import or export source (downloads, itunes, rekordbox).
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Activity {
+    pub id: i64,
+    pub source: String,
+    pub started_at: i64,
+    pub finished_at: i64,
+    pub ok: i64,
+    pub skipped: i64,
+    pub failed: i64,
+    /// What was imported or exported, one line each (capped).
+    pub items: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+const ACTIVITY_KEEP: i64 = 200;
+const ACTIVITY_LINES: usize = 100;
+
+pub fn record_activity(conn: &Connection, a: &Activity) -> Result<(), Error> {
+    let cap = |v: &[String]| -> Result<String, Error> {
+        serde_json::to_string(&v[..v.len().min(ACTIVITY_LINES)])
+            .map_err(|e| Error::Msg(e.to_string()))
+    };
+    conn.execute(
+        "INSERT INTO activity (source, started_at, finished_at, ok, skipped, failed, items, errors)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            a.source,
+            a.started_at,
+            a.finished_at,
+            a.ok,
+            a.skipped,
+            a.failed,
+            cap(&a.items)?,
+            cap(&a.errors)?
+        ],
+    )?;
+    conn.execute(
+        "DELETE FROM activity WHERE source = ?1 AND id NOT IN
+         (SELECT id FROM activity WHERE source = ?1 ORDER BY id DESC LIMIT ?2)",
+        params![a.source, ACTIVITY_KEEP],
+    )?;
+    Ok(())
+}
+
+pub fn activity_history(
+    conn: &Connection,
+    source: &str,
+    limit: i64,
+) -> Result<Vec<Activity>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, source, started_at, finished_at, ok, skipped, failed, items, errors
+         FROM activity WHERE source = ?1 ORDER BY id DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![source, limit], |r| {
+        let list = |i: usize| -> rusqlite::Result<Vec<String>> {
+            Ok(serde_json::from_str(&r.get::<_, String>(i)?).unwrap_or_default())
+        };
+        Ok(Activity {
+            id: r.get(0)?,
+            source: r.get(1)?,
+            started_at: r.get(2)?,
+            finished_at: r.get(3)?,
+            ok: r.get(4)?,
+            skipped: r.get(5)?,
+            failed: r.get(6)?,
+            items: list(7)?,
+            errors: list(8)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn dismiss_activity(conn: &Connection, ids: &[i64]) -> Result<(), Error> {
+    for id in ids {
+        conn.execute("DELETE FROM activity WHERE id = ?1", params![id])?;
+    }
+    Ok(())
 }
 
 pub fn dismiss_runs(conn: &Connection, ids: &[i64]) -> Result<(), Error> {

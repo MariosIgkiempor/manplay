@@ -350,6 +350,31 @@ fn convert(ffmpeg: &Path, c: &Candidate, dest: &Path) -> Result<(), String> {
     })
 }
 
+/// Songs under `source` that an import would convert: not in the library, not imported before.
+/// Read-only; never converts or records anything.
+pub fn pending(source: &Path, mut known: Known) -> Vec<Converted> {
+    let mut out = Vec::new();
+    if !source.is_dir() {
+        return out;
+    }
+    for path in find_m4a(source) {
+        let Some(c) = read_candidate(source, &path) else {
+            continue;
+        };
+        if known.already_imported(&c) || known.in_library(&c) {
+            continue;
+        }
+        known.add(&c);
+        out.push(Converted {
+            artist: c.artist,
+            album: c.album,
+            title: c.title,
+            dest: path.display().to_string(),
+        });
+    }
+    out
+}
+
 /// Converts every new song under `source` into `library`. `record` is called after each file
 /// is safely in the library so a crash never loses track of what was imported.
 pub fn import(

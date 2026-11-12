@@ -1,8 +1,11 @@
 import { ArrowLeft, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { AddDestination } from "#/components/add-destination.tsx";
 import { AlbumPanel } from "#/components/album-panel.tsx";
 import { ArtistPanel } from "#/components/artist-panel.tsx";
+import { DestinationServicePanel } from "#/components/destination-service.tsx";
+import { DownloadsPanel } from "#/components/downloads-source.tsx";
+import { ItunesPanel } from "#/components/itunes-source.tsx";
+import { RekordboxPanel } from "#/components/rekordbox-source.tsx";
 import { TagPanel } from "#/components/tag-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
@@ -13,15 +16,24 @@ import {
 } from "#/context/detail-context.ts";
 import { cn } from "#/lib/utils.ts";
 
+const SERVICE_PANELS = {
+	downloads: DownloadsPanel,
+	itunes: ItunesPanel,
+	rekordbox: RekordboxPanel,
+	tailscale: () => <DestinationServicePanel kind="tailscale" />,
+	r2: () => <DestinationServicePanel kind="r2" />,
+} as const;
+
 function Content({ view }: { view: DetailView }) {
-	const { close } = useDetail();
 	switch (view.kind) {
 		case "album":
 			return <AlbumPanel albumKey={view.key} />;
 		case "artist":
 			return <ArtistPanel name={view.name} />;
-		case "add-destination":
-			return <AddDestination onAdded={close} />;
+		case "service": {
+			const Panel = SERVICE_PANELS[view.service];
+			return <Panel />;
+		}
 		case "tag":
 			return <TagPanel name={view.name} />;
 		default:

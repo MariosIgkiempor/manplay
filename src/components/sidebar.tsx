@@ -1,16 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import {
-	CloudUpload,
-	Disc3,
-	Download,
-	FolderInput,
-	Library,
-	ListMusic,
-	Music,
-	Plus,
-	Settings,
-} from "lucide-react";
+import { Download, Library, ListMusic, Music, Plus, Settings, Upload } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -26,7 +16,7 @@ function NavLink({
 	children,
 	...props
 }: {
-	to: "/" | "/import" | "/sync" | "/rekordbox" | "/itunes" | "/settings";
+	to: "/" | "/import" | "/export" | "/settings";
 	children: ReactNode;
 }) {
 	return (
@@ -77,21 +67,13 @@ export function Sidebar() {
 					Library
 				</NavLink>
 				<NavLink to="/import">
-					<FolderInput className="size-4" />
+					<Download className="size-4" />
 					Import
 				</NavLink>
-				<NavLink to="/sync">
-					<CloudUpload className="size-4" />
-					Sync
+				<NavLink to="/export">
+					<Upload className="size-4" />
+					Export
 					{syncing && <span className="ml-auto size-2 animate-pulse rounded-full bg-primary" />}
-				</NavLink>
-				<NavLink to="/itunes">
-					<Download className="size-4" />
-					iTunes
-				</NavLink>
-				<NavLink to="/rekordbox">
-					<Disc3 className="size-4" />
-					Rekordbox
 				</NavLink>
 			</nav>
 			<div className="px-2 font-medium text-muted-foreground text-xs uppercase tracking-wide">

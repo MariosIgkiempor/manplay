@@ -50,7 +50,7 @@ const R2_FIELDS = [
 ] as const;
 
 /** Credentials for a Cloudflare R2 bucket. The secret is stored in the OS keychain. */
-function AddR2({ onAdded }: { onAdded: () => void }) {
+export function AddR2({ onAdded }: { onAdded: () => void }) {
 	const queryClient = useQueryClient();
 	const [form, setForm] = useState({
 		account: "",
@@ -100,44 +100,8 @@ function AddR2({ onAdded }: { onAdded: () => void }) {
 	);
 }
 
-/** Choose where to back up: a Cloudflare R2 bucket or a Tailscale machine. */
-export function AddDestination({ onAdded }: { onAdded: () => void }) {
-	const [kind, setKind] = useState<"r2" | "tailscale">("r2");
-	return (
-		<div className="space-y-6 pb-8">
-			<div className="space-y-1">
-				<h2 className="font-semibold text-2xl tracking-tight">Add destination</h2>
-				<p className="text-muted-foreground text-sm">Choose where your library is backed up.</p>
-			</div>
-			<div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
-				{(
-					[
-						["r2", "Cloudflare R2"],
-						["tailscale", "Tailscale"],
-					] as const
-				).map(([id, label]) => (
-					<button
-						key={id}
-						type="button"
-						onClick={() => setKind(id)}
-						className={cn(
-							"rounded-md px-3 py-1.5 font-medium text-sm transition-colors",
-							kind === id
-								? "bg-background shadow-sm"
-								: "text-muted-foreground hover:text-foreground",
-						)}
-					>
-						{label}
-					</button>
-				))}
-			</div>
-			{kind === "r2" ? <AddR2 onAdded={onAdded} /> : <AddTailscale onAdded={onAdded} />}
-		</div>
-	);
-}
-
 /** Pick a Tailscale machine, browse its Taildrive folders, and add one as a destination. */
-function AddTailscale({ onAdded }: { onAdded: () => void }) {
+export function AddTailscale({ onAdded }: { onAdded: () => void }) {
 	const queryClient = useQueryClient();
 	const [machine, setMachine] = useState<string | null>(null);
 	const [path, setPath] = useState<string[]>([]);

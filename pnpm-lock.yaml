@@ -53,6 +53,9 @@ importers:
       react-dom:
         specifier: ^19.2.0
         version: 19.3.1(react@19.3.1)
+      simple-icons:
+        specifier: ^16.37.0
+        version: 16.37.0
       tailwind-merge:
         specifier: ^3.7.0
         version: 3.7.0
@@ -1085,6 +1088,10 @@ packages:
   seroval@1.8.0:
     resolution: {integrity: sha512-W5N4cMPc58lypAsScCmhGTyZxNZ6gPHvLHtMqtyvDFpfyNDsH1QjU0nI9Lr34+Q5ZLPsWeqOhkgTY5XtaPVQ4A==}
     engines: {node: '>=20'}
+
+  simple-icons@16.37.0:
+    resolution: {integrity: sha512-8mCJIhpMYOL9g13GW59EiL3sVXJnTEKGCTZFaekl9UQ3Qo0SwVjnLaJ82QiaH8BKBdouEDzrHMXIWh8cBIy48A==}
+    engines: {node: '>=0.12.18'}
 
   source-map-js@1.2.2:
     resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
@@ -2174,6 +2181,8 @@ snapshots:
       seroval: 1.8.0
 
   seroval@1.8.0: {}
+
+  simple-icons@16.37.0: {}
 
   source-map-js@1.2.2: {}
 

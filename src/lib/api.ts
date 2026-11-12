@@ -194,6 +194,21 @@ export async function addR2Target(t: NewR2Target): Promise<number> {
 	return int.parse(await invoke("add_r2_target", { ...t }));
 }
 
+/** Changes a destination's folder; for R2 also its access key (blank secret keeps the stored one). */
+export async function updateSyncTarget(t: {
+	id: number;
+	path: string[];
+	keyId?: string | undefined;
+	secret?: string | undefined;
+}): Promise<void> {
+	await invoke("update_sync_target", {
+		id: t.id,
+		path: t.path,
+		keyId: t.keyId ?? null,
+		secret: t.secret ?? null,
+	});
+}
+
 export async function removeSyncTarget(id: number): Promise<void> {
 	await invoke("remove_sync_target", { id });
 }
@@ -225,9 +240,47 @@ export async function dismissSyncRuns(ids: number[]): Promise<void> {
 	await invoke("dismiss_sync_runs", { ids });
 }
 
-/** Syncs one target, or every target when `targetId` is omitted. */
-export async function syncRun(targetId?: number): Promise<void> {
-	await invoke("sync_run", { targetId: targetId ?? null });
+export type ActivitySource = "downloads" | "itunes" | "rekordbox";
+
+const activitySchema = z.object({
+	id: int,
+	source: z.string(),
+	startedAt: int,
+	finishedAt: int,
+	ok: int,
+	skipped: int,
+	failed: int,
+	items: z.array(z.string()),
+	errors: z.array(z.string()),
+});
+
+export type Activity = z.infer<typeof activitySchema>;
+
+/** Past runs of an import or export source, newest first. */
+export async function activityHistory(source: ActivitySource, limit: number): Promise<Activity[]> {
+	return z.array(activitySchema).parse(await invoke("activity_history", { source, limit }));
+}
+
+export async function dismissActivity(ids: number[]): Promise<void> {
+	await invoke("dismiss_activity", { ids });
+}
+
+/** Syncs the given targets, or every target of an enabled service when `ids` is omitted. */
+export async function syncRun(ids?: number[]): Promise<void> {
+	await invoke("sync_run", { targetIds: ids ?? null });
+}
+
+export type ServiceId = "downloads" | "itunes" | "tailscale" | "r2" | "rekordbox";
+
+/** Explicit on/off choices by service id; a service never switched is absent. */
+export async function serviceFlags(): Promise<Record<string, string>> {
+	return Object.fromEntries(
+		z.array(z.tuple([z.string(), z.string()])).parse(await invoke("service_flags")),
+	);
+}
+
+export async function setServiceEnabled(id: ServiceId, enabled: boolean): Promise<void> {
+	await invoke("set_service_enabled", { id, enabled });
 }
 
 const progressSchema = z.object({
@@ -301,6 +354,7 @@ const itunesSchema = z.object({
 });
 
 export type ItunesStatus = z.infer<typeof itunesSchema>;
+export type ItunesPendingSong = z.infer<typeof itunesReportSchema>["converted"][number];
 
 export async function itunesStatus(): Promise<ItunesStatus> {
 	return itunesSchema.parse(await invoke("itunes_status"));
@@ -313,6 +367,11 @@ export function pickItunesFolder(): Promise<string | null> {
 
 export async function setItunesPath(path: string | null): Promise<ItunesStatus> {
 	return itunesSchema.parse(await invoke("itunes_set_path", { path }));
+}
+
+/** Songs in the iTunes folder an import would add. Read-only. */
+export async function itunesPending(): Promise<ItunesPendingSong[]> {
+	return itunesReportSchema.shape.converted.parse(await invoke("itunes_pending"));
 }
 
 /** Converts new iTunes songs into the library. Null when iTunes or the library is not set up. */

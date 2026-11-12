@@ -374,6 +374,44 @@ async fn add_r2_target(
     Ok(id)
 }
 
+/// Edits a destination: its folder (clears synced state when it changes) and,
+/// for R2, the access key. A blank `secret` keeps the stored credentials.
+#[tauri::command]
+async fn update_sync_target(
+    state: State<'_, AppState>,
+    id: i64,
+    path: Vec<String>,
+    key_id: Option<String>,
+    secret: Option<String>,
+) -> Result<(), Error> {
+    let target = with_db!(state, |c| db::list_targets(c))?
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| Error::Msg("destination no longer exists".to_owned()))?;
+    let path: Vec<String> = path
+        .into_iter()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if let Some(account) = target.tailnet.strip_prefix(r2::TARGET_PREFIX) {
+        let secret = secret.filter(|s| !s.is_empty());
+        if let (Some(key_id), Some(secret)) = (key_id.filter(|k| !k.trim().is_empty()), secret) {
+            let client = r2::R2::new(account, &target.machine, key_id.trim(), secret.trim());
+            client.check(&state.http).await?;
+            client.save_credentials(id)?;
+        }
+    } else if path.is_empty() {
+        return Err(Error::Msg("choose a shared folder".to_owned()));
+    }
+    with_db!(state, |c| db::set_target_path(c, id, &path)).map_err(|e| {
+        if e.to_string().contains("UNIQUE") {
+            Error::Msg("another destination already uses that folder".to_owned())
+        } else {
+            e
+        }
+    })
+}
+
 #[tauri::command]
 fn remove_sync_target(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
     with_db!(state, |c| db::remove_target(c, id))?;
@@ -389,6 +427,30 @@ fn dismiss_sync_runs(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), Er
 #[tauri::command]
 fn sync_history(state: State<'_, AppState>, limit: i64) -> Result<Vec<RunView>, Error> {
     with_db!(state, |c| db::history(c, limit))
+}
+
+#[tauri::command]
+fn service_flags(state: State<'_, AppState>) -> Result<Vec<(String, String)>, Error> {
+    with_db!(state, |c| db::service_flags(c))
+}
+
+#[tauri::command]
+fn set_service_enabled(state: State<'_, AppState>, id: String, enabled: bool) -> Result<(), Error> {
+    with_db!(state, |c| db::set_service_enabled(c, &id, enabled))
+}
+
+#[tauri::command]
+fn activity_history(
+    state: State<'_, AppState>,
+    source: String,
+    limit: i64,
+) -> Result<Vec<db::Activity>, Error> {
+    with_db!(state, |c| db::activity_history(c, &source, limit))
+}
+
+#[tauri::command]
+fn dismiss_activity(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), Error> {
+    with_db!(state, |c| db::dismiss_activity(c, &ids))
 }
 
 fn unix_now() -> i64 {
@@ -436,16 +498,16 @@ impl Drop for SyncGuard<'_> {
     }
 }
 
-/// Syncs one target, or all of them when `target_id` is `None`.
+/// Syncs the given targets, or every target of an enabled service when `target_ids` is `None`.
 #[tauri::command]
 async fn sync_run(
     app: AppHandle,
     state: State<'_, AppState>,
-    target_id: Option<i64>,
+    target_ids: Option<Vec<i64>>,
 ) -> Result<(), Error> {
     let (targets, items, mut victims) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        let targets = db::get_targets(&conn, target_id)?;
+        let targets = db::get_targets(&conn, target_ids.as_deref())?;
         let items = collect_items(&conn)?;
         let victims = collect_victims(&conn, &targets)?;
         (targets, items, victims)
@@ -815,11 +877,37 @@ async fn import_run(
 ) -> Result<import::ImportReport, Error> {
     let library = library_root(&state)?;
     let lib = library.clone();
+    let started_at = unix_now();
+    let items: Vec<String> = groups
+        .iter()
+        .filter(|g| !g.tracks.is_empty())
+        .map(|g| format!("{} — {} ({} tracks)", g.artist, g.album, g.tracks.len()))
+        .collect();
     let report = tauri::async_runtime::spawn_blocking(move || import::run(&folder, &lib, &groups))
         .await
         .map_err(|e| Error::Msg(e.to_string()))?;
     if report.imported > 0 {
         refresh_after_fs_change(&state, library).await;
+    }
+    if report.imported > 0 || !report.failed.is_empty() {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::record_activity(
+            &conn,
+            &db::Activity {
+                source: "downloads".to_owned(),
+                started_at,
+                finished_at: unix_now(),
+                ok: i64::try_from(report.imported).unwrap_or(0),
+                failed: i64::try_from(report.failed.len()).unwrap_or(0),
+                items,
+                errors: report
+                    .failed
+                    .iter()
+                    .map(|f| format!("{}: {}", f.file, f.error))
+                    .collect(),
+                ..db::Activity::default()
+            },
+        )?;
     }
     Ok(report)
 }
@@ -864,6 +952,12 @@ fn store_last(conn: &Connection, last: &RekordboxLast) -> Result<(), Error> {
 /// Writes the rekordbox XML to the configured file. `Ok(false)` when no file is configured.
 /// The file is written atomically so rekordbox never reads a half-written library.
 fn run_export(state: &AppState) -> Result<bool, Error> {
+    export_inner(state, false)
+}
+
+/// `record_ok` adds successful runs to the history; failures are always recorded.
+fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
+    let started_at = unix_now();
     let (path, tracks, playlists) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let Some(path) = db::get_setting(&conn, SETTING_RB_PATH)? else {
@@ -887,11 +981,40 @@ fn run_export(state: &AppState) -> Result<bool, Error> {
                 error: None,
             };
             store_last(&conn, &last)?;
+            if record_ok {
+                db::record_activity(
+                    &conn,
+                    &db::Activity {
+                        source: "rekordbox".to_owned(),
+                        started_at,
+                        finished_at: unix_now(),
+                        ok: i64::try_from(tracks.len()).unwrap_or(0),
+                        items: vec![format!(
+                            "{} tracks · {} playlists",
+                            tracks.len(),
+                            playlists.len()
+                        )],
+                        ..db::Activity::default()
+                    },
+                )?;
+            }
             Ok(true)
         }
         Err(e) => {
-            last.error = Some(format!("could not write {}: {e}", path.display()));
+            let msg = format!("could not write {}: {e}", path.display());
+            last.error = Some(msg.clone());
             store_last(&conn, &last)?;
+            db::record_activity(
+                &conn,
+                &db::Activity {
+                    source: "rekordbox".to_owned(),
+                    started_at,
+                    finished_at: unix_now(),
+                    failed: 1,
+                    errors: vec![msg],
+                    ..db::Activity::default()
+                },
+            )?;
             Err(Error::Io(e))
         }
     }
@@ -900,7 +1023,15 @@ fn run_export(state: &AppState) -> Result<bool, Error> {
 /// Keeps the exported file current after playlist or library changes. Failures are recorded
 /// in the export status (shown on the Rekordbox page) rather than failing the user's action.
 fn auto_export(state: &AppState) {
-    let _ = run_export(state);
+    let off = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|c| db::service_off(&c, "rekordbox").ok())
+        .unwrap_or(false);
+    if !off {
+        let _ = run_export(state);
+    }
 }
 
 #[tauri::command]
@@ -922,14 +1053,16 @@ fn rekordbox_set_path(
             db::set_setting(&conn, SETTING_RB_LAST, None)?;
         }
     }
-    run_export(&state)?;
+    if path.is_some() {
+        export_inner(&state, true)?;
+    }
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     rekordbox_status_of(&conn)
 }
 
 #[tauri::command]
 fn rekordbox_export(state: State<'_, AppState>) -> Result<RekordboxStatus, Error> {
-    if !run_export(&state)? {
+    if !export_inner(&state, true)? {
         return Err(Error::Msg(
             "choose where to save the rekordbox file first".to_owned(),
         ));
@@ -979,12 +1112,33 @@ fn itunes_set_path(
     itunes_status_of(&conn)
 }
 
+/// Songs in the iTunes folder that an import would add. Empty when iTunes is off or unset.
+#[tauri::command]
+async fn itunes_pending(state: State<'_, AppState>) -> Result<Vec<itunes::Converted>, Error> {
+    let (source, known) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        if db::service_off(&conn, "itunes")? {
+            return Ok(Vec::new());
+        }
+        let Some(source) = db::get_setting(&conn, SETTING_ITUNES_PATH)? else {
+            return Ok(Vec::new());
+        };
+        (PathBuf::from(source), itunes::Known::load(&conn)?)
+    };
+    tauri::async_runtime::spawn_blocking(move || itunes::pending(&source, known))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))
+}
+
 /// Converts new iTunes songs into the library, then rescans so they show up.
 /// `Ok(None)` when no iTunes folder or library folder is configured.
 #[tauri::command]
 async fn itunes_import(state: State<'_, AppState>) -> Result<Option<ItunesStatus>, Error> {
     let (source, library, known) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        if db::service_off(&conn, "itunes")? {
+            return Ok(None);
+        }
         let source = db::get_setting(&conn, SETTING_ITUNES_PATH)?;
         let library = db::get_setting(&conn, SETTING_ROOT)?;
         let (Some(source), Some(library)) = (source, library) else {
@@ -1018,9 +1172,40 @@ async fn itunes_import(state: State<'_, AppState>) -> Result<Option<ItunesStatus
     if !report.converted.is_empty() {
         scan_and_store(&state, library).await?;
     }
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    if !report.converted.is_empty() || !report.failed.is_empty() || report.error.is_some() {
+        db::record_activity(
+            &conn,
+            &db::Activity {
+                source: "itunes".to_owned(),
+                started_at: now,
+                finished_at: unix_now(),
+                ok: i64::try_from(report.converted.len()).unwrap_or(0),
+                skipped: i64::try_from(report.skipped).unwrap_or(0),
+                failed: i64::try_from(report.failed.len()).unwrap_or(0)
+                    + i64::from(report.error.is_some()),
+                items: report
+                    .converted
+                    .iter()
+                    .map(|c| format!("{} — {} · {}", c.artist, c.title, c.album))
+                    .collect(),
+                errors: report
+                    .error
+                    .iter()
+                    .cloned()
+                    .chain(
+                        report
+                            .failed
+                            .iter()
+                            .map(|f| format!("{}: {}", f.file, f.error)),
+                    )
+                    .collect(),
+                ..db::Activity::default()
+            },
+        )?;
+    }
     report.converted.truncate(ITUNES_KEEP);
     report.failed.truncate(ITUNES_KEEP);
-    let conn = state.db.lock().map_err(|_| Error::Lock)?;
     let raw = serde_json::to_string(&report).map_err(|e| Error::Msg(e.to_string()))?;
     db::set_setting(&conn, SETTING_ITUNES_LAST, Some(&raw))?;
     itunes_status_of(&conn).map(Some)
@@ -1144,8 +1329,13 @@ pub fn run() {
             list_sync_targets,
             add_sync_target,
             add_r2_target,
+            update_sync_target,
             remove_sync_target,
             sync_history,
+            activity_history,
+            service_flags,
+            set_service_enabled,
+            dismiss_activity,
             dismiss_sync_runs,
             sync_run,
             is_syncing,
@@ -1155,6 +1345,7 @@ pub fn run() {
             itunes_status,
             itunes_set_path,
             itunes_import,
+            itunes_pending,
             fs_list,
             fs_make_dir,
             fs_rename,

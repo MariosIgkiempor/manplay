@@ -87,14 +87,26 @@ function usePreview(folder: string | null, editFor: (key: string) => Edit | unde
 	return { activeKey, isPlaying: player.playing, loading, error, toggle };
 }
 
-export function useImport() {
+/** Asks for the Downloads folder and shares the choice with every view of it. */
+export function useChooseImportFolder() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: pickImportFolder,
+		onSuccess: (dir) => {
+			if (dir !== null) {
+				queryClient.setQueryData(["import-folder"], dir);
+			}
+		},
+	});
+}
+
+export function useImport(enabled = true) {
 	const queryClient = useQueryClient();
 	const savedFolder = useQuery({ queryKey: ["import-folder"], queryFn: importGetFolder });
 	const root = useLibraryRoot();
 	const targets = useSyncTargets();
 	const sync = useSyncRun();
-	const [picked, setPicked] = useState<string | null>(null);
-	const folder = picked ?? savedFolder.data ?? null;
+	const folder = savedFolder.data ?? null;
 
 	const [scan, setScan] = useState<ImportScan | null>(null);
 	const [fromCache, setFromCache] = useState(false);
@@ -117,8 +129,12 @@ export function useImport() {
 	// Show what the last scan found right away, then bring it up to date.
 	const booted = useRef<string | null>(null);
 	useEffect(() => {
-		if (folder === null || booted.current === folder) {
+		if (!enabled || folder === null || booted.current === folder) {
 			return;
+		}
+		if (booted.current !== null) {
+			setScan(null);
+			setReport(null);
 		}
 		booted.current = folder;
 		void importCached(folder).then((cached) => {
@@ -132,18 +148,9 @@ export function useImport() {
 			}
 		});
 		startScan({ dir: folder, fresh: false });
-	}, [folder, show, startScan]);
+	}, [enabled, folder, show, startScan]);
 
-	const choose = useMutation({
-		mutationFn: pickImportFolder,
-		onSuccess: (dir) => {
-			if (dir !== null) {
-				setPicked(dir);
-				setReport(null);
-				setScan(null);
-			}
-		},
-	});
+	const choose = useChooseImportFolder();
 
 	/** Adds one group (by key) or all of them (null). Imported tracks flip to "in library". */
 	const add = useMutation({
@@ -190,7 +197,7 @@ export function useImport() {
 		preview,
 		canAdd: root.data !== null,
 		hasRoot: root.data !== null,
-		rescan: (fresh: boolean) => folder !== null && startScan({ dir: folder, fresh }),
+		rescan: (fresh: boolean) => enabled && folder !== null && startScan({ dir: folder, fresh }),
 		edit: (key: string, next: { artist: string; album: string }) =>
 			setEdits((prev) => ({ ...prev, [key]: { ...next, touched: true } })),
 		toggle: (key: string) => setUnchecked((prev) => withToggled(prev, key)),
