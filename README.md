@@ -24,7 +24,7 @@ pnpm build
 3. The `Release` workflow builds Apple Silicon and Intel DMGs, signs the updater
    artifacts, and publishes a GitHub release with `latest.json`.
 4. Installed apps pick it up via Settings → About (checked on launch too), and the
-   website (`website/`, Laravel) links the new DMGs automatically (10 min cache).
+   website (separate repo `manplay-web`, Laravel) links the new DMGs automatically (10 min cache).
 
 Required repo secrets: `TAURI_SIGNING_PRIVATE_KEY` (contents of `~/.tauri/manplay.key`)
 and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (empty string if none).
