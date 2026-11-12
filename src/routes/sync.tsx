@@ -1,22 +1,34 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { CloudUpload, Plus } from "lucide-react";
-import { useState } from "react";
-import { AddDestination } from "#/components/add-destination.tsx";
 import { DestinationCard } from "#/components/destination-card.tsx";
 import { SyncHistory } from "#/components/sync-history.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { useDetail } from "#/context/detail-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { removeSyncTarget, syncHistory, tailscaleStatus } from "#/lib/api.ts";
 import { useSyncRun, useSyncTargets, useTracks } from "#/lib/queries.ts";
 
 export const Route = createFileRoute("/sync")({ component: SyncPage });
 
-const HISTORY_LIMIT = 30;
+const HISTORY_LIMIT = 200;
+
+function SectionTitle({ title, count }: { title: string; count?: number }) {
+	return (
+		<h2 className="flex items-center gap-2 font-medium text-muted-foreground text-xs uppercase tracking-wider">
+			{title}
+			{count !== undefined && count > 0 && (
+				<span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums">
+					{count}
+				</span>
+			)}
+		</h2>
+	);
+}
 
 function SyncPage() {
 	const queryClient = useQueryClient();
-	const [adding, setAdding] = useState(false);
+	const detail = useDetail();
 	const progress = useSyncProgress();
 	const targets = useSyncTargets();
 	const tracks = useTracks();
@@ -37,19 +49,19 @@ function SyncPage() {
 
 	const list = targets.data ?? [];
 	const busy = progress.size > 0 || run.isPending;
-	const showAdd = adding || (targets.isSuccess && list.length === 0);
 
 	return (
-		<main className="space-y-8 p-6">
-			<header className="flex flex-wrap items-center justify-between gap-3">
-				<div>
-					<h1 className="font-bold text-2xl">Sync</h1>
-					<p className="text-muted-foreground text-sm">
-						Every file in your library is copied to each destination. Nothing is ever deleted there.
+		<main className="mx-auto w-full max-w-5xl space-y-8 p-6 lg:p-8">
+			<header className="flex flex-wrap items-end justify-between gap-4">
+				<div className="space-y-1">
+					<h1 className="font-semibold text-2xl tracking-tight">Sync</h1>
+					<p className="max-w-xl text-muted-foreground text-sm">
+						Back up your library to one or more destinations. Files are copied one way and never
+						modified; removing a track locally only removes its backup after a grace period.
 					</p>
 				</div>
 				<div className="flex gap-2">
-					<Button variant="outline" onClick={() => setAdding(!adding)}>
+					<Button variant="outline" onClick={() => detail.open({ kind: "add-destination" })}>
 						<Plus /> Add destination
 					</Button>
 					<Button onClick={() => run.mutate(undefined)} disabled={busy || list.length === 0}>
@@ -67,12 +79,19 @@ function SyncPage() {
 					),
 			)}
 
-			{showAdd && <AddDestination onAdded={() => setAdding(false)} />}
-
 			<section className="space-y-3">
-				<h2 className="font-semibold">Destinations</h2>
-				{list.length === 0 && !showAdd && (
-					<p className="text-muted-foreground text-sm">No destinations yet.</p>
+				<SectionTitle title="Destinations" count={list.length} />
+				{list.length === 0 && targets.isSuccess && (
+					<div className="rounded-xl border border-dashed px-4 py-8 text-center text-muted-foreground text-sm">
+						<p>Add a Cloudflare R2 bucket or a Tailscale machine to start backing up.</p>
+						<Button
+							className="mt-3"
+							variant="outline"
+							onClick={() => detail.open({ kind: "add-destination" })}
+						>
+							<Plus /> Add destination
+						</Button>
+					</div>
 				)}
 				<div className="grid gap-4 lg:grid-cols-2">
 					{list.map((t) => (
@@ -92,7 +111,7 @@ function SyncPage() {
 			</section>
 
 			<section className="space-y-3">
-				<h2 className="font-semibold">History</h2>
+				<SectionTitle title="History" />
 				<SyncHistory runs={history.data ?? []} />
 			</section>
 		</main>

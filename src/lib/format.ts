@@ -34,3 +34,17 @@ export function formatBytes(bytes: number): string {
 	}
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/** "1m 05s" / "42s" / "<1s" for a duration in seconds. */
+export function duration(seconds: number): string {
+	if (seconds < 1) {
+		return "<1s";
+	}
+	const h = Math.floor(seconds / 3600);
+	const m = Math.floor((seconds % 3600) / 60);
+	const sec = Math.floor(seconds % 60);
+	if (h > 0) {
+		return `${h}h ${String(m).padStart(2, "0")}m`;
+	}
+	return m > 0 ? `${m}m ${String(sec).padStart(2, "0")}s` : `${sec}s`;
+}

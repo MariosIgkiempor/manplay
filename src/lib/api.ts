@@ -178,6 +178,22 @@ export async function addSyncTarget(target: NewTarget): Promise<number> {
 	return int.parse(await invoke("add_sync_target", { target }));
 }
 
+export function isR2(target: SyncTarget): boolean {
+	return target.tailnet.startsWith("r2:");
+}
+
+export interface NewR2Target {
+	account: string;
+	bucket: string;
+	prefix: string;
+	keyId: string;
+	secret: string;
+}
+
+export async function addR2Target(t: NewR2Target): Promise<number> {
+	return int.parse(await invoke("add_r2_target", { ...t }));
+}
+
 export async function removeSyncTarget(id: number): Promise<void> {
 	await invoke("remove_sync_target", { id });
 }
@@ -185,6 +201,7 @@ export async function removeSyncTarget(id: number): Promise<void> {
 const runSchema = z.object({
 	id: int,
 	targetId: int,
+	tailnet: z.string(),
 	machine: z.string(),
 	path: z.array(z.string()),
 	startedAt: int,
@@ -194,12 +211,18 @@ const runSchema = z.object({
 	failed: int,
 	deleted: int,
 	firstError: z.string().nullable(),
+	errors: z.array(z.string()),
+	batch: int,
 });
 
 export type SyncRun = z.infer<typeof runSchema>;
 
 export async function syncHistory(limit: number): Promise<SyncRun[]> {
 	return z.array(runSchema).parse(await invoke("sync_history", { limit }));
+}
+
+export async function dismissSyncRuns(ids: number[]): Promise<void> {
+	await invoke("dismiss_sync_runs", { ids });
 }
 
 /** Syncs one target, or every target when `targetId` is omitted. */

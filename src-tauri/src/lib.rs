@@ -7,6 +7,7 @@ mod error;
 mod fsops;
 mod import;
 mod itunes;
+mod r2;
 mod rekordbox;
 mod scan;
 mod sync;
@@ -342,8 +343,47 @@ fn add_sync_target(state: State<'_, AppState>, target: NewTarget) -> Result<i64,
 }
 
 #[tauri::command]
+async fn add_r2_target(
+    state: State<'_, AppState>,
+    account: String,
+    bucket: String,
+    prefix: String,
+    key_id: String,
+    secret: String,
+) -> Result<i64, Error> {
+    let (account, bucket) = (account.trim(), bucket.trim());
+    if account.is_empty() || bucket.is_empty() || key_id.trim().is_empty() || secret.is_empty() {
+        return Err(Error::Msg("fill in every field".to_owned()));
+    }
+    let client = r2::R2::new(account, bucket, key_id.trim(), secret.trim());
+    client.check(&state.http).await?;
+    let path: Vec<String> = prefix
+        .split('/')
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned)
+        .collect();
+    let id = with_db!(state, |c| db::add_target(
+        c,
+        &NewTarget {
+            tailnet: format!("{}{account}", r2::TARGET_PREFIX),
+            machine: bucket.to_owned(),
+            path,
+        }
+    ))?;
+    client.save_credentials(id)?;
+    Ok(id)
+}
+
+#[tauri::command]
 fn remove_sync_target(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
-    with_db!(state, |c| db::remove_target(c, id))
+    with_db!(state, |c| db::remove_target(c, id))?;
+    r2::forget_credentials(id);
+    Ok(())
+}
+
+#[tauri::command]
+fn dismiss_sync_runs(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), Error> {
+    with_db!(state, |c| db::dismiss_runs(c, &ids))
 }
 
 #[tauri::command]
@@ -423,6 +463,7 @@ async fn sync_run(
     }
     let _guard = SyncGuard(&state.syncing);
 
+    let batch = unix_now();
     for target in &targets {
         let started_at = unix_now();
         let mut outcome = sync::run(&app, &state.http, target, &items).await;
@@ -448,6 +489,7 @@ async fn sync_run(
         } else {
             sync::Cleanup::default()
         };
+        outcome.summary.failed_total += cleanup.errors.len() + moved_cleanup.errors.len();
         outcome.summary.failed.extend(cleanup.errors);
         outcome.summary.failed.extend(moved_cleanup.errors);
         let removed_ids: Vec<i64> = cleanup.deleted.iter().map(|(id, _)| *id).collect();
@@ -457,9 +499,11 @@ async fn sync_run(
             finished_at: unix_now(),
             uploaded: outcome.summary.uploaded,
             skipped: outcome.summary.skipped,
-            failed: outcome.summary.failed.len(),
+            failed: outcome.summary.failed_total,
             deleted: cleanup.deleted.len() + moved_cleanup.deleted.len(),
             first_error: outcome.summary.failed.first().cloned(),
+            errors: outcome.summary.failed.clone(),
+            batch,
         };
         let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
         db::record_run(&mut conn, &record, &outcome.present, &removed_ids)?;
@@ -1099,8 +1143,10 @@ pub fn run() {
             drive_list,
             list_sync_targets,
             add_sync_target,
+            add_r2_target,
             remove_sync_target,
             sync_history,
+            dismiss_sync_runs,
             sync_run,
             is_syncing,
             rekordbox_status,
@@ -1290,6 +1336,8 @@ mod tests {
             failed: 0,
             deleted: 0,
             first_error: None,
+            errors: Vec::new(),
+            batch: 0,
         };
         db::record_run(&mut f.conn, &record, &[(ids[0], 1), (ids[1], 1)], &[]).expect("run");
 
@@ -1396,6 +1444,8 @@ mod tests {
             failed: 0,
             deleted: 0,
             first_error: None,
+            errors: Vec::new(),
+            batch: 0,
         };
         db::record_run(&mut f.conn, &record, &[(id, 1)], &[]).expect("run");
         assert_eq!(db::list(&f.conn).expect("list")[0].synced_count, 1);

@@ -1,7 +1,7 @@
-import { CloudUpload, Trash2 } from "lucide-react";
+import { Cloud, CloudUpload, Trash2 } from "lucide-react";
 import { Button } from "#/components/ui/button.tsx";
-import type { Machine, SyncProgress, SyncRun, SyncTarget } from "#/lib/api.ts";
-import { timeAgo } from "#/lib/format.ts";
+import { isR2, type Machine, type SyncProgress, type SyncRun, type SyncTarget } from "#/lib/api.ts";
+import { duration, timeAgo } from "#/lib/format.ts";
 import { cn } from "#/lib/utils.ts";
 
 interface Props {
@@ -32,7 +32,8 @@ function LastRun({ run }: { run: SyncRun | undefined }) {
 	}
 	return (
 		<span className="text-muted-foreground">
-			Last sync {timeAgo(run.finishedAt)} · {run.uploaded} uploaded
+			Last sync {timeAgo(run.finishedAt)} · {duration(run.finishedAt - run.startedAt)} ·{" "}
+			{run.uploaded.toLocaleString()} uploaded
 			{run.failed > 0 && <span className="text-destructive"> · {run.failed} failed</span>}
 		</span>
 	);
@@ -45,20 +46,30 @@ function Header({
 	busy,
 	onRemove,
 }: Pick<Props, "target" | "machine" | "busy" | "onRemove"> & { online: boolean }) {
+	const r2 = isR2(target);
 	return (
 		<div className="flex items-start justify-between gap-3">
 			<div className="min-w-0">
 				<div className="flex items-center gap-2 font-medium">
-					<span
-						role="img"
-						aria-label={online ? "online" : "offline"}
-						className={cn("size-2 rounded-full", online ? "bg-emerald-500" : "bg-muted-foreground")}
-					/>
-					<span className="truncate">{machine?.hostName ?? target.machine}</span>
+					{r2 ? (
+						<Cloud className="size-4 shrink-0 text-muted-foreground" />
+					) : (
+						<span
+							role="img"
+							aria-label={online ? "online" : "offline"}
+							className={cn(
+								"size-2 rounded-full",
+								online ? "bg-emerald-500" : "bg-muted-foreground",
+							)}
+						/>
+					)}
+					<span className="truncate">
+						{r2 ? `R2 · ${target.machine}` : (machine?.hostName ?? target.machine)}
+					</span>
 					{machine && <span className="text-muted-foreground text-xs">{machine.os}</span>}
 				</div>
 				<div className="truncate text-muted-foreground text-sm" title={target.path.join(" / ")}>
-					{target.path.join(" / ")}
+					{target.path.join(" / ") || "(bucket root)"}
 				</div>
 			</div>
 			<Button
@@ -85,11 +96,11 @@ export function DestinationCard({
 	onRemove,
 }: Props) {
 	const running = progress !== undefined;
-	const online = machine?.online ?? false;
+	const online = isR2(target) || (machine?.online ?? false);
 	const synced = Math.min(target.syncedTracks, totalTracks);
 
 	return (
-		<div className="space-y-3 rounded-xl border bg-card p-4">
+		<div className="space-y-4 rounded-xl border bg-card p-5 shadow-xs">
 			<Header target={target} machine={machine} online={online} busy={busy} onRemove={onRemove} />
 
 			<div className="space-y-1.5">

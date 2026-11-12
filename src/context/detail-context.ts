@@ -3,7 +3,8 @@ import { createContext, useCallback, useContext } from "react";
 export type DetailView =
 	| { kind: "album"; key: string }
 	| { kind: "artist"; name: string }
-	| { kind: "tag"; name: string };
+	| { kind: "tag"; name: string }
+	| { kind: "add-destination" };
 
 export interface DetailApi {
 	view: DetailView | null;

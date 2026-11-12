@@ -123,6 +123,8 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
          );",
     )?;
     add_column(&conn, "sync_runs", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column(&conn, "sync_runs", "errors", "TEXT NOT NULL DEFAULT '[]'")?;
+    add_column(&conn, "sync_runs", "batch", "INTEGER NOT NULL DEFAULT 0")?;
     Ok(conn)
 }
 
@@ -484,6 +486,10 @@ pub struct RunRecord {
     pub failed: usize,
     pub deleted: usize,
     pub first_error: Option<String>,
+    /// Every reported failure (capped upstream).
+    pub errors: Vec<String>,
+    /// Shared by all destinations synced by one command.
+    pub batch: i64,
 }
 
 /// Stores the run and marks every confirmed-present track as synced.
@@ -513,8 +519,9 @@ pub fn record_run(
     }
     tx.execute(
         "INSERT INTO sync_runs
-             (target_id, started_at, finished_at, uploaded, skipped, failed, deleted, first_error)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (target_id, started_at, finished_at, uploaded, skipped, failed, deleted, first_error,
+              errors, batch)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             run.target_id,
             run.started_at,
@@ -523,7 +530,9 @@ pub fn record_run(
             i64::try_from(run.skipped).unwrap_or(i64::MAX),
             i64::try_from(run.failed).unwrap_or(i64::MAX),
             i64::try_from(run.deleted).unwrap_or(i64::MAX),
-            run.first_error
+            run.first_error,
+            serde_json::to_string(&run.errors).unwrap_or_else(|_| "[]".to_owned()),
+            run.batch
         ],
     )?;
     tx.commit()?;
@@ -535,6 +544,7 @@ pub fn record_run(
 pub struct RunView {
     pub id: i64,
     pub target_id: i64,
+    pub tailnet: String,
     pub machine: String,
     pub path: Vec<String>,
     pub started_at: i64,
@@ -544,12 +554,21 @@ pub struct RunView {
     pub failed: i64,
     pub deleted: i64,
     pub first_error: Option<String>,
+    pub errors: Vec<String>,
+    pub batch: i64,
+}
+
+pub fn dismiss_runs(conn: &Connection, ids: &[i64]) -> Result<(), Error> {
+    for id in ids {
+        conn.execute("DELETE FROM sync_runs WHERE id = ?1", params![id])?;
+    }
+    Ok(())
 }
 
 pub fn history(conn: &Connection, limit: i64) -> Result<Vec<RunView>, Error> {
     let mut stmt = conn.prepare(
         "SELECT r.id, r.target_id, st.machine, st.path, r.started_at, r.finished_at,
-                r.uploaded, r.skipped, r.failed, r.first_error, r.deleted
+                r.uploaded, r.skipped, r.failed, r.first_error, r.deleted, r.errors, r.batch, st.tailnet
          FROM sync_runs r JOIN sync_targets st ON st.id = r.target_id
          ORDER BY r.id DESC LIMIT ?1",
     )?;
@@ -567,6 +586,9 @@ pub fn history(conn: &Connection, limit: i64) -> Result<Vec<RunView>, Error> {
             failed: r.get(8)?,
             first_error: r.get(9)?,
             deleted: r.get(10)?,
+            errors: serde_json::from_str(&r.get::<_, String>(11)?).unwrap_or_default(),
+            batch: r.get(12)?,
+            tailnet: r.get(13)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)

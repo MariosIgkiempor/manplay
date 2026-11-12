@@ -6,6 +6,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::db::SyncTarget;
+use crate::error::Error;
+use crate::r2::{self, R2};
 use crate::webdav;
 
 #[derive(Debug, Default, Serialize)]
@@ -13,7 +15,10 @@ use crate::webdav;
 pub struct Summary {
     pub uploaded: usize,
     pub skipped: usize,
+    /// First few failure messages.
     pub failed: Vec<String>,
+    /// Total failures, including ones not listed in `failed`.
+    pub failed_total: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -55,14 +60,84 @@ pub struct Outcome {
 
 const MAX_REPORTED_FAILURES: usize = 20;
 
-/// One-way mirror: uploads files that are missing or differ in size. Never deletes.
-pub async fn run(app: &AppHandle, client: &Client, target: &SyncTarget, items: &[Item]) -> Outcome {
-    let base: Vec<String> = [target.tailnet.clone(), target.machine.clone()]
+fn is_r2(target: &SyncTarget) -> bool {
+    target.tailnet.starts_with(r2::TARGET_PREFIX)
+}
+
+/// Path segments of the destination folder as the backend addresses them.
+fn base_of(target: &SyncTarget) -> Vec<String> {
+    if is_r2(target) {
+        return target.path.clone();
+    }
+    [target.tailnet.clone(), target.machine.clone()]
         .into_iter()
         .chain(target.path.iter().cloned())
-        .collect();
+        .collect()
+}
+
+enum Backend<'a> {
+    Dav(&'a Client),
+    R2(&'a Client, R2),
+}
+
+impl<'a> Backend<'a> {
+    fn for_target(client: &'a Client, target: &SyncTarget) -> Result<Self, Error> {
+        if is_r2(target) {
+            let account = target.tailnet.trim_start_matches(r2::TARGET_PREFIX);
+            Ok(Self::R2(
+                client,
+                R2::load(account, &target.machine, target.id)?,
+            ))
+        } else {
+            Ok(Self::Dav(client))
+        }
+    }
+
+    async fn exists(&self, base: &[String]) -> Result<bool, Error> {
+        match self {
+            Self::Dav(c) => webdav::exists(c, base).await,
+            Self::R2(c, r) => r.check(c).await.map(|()| true),
+        }
+    }
+
+    async fn remote_size(&self, dest: &[String]) -> Result<Option<u64>, Error> {
+        match self {
+            Self::Dav(c) => webdav::remote_size(c, dest).await,
+            Self::R2(c, r) => r.remote_size(c, dest).await,
+        }
+    }
+
+    async fn mkdir(&self, dir: &[String]) -> Result<(), Error> {
+        match self {
+            Self::Dav(c) => webdav::mkcol(c, dir).await,
+            Self::R2(..) => Ok(()),
+        }
+    }
+
+    async fn put(&self, dest: &[String], file: &std::path::Path) -> Result<(), Error> {
+        match self {
+            Self::Dav(c) => webdav::put(c, dest, file).await,
+            Self::R2(c, r) => r.put(c, dest, file).await,
+        }
+    }
+
+    async fn delete(&self, dest: &[String]) -> Result<(), Error> {
+        match self {
+            Self::Dav(c) => webdav::delete(c, dest).await,
+            Self::R2(c, r) => r.delete(c, dest).await,
+        }
+    }
+}
+
+/// One-way mirror: uploads files that are missing or differ in size. Never deletes.
+pub async fn run(app: &AppHandle, client: &Client, target: &SyncTarget, items: &[Item]) -> Outcome {
+    let base = base_of(target);
+    let backend = match Backend::for_target(client, target) {
+        Ok(b) => b,
+        Err(e) => return unreachable_outcome(&e.to_string()),
+    };
     let total = items.len();
-    match webdav::exists(client, &base).await {
+    match backend.exists(&base).await {
         Ok(true) => {}
         Ok(false) => {
             return unreachable_outcome(
@@ -90,7 +165,7 @@ pub async fn run(app: &AppHandle, client: &Client, target: &SyncTarget, items: &
                 current: &label,
             },
         );
-        match upload_one(client, &base, item, &mut made).await {
+        match upload_one(&backend, &base, item, &mut made).await {
             Ok((uploaded, size)) => {
                 if uploaded {
                     out.summary.uploaded += 1;
@@ -100,6 +175,7 @@ pub async fn run(app: &AppHandle, client: &Client, target: &SyncTarget, items: &
                 out.present.push((item.track_id, size));
             }
             Err(e) => {
+                out.summary.failed_total += 1;
                 if out.summary.failed.len() < MAX_REPORTED_FAILURES {
                     out.summary.failed.push(format!("{label}: {e}"));
                 }
@@ -121,14 +197,18 @@ pub async fn run(app: &AppHandle, client: &Client, target: &SyncTarget, items: &
 /// Removes remote copies that this app previously synced for tracks that are long gone locally.
 /// Only exact mapped file paths are deleted; folders and unknown files are never touched.
 pub async fn cleanup(client: &Client, target: &SyncTarget, victims: &[Victim]) -> Cleanup {
-    let base: Vec<String> = [target.tailnet.clone(), target.machine.clone()]
-        .into_iter()
-        .chain(target.path.iter().cloned())
-        .collect();
+    let base = base_of(target);
     let mut out = Cleanup::default();
+    let backend = match Backend::for_target(client, target) {
+        Ok(b) => b,
+        Err(e) => {
+            out.errors.push(e.to_string());
+            return out;
+        }
+    };
     for v in victims {
         let dest: Vec<String> = base.iter().chain(v.rel.iter()).cloned().collect();
-        match webdav::delete(client, &dest).await {
+        match backend.delete(&dest).await {
             Ok(()) => out.deleted.push((v.track_id, v.rel.clone())),
             Err(e) => out.errors.push(format!("remove {}: {e}", v.rel.join("/"))),
         }
@@ -141,6 +221,7 @@ fn unreachable_outcome(reason: &str) -> Outcome {
         reachable: false,
         summary: Summary {
             failed: vec![format!("destination unreachable: {reason}")],
+            failed_total: 1,
             ..Summary::default()
         },
         present: Vec::new(),
@@ -149,25 +230,25 @@ fn unreachable_outcome(reason: &str) -> Outcome {
 
 /// Returns `(uploaded, local size)`.
 async fn upload_one(
-    client: &Client,
+    backend: &Backend<'_>,
     base: &[String],
     item: &Item,
     made: &mut HashSet<Vec<String>>,
-) -> Result<(bool, i64), crate::error::Error> {
+) -> Result<(bool, i64), Error> {
     let dest: Vec<String> = base.iter().chain(item.rel.iter()).cloned().collect();
     let local_len = tokio::fs::metadata(&item.local).await?.len();
     let size = i64::try_from(local_len).unwrap_or(i64::MAX);
-    if webdav::remote_size(client, &dest).await? == Some(local_len) {
+    if backend.remote_size(&dest).await? == Some(local_len) {
         return Ok((false, size));
     }
     // Create each parent folder below the target folder once.
     for depth in (base.len() + 1)..dest.len() {
         let dir = dest[..depth].to_vec();
         if !made.contains(&dir) {
-            webdav::mkcol(client, &dir).await?;
+            backend.mkdir(&dir).await?;
             made.insert(dir);
         }
     }
-    webdav::put(client, &dest, &item.local).await?;
+    backend.put(&dest, &item.local).await?;
     Ok((true, size))
 }
