@@ -50,7 +50,7 @@ const R2_FIELDS = [
 ] as const;
 
 /** Credentials for a Cloudflare R2 bucket. The secret is stored in the OS keychain. */
-export function AddR2({ onAdded }: { onAdded: () => void }) {
+export function AddR2({ onAdded }: { onAdded: (id: number) => void }) {
 	const queryClient = useQueryClient();
 	const [form, setForm] = useState({
 		account: "",
@@ -61,9 +61,9 @@ export function AddR2({ onAdded }: { onAdded: () => void }) {
 	});
 	const add = useMutation({
 		mutationFn: addR2Target,
-		onSuccess: async () => {
+		onSuccess: async (id) => {
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
-			onAdded();
+			onAdded(id);
 		},
 	});
 	return (
@@ -101,7 +101,7 @@ export function AddR2({ onAdded }: { onAdded: () => void }) {
 }
 
 /** Pick a Tailscale machine, browse its Taildrive folders, and add one as a destination. */
-export function AddTailscale({ onAdded }: { onAdded: () => void }) {
+export function AddTailscale({ onAdded }: { onAdded: (id: number) => void }) {
 	const queryClient = useQueryClient();
 	const [machine, setMachine] = useState<string | null>(null);
 	const [path, setPath] = useState<string[]>([]);
@@ -110,9 +110,9 @@ export function AddTailscale({ onAdded }: { onAdded: () => void }) {
 
 	const add = useMutation({
 		mutationFn: addSyncTarget,
-		onSuccess: async () => {
+		onSuccess: async (id) => {
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
-			onAdded();
+			onAdded(id);
 		},
 	});
 

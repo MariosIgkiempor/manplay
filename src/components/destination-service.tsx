@@ -4,6 +4,7 @@ import { useState } from "react";
 import { AddR2, AddTailscale } from "#/components/add-destination.tsx";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { Drawer } from "#/components/drawer.tsx";
+import { PullReview } from "#/components/pull-review.tsx";
 import { SourceCard } from "#/components/source-card.tsx";
 import { SectionTitle, SourcePanel } from "#/components/source-panel.tsx";
 import { TargetDetail } from "#/components/target-detail.tsx";
@@ -140,8 +141,13 @@ export function DestinationServicePanel({ kind }: { kind: DestinationKind }) {
 	const { mine, enabled, setEnabled } = useDestinations(kind);
 	const [selected, setSelected] = useState<number | null>(null);
 	const [adding, setAdding] = useState(false);
+	const [reviewing, setReviewing] = useState<number | null>(null);
 	const copy = COPY[kind];
 	const target = mine.find((t) => t.id === selected);
+	const onAdded = (id: number) => {
+		setAdding(false);
+		setReviewing(id);
+	};
 	return (
 		<SourcePanel
 			brand={copy.brand}
@@ -186,12 +192,18 @@ export function DestinationServicePanel({ kind }: { kind: DestinationKind }) {
 						<BrandIcon brand={copy.brand} className="size-10" />
 						<h2 className="font-semibold text-xl tracking-tight">{copy.add}</h2>
 					</div>
-					{kind === "r2" ? (
-						<AddR2 onAdded={() => setAdding(false)} />
-					) : (
-						<AddTailscale onAdded={() => setAdding(false)} />
-					)}
+					{kind === "r2" ? <AddR2 onAdded={onAdded} /> : <AddTailscale onAdded={onAdded} />}
 				</div>
+			</Drawer>
+			<Drawer
+				open={reviewing !== null}
+				onClose={() => setReviewing(null)}
+				title="Pull existing files"
+				width="w-[44rem]"
+			>
+				{reviewing !== null && (
+					<PullReview targetId={reviewing} onDone={() => setReviewing(null)} />
+				)}
 			</Drawer>
 		</SourcePanel>
 	);

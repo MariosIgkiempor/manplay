@@ -410,6 +410,23 @@ pub fn all_files(conn: &Connection) -> Result<Vec<TrackFile>, Error> {
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
+/// `(path, size)` of every track currently on disk.
+pub fn present_sizes(conn: &Connection) -> Result<Vec<(String, i64)>, Error> {
+    let mut stmt = conn.prepare("SELECT path, size FROM tracks WHERE missing_since IS NULL")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// `(path, fingerprint)` of every on-disk track that has a fingerprint.
+pub fn present_fingerprints(conn: &Connection) -> Result<Vec<(String, String)>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT path, fingerprint FROM tracks
+         WHERE missing_since IS NULL AND fingerprint IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
 pub fn track_path(conn: &Connection, id: i64) -> Result<Option<String>, Error> {
     match conn.query_row("SELECT path FROM tracks WHERE id = ?1", params![id], |r| {
         r.get(0)

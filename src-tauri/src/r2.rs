@@ -7,6 +7,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{Body, Client, Method, StatusCode, header};
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
 
 use crate::error::Error;
 
@@ -98,11 +99,33 @@ impl R2 {
     }
 
     fn request(&self, client: &Client, method: &Method, key: &[String]) -> reqwest::RequestBuilder {
+        self.signed(client, method, key, &[])
+    }
+
+    /// `query` pairs must already be sorted by name, as `SigV4` requires.
+    fn signed(
+        &self,
+        client: &Client,
+        method: &Method,
+        key: &[String],
+        query: &[(&str, &str)],
+    ) -> reqwest::RequestBuilder {
         let host = self.host();
         let path = self.path(key);
+        let query = query
+            .iter()
+            .map(|(k, v)| {
+                format!(
+                    "{}={}",
+                    utf8_percent_encode(k, ENCODE),
+                    utf8_percent_encode(v, ENCODE)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("&");
         let (date, stamp) = timestamps(now());
         let canonical = format!(
-            "{method}\n{path}\n\nhost:{host}\nx-amz-content-sha256:{UNSIGNED}\nx-amz-date:{stamp}\n\nhost;x-amz-content-sha256;x-amz-date\n{UNSIGNED}"
+            "{method}\n{path}\n{query}\nhost:{host}\nx-amz-content-sha256:{UNSIGNED}\nx-amz-date:{stamp}\n\nhost;x-amz-content-sha256;x-amz-date\n{UNSIGNED}"
         );
         let scope = format!("{date}/auto/s3/aws4_request");
         let to_sign = format!(
@@ -118,8 +141,13 @@ impl R2 {
             "AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={sig}",
             self.key_id
         );
+        let url = if query.is_empty() {
+            format!("https://{host}{path}")
+        } else {
+            format!("https://{host}{path}?{query}")
+        };
         client
-            .request(method.clone(), format!("https://{host}{path}"))
+            .request(method.clone(), url)
             .header("x-amz-date", stamp)
             .header("x-amz-content-sha256", UNSIGNED)
             .header(header::AUTHORIZATION, auth)
@@ -165,6 +193,90 @@ impl R2 {
         } else {
             Err(Error::Msg(format!("r2 PUT {}", resp.status())))
         }
+    }
+
+    /// Every object below `prefix` as `(full key, size)`.
+    pub async fn list(
+        &self,
+        client: &Client,
+        prefix: &[String],
+    ) -> Result<Vec<(String, u64)>, Error> {
+        let prefix = if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", prefix.join("/"))
+        };
+        let mut out = Vec::new();
+        let mut token = String::new();
+        loop {
+            let mut query = Vec::new();
+            if !token.is_empty() {
+                query.push(("continuation-token", token.as_str()));
+            }
+            query.push(("list-type", "2"));
+            if !prefix.is_empty() {
+                query.push(("prefix", prefix.as_str()));
+            }
+            let resp = self.signed(client, &Method::GET, &[], &query).send().await?;
+            if !resp.status().is_success() {
+                return Err(Error::Msg(format!("r2 LIST {}", resp.status())));
+            }
+            let body = resp.text().await?;
+            let doc = roxmltree::Document::parse(&body).map_err(|e| Error::Msg(e.to_string()))?;
+            let text = |n: roxmltree::Node<'_, '_>, tag: &str| {
+                n.children()
+                    .find(|c| c.has_tag_name(tag))
+                    .and_then(|c| c.text())
+                    .map(str::to_owned)
+            };
+            for c in doc.descendants().filter(|n| n.has_tag_name("Contents")) {
+                if let Some(key) = text(c, "Key") {
+                    let size = text(c, "Size").and_then(|s| s.parse().ok()).unwrap_or(0);
+                    out.push((key, size));
+                }
+            }
+            let root = doc.root_element();
+            let truncated = text(root, "IsTruncated").is_some_and(|t| t == "true");
+            match text(root, "NextContinuationToken") {
+                Some(next) if truncated => token = next,
+                _ => break,
+            }
+        }
+        Ok(out)
+    }
+
+    /// Reads `len` bytes starting at `start`.
+    pub async fn get_range(
+        &self,
+        client: &Client,
+        key: &[String],
+        start: u64,
+        len: u64,
+    ) -> Result<Vec<u8>, Error> {
+        let end = start + len.saturating_sub(1);
+        let resp = self
+            .request(client, &Method::GET, key)
+            .header(header::RANGE, format!("bytes={start}-{end}"))
+            .send()
+            .await?;
+        if resp.status() != StatusCode::PARTIAL_CONTENT {
+            return Err(Error::Msg(format!("r2 range read {}", resp.status())));
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    /// Downloads an object to `dest`.
+    pub async fn get(&self, client: &Client, key: &[String], dest: &Path) -> Result<(), Error> {
+        let mut resp = self.request(client, &Method::GET, key).send().await?;
+        if !resp.status().is_success() {
+            return Err(Error::Msg(format!("r2 GET {}", resp.status())));
+        }
+        let mut out = tokio::fs::File::create(dest).await?;
+        while let Some(chunk) = resp.chunk().await? {
+            out.write_all(&chunk).await?;
+        }
+        out.flush().await?;
+        Ok(())
     }
 
     /// A file that is already gone counts as success.

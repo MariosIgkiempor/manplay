@@ -5,6 +5,7 @@ use std::path::Path;
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use reqwest::{Body, Client, Method, StatusCode, header};
 use serde::Serialize;
+use tokio::io::AsyncWriteExt;
 
 use crate::error::Error;
 
@@ -20,6 +21,7 @@ const DAV_NS: &str = "DAV:";
 pub struct Entry {
     pub name: String,
     pub is_dir: bool,
+    pub size: Option<u64>,
 }
 
 fn url(segments: &[String]) -> String {
@@ -80,7 +82,12 @@ pub async fn list(client: &Client, segments: &[String]) -> Result<Vec<Entry>, Er
             let is_dir = resp
                 .descendants()
                 .any(|n| n.has_tag_name((DAV_NS, "collection")));
-            Some(Entry { name, is_dir })
+            let size = resp
+                .descendants()
+                .find(|n| n.has_tag_name((DAV_NS, "getcontentlength")))
+                .and_then(|n| n.text())
+                .and_then(|t| t.trim().parse().ok());
+            Some(Entry { name, is_dir, size })
         })
         .collect();
     entries.sort_by(|a, b| {
@@ -89,6 +96,68 @@ pub async fn list(client: &Client, segments: &[String]) -> Result<Vec<Entry>, Er
             .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok(entries)
+}
+
+/// Every file below `base` as `(path relative to base, size)`, walking folders one level at a time.
+pub async fn list_files(
+    client: &Client,
+    base: &[String],
+) -> Result<Vec<(Vec<String>, u64)>, Error> {
+    const MAX_DEPTH: usize = 12;
+    let mut out = Vec::new();
+    let mut stack: Vec<Vec<String>> = vec![Vec::new()];
+    while let Some(rel) = stack.pop() {
+        let dir: Vec<String> = base.iter().chain(rel.iter()).cloned().collect();
+        for e in list(client, &dir).await? {
+            let mut child = rel.clone();
+            child.push(e.name);
+            if e.is_dir {
+                if child.len() < MAX_DEPTH {
+                    stack.push(child);
+                }
+            } else {
+                out.push((child, e.size.unwrap_or(0)));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Downloads a remote file to `dest`.
+pub async fn get(client: &Client, segments: &[String], dest: &Path) -> Result<(), Error> {
+    let mut resp = client.get(url(segments)).send().await?;
+    if !resp.status().is_success() {
+        return Err(Error::Msg(format!("webdav GET {}", resp.status())));
+    }
+    let mut out = tokio::fs::File::create(dest).await?;
+    while let Some(chunk) = resp.chunk().await? {
+        out.write_all(&chunk).await?;
+    }
+    out.flush().await?;
+    Ok(())
+}
+
+/// Reads `len` bytes starting at `start`.
+pub async fn get_range(
+    client: &Client,
+    segments: &[String],
+    start: u64,
+    len: u64,
+) -> Result<Vec<u8>, Error> {
+    let end = start + len.saturating_sub(1);
+    let resp = client
+        .get(url(segments))
+        .header(header::RANGE, format!("bytes={start}-{end}"))
+        .send()
+        .await?;
+    // A 200 means the server ignored the range and would send the whole file.
+    if resp.status() != StatusCode::PARTIAL_CONTENT {
+        return Err(Error::Msg(format!(
+            "webdav range read {} (server may not support ranges)",
+            resp.status()
+        )));
+    }
+    Ok(resp.bytes().await?.to_vec())
 }
 
 /// Size of the remote file, or `None` if it does not exist.

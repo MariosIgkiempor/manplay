@@ -46,6 +46,31 @@ pub fn fingerprint_reader<R: Read + Seek>(file: &mut R, size: u64) -> Option<Str
     Some(hasher.finalize().to_hex().to_string())
 }
 
+/// Byte ranges `(offset, length)` that [`fingerprint`] samples for a file of `size` bytes.
+/// A file of at most two samples is read whole. `None` where [`fingerprint`] itself fails
+/// because a sample would run past the end (sizes just above two samples).
+pub fn sample_ranges(size: u64) -> Option<Vec<(u64, u64)>> {
+    if size <= SAMPLE * 2 {
+        return Some(vec![(0, size)]);
+    }
+    let ranges: Vec<(u64, u64)> = (1..=2).map(|third| (size / 3 * third, SAMPLE)).collect();
+    ranges
+        .iter()
+        .all(|(o, l)| o + l <= size)
+        .then_some(ranges)
+}
+
+/// Fingerprint from already-fetched sample bytes (in [`sample_ranges`] order), so a remote file
+/// can be compared with the library without downloading it.
+pub fn fingerprint_from_samples(size: u64, samples: &[Vec<u8>]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&size.to_le_bytes());
+    for s in samples {
+        hasher.update(s);
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
 pub struct ScanResult {
     pub tracks: Vec<NewTrack>,
     /// Entries that could not be read. A scan with errors is not trusted to say what is missing.
@@ -121,6 +146,31 @@ pub fn scan(root: &Path) -> ScanResult {
 #[cfg(test)]
 #[allow(clippy::expect_used)] // tests: panicking is the failure mode
 mod tests {
+    #[test]
+    fn sampled_fingerprint_matches_reader() {
+        for size in [10_u64, 131_072, 131_073, 500_000] {
+            let data: Vec<u8> = (0..size).map(|i| u8::try_from(i % 251).unwrap_or(0)).collect();
+            let expect = super::fingerprint_reader(&mut std::io::Cursor::new(&data), size);
+            let Some(ranges) = super::sample_ranges(size) else {
+                assert_eq!(expect, None, "size {size}");
+                continue;
+            };
+            let parts: Vec<Vec<u8>> = ranges
+                .into_iter()
+                .map(|(o, l)| {
+                    let o = usize::try_from(o).unwrap_or(0);
+                    let l = usize::try_from(l).unwrap_or(0);
+                    data[o..o + l].to_vec()
+                })
+                .collect();
+            assert_eq!(
+                Some(super::fingerprint_from_samples(size, &parts)),
+                expect,
+                "size {size}"
+            );
+        }
+    }
+
     use super::*;
 
     fn bytes(len: usize, seed: u8) -> Vec<u8> {

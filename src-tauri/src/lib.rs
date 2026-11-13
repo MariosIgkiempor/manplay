@@ -412,6 +412,180 @@ async fn update_sync_target(
     })
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteScan {
+    /// Every file found on the destination, audio or not.
+    total: usize,
+    /// Audio files the library does not have.
+    missing: Vec<MissingFile>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MissingFile {
+    #[serde(flatten)]
+    file: sync::Remote,
+    /// Extension of a library track with the same name but another format (e.g. `flac`).
+    other_format: Option<String>,
+}
+
+fn find_target(state: &AppState, id: i64) -> Result<(SyncTarget, PathBuf), Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    let target = db::get_targets(&conn, Some(&[id]))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Msg("destination no longer exists".to_owned()))?;
+    let root = db::get_setting(&conn, SETTING_ROOT)?.ok_or_else(|| {
+        Error::Msg("library folder unknown: choose one in Library first".to_owned())
+    })?;
+    Ok((target, PathBuf::from(root)))
+}
+
+fn local_path(root: &Path, rel: &[String]) -> PathBuf {
+    rel.iter().fold(root.to_path_buf(), |p, s| p.join(s))
+}
+
+/// Library lookups for [`remote_scan`]: lower-cased paths, `(file name, size)` pairs, and
+/// file name without extension -> extension.
+type KnownLibrary = (
+    HashSet<String>,
+    HashSet<(String, i64)>,
+    HashMap<String, String>,
+);
+
+/// Looks inside a destination for audio files the library is missing.
+#[tauri::command]
+async fn remote_scan(state: State<'_, AppState>, target_id: i64) -> Result<RemoteScan, Error> {
+    let (target, root) = find_target(&state, target_id)?;
+    // A library file counts as a match by path (any letter case) or by file name plus size,
+    // so tracks that were organised into different folders locally are not offered again.
+    let (known_paths, known_files, known_stems): KnownLibrary = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let rows = db::present_sizes(&conn)?;
+        let paths = rows.iter().map(|(p, _)| p.to_lowercase()).collect();
+        let files = rows
+            .iter()
+            .filter_map(|(p, size)| {
+                let name = Path::new(p).file_name()?.to_str()?.to_lowercase();
+                Some((name, *size))
+            })
+            .collect();
+        let stems = rows
+            .iter()
+            .filter_map(|(p, _)| {
+                let p = Path::new(p);
+                let stem = p.file_stem()?.to_str()?.to_lowercase();
+                let ext = p.extension()?.to_str()?.to_lowercase();
+                Some((stem, ext))
+            })
+            .collect();
+        (paths, files, stems)
+    };
+    let remote = sync::list_remote(&state.http, &target).await?;
+    let total = remote.len();
+    let missing = remote
+        .into_iter()
+        .filter(|r| {
+            let name = r.rel.last().map_or("", String::as_str);
+            if name.starts_with('.') || !scan::is_audio(Path::new(name)) {
+                return false;
+            }
+            let path = local_path(&root, &r.rel);
+            let size = i64::try_from(r.size).unwrap_or(i64::MAX);
+            !path.exists()
+                && path
+                    .to_str()
+                    .is_none_or(|p| !known_paths.contains(&p.to_lowercase()))
+                && !known_files.contains(&(name.to_lowercase(), size))
+        })
+        .map(|file| {
+            let p = Path::new(file.rel.last().map_or("", String::as_str));
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+            let other_format = known_stems
+                .get(&stem.to_lowercase())
+                .filter(|e| !e.eq_ignore_ascii_case(ext))
+                .cloned();
+            MissingFile { file, other_format }
+        })
+        .collect();
+    Ok(RemoteScan { total, missing })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Verified {
+    rel: Vec<String>,
+    /// Library file with identical audio, relative to the library folder.
+    duplicate_of: Option<String>,
+    /// False when the remote file could not be sampled.
+    checked: bool,
+}
+
+/// Compares the audio of remote files with the library by content fingerprint.
+#[tauri::command]
+async fn remote_verify(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: i64,
+    files: Vec<Vec<String>>,
+) -> Result<Vec<Verified>, Error> {
+    let (target, root) = find_target(&state, target_id)?;
+    let library: HashMap<String, String> = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::present_fingerprints(&conn)?
+            .into_iter()
+            .map(|(path, fp)| (fp, path))
+            .collect()
+    };
+    let wanted: HashSet<Vec<String>> = files.into_iter().collect();
+    let chosen: Vec<sync::Remote> = sync::list_remote(&state.http, &target)
+        .await?
+        .into_iter()
+        .filter(|r| wanted.contains(&r.rel))
+        .collect();
+    let prints = sync::fingerprint_remote(&app, &state.http, &target, &chosen).await?;
+    Ok(chosen
+        .into_iter()
+        .zip(prints)
+        .map(|(file, fp)| Verified {
+            checked: fp.is_some(),
+            duplicate_of: fp.and_then(|fp| library.get(&fp)).map(|path| {
+                rel_path(&root, path).map_or_else(|| path.clone(), |rel| rel.join("/"))
+            }),
+            rel: file.rel,
+        })
+        .collect())
+}
+
+/// Downloads the chosen files from a destination into the library, then rescans.
+#[tauri::command]
+async fn remote_pull(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: i64,
+    files: Vec<Vec<String>>,
+) -> Result<sync::PullOutcome, Error> {
+    let (target, root) = find_target(&state, target_id)?;
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    // Only paths the destination really lists are downloaded.
+    let wanted: HashSet<Vec<String>> = files.into_iter().collect();
+    let chosen: Vec<sync::Remote> = sync::list_remote(&state.http, &target)
+        .await?
+        .into_iter()
+        .filter(|r| wanted.contains(&r.rel))
+        .collect();
+    let outcome = sync::pull(&app, &state.http, &target, &root, &chosen).await;
+    if outcome.pulled > 0 {
+        scan_and_store(&state, root).await?;
+    }
+    Ok(outcome)
+}
+
 #[tauri::command]
 fn remove_sync_target(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
     with_db!(state, |c| db::remove_target(c, id))?;
@@ -1338,6 +1512,9 @@ pub fn run() {
             dismiss_activity,
             dismiss_sync_runs,
             sync_run,
+            remote_scan,
+            remote_pull,
+            remote_verify,
             is_syncing,
             rekordbox_status,
             rekordbox_set_path,

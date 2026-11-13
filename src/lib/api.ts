@@ -270,6 +270,54 @@ export async function syncRun(ids?: number[]): Promise<void> {
 	await invoke("sync_run", { targetIds: ids ?? null });
 }
 
+const remoteFileSchema = z.object({ rel: z.array(z.string()), size: int });
+export type RemoteFile = z.infer<typeof remoteFileSchema> & { otherFormat?: string | null };
+
+const missingFileSchema = remoteFileSchema.extend({ otherFormat: z.string().nullable() });
+const remoteScanSchema = z.object({ total: int, missing: z.array(missingFileSchema) });
+
+/** Looks inside a destination for audio files the library does not have. */
+export async function remoteScan(targetId: number) {
+	return remoteScanSchema.parse(await invoke("remote_scan", { targetId }));
+}
+
+const verifiedSchema = z.object({
+	rel: z.array(z.string()),
+	duplicateOf: z.string().nullable(),
+	checked: z.boolean(),
+});
+export type Verified = z.infer<typeof verifiedSchema>;
+
+/** Compares the audio of destination files with the library by content fingerprint. */
+export async function remoteVerify(targetId: number, files: string[][]): Promise<Verified[]> {
+	return z.array(verifiedSchema).parse(await invoke("remote_verify", { targetId, files }));
+}
+
+const pullOutcomeSchema = z.object({
+	pulled: int,
+	skipped: int,
+	failed: z.array(z.string()),
+	failedTotal: int,
+});
+export type PullOutcome = z.infer<typeof pullOutcomeSchema>;
+
+/** Downloads the given files (paths relative to the destination) into the library. */
+export async function remotePull(targetId: number, files: string[][]): Promise<PullOutcome> {
+	return pullOutcomeSchema.parse(await invoke("remote_pull", { targetId, files }));
+}
+
+const pullProgressSchema = z.object({ done: int, total: int, current: z.string() });
+export type PullProgress = z.infer<typeof pullProgressSchema>;
+
+export function onPullProgress(handler: (p: PullProgress) => void): Promise<() => void> {
+	return listen("pull-progress", (e) => {
+		const parsed = pullProgressSchema.safeParse(e.payload);
+		if (parsed.success) {
+			handler(parsed.data);
+		}
+	});
+}
+
 export type ServiceId = "downloads" | "itunes" | "tailscale" | "r2" | "rekordbox";
 
 /** Explicit on/off choices by service id; a service never switched is absent. */

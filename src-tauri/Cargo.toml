@@ -29,7 +29,7 @@ walkdir = "2.5.0"
 thiserror = "2.0.21"
 tauri-plugin-dialog = "2.8.4"
 reqwest = { version = "0.13.5", default-features = false, features = ["stream", "rustls"] }
-tokio = { version = "1.54.1", features = ["fs"] }
+tokio = { version = "1.54.1", features = ["fs", "io-util"] }
 roxmltree = "0.21.2"
 percent-encoding = "2.3.2"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
