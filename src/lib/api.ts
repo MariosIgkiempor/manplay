@@ -606,6 +606,23 @@ export async function tagsPreview(
 	return previewSchema.parse(await invoke("tags_preview", { path, edits }));
 }
 
+const libraryViewSchema = z.enum(["albums", "songs", "files"]);
+export type LibraryView = z.infer<typeof libraryViewSchema>;
+
+/** Library tab last used; kept in the database so it is open again after leaving Library. */
+export async function getLibraryView(): Promise<LibraryView> {
+	const raw = z
+		.string()
+		.nullable()
+		.parse(await invoke("get_library_view"));
+	const parsed = libraryViewSchema.safeParse(raw);
+	return parsed.success ? parsed.data : "albums";
+}
+
+export async function setLibraryView(view: LibraryView): Promise<void> {
+	await invoke("set_library_view", { view });
+}
+
 const tagClipboardSchema = z.object({
 	from: z.string(),
 	values: z.record(z.string(), z.string()),

@@ -11,6 +11,7 @@ import {
 	fsRename,
 	fsTrash,
 	getLibraryRoot,
+	getLibraryView,
 	getTagClipboard,
 	itunesImport,
 	itunesPending,
@@ -24,6 +25,7 @@ import {
 	resetLibrary,
 	type ServiceId,
 	serviceFlags,
+	setLibraryView,
 	setServiceEnabled,
 	setTagClipboard,
 	syncHistory,
@@ -264,6 +266,18 @@ export function useTagValues(field: string, enabled: boolean) {
 		enabled,
 		staleTime: 30_000,
 	});
+}
+
+/** Library tab last used, stored in the database. `view` is null until it has loaded. */
+export function useLibraryView() {
+	const queryClient = useQueryClient();
+	const query = useQuery({ queryKey: ["library-view"], queryFn: getLibraryView });
+	const set = useMutation({
+		mutationFn: setLibraryView,
+		onMutate: (view) => queryClient.setQueryData(["library-view"], view),
+		onError: () => queryClient.invalidateQueries({ queryKey: ["library-view"] }),
+	});
+	return { view: query.data ?? null, setView: set.mutate };
 }
 
 /** Tags copied in the Files view, stored in the database. */

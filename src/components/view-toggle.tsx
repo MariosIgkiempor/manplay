@@ -1,8 +1,9 @@
 import { Disc3, FolderTree, ListMusic } from "lucide-react";
 import type { ReactNode } from "react";
+import type { LibraryView } from "#/lib/api.ts";
 import { cn } from "#/lib/utils.ts";
 
-export type View = "albums" | "songs" | "files";
+export type View = LibraryView;
 
 export function ViewToggle({ view, onChange }: { view: View; onChange: (v: View) => void }) {
 	const item = (v: View, label: string, icon: ReactNode) => (

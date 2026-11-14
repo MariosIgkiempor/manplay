@@ -6,13 +6,14 @@ import { LibraryHeader } from "#/components/library-header.tsx";
 import { LibraryList, ScanButtons } from "#/components/library-parts.tsx";
 import { MissingBanner } from "#/components/missing-banner.tsx";
 import { SearchPalette } from "#/components/search-palette.tsx";
-import { type View, ViewToggle } from "#/components/view-toggle.tsx";
+import { ViewToggle } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
 import { playlistTracks } from "#/lib/api.ts";
 import {
 	SCAN_KEY,
 	useLibraryRoot,
+	useLibraryView,
 	useScan,
 	useSyncRun,
 	useSyncTargets,
@@ -42,7 +43,10 @@ function usePlaylistMembers(pills: readonly Pill[]): PlaylistMembers {
 
 function Library() {
 	const detail = useDetail();
-	const [view, setView] = useState<View>("albums");
+	// Saved in the database; the Albums default shows only until the saved tab has loaded.
+	const saved = useLibraryView();
+	const view = saved.view ?? "albums";
+	const setView = saved.setView;
 	const [search, setSearch] = useState("");
 	const [pills, setPills] = useState<Pill[]>([]);
 

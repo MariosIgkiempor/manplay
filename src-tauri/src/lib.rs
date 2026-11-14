@@ -989,6 +989,21 @@ async fn tags_preview(
         .map_err(|e| Error::Msg(e.to_string()))?
 }
 
+const SETTING_LIBRARY_VIEW: &str = "library_view";
+
+/// Library tab last used (`albums`, `songs` or `files`), so it is open again after leaving.
+#[tauri::command]
+fn get_library_view(state: State<'_, AppState>) -> Result<Option<String>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::get_setting(&conn, SETTING_LIBRARY_VIEW)
+}
+
+#[tauri::command]
+fn set_library_view(state: State<'_, AppState>, view: String) -> Result<(), Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::set_setting(&conn, SETTING_LIBRARY_VIEW, Some(&view))
+}
+
 const SETTING_TAG_CLIPBOARD: &str = "tag_clipboard";
 
 /// Tags copied in the Files view (JSON), kept across restarts. `None` when nothing is copied.
@@ -1721,6 +1736,8 @@ pub fn run() {
             tag_value_create,
             tag_values_migrate,
             tags_preview,
+            get_library_view,
+            set_library_view,
             get_tag_clipboard,
             set_tag_clipboard,
             tags_write,
