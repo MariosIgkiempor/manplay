@@ -9,6 +9,7 @@ import { StatusSlotContext } from "#/context/detail-context.ts";
 import { DetailProvider } from "#/context/detail-provider.tsx";
 import { PlayerProvider } from "#/context/player-provider.tsx";
 import { SyncProgressProvider } from "#/context/sync-progress-provider.tsx";
+import { UndoProvider } from "#/context/undo-provider.tsx";
 import appCss from "../styles.css?url";
 
 const queryClient = new QueryClient();
@@ -36,22 +37,24 @@ function RootDocument({ children }: { children: ReactNode }) {
 				<QueryClientProvider client={queryClient}>
 					<PlayerProvider>
 						<SyncProgressProvider>
-							<DetailProvider>
-								<AutoRefresh />
-								<div className="flex h-screen flex-col">
-									<div className="flex min-h-0 flex-1">
-										<Sidebar />
-										<div className="relative min-w-0 flex-1 overflow-hidden">
-											<StatusSlotContext.Provider value={statusSlot}>
-												<div className="h-full overflow-y-auto">{children}</div>
-											</StatusSlotContext.Provider>
-											<div ref={setStatusSlot} className="absolute inset-x-0 bottom-0 z-10" />
-											<DetailPanel />
+							<UndoProvider>
+								<DetailProvider>
+									<AutoRefresh />
+									<div className="flex h-screen flex-col">
+										<div className="flex min-h-0 flex-1">
+											<Sidebar />
+											<div className="relative min-w-0 flex-1 overflow-hidden">
+												<StatusSlotContext.Provider value={statusSlot}>
+													<div className="h-full overflow-y-auto">{children}</div>
+												</StatusSlotContext.Provider>
+												<div ref={setStatusSlot} className="absolute inset-x-0 bottom-0 z-10" />
+												<DetailPanel />
+											</div>
 										</div>
+										<PlayerBar />
 									</div>
-									<PlayerBar />
-								</div>
-							</DetailProvider>
+								</DetailProvider>
+							</UndoProvider>
 						</SyncProgressProvider>
 					</PlayerProvider>
 				</QueryClientProvider>

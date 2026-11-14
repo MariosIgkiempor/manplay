@@ -95,6 +95,23 @@ export function TagEditor({
 		}
 	};
 
+	// Cmd+S saves from anywhere while the editor is open, even with focus in the file list.
+	const saveRef = useRef(save);
+	saveRef.current = save;
+	useEffect(() => {
+		const onKey = (ev: globalThis.KeyboardEvent) => {
+			if (ev.key.toLowerCase() !== "s" || !(ev.metaKey || ev.ctrlKey) || ev.shiftKey) {
+				return;
+			}
+			ev.preventDefault();
+			if (!document.querySelector("[role=dialog]")) {
+				void saveRef.current();
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, []);
+
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: Cmd+Enter applies from any field
 		<div className="flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown}>

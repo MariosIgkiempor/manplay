@@ -39,6 +39,7 @@ import type { TreeRow } from "#/lib/tree.ts";
 import { useFileDrag } from "#/lib/use-file-drag.ts";
 import type { FsClipboard } from "#/lib/use-fs-ops.ts";
 import { useFsOps } from "#/lib/use-fs-ops.ts";
+import { undoMakeDir, undoRename } from "#/lib/use-fs-undo.ts";
 import { useIssueNav } from "#/lib/use-issue-nav.ts";
 import { useTree } from "#/lib/use-tree.ts";
 import { cn } from "#/lib/utils.ts";
@@ -86,7 +87,11 @@ function collapseRow(
 	}
 }
 
+import type { UndoEntry } from "#/context/undo-context.ts";
+
 interface PaneProps {
+	/** Remembers an operation on the shared undo stack. */
+	onRecord: (entry: UndoEntry) => void;
 	clipboard: FsClipboard | null;
 	setClipboard: (c: FsClipboard | null) => void;
 	root: string;
@@ -113,6 +118,7 @@ interface PaneProps {
 }
 
 export function FilePane({
+	onRecord,
 	clipboard,
 	setClipboard,
 	root,
@@ -160,7 +166,8 @@ export function FilePane({
 		setError(null);
 	}, [path]);
 
-	const { makeDir, rename, busy, fail, runMove, paste, remove } = useFsOps({
+	const { makeDir, rename, busy, fail, runMove, paste, remove, record } = useFsOps({
+		record: onRecord,
 		clipboard,
 		setClipboard,
 		setError,
@@ -288,6 +295,7 @@ export function FilePane({
 					forget([r.path]);
 					setRenaming(null);
 					const to = joinPath(r.parent, newName);
+					record(undoRename(r.path, to));
 					setSel({ selected: new Set([to]), anchor: to });
 				},
 			},
@@ -302,6 +310,7 @@ export function FilePane({
 				onSuccess: () => {
 					setCreatingIn(null);
 					const to = joinPath(parent, name);
+					record(undoMakeDir(to));
 					setSel({ selected: new Set([to]), anchor: to });
 				},
 			},

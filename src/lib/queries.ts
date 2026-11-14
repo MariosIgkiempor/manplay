@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useUndo } from "#/context/undo-context.ts";
 import {
 	type ActivitySource,
 	activityHistory,
@@ -30,6 +31,7 @@ import {
 	setTagClipboard,
 	syncHistory,
 	syncRun,
+	tagsPreview,
 	tagsRead,
 	tagsSetCover,
 	tagsWrite,
@@ -38,6 +40,7 @@ import {
 	tagValues,
 	tagValuesMigrate,
 } from "#/lib/api.ts";
+import { undoTagWrite } from "#/lib/undo-entries.ts";
 
 export function useTracks() {
 	return useQuery({ queryKey: ["tracks"], queryFn: listTracks });
@@ -184,7 +187,7 @@ export function useItunesImport() {
 }
 
 /** Everything that can change when files move on disk (the backend rescans afterwards). */
-async function refreshAfterFsChange(queryClient: ReturnType<typeof useQueryClient>) {
+export async function refreshAfterFsChange(queryClient: ReturnType<typeof useQueryClient>) {
 	await Promise.all(
 		["fs", "tracks", "playlists", "tags", "library-status", "audit", "tag-values"].map((k) =>
 			queryClient.invalidateQueries({ queryKey: [k] }),
@@ -294,9 +297,18 @@ export function useTagClipboard() {
 
 export function useTagsWrite() {
 	const queryClient = useQueryClient();
+	const { record } = useUndo();
 	return useMutation({
-		mutationFn: ({ path, edits }: { path: string; edits: Record<string, string> }) =>
-			tagsWrite(path, edits),
+		mutationFn: async ({ path, edits }: { path: string; edits: Record<string, string> }) => {
+			// Remember the old values first so the edit can be undone.
+			const before = await tagsPreview(path, edits).catch(() => null);
+			const report = await tagsWrite(path, edits);
+			const entry = before && undoTagWrite(before);
+			if (entry && report.fixed > 0) {
+				record(entry);
+			}
+			return report;
+		},
 		onSettled: async () => {
 			await refreshAfterFsChange(queryClient);
 			await queryClient.invalidateQueries({ queryKey: ["file-tags"] });

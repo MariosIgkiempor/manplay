@@ -453,17 +453,19 @@ export async function fsList(path: string): Promise<FsEntry[]> {
 	return z.array(fsEntrySchema).parse(await invoke("fs_list", { path }));
 }
 
-export async function fsMakeDir(parent: string, name: string): Promise<void> {
-	await invoke("fs_make_dir", { parent, name });
+/** Creates a folder and returns its path. */
+export async function fsMakeDir(parent: string, name: string): Promise<string> {
+	return z.string().parse(await invoke("fs_make_dir", { parent, name }));
 }
 
-export async function fsRename(path: string, newName: string): Promise<void> {
-	await invoke("fs_rename", { path, newName });
+/** Renames in place and returns the new path. */
+export async function fsRename(path: string, newName: string): Promise<string> {
+	return z.string().parse(await invoke("fs_rename", { path, newName }));
 }
 
-/** Copies into `dest`; a name already taken there gets " copy" added. */
-export async function fsCopy(paths: string[], dest: string): Promise<void> {
-	await invoke("fs_copy", { paths, dest });
+/** Copies into `dest`; a name already taken there gets " copy" added. Returns the new paths. */
+export async function fsCopy(paths: string[], dest: string): Promise<string[]> {
+	return z.array(z.string()).parse(await invoke("fs_copy", { paths, dest }));
 }
 
 /** Moves to the system Trash. */
@@ -566,6 +568,13 @@ export async function tagsRead(path: string): Promise<TagView> {
 /** Writes `edits` (field to value; empty clears) to a song or every song under a folder. */
 export async function tagsWrite(path: string, edits: Record<string, string>): Promise<FixReport> {
 	return fixReportSchema.parse(await invoke("tags_write", { path, edits }));
+}
+
+/** Writes different edits to several songs at once (one rescan). */
+export async function tagsWriteMany(
+	items: { path: string; edits: Record<string, string> }[],
+): Promise<FixReport> {
+	return fixReportSchema.parse(await invoke("tags_write_many", { items }));
 }
 
 /** Sets the front cover of a song, or of every song under a folder, from JPEG/PNG bytes. */

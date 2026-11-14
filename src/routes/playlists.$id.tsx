@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { useUndo } from "#/context/undo-context.ts";
 import {
 	deletePlaylist,
 	listPlaylists,
@@ -9,6 +10,7 @@ import {
 	removeFromPlaylist,
 	renamePlaylist,
 } from "#/lib/api.ts";
+import { undoRemoveFromPlaylist } from "#/lib/undo-entries.ts";
 
 export const Route = createFileRoute("/playlists/$id")({ component: PlaylistPage });
 
@@ -17,6 +19,7 @@ function PlaylistPage() {
 	const playlistId = Number(id);
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
+	const { record } = useUndo();
 
 	const playlists = useQuery({ queryKey: ["playlists"], queryFn: listPlaylists });
 	const tracks = useQuery({
@@ -30,7 +33,10 @@ function PlaylistPage() {
 		await queryClient.invalidateQueries({ queryKey: ["playlist-tracks", playlistId] });
 	};
 	const remove = useMutation({
-		mutationFn: (trackId: number) => removeFromPlaylist(playlistId, trackId),
+		mutationFn: async (trackId: number) => {
+			await removeFromPlaylist(playlistId, trackId);
+			record(undoRemoveFromPlaylist(playlistId, playlist?.name ?? "playlist", trackId));
+		},
 		onSuccess: refresh,
 	});
 	const rename = useMutation({

@@ -2,8 +2,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TrackList } from "#/components/track-list.tsx";
+import { useUndo } from "#/context/undo-context.ts";
 import { type Track, untagTrack } from "#/lib/api.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
+import { undoUntag } from "#/lib/undo-entries.ts";
 import { useTrackSelection } from "#/lib/use-track-selection.ts";
 
 type ListProps = Omit<
@@ -16,9 +18,13 @@ export function SelectableTrackList({ tracks, ...rest }: ListProps) {
 	const queryClient = useQueryClient();
 	const selection = useTrackSelection(tracks);
 	const targets = useSyncTargets();
+	const { record } = useUndo();
 
 	const untag = useMutation({
-		mutationFn: ({ name, trackId }: { name: string; trackId: number }) => untagTrack(name, trackId),
+		mutationFn: async ({ name, trackId }: { name: string; trackId: number }) => {
+			await untagTrack(name, trackId);
+			record(undoUntag(name, trackId));
+		},
 		onSuccess: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
 			await queryClient.invalidateQueries({ queryKey: ["playlist-tracks"] });

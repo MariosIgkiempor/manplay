@@ -1,5 +1,7 @@
+import type { UndoEntry } from "#/context/undo-context.ts";
 import { confirmTrash } from "#/lib/api.ts";
 import { useFsCopy, useFsMakeDir, useFsMove, useFsRename, useFsTrash } from "#/lib/queries.ts";
+import { undoCopy, undoMove } from "#/lib/use-fs-undo.ts";
 
 /** Cut/copied items waiting to be pasted; shared by both panes. */
 export interface FsClipboard {
@@ -16,6 +18,8 @@ interface Deps {
 	/** Forgets tree state for paths that moved or were deleted. */
 	forget: (paths: string[]) => void;
 	clearSelection: () => void;
+	/** Remembers an operation so it can be undone. */
+	record: (entry: UndoEntry) => void;
 }
 
 /** The file operations of a pane: each reports failures through `setError` and refreshes lists. */
@@ -26,6 +30,7 @@ export function useFsOps({
 	setOpen,
 	forget,
 	clearSelection,
+	record,
 }: Deps) {
 	const makeDir = useFsMakeDir();
 	const rename = useFsRename();
@@ -43,6 +48,7 @@ export function useFsOps({
 			{
 				onError: fail,
 				onSuccess: () => {
+					record(undoMove(paths, dest));
 					forget(paths);
 					setOpen(dest, true);
 					clearSelection();
@@ -58,7 +64,10 @@ export function useFsOps({
 		setError(null);
 		setOpen(dest, true);
 		if (clipboard.mode === "copy") {
-			copy.mutate({ paths: clipboard.paths, dest }, { onError: fail });
+			copy.mutate(
+				{ paths: clipboard.paths, dest },
+				{ onError: fail, onSuccess: (created) => record(undoCopy(created)) },
+			);
 			return;
 		}
 		move.mutate(
@@ -66,6 +75,7 @@ export function useFsOps({
 			{
 				onError: fail,
 				onSuccess: () => {
+					record(undoMove(clipboard.paths, dest));
 					forget(clipboard.paths);
 					setClipboard(null);
 				},
@@ -88,5 +98,5 @@ export function useFsOps({
 		});
 	};
 
-	return { makeDir, rename, busy, fail, runMove, paste, remove };
+	return { makeDir, rename, busy, fail, runMove, paste, remove, record };
 }

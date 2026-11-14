@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Tags } from "lucide-react";
+import { Tags, Undo2 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { FilePane } from "#/components/file-pane.tsx";
 import { type FixNotice, HealthBar } from "#/components/library-health.tsx";
@@ -7,6 +7,7 @@ import { TagCopyDialog } from "#/components/tag-copy-dialog.tsx";
 import { TagEditor, type TagTarget } from "#/components/tag-editor.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
+import { useUndo } from "#/context/undo-context.ts";
 import { confirmFix, type FixReport } from "#/lib/api.ts";
 import { describeFixes, fixablePaths, indexIssues } from "#/lib/audit.ts";
 import {
@@ -93,6 +94,7 @@ export function FilesView() {
 	const [copying, setCopying] = useState<TagTarget | null>(null);
 	const tagWriter = useTagsWrite();
 	const [autoOpen, setAutoOpen] = useState(loadAutoOpen);
+	const fsUndo = useUndo();
 	const selectTarget = useCallback(
 		(t: TagTarget) => {
 			setTagTarget(t);
@@ -176,6 +178,16 @@ export function FilesView() {
 					/>
 				</span>
 				<Button
+					variant="outline"
+					size="sm"
+					onClick={() => void fsUndo.undo()}
+					disabled={!fsUndo.canUndo}
+					title={fsUndo.label ? `Undo ${fsUndo.label} (⌘Z)` : "Nothing to undo"}
+				>
+					<Undo2 />
+					Undo
+				</Button>
+				<Button
 					variant={tagsOpen ? "secondary" : "outline"}
 					size="sm"
 					onClick={() => setTagsOpen(!tagsOpen)}
@@ -190,6 +202,7 @@ export function FilesView() {
 					<FilePane
 						key={i}
 						root={base}
+						onRecord={fsUndo.record}
 						path={at(i)}
 						onNavigate={go(i)}
 						active={split && active === i}

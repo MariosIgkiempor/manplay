@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Tag as TagIcon } from "lucide-react";
 import { SearchSubmenu } from "#/components/search-submenu.tsx";
+import { useUndo } from "#/context/undo-context.ts";
 import { listTags, type Track, tagTracks } from "#/lib/api.ts";
+import { undoTagTracks } from "#/lib/undo-entries.ts";
 
 const REFRESH = ["tracks", "playlist-tracks", "tags", "playlists"] as const;
 
@@ -9,9 +11,22 @@ const REFRESH = ["tracks", "playlist-tracks", "tags", "playlists"] as const;
 export function TagSubmenu({ tracks }: { tracks: readonly Track[] }) {
 	const queryClient = useQueryClient();
 	const tags = useQuery({ queryKey: ["tags"], queryFn: listTags });
-	const ids = tracks.map((t) => t.id);
+	const { record } = useUndo();
 	const tag = useMutation({
-		mutationFn: (name: string) => tagTracks(name, ids),
+		mutationFn: async (name: string) => {
+			const lower = name.toLowerCase();
+			const missing = tracks
+				.filter((t) => !t.tags.some((x) => x.toLowerCase() === lower))
+				.map((t) => t.id);
+			await tagTracks(
+				name,
+				tracks.map((t) => t.id),
+			);
+			const entry = undoTagTracks(name, missing);
+			if (entry) {
+				record(entry);
+			}
+		},
 		onSuccess: async () => {
 			for (const key of REFRESH) {
 				await queryClient.invalidateQueries({ queryKey: [key] });

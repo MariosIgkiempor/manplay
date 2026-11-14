@@ -854,10 +854,9 @@ async fn fs_make_dir(
     state: State<'_, AppState>,
     parent: PathBuf,
     name: String,
-) -> Result<(), Error> {
+) -> Result<PathBuf, Error> {
     let root = library_root(&state)?;
-    fsops::make_dir(&root, &parent, &name)?;
-    Ok(())
+    Ok(fsops::make_dir(&root, &parent, &name)?)
 }
 
 #[tauri::command]
@@ -865,11 +864,11 @@ async fn fs_rename(
     state: State<'_, AppState>,
     path: PathBuf,
     new_name: String,
-) -> Result<(), Error> {
+) -> Result<PathBuf, Error> {
     let root = library_root(&state)?;
-    fsops::rename(&root, &path, &new_name)?;
+    let to = fsops::rename(&root, &path, &new_name)?;
     refresh_after_fs_change(&state, root).await;
-    Ok(())
+    Ok(to)
 }
 
 #[tauri::command]
@@ -877,11 +876,11 @@ async fn fs_copy(
     state: State<'_, AppState>,
     paths: Vec<PathBuf>,
     dest: PathBuf,
-) -> Result<(), Error> {
+) -> Result<Vec<PathBuf>, Error> {
     let root = library_root(&state)?;
-    fsops::copy_into(&root, &paths, &dest)?;
+    let created = fsops::copy_into(&root, &paths, &dest)?;
     refresh_after_fs_change(&state, root).await;
-    Ok(())
+    Ok(created)
 }
 
 /// Moves to the system Trash. Tracks that vanish are soft-deleted by the rescan, as usual.
@@ -1035,6 +1034,40 @@ async fn tags_write(
     let report = tauri::async_runtime::spawn_blocking(move || tags::write(&r, &path, &edits))
         .await
         .map_err(|e| Error::Msg(e.to_string()))??;
+    refresh_after_fs_change(&state, root).await;
+    Ok(report)
+}
+
+/// One song's tag edits, for [`tags_write_many`].
+#[derive(serde::Deserialize)]
+struct TagWrite {
+    path: PathBuf,
+    edits: std::collections::BTreeMap<String, String>,
+}
+
+/// Writes several songs' edits in one go (one rescan), used to undo a tag edit.
+#[tauri::command]
+async fn tags_write_many(
+    state: State<'_, AppState>,
+    items: Vec<TagWrite>,
+) -> Result<audit::FixReport, Error> {
+    let root = library_root(&state)?;
+    if state.fixing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a fix is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.fixing);
+    let r = root.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        let mut total = audit::FixReport::default();
+        for item in items {
+            let one = tags::write(&r, &item.path, &item.edits)?;
+            total.fixed += one.fixed;
+            total.failed.extend(one.failed);
+        }
+        Ok::<_, Error>(total)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))??;
     refresh_after_fs_change(&state, root).await;
     Ok(report)
 }
@@ -1741,6 +1774,7 @@ pub fn run() {
             get_tag_clipboard,
             set_tag_clipboard,
             tags_write,
+            tags_write_many,
             tags_set_cover,
             audit_fix,
             audit_place,
