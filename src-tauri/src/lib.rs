@@ -334,6 +334,19 @@ fn untag_track(state: State<'_, AppState>, name: String, track_id: i64) -> Resul
     with_db!(state, |c| db::untag_track(c, &name, track_id))
 }
 
+/// Renames, merges or deletes library tags by name (see `db::migrate_tags`).
+#[tauri::command]
+fn migrate_library_tags(
+    state: State<'_, AppState>,
+    from: Vec<String>,
+    to: Option<String>,
+) -> Result<(), Error> {
+    let to = to.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    with_db!(state, |c| db::migrate_tags(c, &from, to))?;
+    auto_export(&state);
+    Ok(())
+}
+
 #[tauri::command]
 fn delete_tag(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
     with_db!(state, |c| db::delete_tag(c, id))
@@ -911,6 +924,47 @@ fn open_privacy_settings() -> Result<(), Error> {
 fn tag_values(state: State<'_, AppState>, field: String) -> Result<Vec<db::TagValue>, Error> {
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     db::tag_values(&conn, &field)
+}
+
+/// Adds a value to a tag field's pick list before any song uses it.
+#[tauri::command]
+fn tag_value_create(state: State<'_, AppState>, field: String, value: String) -> Result<(), Error> {
+    if !tags::SUGGEST.contains(&field.as_str()) {
+        return Err(Error::Msg(format!("cannot manage values of: {field}")));
+    }
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(Error::Msg("a value needs a name".to_owned()));
+    }
+    with_db!(state, |c| db::create_tag_value(c, &field, value))
+}
+
+/// Replaces (or, with `to` unset, removes) values of a tag field in every song of the library.
+#[tauri::command]
+async fn tag_values_migrate(
+    state: State<'_, AppState>,
+    field: String,
+    from: Vec<String>,
+    to: Option<String>,
+) -> Result<audit::FixReport, Error> {
+    let root = library_root(&state)?;
+    let to = to.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+    if state.fixing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a fix is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.fixing);
+    {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::migrate_custom_values(&conn, &field, &from, to.as_deref())?;
+    }
+    let r = root.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        tags::migrate(&r, &field, &from, to.as_deref())
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))??;
+    refresh_after_fs_change(&state, root).await;
+    Ok(report)
 }
 
 /// Tags shared by the song at `path`, or by every song under it when it is a folder.
@@ -1628,6 +1682,7 @@ pub fn run() {
             tag_tracks,
             untag_track,
             delete_tag,
+            migrate_library_tags,
             tailscale_status,
             drive_list,
             list_sync_targets,
@@ -1663,6 +1718,8 @@ pub fn run() {
             audit_library,
             tags_read,
             tag_values,
+            tag_value_create,
+            tag_values_migrate,
             tags_preview,
             get_tag_clipboard,
             set_tag_clipboard,

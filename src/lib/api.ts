@@ -133,6 +133,11 @@ export async function untagTrack(name: string, trackId: number): Promise<void> {
 	await invoke("untag_track", { name, trackId });
 }
 
+/** Moves every track of the library tags in `from` to `to` (created if needed); `null` deletes them. */
+export async function migrateLibraryTags(from: string[], to: string | null): Promise<void> {
+	await invoke("migrate_library_tags", { from, to });
+}
+
 export async function deleteTag(id: number): Promise<void> {
 	await invoke("delete_tag", { id });
 }
@@ -531,6 +536,20 @@ export function confirmFix(lines: string[]): Promise<boolean> {
 }
 
 // ---- tag editor --------------------------------------------------------------
+
+/** Adds a value to a tag field's pick list before any song uses it. */
+export async function tagValueCreate(field: string, value: string): Promise<void> {
+	await invoke("tag_value_create", { field, value });
+}
+
+/** Rewrites every song holding a value in `from` to hold `to` instead; `null` removes it. */
+export async function tagValuesMigrate(
+	field: string,
+	from: string[],
+	to: string | null,
+): Promise<FixReport> {
+	return fixReportSchema.parse(await invoke("tag_values_migrate", { field, from, to }));
+}
 
 const tagViewSchema = z.object({
 	count: int,

@@ -17,6 +17,7 @@ import {
 	libraryStatus,
 	listSyncTargets,
 	listTracks,
+	migrateLibraryTags,
 	pickAndScan,
 	removeMissingNow,
 	rescanLibrary,
@@ -30,7 +31,10 @@ import {
 	tagsRead,
 	tagsSetCover,
 	tagsWrite,
+	tagTracks,
+	tagValueCreate,
 	tagValues,
+	tagValuesMigrate,
 } from "#/lib/api.ts";
 
 export function useTracks() {
@@ -319,4 +323,34 @@ export function useServices() {
 		},
 		setEnabled: (id: ServiceId, enabled: boolean) => set.mutate({ id, enabled }),
 	};
+}
+
+/** Tag Database edits. Library tags live in the database; the rest rewrite the songs' files. */
+export function useTagDatabaseOps(field: string | "library") {
+	const queryClient = useQueryClient();
+	const done = async () => {
+		await refreshAfterFsChange(queryClient);
+		await queryClient.invalidateQueries({ queryKey: ["file-tags"] });
+	};
+	const create = useMutation({
+		mutationFn: async (name: string) => {
+			if (field === "library") {
+				await tagTracks(name, []);
+			} else {
+				await tagValueCreate(field, name);
+			}
+		},
+		onSettled: done,
+	});
+	const migrate = useMutation({
+		mutationFn: async ({ from, to }: { from: string[]; to: string | null }) => {
+			if (field === "library") {
+				await migrateLibraryTags(from, to);
+				return null;
+			}
+			return tagValuesMigrate(field, from, to);
+		},
+		onSettled: done,
+	});
+	return { create, migrate };
 }

@@ -1,5 +1,5 @@
 import { GripVertical, X } from "lucide-react";
-import { type KeyboardEvent, useId, useMemo, useState } from "react";
+import { type ClipboardEvent, type KeyboardEvent, useId, useMemo, useState } from "react";
 import { joinNames, splitNames } from "#/lib/names.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -34,7 +34,11 @@ export function TagCombobox({
 	const listId = useId();
 	const [text, setText] = useState("");
 	const [open, setOpen] = useState(false);
-	const [active, setActive] = useState(0);
+	// Single-value fields start with nothing highlighted, so Enter keeps what was typed.
+	const idle = multi ? 0 : -1;
+	const [active, setActive] = useState(idle);
+	// Cmd+A on an empty name list "selects" every name, so copy, cut and paste act on all of them.
+	const [allSelected, setAllSelected] = useState(false);
 	const chips = useMemo(() => (multi ? splitNames(value) : []), [multi, value]);
 
 	const matches = useMemo(() => {
@@ -63,7 +67,7 @@ export function TagCombobox({
 			onChange(name);
 		}
 		setText("");
-		setActive(0);
+		setActive(idle);
 		setOpen(multi);
 	};
 	const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
@@ -81,19 +85,83 @@ export function TagCombobox({
 	};
 	const removeChip = (name: string) => onChange(joinNames(chips.filter((c) => c !== name)));
 
+	/** Cmd+C / Cmd+X with no text selected copy every name (`A; B`), as typed into the field. */
+	const onCopy = (ev: ClipboardEvent<HTMLInputElement>, cut: boolean) => {
+		const input = ev.currentTarget;
+		const hasSelection = input.selectionStart !== input.selectionEnd;
+		if (!multi || hasSelection || chips.length === 0) {
+			return;
+		}
+		ev.preventDefault();
+		ev.clipboardData.setData("text/plain", value);
+		if (cut) {
+			setAllSelected(false);
+			onChange("");
+		}
+	};
+	/** Pasted names (split on `;` and new lines) join the list; after Cmd+A they replace it. */
+	const onPaste = (ev: ClipboardEvent<HTMLInputElement>) => {
+		const pasted = ev.clipboardData.getData("text/plain");
+		if (!multi || (!allSelected && !/[;\n]/.test(pasted))) {
+			return; // a plain word pastes into the text box as usual
+		}
+		ev.preventDefault();
+		const names = splitNames(pasted.replace(/\r?\n/g, ";"));
+		const base = allSelected ? [] : chips;
+		const merged = [...base];
+		for (const n of names) {
+			if (!merged.some((m) => m.toLowerCase() === n.toLowerCase())) {
+				merged.push(n);
+			}
+		}
+		setAllSelected(false);
+		onChange(joinNames(merged));
+	};
+
 	const move = (step: number) => {
 		setOpen(true);
-		setActive((a) => (rows.length === 0 ? 0 : (a + step + rows.length) % rows.length));
+		setActive((a) => {
+			if (rows.length === 0) {
+				return idle;
+			}
+			if (a < 0) {
+				return step > 0 ? 0 : rows.length - 1;
+			}
+			return (a + step + rows.length) % rows.length;
+		});
 	};
 	const confirm = (ev: KeyboardEvent) => {
-		const next = (open ? rows[active]?.value : undefined) ?? typedNew;
+		const highlighted = open ? rows[active]?.value : undefined;
+		if (!multi && highlighted === undefined) {
+			setOpen(false);
+			return;
+		}
+		const next = highlighted ?? typedNew;
 		if (next !== "" && (multi || open)) {
 			ev.preventDefault();
 			ev.stopPropagation();
 			commit(next);
 		}
 	};
+	/** Keys that act on the whole name list (Cmd+A, then Backspace). True when handled. */
+	const listKey = (ev: KeyboardEvent) => {
+		if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "a" && multi && text === "") {
+			ev.preventDefault();
+			setAllSelected(chips.length > 0);
+			return true;
+		}
+		if (allSelected && (ev.key === "Backspace" || ev.key === "Delete")) {
+			ev.preventDefault();
+			setAllSelected(false);
+			onChange("");
+			return true;
+		}
+		return false;
+	};
 	const edgeKey = (ev: KeyboardEvent) => {
+		if (listKey(ev)) {
+			return;
+		}
 		if (ev.key === "Backspace" && multi && text === "" && chips.length > 0) {
 			removeChip(chips[chips.length - 1] ?? "");
 		} else if (ev.key === "Escape" && open) {
@@ -106,7 +174,11 @@ export function TagCombobox({
 		if (arrow !== undefined) {
 			ev.preventDefault();
 			move(arrow);
-		} else if (ev.key === "Enter" || (multi && (ev.key === ";" || ev.key === ","))) {
+		} else if (
+			// Cmd+Enter is left alone: it saves the editor.
+			(ev.key === "Enter" && !ev.metaKey && !ev.ctrlKey) ||
+			(multi && (ev.key === ";" || ev.key === ","))
+		) {
 			confirm(ev);
 		} else {
 			edgeKey(ev);
@@ -125,6 +197,7 @@ export function TagCombobox({
 					<Chip
 						key={c}
 						name={c}
+						selected={allSelected}
 						dragging={drag?.from === i}
 						dropBefore={drag !== null && drag.over === i && drag.from !== i}
 						onDragStart={() => setDrag({ from: i, over: i })}
@@ -151,7 +224,8 @@ export function TagCombobox({
 					placeholder={chips.length === 0 ? placeholder : ""}
 					onChange={(e) => {
 						setText(e.target.value);
-						setActive(0);
+						setActive(idle);
+						setAllSelected(false);
 						setOpen(true);
 						if (!multi) {
 							onChange(e.target.value);
@@ -164,9 +238,13 @@ export function TagCombobox({
 							commit(typedNew);
 						}
 						setText("");
+						setAllSelected(false);
 						setOpen(false);
 					}}
 					onKeyDown={onKeyDown}
+					onCopy={(e) => onCopy(e, false)}
+					onCut={(e) => onCopy(e, true)}
+					onPaste={onPaste}
 					className="h-6 min-w-16 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
 				/>
 			</div>
@@ -209,6 +287,7 @@ export function TagCombobox({
 
 function Chip({
 	name,
+	selected,
 	dragging,
 	dropBefore,
 	onDragStart,
@@ -219,6 +298,7 @@ function Chip({
 	onRemove,
 }: {
 	name: string;
+	selected: boolean;
 	dragging: boolean;
 	dropBefore: boolean;
 	onDragStart: () => void;
@@ -258,6 +338,7 @@ function Chip({
 			}}
 			className={cn(
 				"flex max-w-full cursor-grab items-center gap-0.5 rounded-md bg-secondary py-0.5 pr-0.5 pl-0.5 text-secondary-foreground text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
+				selected && "bg-primary text-primary-foreground",
 				dragging && "opacity-40",
 				dropBefore && "shadow-[-2px_0_0_0_var(--color-primary)]",
 			)}

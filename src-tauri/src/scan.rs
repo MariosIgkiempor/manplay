@@ -83,13 +83,13 @@ fn collect_values(
 ) {
     let Some(tag) = tag else { return };
     for field in crate::tags::SUGGEST {
-        let Some(text) = crate::tags::key_for(field).and_then(|k| tag.get_string(k)) else {
+        let Some(text) = crate::tags::read_field(Some(tag), field) else {
             continue;
         };
         let names = if crate::tags::MULTI.contains(field) {
-            crate::tags::split_names(text)
+            crate::tags::split_names(&text)
         } else {
-            vec![text.trim().to_owned()]
+            vec![text]
         };
         for name in names.into_iter().filter(|n| !n.is_empty()) {
             *into.entry((*field, name)).or_insert(0) += 1;

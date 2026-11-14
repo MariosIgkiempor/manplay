@@ -44,6 +44,12 @@ fn create_tag_values(conn: &Connection) -> Result<(), Error> {
              value TEXT NOT NULL,
              count INTEGER NOT NULL,
              PRIMARY KEY (field, value)
+         );
+         -- Values made by hand in the Tag Database; kept until a song uses them.
+         CREATE TABLE IF NOT EXISTS tag_custom (
+             field TEXT NOT NULL,
+             value TEXT NOT NULL COLLATE NOCASE,
+             PRIMARY KEY (field, value)
          );",
     )?;
     Ok(())
@@ -252,11 +258,15 @@ pub struct TagValue {
     pub count: i64,
 }
 
-/// Known values of one field, most used first.
+/// Known values of one field, most used first. Values made by hand come last with a count of 0.
 pub fn tag_values(conn: &Connection, field: &str) -> Result<Vec<TagValue>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT value, count FROM tag_values WHERE field = ?1
-         ORDER BY count DESC, value COLLATE NOCASE",
+        "SELECT value, count FROM (
+             SELECT value, count FROM tag_values WHERE field = ?1
+             UNION ALL
+             SELECT value, 0 FROM tag_custom WHERE field = ?1
+               AND value NOT IN (SELECT value FROM tag_values WHERE field = ?1 COLLATE NOCASE)
+         ) ORDER BY count DESC, value COLLATE NOCASE",
     )?;
     let rows = stmt.query_map(params![field], |r| {
         Ok(TagValue {
@@ -265,6 +275,36 @@ pub fn tag_values(conn: &Connection, field: &str) -> Result<Vec<TagValue>, Error
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Adds a value by hand so it shows up in pick lists before any song uses it.
+pub fn create_tag_value(conn: &Connection, field: &str, value: &str) -> Result<(), Error> {
+    conn.execute(
+        "INSERT OR IGNORE INTO tag_custom (field, value) VALUES (?1, ?2)",
+        params![field, value],
+    )?;
+    Ok(())
+}
+
+/// Keeps hand-made values in step with a migration: the old ones go, and the new one takes
+/// their place when one of them was hand-made.
+pub fn migrate_custom_values(
+    conn: &Connection,
+    field: &str,
+    from: &[String],
+    to: Option<&str>,
+) -> Result<(), Error> {
+    let mut had = false;
+    for name in from {
+        had |= conn.execute(
+            "DELETE FROM tag_custom WHERE field = ?1 AND value = ?2",
+            params![field, name],
+        )? > 0;
+    }
+    if let (true, Some(to)) = (had, to) {
+        create_tag_value(conn, field, to)?;
+    }
+    Ok(())
 }
 
 /// Deletes every track; cascades to playlist/tag memberships and sync records.
@@ -419,6 +459,48 @@ pub fn untag_track(conn: &Connection, name: &str, track_id: i64) -> Result<(), E
          AND tag_id = (SELECT id FROM tags WHERE name = ?2)",
         params![track_id, name],
     )?;
+    Ok(())
+}
+
+/// Renames, merges or removes library tags by name: every track of each tag in `from` moves to
+/// `to` (created if needed), then the old tag goes. With `to` as `None` they are just deleted.
+pub fn migrate_tags(conn: &mut Connection, from: &[String], to: Option<&str>) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    let id_of = |name: &str| -> Result<Option<i64>, Error> {
+        Ok(tx
+            .query_row("SELECT id FROM tags WHERE name = ?1", params![name], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    };
+    let mut to_id = None;
+    if let Some(name) = to {
+        tx.execute(
+            "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
+            params![name],
+        )?;
+        to_id = id_of(name)?;
+    }
+    let mut recase = false;
+    for name in from {
+        let Some(id) = id_of(name)? else { continue };
+        if Some(id) == to_id {
+            recase = true; // renaming a tag to itself: only the capitalisation can differ
+            continue;
+        }
+        if let Some(target) = to_id {
+            tx.execute(
+                "INSERT OR IGNORE INTO track_tags (track_id, tag_id)
+                 SELECT track_id, ?1 FROM track_tags WHERE tag_id = ?2",
+                params![target, id],
+            )?;
+        }
+        tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+    }
+    if let (true, Some(id), Some(name)) = (recase, to_id, to) {
+        tx.execute("UPDATE tags SET name = ?1 WHERE id = ?2", params![name, id])?;
+    }
+    tx.commit()?;
     Ok(())
 }
 

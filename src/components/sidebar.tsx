@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Download, Library, ListMusic, Music, Plus, Settings, Upload } from "lucide-react";
+import {
+	Database,
+	Download,
+	Library,
+	ListMusic,
+	Music,
+	Plus,
+	Settings,
+	Upload,
+} from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -16,7 +25,7 @@ function NavLink({
 	children,
 	...props
 }: {
-	to: "/" | "/import" | "/export" | "/settings";
+	to: "/" | "/import" | "/export" | "/tags" | "/settings";
 	children: ReactNode;
 }) {
 	return (
@@ -65,6 +74,10 @@ export function Sidebar() {
 				<NavLink to="/">
 					<Library className="size-4" />
 					Library
+				</NavLink>
+				<NavLink to="/tags">
+					<Database className="size-4" />
+					Tag Database
 				</NavLink>
 				<NavLink to="/import">
 					<Download className="size-4" />

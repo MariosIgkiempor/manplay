@@ -9,7 +9,7 @@ use lofty::config::WriteOptions;
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::read_from_path;
-use lofty::tag::{ItemKey, Tag, TagExt};
+use lofty::tag::{ItemKey, Tag, TagExt, TagType};
 use serde::Serialize;
 use walkdir::WalkDir;
 
@@ -85,13 +85,34 @@ pub fn split_names(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// Tag item for an editor field id.
-pub fn key_for(field: &str) -> Option<ItemKey> {
-    item_key(field)
-}
-
 fn item_key(field: &str) -> Option<ItemKey> {
     FIELDS.iter().find(|(id, _)| *id == field).map(|(_, k)| *k)
+}
+
+/// Every item key a field can be found under. ID3 keeps label and publisher in one frame (TPUB)
+/// and lofty reads that frame back as `Publisher`, so looking for `Label` alone never finds a
+/// label that is already in the file.
+fn item_keys(field: &str) -> &'static [ItemKey] {
+    if field == "label" {
+        return &[ItemKey::Label, ItemKey::Publisher];
+    }
+    FIELDS
+        .iter()
+        .find(|(id, _)| *id == field)
+        .map_or(&[], |(_, k)| std::slice::from_ref(k))
+}
+
+/// The key a new value is written under for this kind of tag (the one it reads back as).
+fn write_key(field: &str, tag_type: TagType) -> Option<ItemKey> {
+    if field == "label" && tag_type == TagType::Id3v2 {
+        return Some(ItemKey::Publisher);
+    }
+    item_keys(field).first().copied()
+}
+
+/// A field's value in `tag`, trying every key it may be stored under.
+pub fn read_field(tag: Option<&Tag>, field: &str) -> Option<String> {
+    item_keys(field).iter().find_map(|k| read_value(tag, *k))
 }
 
 fn err(msg: impl Into<String>) -> Error {
@@ -149,8 +170,8 @@ pub fn read(root: &Path, path: &Path) -> Result<TagView, Error> {
     for file in &files {
         let tagged = read_from_path(file).ok();
         let tag = tagged.as_ref().and_then(|f| f.primary_tag());
-        for (id, key) in FIELDS {
-            per_field.entry(id).or_default().push(read_value(tag, *key));
+        for (id, _) in FIELDS {
+            per_field.entry(id).or_default().push(read_field(tag, id));
         }
     }
     let fields = FIELDS
@@ -222,8 +243,8 @@ pub fn preview(
         let changes: Vec<Change> = edits
             .iter()
             .filter_map(|(field, value)| {
-                let key = item_key(field)?;
-                let from = read_value(tag, key);
+                item_key(field)?;
+                let from = read_field(tag, field);
                 let to = Some(normalized(field, value)).filter(|v| !v.is_empty());
                 (from != to).then(|| Change {
                     field: field.clone(),
@@ -246,21 +267,37 @@ pub fn preview(
 }
 
 /// Applies `edits` to `tag`: a non-empty value sets the field, an empty one clears it.
-fn apply(tag: &mut Tag, edits: &BTreeMap<String, String>) {
+fn apply(tag: &mut Tag, edits: &BTreeMap<String, String>) -> Result<(), Error> {
     for (field, value) in edits {
-        let Some(key) = item_key(field) else { continue };
-        let joined;
-        let value = if MULTI.contains(&field.as_str()) {
-            joined = split_names(value).join(SEPARATOR);
-            joined.as_str()
-        } else {
-            value.trim()
+        let Some(key) = write_key(field, tag.tag_type()) else {
+            continue;
         };
-        tag.remove_key(key);
-        if !value.is_empty() {
-            tag.insert_text(key, value.to_owned());
+        let value = normalized(field, value);
+        for k in item_keys(field) {
+            tag.remove_key(*k);
+        }
+        if !value.is_empty() && !tag.insert_text(key, value) {
+            return Err(err(format!(
+                "this file format cannot store the {field} tag"
+            )));
         }
     }
+    Ok(())
+}
+
+/// Checks the rewritten file really holds what was asked for, so a tag the format silently
+/// dropped is reported instead of shown as saved.
+fn verify(tag: Option<&Tag>, edits: &BTreeMap<String, String>) -> Result<(), Error> {
+    for (field, value) in edits {
+        let Some(key) = item_key(field) else { continue };
+        let want = normalized(field, value);
+        let got = read_field(tag, field).unwrap_or_default();
+        let exact = !key.is_numeric() && field != "compilation";
+        if want.is_empty() != got.is_empty() || (exact && want != got) {
+            return Err(err(format!("the {field} tag did not stick in this file")));
+        }
+    }
+    Ok(())
 }
 
 /// A hidden scratch copy beside `file`. It keeps the extension: lofty picks the format from it.
@@ -269,7 +306,11 @@ fn scratch_copy(file: &Path) -> PathBuf {
     file.with_file_name(format!(".manplay-tags-{}.{ext}", std::process::id()))
 }
 
-fn write_one(file: &Path, change: &dyn Fn(&mut Tag)) -> Result<(), Error> {
+fn write_one(
+    file: &Path,
+    change: &dyn Fn(&mut Tag) -> Result<(), Error>,
+    check: &dyn Fn(Option<&Tag>) -> Result<(), Error>,
+) -> Result<(), Error> {
     let tmp = scratch_copy(file);
     std::fs::copy(file, &tmp)?;
     let result = (|| -> Result<(), Error> {
@@ -278,7 +319,7 @@ fn write_one(file: &Path, change: &dyn Fn(&mut Tag)) -> Result<(), Error> {
             .primary_tag()
             .cloned()
             .unwrap_or_else(|| Tag::new(tagged.primary_tag_type()));
-        change(&mut tag);
+        change(&mut tag)?;
         // Library convention: MP3s carry ID3v2.3 tags.
         let options = WriteOptions::default().use_id3v23(is_mp3(file));
         tag.save_to_path(&tmp, options)
@@ -288,6 +329,7 @@ fn write_one(file: &Path, change: &dyn Fn(&mut Tag)) -> Result<(), Error> {
         if after.properties().duration() != tagged.properties().duration() {
             return Err(err("rewritten file changed length"));
         }
+        check(after.primary_tag())?;
         Ok(())
     })();
     match result {
@@ -299,6 +341,10 @@ fn write_one(file: &Path, change: &dyn Fn(&mut Tag)) -> Result<(), Error> {
             Err(e)
         }
     }
+}
+
+fn write_edits(file: &Path, edits: &BTreeMap<String, String>) -> Result<(), Error> {
+    write_one(file, &|tag| apply(tag, edits), &|tag| verify(tag, edits))
 }
 
 /// Writes `edits` to the song at `path`, or to every song under it when it is a folder.
@@ -316,7 +362,61 @@ pub fn write(
         return Ok(report);
     }
     for file in songs(root, path)? {
-        match write_one(&file, &|tag| apply(tag, edits)) {
+        match write_edits(&file, edits) {
+            Ok(()) => report.fixed += 1,
+            Err(e) => report.failed.push(FixFailure {
+                path: file.to_string_lossy().into_owned(),
+                error: e.to_string(),
+            }),
+        }
+    }
+    Ok(report)
+}
+
+/// What a field holds once every name in `from` becomes `to` (or is dropped when `to` is `None`).
+/// Names match ignoring case. `None` when nothing changes.
+pub fn migrated(field: &str, current: &str, from: &[String], to: Option<&str>) -> Option<String> {
+    let hit = |n: &str| from.iter().any(|f| f.trim().eq_ignore_ascii_case(n.trim()));
+    if !MULTI.contains(&field) {
+        return hit(current).then(|| to.unwrap_or_default().trim().to_owned());
+    }
+    let names = split_names(current);
+    let mut out: Vec<String> = Vec::new();
+    for name in &names {
+        let next = if hit(name) {
+            to.map(str::trim)
+        } else {
+            Some(name.as_str())
+        };
+        if let Some(n) = next.filter(|n| !n.is_empty())
+            && !out.iter().any(|o| o.eq_ignore_ascii_case(n))
+        {
+            out.push(n.to_owned());
+        }
+    }
+    (out != names).then(|| out.join(SEPARATOR))
+}
+
+/// Replaces every name in `from` with `to` (or removes it) in `field`, across every song in the
+/// library. Failures are reported per file and never undo the rest.
+pub fn migrate(
+    root: &Path,
+    field: &str,
+    from: &[String],
+    to: Option<&str>,
+) -> Result<FixReport, Error> {
+    if !SUGGEST.contains(&field) {
+        return Err(err(format!("cannot manage values of: {field}")));
+    }
+    let mut report = FixReport::default();
+    for file in songs(root, root)? {
+        let tagged = read_from_path(&file).ok();
+        let current = read_field(tagged.as_ref().and_then(|f| f.primary_tag()), field);
+        let Some(new) = current.and_then(|c| migrated(field, &c, from, to)) else {
+            continue;
+        };
+        let edits = BTreeMap::from([(field.to_owned(), new)]);
+        match write_edits(&file, &edits) {
             Ok(()) => report.fixed += 1,
             Err(e) => report.failed.push(FixFailure {
                 path: file.to_string_lossy().into_owned(),
@@ -359,8 +459,9 @@ pub fn write_cover(
                     .mime_type(mime.clone())
                     .build(),
             );
+            Ok(())
         };
-        match write_one(file, &change) {
+        match write_one(file, &change, &|_| Ok(())) {
             Ok(()) => report.fixed += 1,
             Err(e) => report.failed.push(FixFailure {
                 path: file.to_string_lossy().into_owned(),
@@ -375,6 +476,47 @@ pub fn write_cover(
 #[allow(clippy::expect_used, clippy::cast_possible_truncation)] // tests: panicking is the failure mode
 mod tests {
     use super::*;
+
+    #[test]
+    fn label_is_found_and_replaced_in_an_id3_tag() {
+        let set = |tag: &mut Tag, v: &str| {
+            let edits = BTreeMap::from([("label".to_owned(), v.to_owned())]);
+            apply(tag, &edits).expect("apply");
+        };
+        let mut tag = Tag::new(TagType::Id3v2);
+        set(&mut tag, "Warp");
+        // Round trip through the ID3 frame model, as a saved file would.
+        let mut tag = Tag::from(lofty::id3::v2::Id3v2Tag::from(tag));
+        assert_eq!(read_field(Some(&tag), "label").as_deref(), Some("Warp"));
+        set(&mut tag, "Ninja Tune");
+        let tag = Tag::from(lofty::id3::v2::Id3v2Tag::from(tag));
+        assert_eq!(
+            read_field(Some(&tag), "label").as_deref(),
+            Some("Ninja Tune")
+        );
+        assert_eq!(tag.len(), 1, "no stale duplicate left behind");
+    }
+
+    #[test]
+    fn migrating_names_renames_merges_and_drops() {
+        let from = ["hip hop".to_owned(), "Rap".to_owned()];
+        let m = |cur: &str, to: Option<&str>| migrated("genre", cur, &from, to);
+        assert_eq!(
+            m("House; Hip Hop", Some("Hip-Hop")).as_deref(),
+            Some("House; Hip-Hop")
+        );
+        assert_eq!(
+            m("Rap; Hip-Hop", Some("Hip-Hop")).as_deref(),
+            Some("Hip-Hop")
+        );
+        assert_eq!(m("House; Rap", None).as_deref(), Some("House"));
+        assert_eq!(m("Rap", None).as_deref(), Some(""));
+        assert_eq!(m("House", Some("X")), None);
+        assert_eq!(
+            migrated("label", "warp", &["Warp".to_owned()], Some("Warp Records")).as_deref(),
+            Some("Warp Records")
+        );
+    }
 
     #[test]
     fn every_field_id_is_unique() {
@@ -395,7 +537,7 @@ mod tests {
             ("label".to_owned(), String::new()),
             ("nonsense".to_owned(), "x".to_owned()),
         ]);
-        apply(&mut tag, &edits);
+        apply(&mut tag, &edits).expect("apply");
         assert_eq!(tag.get_string(ItemKey::Genre), Some("House"));
         assert_eq!(tag.get_string(ItemKey::Label), None);
     }
@@ -405,7 +547,7 @@ mod tests {
         assert_eq!(split_names(" A ;B;; C "), ["A", "B", "C"]);
         let mut tag = Tag::new(lofty::tag::TagType::Id3v2);
         let edits = BTreeMap::from([("artist".to_owned(), "A;B ;  C".to_owned())]);
-        apply(&mut tag, &edits);
+        apply(&mut tag, &edits).expect("apply");
         assert_eq!(tag.get_string(ItemKey::TrackArtist), Some("A; B; C"));
     }
 
