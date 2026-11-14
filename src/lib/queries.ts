@@ -17,6 +17,7 @@ import {
 	itunesImport,
 	itunesPending,
 	libraryStatus,
+	listMissing,
 	listSyncTargets,
 	listTracks,
 	migrateLibraryTags,
@@ -64,9 +65,12 @@ export function useSyncTargets() {
 }
 
 /** Mutation that syncs the given target ids, or every target of an enabled service (pass undefined). */
+export const SYNC_KEY = ["sync-run"] as const;
+
 export function useSyncRun() {
 	const queryClient = useQueryClient();
 	return useMutation({
+		mutationKey: SYNC_KEY,
 		mutationFn: (ids?: number[]) => syncRun(ids),
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["sync-history"] });
@@ -84,6 +88,11 @@ export function useLibraryStatus() {
 	return useQuery({ queryKey: ["library-status"], queryFn: libraryStatus });
 }
 
+/** Tracks whose files are gone; only fetched while `enabled` (the list drawer is open). */
+export function useMissingTracks(enabled: boolean) {
+	return useQuery({ queryKey: ["missing-tracks"], queryFn: listMissing, enabled });
+}
+
 /** Ends the grace period for missing tracks, then syncs so remote copies are removed too. */
 export function useRemoveMissing() {
 	const queryClient = useQueryClient();
@@ -92,6 +101,7 @@ export function useRemoveMissing() {
 		mutationFn: removeMissingNow,
 		onSuccess: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["library-status"] });
+			await queryClient.invalidateQueries({ queryKey: ["missing-tracks"] });
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
 			const targets = await queryClient.ensureQueryData({
 				queryKey: ["sync-targets"],
@@ -351,7 +361,7 @@ export function useServices() {
 	};
 }
 
-/** Tag Database edits. Library tags live in the database; the rest rewrite the songs' files. */
+/** Tag database edits. Library tags live in the database; the rest rewrite the songs' files. */
 export function useTagDatabaseOps(field: string | "library") {
 	const queryClient = useQueryClient();
 	const done = async () => {

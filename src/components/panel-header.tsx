@@ -19,7 +19,7 @@ export function PanelHeader({ title, subtitle, meta, art, tracks }: Props) {
 		<div className="flex items-end gap-5">
 			{art}
 			<div className="min-w-0 space-y-2">
-				<h2 className="truncate font-bold text-2xl" title={title}>
+				<h2 className="truncate font-semibold text-2xl" title={title}>
 					{title}
 				</h2>
 				{subtitle && <div className="text-lg text-muted-foreground">{subtitle}</div>}

@@ -3,9 +3,10 @@ import { CloudUpload } from "lucide-react";
 import { DestinationServiceCard } from "#/components/destination-service.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { RekordboxCard } from "#/components/rekordbox-source.tsx";
+import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
-import { useSyncRun, useSyncTargets } from "#/lib/queries.ts";
+import { useSyncRun, useSyncTargets, useTracks } from "#/lib/queries.ts";
 
 export const Route = createFileRoute("/export")({ component: ExportPage });
 
@@ -13,6 +14,10 @@ function ExportPage() {
 	const progress = useSyncProgress();
 	const targets = useSyncTargets();
 	const run = useSyncRun();
+	const tracks = useTracks();
+	const targetCount = targets.data?.length ?? 0;
+	const pending =
+		targetCount === 0 ? 0 : (tracks.data ?? []).filter((t) => t.syncedCount < targetCount).length;
 	const busy = progress.size > 0 || run.isPending;
 
 	return (
@@ -38,6 +43,10 @@ function ExportPage() {
 				<DestinationServiceCard kind="r2" />
 				<RekordboxCard />
 			</section>
+			<StatusBar>
+				<Stat label="Destinations" value={targetCount} />
+				<Stat label="Songs to sync" value={pending} />
+			</StatusBar>
 		</main>
 	);
 }

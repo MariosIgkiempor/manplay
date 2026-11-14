@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Check, Merge, Pencil, Plus, Trash2, X } from "lucide-react";
 import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
 import { ErrorText } from "#/components/error-text.tsx";
+import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { listTags } from "#/lib/api.ts";
@@ -47,6 +48,29 @@ function useItems(source: string): { items: Item[]; loading: boolean } {
 		[isLibrary, tags.data, values.data],
 	);
 	return { items, loading: isLibrary ? tags.isPending : values.isPending };
+}
+
+/** Status bar figures for the tag database view. */
+function DatabaseStats({
+	source,
+	total,
+	shown,
+	search,
+	selected,
+}: {
+	source: string;
+	total: number;
+	shown: number;
+	search: string;
+	selected: number;
+}) {
+	return (
+		<StatusBar>
+			<Stat label={SOURCES.find((x) => x.id === source)?.label ?? "Values"} value={total} />
+			{search.trim() !== "" && <Stat label="Matching" value={shown} />}
+			{selected > 0 && <Stat label="Selected" value={selected} />}
+		</StatusBar>
+	);
 }
 
 /** Browse, create, rename, merge and delete the values used across the library. */
@@ -124,6 +148,13 @@ export function TagDatabase() {
 
 	return (
 		<div className="space-y-4">
+			<DatabaseStats
+				source={source}
+				total={items.length}
+				shown={shown.length}
+				search={search}
+				selected={selected.size}
+			/>
 			<div className="flex flex-wrap gap-1.5">
 				{SOURCES.map((s) => (
 					<button
@@ -151,9 +182,6 @@ export function TagDatabase() {
 					className="max-w-xs"
 				/>
 				<NewValue busy={busy} existing={items} onCreate={create} />
-				<span className="ml-auto text-muted-foreground text-xs">
-					{plural(items.length, "value", "values")}
-				</span>
 			</div>
 
 			{selected.size > 0 && (

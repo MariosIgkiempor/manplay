@@ -3,6 +3,7 @@ import { Tags, Undo2 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { FilePane } from "#/components/file-pane.tsx";
 import { type FixNotice, HealthBar } from "#/components/library-health.tsx";
+import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TagCopyDialog } from "#/components/tag-copy-dialog.tsx";
 import { TagEditor, type TagTarget } from "#/components/tag-editor.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -16,6 +17,7 @@ import {
 	useLibraryRoot,
 	useTagClipboard,
 	useTagsWrite,
+	useTracks,
 } from "#/lib/queries.ts";
 import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
 import type { FsClipboard } from "#/lib/use-fs-ops.ts";
@@ -82,6 +84,7 @@ async function pasteTagsOnto(
 export function FilesView() {
 	const root = useLibraryRoot();
 	const audit = useAudit();
+	const tracks = useTracks();
 	const fixer = useAuditFix();
 	const queryClient = useQueryClient();
 	const [split, setSplit] = useState(false);
@@ -251,6 +254,10 @@ export function FilesView() {
 			{copying && (
 				<TagCopyDialog target={copying} onCopy={setTagClip} onClose={() => setCopying(null)} />
 			)}
+			<StatusBar>
+				<Stat label="Songs" value={tracks.data?.length ?? 0} />
+				<Stat label="Issues" value={issues?.length ?? 0} />
+			</StatusBar>
 			{tagConfirm.dialog}
 		</div>
 	);

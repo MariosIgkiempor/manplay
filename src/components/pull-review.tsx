@@ -27,14 +27,13 @@ function Notice({ text, onDone }: { text: string; onDone: () => void }) {
 	);
 }
 
-const PILL =
-	"inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 font-medium text-[11px]";
+const PILL = "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 font-medium text-xs";
 
 /** Short status pill shown beside the size. */
 function Status({ file, verdict }: { file: RemoteFile; verdict: Verified | undefined }) {
 	if (verdict?.duplicateOf) {
 		return (
-			<span className={`${PILL} bg-amber-500/15 text-amber-500`}>
+			<span className={`${PILL} bg-warning/15 text-warning`}>
 				<Copy className="size-3" /> Duplicate
 			</span>
 		);
@@ -44,7 +43,7 @@ function Status({ file, verdict }: { file: RemoteFile; verdict: Verified | undef
 	}
 	if (verdict) {
 		return (
-			<span className={`${PILL} bg-emerald-500/15 text-emerald-500`}>
+			<span className={`${PILL} bg-success/15 text-success`}>
 				<Check className="size-3" /> New audio
 			</span>
 		);
@@ -123,7 +122,7 @@ function FileRow({
 					</span>
 				)}
 				{verdict?.duplicateOf && (
-					<span className="block break-words text-amber-500/90 text-xs">
+					<span className="block break-words text-warning/90 text-xs">
 						Same audio as {verdict.duplicateOf}
 					</span>
 				)}

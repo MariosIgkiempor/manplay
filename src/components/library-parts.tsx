@@ -1,11 +1,14 @@
 import { FolderOpen, RefreshCw } from "lucide-react";
+import { useMemo } from "react";
 import { AlbumGrid } from "#/components/album-grid.tsx";
+import { ArtistGrid } from "#/components/artist-grid.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import type { View } from "#/components/view-toggle.tsx";
 import type { groupAlbums } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
+import { groupArtists } from "#/lib/artists.ts";
 
 export function LibraryList({
 	view,
@@ -13,13 +16,27 @@ export function LibraryList({
 	tracks,
 	targetCount,
 	onOpen,
+	onOpenArtist,
 }: {
 	view: View;
 	albums: ReturnType<typeof groupAlbums>;
 	tracks: Track[];
 	targetCount: number;
 	onOpen: (albumKey: string) => void;
+	onOpenArtist: (name: string) => void;
 }) {
+	const artists = useMemo(() => groupArtists(tracks), [tracks]);
+	if (view === "artists") {
+		return (
+			<>
+				<ArtistGrid artists={artists} onOpen={(a) => onOpenArtist(a.name)} />
+				<StatusBar>
+					<Stat label="Artists" value={artists.length} />
+					<Stat label="Songs" value={tracks.length} />
+				</StatusBar>
+			</>
+		);
+	}
 	return view === "albums" ? (
 		<>
 			<AlbumGrid albums={albums} targetCount={targetCount} onOpen={(a) => onOpen(a.key)} />
@@ -29,7 +46,7 @@ export function LibraryList({
 			</StatusBar>
 		</>
 	) : (
-		<SelectableTrackList tracks={tracks} />
+		<SelectableTrackList tracks={tracks} showDuration />
 	);
 }
 

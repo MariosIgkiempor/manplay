@@ -509,7 +509,7 @@ function FieldInput(props: FieldProps) {
 							onClick={() => onChange(fill.value)}
 							aria-label={`Copy ${field.label} from ${fill.from}`}
 							title={`Copy from ${fill.from}: ${fill.value}`}
-							className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+							className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
 						>
 							<TextCursorInput className="size-3" />
 						</button>
@@ -520,7 +520,7 @@ function FieldInput(props: FieldProps) {
 						onClick={onRevert}
 						aria-label={`Undo change to ${field.label}`}
 						title="Undo change"
-						className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+						className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
 					>
 						<Undo2 className="size-3" />
 					</button>
@@ -617,7 +617,7 @@ function PlainControl({ id, field, shared, draft, onChange }: FieldProps & { id:
 					aria-label={`Clear ${field.label}`}
 					title="Clear this tag"
 					onClick={() => onChange("")}
-					className="absolute inset-y-0 right-1 my-auto flex size-6 items-center justify-center rounded text-muted-foreground/70 hover:bg-muted hover:text-foreground"
+					className="absolute inset-y-0 right-1 my-auto flex size-6 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-muted hover:text-foreground"
 				>
 					<Eraser className="size-3.5" />
 				</button>

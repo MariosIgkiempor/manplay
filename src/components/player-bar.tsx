@@ -15,7 +15,7 @@ export function PlayerBar() {
 			<div className="flex min-w-0 items-center gap-3">
 				{current ? (
 					<>
-						<AlbumArt trackId={current.id} className="size-12 shrink-0 rounded" />
+						<AlbumArt trackId={current.id} className="size-12 shrink-0 rounded-md" />
 						<div className="min-w-0">
 							<div className="truncate font-medium text-sm">{current.title}</div>
 							<div className="truncate text-muted-foreground text-xs">

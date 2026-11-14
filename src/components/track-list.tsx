@@ -137,7 +137,7 @@ function TitleCell({
 }) {
 	return (
 		<div className="flex min-w-0 items-center gap-3">
-			{!hideArt && <AlbumArt trackId={track.id} className="size-10 shrink-0 rounded" />}
+			{!hideArt && <AlbumArt trackId={track.id} className="size-10 shrink-0 rounded-md" />}
 			<div className="min-w-0">
 				<div
 					className={cn("truncate", isCurrent && "font-medium text-primary")}

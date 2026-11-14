@@ -32,7 +32,7 @@ export function SourceCard({
 	onOpen,
 }: Props) {
 	return (
-		<div className="space-y-4 rounded-xl border bg-card p-5 shadow-xs">
+		<div className="space-y-4 rounded-xl border bg-card p-4">
 			<div className="flex items-start justify-between gap-3">
 				<button
 					type="button"

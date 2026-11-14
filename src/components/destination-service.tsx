@@ -121,7 +121,7 @@ function TargetRow({ target, onOpen }: { target: SyncTarget; onOpen: () => void 
 					<span
 						role="img"
 						aria-label={online ? "online" : "offline"}
-						className={`size-2 shrink-0 rounded-full ${online ? "bg-emerald-500" : "bg-muted-foreground"}`}
+						className={`size-2 shrink-0 rounded-full ${online ? "bg-success" : "bg-muted-foreground"}`}
 					/>
 				)}
 				<span className="min-w-0 flex-1">

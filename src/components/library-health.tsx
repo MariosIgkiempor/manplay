@@ -79,8 +79,8 @@ function Summary({
 	const manual = files - fixable;
 	const noFfmpeg = issues.some((i) => i.kind === "notMp3" && !i.fixable);
 	return (
-		<div className="flex flex-wrap items-center gap-3 bg-amber-500/10 px-3 py-1.5">
-			<TriangleAlert className="size-4 shrink-0 text-amber-500" />
+		<div className="flex flex-wrap items-center gap-3 bg-warning/10 px-3 py-1.5">
+			<TriangleAlert className="size-4 shrink-0 text-warning" />
 			<span className="min-w-0 flex-1">
 				{issues.length} {issues.length === 1 ? "issue" : "issues"} in {files}{" "}
 				{files === 1 ? "file" : "files"}
@@ -109,7 +109,7 @@ function Notice({ notice, onDismiss }: { notice: FixNotice; onDismiss: () => voi
 	const bad = notice.kind === "error" || failed.length > 0;
 	return (
 		<div
-			className={`flex items-start gap-3 px-3 py-1.5 text-xs ${bad ? "bg-destructive/10 text-destructive" : "bg-emerald-500/10"}`}
+			className={`flex items-start gap-3 px-3 py-1.5 text-xs ${bad ? "bg-destructive/10 text-destructive" : "bg-success/10"}`}
 		>
 			<div className="min-w-0 flex-1">
 				{notice.kind === "error" ? (

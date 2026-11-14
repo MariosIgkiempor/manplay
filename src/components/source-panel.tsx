@@ -8,9 +8,7 @@ import { cn } from "#/lib/utils.ts";
 export function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
 	return (
 		<div className="flex items-center justify-between gap-2">
-			<h3 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
-				{children}
-			</h3>
+			<h3 className="font-medium text-muted-foreground text-xs">{children}</h3>
 			{action}
 		</div>
 	);

@@ -12,11 +12,11 @@ import { cn } from "#/lib/utils.ts";
 const COLLAPSED_ROWS = 10;
 
 const STATUS = {
-	ok: { Icon: CircleCheck, tone: "text-emerald-500", bg: "bg-emerald-500/10", label: "Completed" },
+	ok: { Icon: CircleCheck, tone: "text-success", bg: "bg-success/10", label: "Completed" },
 	partial: {
 		Icon: CircleAlert,
-		tone: "text-amber-500",
-		bg: "bg-amber-500/10",
+		tone: "text-warning",
+		bg: "bg-warning/10",
 		label: "Completed with errors",
 	},
 	failed: { Icon: CircleX, tone: "text-destructive", bg: "bg-destructive/10", label: "Failed" },
@@ -87,7 +87,7 @@ function PartDetail({ part }: { part: Part }) {
 				</ul>
 			)}
 			{tip && (
-				<p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-600 text-xs dark:text-amber-400">
+				<p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-warning text-xs">
 					{tip}
 				</p>
 			)}

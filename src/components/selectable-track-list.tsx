@@ -4,6 +4,7 @@ import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TrackList } from "#/components/track-list.tsx";
 import { useUndo } from "#/context/undo-context.ts";
 import { type Track, untagTrack } from "#/lib/api.ts";
+import { duration } from "#/lib/format.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
 import { undoUntag } from "#/lib/undo-entries.ts";
 import { useTrackSelection } from "#/lib/use-track-selection.ts";
@@ -32,6 +33,7 @@ export function SelectableTrackList({ tracks, ...rest }: ListProps) {
 		},
 	});
 
+	const totalSeconds = tracks.reduce((n, t) => n + (t.durationMs ?? 0), 0) / 1000;
 	const selectedTracks = tracks.filter((t) => selection.selected.has(t.id));
 
 	return (
@@ -46,6 +48,7 @@ export function SelectableTrackList({ tracks, ...rest }: ListProps) {
 			/>
 			<StatusBar>
 				<Stat label="Total songs" value={tracks.length} />
+				<Stat label="Duration" value={duration(totalSeconds)} />
 				{selectedTracks.length > 0 && <Stat label="Selected" value={selectedTracks.length} />}
 			</StatusBar>
 		</div>

@@ -178,6 +178,35 @@ fn library_status(state: State<'_, AppState>) -> Result<LibraryStatus, Error> {
     })
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MissingTrackView {
+    id: i64,
+    path: String,
+    title: String,
+    artist: String,
+    album: String,
+    /// Unix seconds when the track is removed for good (already past once "Remove now" was used).
+    removed_at: i64,
+}
+
+/// The tracks whose files are gone, with when each will be removed.
+#[tauri::command]
+fn list_missing(state: State<'_, AppState>) -> Result<Vec<MissingTrackView>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    Ok(db::missing_tracks(&conn)?
+        .into_iter()
+        .map(|t| MissingTrackView {
+            id: t.id,
+            path: t.path,
+            title: t.title,
+            artist: t.artist,
+            album: t.album,
+            removed_at: t.missing_since + GRACE_SECS,
+        })
+        .collect())
+}
+
 /// Ends the grace period for all missing tracks. Never-synced ones are purged immediately;
 /// the rest go once the next sync has removed their remote copies.
 #[tauri::command]
@@ -990,7 +1019,7 @@ async fn tags_preview(
 
 const SETTING_LIBRARY_VIEW: &str = "library_view";
 
-/// Library tab last used (`albums`, `songs` or `files`), so it is open again after leaving.
+/// Library tab last used (`albums`, `songs` or `artists`), so it is open again after leaving.
 #[tauri::command]
 fn get_library_view(state: State<'_, AppState>) -> Result<Option<String>, Error> {
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
@@ -1715,6 +1744,7 @@ pub fn run() {
             scan_library,
             get_library_root,
             library_status,
+            list_missing,
             remove_missing_now,
             rescan_library,
             reset_library,

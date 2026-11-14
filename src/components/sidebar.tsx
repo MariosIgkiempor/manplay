@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import {
 	Database,
 	Download,
+	FolderTree,
 	Library,
 	ListMusic,
 	Music,
@@ -25,7 +26,7 @@ function NavLink({
 	children,
 	...props
 }: {
-	to: "/" | "/import" | "/export" | "/tags" | "/settings";
+	to: "/" | "/files" | "/import" | "/export" | "/tags" | "/settings";
 	children: ReactNode;
 }) {
 	return (
@@ -75,9 +76,13 @@ export function Sidebar() {
 					<Library className="size-4" />
 					Library
 				</NavLink>
+				<NavLink to="/files">
+					<FolderTree className="size-4" />
+					Files
+				</NavLink>
 				<NavLink to="/tags">
 					<Database className="size-4" />
-					Tag Database
+					Tag database
 				</NavLink>
 				<NavLink to="/import">
 					<Download className="size-4" />
@@ -119,7 +124,7 @@ export function Sidebar() {
 					<Settings className="size-4" />
 					Settings
 					{updateAvailable && (
-						<span className="ml-auto rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">
+						<span className="ml-auto rounded-full bg-primary px-1.5 text-xs text-primary-foreground">
 							Update
 						</span>
 					)}

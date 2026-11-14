@@ -1,10 +1,8 @@
-import { useIsMutating, useMutationState, useQueries } from "@tanstack/react-query";
+import { useIsMutating, useQueries } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { FilesView } from "#/components/files-view.tsx";
 import { LibraryHeader } from "#/components/library-header.tsx";
 import { LibraryList, ScanButtons } from "#/components/library-parts.tsx";
-import { MissingBanner } from "#/components/missing-banner.tsx";
 import { SearchPalette } from "#/components/search-palette.tsx";
 import { ViewToggle } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
@@ -15,7 +13,6 @@ import {
 	useLibraryRoot,
 	useLibraryView,
 	useScan,
-	useSyncRun,
 	useSyncTargets,
 	useTracks,
 } from "#/lib/queries.ts";
@@ -53,15 +50,10 @@ function Library() {
 	const tracks = useTracks();
 	const targets = useSyncTargets();
 	const targetCount = targets.data?.length ?? 0;
-	const syncRun = useSyncRun();
 	const root = useLibraryRoot();
 	const scan = useScan();
 	// Also true while the automatic launch-time rescan is running.
 	const scanning = useIsMutating({ mutationKey: SCAN_KEY }) > 0;
-	const lastScanError = useMutationState({
-		filters: { mutationKey: SCAN_KEY, status: "error" },
-		select: (m) => String(m.state.error),
-	}).at(-1);
 
 	const members = usePlaylistMembers(pills);
 	const visible = useMemo(
@@ -70,10 +62,8 @@ function Library() {
 	);
 	const albums = useMemo(() => groupAlbums(visible), [visible]);
 
-	const files = view === "files";
-
 	return (
-		<main className={files ? "flex h-full flex-col" : undefined}>
+		<main>
 			<LibraryHeader
 				title="Library"
 				subtitle={root.data ?? undefined}
@@ -88,31 +78,20 @@ function Library() {
 					</>
 				}
 				filters={
-					files ? undefined : (
-						<SearchPalette pills={pills} onPills={setPills} text={search} onText={setSearch} />
-					)
+					<SearchPalette pills={pills} onPills={setPills} text={search} onText={setSearch} />
 				}
 			/>
 
-			<div className={files ? "space-y-3 px-6 pb-4" : "space-y-5 px-6 pt-5 pb-6"}>
-				<MissingBanner />
-				{lastScanError && !scanning && <p className="text-destructive text-sm">{lastScanError}</p>}
-				{syncRun.isError && <p className="text-destructive text-sm">{String(syncRun.error)}</p>}
-				{!files && (
-					<LibraryList
-						view={view}
-						albums={albums}
-						tracks={visible}
-						targetCount={targetCount}
-						onOpen={(key) => detail.open({ kind: "album", key })}
-					/>
-				)}
+			<div className="space-y-5 px-6 pt-5 pb-6">
+				<LibraryList
+					view={view}
+					albums={albums}
+					tracks={visible}
+					targetCount={targetCount}
+					onOpen={(key) => detail.open({ kind: "album", key })}
+					onOpenArtist={(name) => detail.open({ kind: "artist", name })}
+				/>
 			</div>
-			{files && (
-				<div className="min-h-0 flex-1">
-					<FilesView />
-				</div>
-			)}
 		</main>
 	);
 }

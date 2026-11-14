@@ -3,8 +3,8 @@ import type { SyncState } from "#/lib/albums.ts";
 import { cn } from "#/lib/utils.ts";
 
 const META = {
-	synced: { label: "Synced", Icon: CircleCheck, className: "text-emerald-500" },
-	partial: { label: "Partly synced", Icon: CircleDashed, className: "text-amber-500" },
+	synced: { label: "Synced", Icon: CircleCheck, className: "text-success" },
+	partial: { label: "Partly synced", Icon: CircleDashed, className: "text-warning" },
 	pending: { label: "Not synced yet", Icon: CloudUpload, className: "text-muted-foreground" },
 } as const;
 

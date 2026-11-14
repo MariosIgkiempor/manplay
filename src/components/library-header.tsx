@@ -87,7 +87,7 @@ export function LibraryHeader({ title, subtitle, controls, filters }: Props) {
 function Heading({ title, subtitle }: { title: string; subtitle?: string | undefined }) {
 	return (
 		<div className="min-w-0">
-			<h1 className="font-bold text-2xl">{title}</h1>
+			<h1 className="font-semibold text-2xl">{title}</h1>
 			{subtitle && (
 				<p className="truncate text-muted-foreground text-xs" title={subtitle}>
 					{subtitle}

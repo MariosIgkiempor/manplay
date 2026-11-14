@@ -533,7 +533,7 @@ function Breadcrumbs({
 		<nav className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5 text-sm">
 			<button
 				type="button"
-				className="rounded px-1 font-medium hover:bg-muted"
+				className="rounded-md px-1 font-medium hover:bg-muted"
 				onClick={() => onNavigate(root)}
 				onDragOver={(ev) => allowDrop(ev, root)}
 				onDragLeave={clearDrop}
@@ -548,7 +548,7 @@ function Breadcrumbs({
 						<ChevronRight className="size-3 text-muted-foreground" />
 						<button
 							type="button"
-							className={cn("rounded px-1 hover:bg-muted", dropTarget === to && "bg-primary/20")}
+							className={cn("rounded-md px-1 hover:bg-muted", dropTarget === to && "bg-primary/20")}
 							onClick={() => onNavigate(to)}
 							onDragOver={(ev) => allowDrop(ev, to)}
 							onDragLeave={clearDrop}
@@ -845,7 +845,7 @@ function Thumb({ src, children }: { src: string; children: React.ReactNode }) {
 			loading="lazy"
 			decoding="async"
 			draggable={false}
-			className="size-7 shrink-0 rounded object-cover"
+			className="size-7 shrink-0 rounded-md object-cover"
 			onError={() => setFailed(true)}
 		/>
 	);
@@ -896,7 +896,7 @@ function Chevron({
 			type="button"
 			tabIndex={-1}
 			aria-label={open ? "Collapse" : "Expand"}
-			className="-mx-1 flex size-5 shrink-0 items-center justify-center rounded hover:bg-muted"
+			className="-mx-1 flex size-5 shrink-0 items-center justify-center rounded-md hover:bg-muted"
 			onClick={(ev) => {
 				ev.stopPropagation();
 				onToggle();

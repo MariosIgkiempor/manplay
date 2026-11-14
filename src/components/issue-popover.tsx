@@ -30,7 +30,7 @@ export function IssuePopover({ path, isDir, health, fixing, onFix, open, onOpenC
 		<Popover.Root open={open} onOpenChange={onOpenChange}>
 			<Popover.Trigger
 				aria-label="Show issues"
-				className="flex shrink-0 items-center gap-1 rounded px-1 text-amber-500 text-xs hover:bg-amber-500/15"
+				className="flex shrink-0 items-center gap-1 rounded-md px-1 text-warning text-xs hover:bg-warning/15"
 				onClick={(ev) => ev.stopPropagation()}
 				onDoubleClick={(ev) => ev.stopPropagation()}
 				onMouseDown={(ev) => ev.stopPropagation()}

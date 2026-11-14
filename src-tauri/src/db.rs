@@ -940,6 +940,34 @@ pub fn missing_count(conn: &Connection) -> Result<i64, Error> {
     )?)
 }
 
+pub struct MissingTrack {
+    pub id: i64,
+    pub path: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub missing_since: i64,
+}
+
+/// Tracks whose files vanished from disk, longest-missing first.
+pub fn missing_tracks(conn: &Connection) -> Result<Vec<MissingTrack>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, title, artist, album, missing_since FROM tracks
+         WHERE missing_since IS NOT NULL ORDER BY missing_since, path",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(MissingTrack {
+            id: r.get(0)?,
+            path: r.get(1)?,
+            title: r.get(2)?,
+            artist: r.get(3)?,
+            album: r.get(4)?,
+            missing_since: r.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// Treats every missing track as past its grace period (the user asked to remove them now).
 pub fn expire_missing_now(conn: &Connection) -> Result<(), Error> {
     conn.execute(

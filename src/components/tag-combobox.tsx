@@ -349,7 +349,7 @@ function Chip({
 				type="button"
 				aria-label={`Remove ${name}`}
 				onClick={onRemove}
-				className="rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+				className="rounded-md p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
 			>
 				<X className="size-3" />
 			</button>

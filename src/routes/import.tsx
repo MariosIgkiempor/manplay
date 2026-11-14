@@ -23,9 +23,7 @@ function ImportPage() {
 				<ItunesCard />
 			</section>
 			<section className="space-y-6">
-				<h2 className="font-medium text-muted-foreground text-xs uppercase tracking-wider">
-					New to import
-				</h2>
+				<h2 className="font-medium text-muted-foreground text-xs">New to import</h2>
 				{itunesOn && <ItunesPending />}
 				{enabled && s.folder !== null && (
 					<div className="space-y-3">

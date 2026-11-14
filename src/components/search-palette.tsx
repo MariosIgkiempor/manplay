@@ -41,7 +41,7 @@ function PillChip({ pill, onRemove }: { pill: Pill; onRemove: () => void }) {
 			<button
 				type="button"
 				aria-label={`Remove ${pill.label}`}
-				className="rounded p-0.5 hover:bg-primary/20"
+				className="rounded-md p-0.5 hover:bg-primary/20"
 				onMouseDown={(e) => e.preventDefault()}
 				onClick={onRemove}
 			>
@@ -186,7 +186,7 @@ export function SearchPalette({ pills, onPills, text, onText }: Props) {
 					<button
 						type="button"
 						aria-label="Clear search"
-						className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+						className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
 						onMouseDown={(e) => e.preventDefault()}
 						onClick={clear}
 					>

@@ -3,8 +3,10 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { AutoRefresh } from "#/components/auto-refresh.tsx";
 import { DetailPanel } from "#/components/detail-panel.tsx";
+import { MissingDrawer, MissingIndicator } from "#/components/missing-files.tsx";
 import { PlayerBar } from "#/components/player-bar.tsx";
 import { Sidebar } from "#/components/sidebar.tsx";
+import { StatusBarHost } from "#/components/status-bar.tsx";
 import { StatusSlotContext } from "#/context/detail-context.ts";
 import { DetailProvider } from "#/context/detail-provider.tsx";
 import { PlayerProvider } from "#/context/player-provider.tsx";
@@ -28,6 +30,7 @@ export const Route = createRootRoute({
 
 function RootDocument({ children }: { children: ReactNode }) {
 	const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
+	const [missingOpen, setMissingOpen] = useState(false);
 	return (
 		<html lang="en" className="dark">
 			<head>
@@ -43,12 +46,18 @@ function RootDocument({ children }: { children: ReactNode }) {
 									<div className="flex h-screen flex-col">
 										<div className="flex min-h-0 flex-1">
 											<Sidebar />
-											<div className="relative min-w-0 flex-1 overflow-hidden">
-												<StatusSlotContext.Provider value={statusSlot}>
-													<div className="h-full overflow-y-auto">{children}</div>
-												</StatusSlotContext.Provider>
-												<div ref={setStatusSlot} className="absolute inset-x-0 bottom-0 z-10" />
-												<DetailPanel />
+											<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+												<div className="relative min-h-0 flex-1 overflow-hidden">
+													<StatusSlotContext.Provider value={statusSlot}>
+														<div className="h-full overflow-y-auto">{children}</div>
+													</StatusSlotContext.Provider>
+													<DetailPanel />
+													<MissingDrawer open={missingOpen} onClose={() => setMissingOpen(false)} />
+												</div>
+												<StatusBarHost
+													setSlot={setStatusSlot}
+													notices={<MissingIndicator onClick={() => setMissingOpen(true)} />}
+												/>
 											</div>
 										</div>
 										<PlayerBar />

@@ -54,7 +54,7 @@ function DiffChips({ from, to }: { from: string | null; to: string | null }) {
 					className={cn(
 						chip,
 						d.state === "kept" && "bg-secondary text-secondary-foreground",
-						d.state === "added" && "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+						d.state === "added" && "bg-success/15 text-success ",
 						d.state === "removed" && "bg-destructive/10 text-destructive line-through",
 					)}
 				>
@@ -148,7 +148,7 @@ export function TagConfirmDialog({
 						</Button>
 						<Button ref={applyRef} onClick={() => onDone(true)} disabled={!ready}>
 							{ready ? `Apply to ${songs(files.length)}` : "Apply"}
-							<kbd className="ml-1 rounded bg-primary-foreground/20 px-1 font-sans text-[10px]">
+							<kbd className="ml-1 rounded-md bg-primary-foreground/20 px-1 font-sans text-xs">
 								⌘↵
 							</kbd>
 						</Button>

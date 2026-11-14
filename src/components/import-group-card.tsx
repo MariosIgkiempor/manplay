@@ -241,7 +241,7 @@ export function GroupCard(p: GroupCardProps) {
 	const expandable = group.tracks.length > 1;
 	const ToggleIcon = open ? ChevronDown : ChevronRight;
 	return (
-		<section className="rounded-xl border bg-card p-3">
+		<section className="rounded-xl border bg-card p-4">
 			<div className="flex items-center gap-4">
 				<Cover group={group} playback={p.playback} target={fresh[0] ?? group.tracks[0]} />
 				<div className="min-w-0 flex-1">

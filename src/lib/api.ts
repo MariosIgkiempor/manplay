@@ -61,6 +61,23 @@ export async function libraryStatus(): Promise<LibraryStatus> {
 	return libraryStatusSchema.parse(await invoke("library_status"));
 }
 
+const missingTrackSchema = z.object({
+	id: int,
+	path: z.string(),
+	title: z.string(),
+	artist: z.string(),
+	album: z.string(),
+	/** Unix seconds when the track is removed for good. */
+	removedAt: int,
+});
+
+export type MissingTrack = z.infer<typeof missingTrackSchema>;
+
+/** Tracks whose files are gone from disk. */
+export async function listMissing(): Promise<MissingTrack[]> {
+	return z.array(missingTrackSchema).parse(await invoke("list_missing"));
+}
+
 /** Ends the grace period for missing tracks; the next sync removes their remote copies. */
 export async function removeMissingNow(): Promise<void> {
 	await invoke("remove_missing_now");
@@ -615,7 +632,7 @@ export async function tagsPreview(
 	return previewSchema.parse(await invoke("tags_preview", { path, edits }));
 }
 
-const libraryViewSchema = z.enum(["albums", "songs", "files"]);
+const libraryViewSchema = z.enum(["albums", "songs", "artists"]);
 export type LibraryView = z.infer<typeof libraryViewSchema>;
 
 /** Library tab last used; kept in the database so it is open again after leaving Library. */

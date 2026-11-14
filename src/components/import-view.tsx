@@ -42,7 +42,7 @@ interface ToolbarProps {
 
 function Toolbar(p: ToolbarProps) {
 	return (
-		<div className="sticky top-0 z-10 flex items-center justify-end gap-2 rounded-xl border bg-card/95 p-2 shadow-xs backdrop-blur">
+		<div className="sticky top-0 z-10 flex items-center justify-end gap-2 rounded-xl border bg-card/95 p-2 backdrop-blur">
 			<Button
 				variant="ghost"
 				size="icon"
