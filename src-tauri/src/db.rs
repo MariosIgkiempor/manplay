@@ -55,6 +55,12 @@ fn create_tag_values(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
+/// Tag tables that live outside the main schema, plus any parent tag levels that are missing.
+fn prepare_tags(conn: &Connection) -> Result<(), Error> {
+    create_tag_values(conn)?;
+    restore_tag_parents(conn)
+}
+
 pub fn open(path: &Path) -> Result<Connection, Error> {
     let conn = Connection::open(path)?;
     conn.execute_batch(
@@ -155,7 +161,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "sync_runs", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
     add_column(&conn, "sync_runs", "errors", "TEXT NOT NULL DEFAULT '[]'")?;
     add_column(&conn, "sync_runs", "batch", "INTEGER NOT NULL DEFAULT 0")?;
-    create_tag_values(&conn).map(|()| conn)
+    prepare_tags(&conn).map(|()| conn)
 }
 
 fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), Error> {
@@ -411,17 +417,73 @@ pub fn playlist_tracks(conn: &Connection, playlist_id: i64) -> Result<Vec<Track>
 #[serde(rename_all = "camelCase")]
 pub struct Tag {
     pub id: i64,
+    /// Full path, levels separated by `/` (e.g. `Genre/Electronic/House`).
     pub name: String,
+    /// Songs tagged with this tag or any tag below it.
     pub track_count: i64,
 }
 
+/// Tidies a tag path: trims each level and drops empty ones (`" a / /b "` becomes `a/b`).
+pub fn normalize_tag(name: &str) -> String {
+    name.split('/')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// `a/b/c` → `["a", "a/b", "a/b/c"]`.
+fn tag_ancestry(name: &str) -> Vec<String> {
+    let parts: Vec<&str> = name.split('/').collect();
+    (1..=parts.len()).map(|n| parts[..n].join("/")).collect()
+}
+
+/// Creates the tag and every parent level it names; returns the tag's id.
+fn ensure_tag(tx: &Connection, name: &str) -> Result<i64, Error> {
+    for level in tag_ancestry(name) {
+        tx.execute(
+            "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
+            params![level],
+        )?;
+    }
+    Ok(
+        tx.query_row("SELECT id FROM tags WHERE name = ?1", params![name], |r| {
+            r.get(0)
+        })?,
+    )
+}
+
+/// Recreates any missing parent level (e.g. after `a` moved into `a/b`, or for tags named with
+/// `/` before tags were hierarchical).
+fn restore_tag_parents(conn: &Connection) -> Result<(), Error> {
+    let names: Vec<String> = conn
+        .prepare("SELECT name FROM tags WHERE instr(name, '/') > 0")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for name in names {
+        for level in tag_ancestry(&name) {
+            conn.execute(
+                "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
+                params![level],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Condition matching tag `c` being `g` itself or anywhere below it.
+const IN_SUBTREE: &str =
+    "(c.id = g.id OR lower(substr(c.name, 1, length(g.name) + 1)) = lower(g.name || '/'))";
+
 pub fn list_tags(conn: &Connection) -> Result<Vec<Tag>, Error> {
-    let mut stmt = conn.prepare(
-        "SELECT g.id, g.name, COUNT(t.id)
-         FROM tags g LEFT JOIN track_tags tt ON tt.tag_id = g.id
+    let mut stmt = conn.prepare(&format!(
+        "SELECT g.id, g.name, COUNT(DISTINCT t.id)
+         FROM tags g
+         JOIN tags c ON {IN_SUBTREE}
+         LEFT JOIN track_tags tt ON tt.tag_id = c.id
          LEFT JOIN tracks t ON t.id = tt.track_id AND t.missing_since IS NULL
-         GROUP BY g.id ORDER BY g.name",
-    )?;
+         GROUP BY g.id ORDER BY g.name COLLATE NOCASE"
+    ))?;
     let rows = stmt.query_map([], |r| {
         Ok(Tag {
             id: r.get(0)?,
@@ -432,16 +494,14 @@ pub fn list_tags(conn: &Connection) -> Result<Vec<Tag>, Error> {
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-/// Creates the tag if needed and attaches it to every given track.
+/// Creates the tag (and its parent levels) if needed and attaches it to every given track.
 pub fn tag_tracks(conn: &mut Connection, name: &str, track_ids: &[i64]) -> Result<(), Error> {
+    let name = normalize_tag(name);
+    if name.is_empty() {
+        return Ok(());
+    }
     let tx = conn.transaction()?;
-    tx.execute(
-        "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
-        params![name],
-    )?;
-    let tag_id: i64 = tx.query_row("SELECT id FROM tags WHERE name = ?1", params![name], |r| {
-        r.get(0)
-    })?;
+    let tag_id = ensure_tag(&tx, &name)?;
     {
         let mut stmt =
             tx.prepare("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?1, ?2)")?;
@@ -457,49 +517,82 @@ pub fn untag_track(conn: &Connection, name: &str, track_id: i64) -> Result<(), E
     conn.execute(
         "DELETE FROM track_tags WHERE track_id = ?1
          AND tag_id = (SELECT id FROM tags WHERE name = ?2)",
-        params![track_id, name],
+        params![track_id, normalize_tag(name)],
     )?;
     Ok(())
 }
 
-/// Renames, merges or removes library tags by name: every track of each tag in `from` moves to
-/// `to` (created if needed), then the old tag goes. With `to` as `None` they are just deleted.
-pub fn migrate_tags(conn: &mut Connection, from: &[String], to: Option<&str>) -> Result<(), Error> {
-    let tx = conn.transaction()?;
-    let id_of = |name: &str| -> Result<Option<i64>, Error> {
-        Ok(tx
-            .query_row("SELECT id FROM tags WHERE name = ?1", params![name], |r| {
-                r.get(0)
-            })
-            .optional()?)
+/// Moves one tag's songs onto `to` (created with its parents) and drops it. `None` just drops it.
+fn move_tag(tx: &Connection, id: i64, to: Option<&str>) -> Result<(), Error> {
+    let Some(to) = to else {
+        tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+        return Ok(());
     };
-    let mut to_id = None;
-    if let Some(name) = to {
-        tx.execute(
-            "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
-            params![name],
-        )?;
-        to_id = id_of(name)?;
+    let current: String =
+        tx.query_row("SELECT name FROM tags WHERE id = ?1", params![id], |r| {
+            r.get(0)
+        })?;
+    if current.eq_ignore_ascii_case(to) {
+        // Same tag (names compare NOCASE): only the capitalisation can differ.
+        tx.execute("UPDATE tags SET name = ?1 WHERE id = ?2", params![to, id])?;
+        return Ok(());
     }
-    let mut recase = false;
+    let target = ensure_tag(tx, to)?;
+    tx.execute(
+        "INSERT OR IGNORE INTO track_tags (track_id, tag_id)
+         SELECT track_id, ?1 FROM track_tags WHERE tag_id = ?2",
+        params![target, id],
+    )?;
+    tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// Renames, merges or removes library tags by name: every track of each tag in `from` moves to
+/// `to` (created if needed), then the old tag goes. Levels below a moved tag move along with it
+/// (`Genre/House` follows `Genre` → `Style` to `Style/House`). With `to` as `None` the tags and
+/// everything below them are deleted.
+pub fn migrate_tags(conn: &mut Connection, from: &[String], to: Option<&str>) -> Result<(), Error> {
+    let to = to.map(normalize_tag).filter(|t| !t.is_empty());
+    let tx = conn.transaction()?;
+    // (id, new name) for every tag in each `from` subtree, deepest first so children move
+    // before the parent they hang under disappears.
+    let mut moves: Vec<(i64, usize, Option<String>)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for name in from {
-        let Some(id) = id_of(name)? else { continue };
-        if Some(id) == to_id {
-            recase = true; // renaming a tag to itself: only the capitalisation can differ
+        let name = normalize_tag(name);
+        if name.is_empty() {
             continue;
         }
-        if let Some(target) = to_id {
-            tx.execute(
-                "INSERT OR IGNORE INTO track_tags (track_id, tag_id)
-                 SELECT track_id, ?1 FROM track_tags WHERE tag_id = ?2",
-                params![target, id],
-            )?;
+        let mut stmt = tx.prepare(
+            "SELECT id, name FROM tags
+             WHERE lower(name) = lower(?1) OR lower(substr(name, 1, length(?1) + 1)) = lower(?1 || '/')",
+        )?;
+        let rows = stmt.query_map(params![name], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (id, tag) = row?;
+            if !seen.insert(id) {
+                continue;
+            }
+            // "" for the tag itself, "/x/y" for descendants.
+            let rest: String = tag.chars().skip(name.chars().count()).collect();
+            let depth = tag.matches('/').count();
+            moves.push((id, depth, to.as_ref().map(|t| format!("{t}{rest}"))));
         }
-        tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
     }
-    if let (true, Some(id), Some(name)) = (recase, to_id, to) {
-        tx.execute("UPDATE tags SET name = ?1 WHERE id = ?2", params![name, id])?;
+    moves.sort_by_key(|m| std::cmp::Reverse(m.1));
+    for (id, _, target) in moves {
+        let exists: Option<i64> = tx
+            .query_row("SELECT id FROM tags WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if exists.is_some() {
+            move_tag(&tx, id, target.as_deref())?;
+        }
     }
+    restore_tag_parents(&tx)?;
     tx.commit()?;
     Ok(())
 }

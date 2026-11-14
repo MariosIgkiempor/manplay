@@ -1,5 +1,6 @@
 import type { Playlist, Tag, Track } from "#/lib/api.ts";
 import { splitNames } from "#/lib/names.ts";
+import { trackHasTag } from "#/lib/tag-tree.ts";
 
 export type PillKind = "artist" | "song" | "playlist" | "tag";
 
@@ -23,7 +24,7 @@ function matchesPill(t: Track, p: Pill, members: PlaylistMembers): boolean {
 		case "playlist":
 			return members.get(Number(p.id))?.has(t.id) ?? false;
 		case "tag":
-			return t.tags.some((x) => x.toLowerCase() === String(p.id).toLowerCase());
+			return trackHasTag(t, String(p.id));
 	}
 }
 

@@ -12,6 +12,10 @@ export interface SearchItem {
 	count: number;
 	/** Already applied to everything the menu acts on. */
 	checked: boolean;
+	/** Nesting level; shown indented with `label` while nothing is typed. */
+	depth?: number;
+	/** Short name for the nested view (defaults to `name`). */
+	label?: string;
 }
 
 interface Props {
@@ -105,7 +109,13 @@ export function SearchSubmenu({ label, icon: Icon, items, placeholder, emptyHint
 											<Check className="size-4 text-primary" />
 										)}
 									</span>
-									<span className="flex-1 truncate">{t.name}</span>
+									<span
+										className="flex-1 truncate"
+										title={t.name}
+										style={q === "" && t.depth ? { paddingLeft: `${t.depth * 12}px` } : undefined}
+									>
+										{q === "" ? (t.label ?? t.name) : t.name}
+									</span>
 									<span className="text-muted-foreground text-xs">{t.count}</span>
 								</ContextMenu.Item>
 							))}

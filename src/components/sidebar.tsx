@@ -12,6 +12,7 @@ import {
 	Upload,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
+import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
@@ -97,21 +98,24 @@ export function Sidebar() {
 			<div className="px-2 font-medium text-muted-foreground text-xs uppercase tracking-wide">
 				Playlists
 			</div>
-			<nav className="-mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto">
-				{playlists.data?.map((p) => (
-					<Link
-						key={p.id}
-						to="/playlists/$id"
-						params={{ id: String(p.id) }}
-						className={linkClass}
-						activeProps={activeProps}
-					>
-						<ListMusic className="size-4 shrink-0" />
-						<span className="truncate">{p.name}</span>
-						<span className="ml-auto text-xs">{p.trackCount}</span>
-					</Link>
-				))}
-			</nav>
+			<div className="-mt-2 min-h-0 flex-1 overflow-y-auto">
+				<nav className="space-y-0.5">
+					{playlists.data?.map((p) => (
+						<Link
+							key={p.id}
+							to="/playlists/$id"
+							params={{ id: String(p.id) }}
+							className={linkClass}
+							activeProps={activeProps}
+						>
+							<ListMusic className="size-4 shrink-0" />
+							<span className="truncate">{p.name}</span>
+							<span className="ml-auto text-xs">{p.trackCount}</span>
+						</Link>
+					))}
+				</nav>
+				<SidebarTagTree />
+			</div>
 			<form onSubmit={onSubmit} className="flex gap-2">
 				<Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New playlist" />
 				<Button type="submit" size="icon" aria-label="Create playlist" disabled={create.isPending}>

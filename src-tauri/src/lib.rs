@@ -1954,6 +1954,62 @@ mod tests {
         assert_eq!(back[0].tags, vec!["keep".to_owned()]);
     }
 
+    fn tag_counts(conn: &rusqlite::Connection) -> Vec<(String, i64)> {
+        db::list_tags(conn)
+            .expect("tags")
+            .into_iter()
+            .map(|t| (t.name, t.track_count))
+            .collect()
+    }
+
+    #[test]
+    fn hierarchical_tags_count_songs_of_every_level_below() {
+        let mut f = Fixture::new("tag-tree");
+        f.apply(&f.scan_of(&["1", "2", "3"], 0));
+        let ids: Vec<i64> = db::list(&f.conn)
+            .expect("list")
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        db::tag_tracks(&mut f.conn, " Genre / Electronic /House ", &[ids[0]]).expect("tag");
+        db::tag_tracks(&mut f.conn, "Genre/Electronic", &[ids[0], ids[1]]).expect("tag");
+        db::tag_tracks(&mut f.conn, "Mood/Calm", &[ids[2]]).expect("tag");
+        assert_eq!(
+            tag_counts(&f.conn),
+            vec![
+                ("Genre".into(), 2),
+                ("Genre/Electronic".into(), 2),
+                ("Genre/Electronic/House".into(), 1),
+                ("Mood".into(), 1),
+                ("Mood/Calm".into(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn renaming_a_parent_tag_moves_its_children() {
+        let mut f = Fixture::new("tag-rename");
+        f.apply(&f.scan_of(&["1"], 0));
+        let id = db::list(&f.conn).expect("list")[0].id;
+        db::tag_tracks(&mut f.conn, "Genre/House", &[id]).expect("tag");
+        db::migrate_tags(&mut f.conn, &["genre".into()], Some("Style")).expect("rename");
+        assert_eq!(
+            tag_counts(&f.conn),
+            vec![("Style".into(), 1), ("Style/House".into(), 1)]
+        );
+        db::migrate_tags(&mut f.conn, &["Style".into()], Some("Style/Old")).expect("nest");
+        assert_eq!(
+            tag_counts(&f.conn),
+            vec![
+                ("Style".into(), 1),
+                ("Style/Old".into(), 1),
+                ("Style/Old/House".into(), 1),
+            ]
+        );
+        db::migrate_tags(&mut f.conn, &["Style".into()], None).expect("delete");
+        assert!(tag_counts(&f.conn).is_empty());
+    }
+
     #[test]
     fn purge_waits_for_grace_period_and_remote_copies() {
         let mut f = Fixture::new("purge");

@@ -3,6 +3,7 @@ import { Tag as TagIcon } from "lucide-react";
 import { SearchSubmenu } from "#/components/search-submenu.tsx";
 import { useUndo } from "#/context/undo-context.ts";
 import { listTags, type Track, tagTracks } from "#/lib/api.ts";
+import { flattenTagTree } from "#/lib/tag-tree.ts";
 import { undoTagTracks } from "#/lib/undo-entries.ts";
 
 const REFRESH = ["tracks", "playlist-tracks", "tags", "playlists"] as const;
@@ -41,12 +42,14 @@ export function TagSubmenu({ tracks }: { tracks: readonly Track[] }) {
 		<SearchSubmenu
 			label="Tag"
 			icon={TagIcon}
-			placeholder="Search or create tag…"
-			emptyHint="Type a name to create a tag."
-			items={(tags.data ?? []).map((t) => ({
-				name: t.name,
-				count: t.trackCount,
-				checked: hasAll(t.name),
+			placeholder="Search or create tag (a/b nests)…"
+			emptyHint="Type a name to create a tag. Use / to nest, e.g. Genre/House."
+			items={flattenTagTree(tags.data ?? []).map(({ node, depth }) => ({
+				name: node.name,
+				label: node.label,
+				depth,
+				count: node.trackCount,
+				checked: hasAll(node.name),
 			}))}
 			onPick={(name) => tag.mutate(name)}
 		/>
