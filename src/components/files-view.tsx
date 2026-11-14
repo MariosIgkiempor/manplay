@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Tags, Undo2 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { FilePane } from "#/components/file-pane.tsx";
 import { type FixNotice, HealthBar } from "#/components/library-health.tsx";
 import { TagCopyDialog } from "#/components/tag-copy-dialog.tsx";
@@ -20,6 +20,7 @@ import {
 import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
 import type { FsClipboard } from "#/lib/use-fs-ops.ts";
 import { type TagConfirmRequest, useTagConfirm } from "#/lib/use-tag-confirm.tsx";
+import { useTagPanelNav } from "#/lib/use-tag-panel-nav.ts";
 
 const AUTO_KEY = "manplay.tags.autoOpen";
 
@@ -108,6 +109,14 @@ export function FilesView() {
 		setTagTarget(t);
 		setTagsOpen(true);
 	}, []);
+	const rootRef = useRef<HTMLDivElement>(null);
+	const openTags = useCallback(() => setTagsOpen(true), []);
+	const tagNav = useTagPanelNav({
+		root: rootRef,
+		hasTarget: tagTarget !== null,
+		activePane: active,
+		open: openTags,
+	});
 	// Per-pane folder; `null` means "the library root".
 	const [paths, setPaths] = useState<[string | null, string | null]>([null, null]);
 
@@ -154,7 +163,7 @@ export function FilesView() {
 		pasteTagsOnto(tagClip, targets, tagWriter.mutateAsync, setNotice, tagConfirm.ask);
 
 	return (
-		<div className="relative flex h-full min-h-0 flex-col overflow-hidden border-t">
+		<div ref={rootRef} className="relative flex h-full min-h-0 flex-col overflow-hidden border-t">
 			<HealthBar
 				issues={issues}
 				checking={audit.isFetching}
@@ -219,10 +228,17 @@ export function FilesView() {
 						tagClipboard={tagClip}
 						onCopyTags={setCopying}
 						onPasteTags={pasteTags}
+						onFocusTags={tagNav.focusTags}
 					/>
 				))}
 				{tagsOpen && tagTarget && (
-					<aside className="flex w-[26rem] shrink-0 flex-col border-l" aria-label="Tags">
+					<aside
+						ref={tagNav.panel}
+						tabIndex={-1}
+						onKeyDown={tagNav.onKeyDown}
+						className="flex w-[26rem] shrink-0 flex-col border-l outline-none"
+						aria-label="Tags"
+					>
 						<TagEditor
 							key={tagTarget.path}
 							target={tagTarget}

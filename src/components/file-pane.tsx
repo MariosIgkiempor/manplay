@@ -27,6 +27,7 @@ import {
 } from "react";
 import { ErrorText } from "#/components/error-text.tsx";
 import { IssuePopover } from "#/components/issue-popover.tsx";
+import { PaneSearch } from "#/components/pane-search.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { type FsEntry, pathArtUrl } from "#/lib/api.ts";
@@ -42,7 +43,22 @@ import { useFsOps } from "#/lib/use-fs-ops.ts";
 import { undoMakeDir, undoRename } from "#/lib/use-fs-undo.ts";
 import { useIssueNav } from "#/lib/use-issue-nav.ts";
 import { useTree } from "#/lib/use-tree.ts";
+import { expandOrEnter, useVimNav } from "#/lib/use-vim-nav.ts";
 import { cn } from "#/lib/utils.ts";
+
+/** Tells the tag pane about a newly selected song or folder (other files are ignored). */
+function useReportTarget(row: TreeRow | undefined, report: PaneProps["onSelectTarget"]) {
+	const reportRef = useRef(report);
+	reportRef.current = report;
+	const path = row?.path;
+	const name = row?.entry.name;
+	const isDir = row?.entry.isDir;
+	useEffect(() => {
+		if (path !== undefined && name !== undefined && (isDir || isAudioName(name))) {
+			reportRef.current({ path, name, isDir: isDir ?? false });
+		}
+	}, [path, name, isDir]);
+}
 
 /** Pixels of indent per tree level. */
 const INDENT = 16;
@@ -115,6 +131,8 @@ interface PaneProps {
 	tagClipboard: TagClipboard | null;
 	onCopyTags: (target: { path: string; name: string; isDir: boolean }) => unknown;
 	onPasteTags: (targets: { path: string; name: string; isDir: boolean }[]) => unknown;
+	/** Moves keyboard focus to the tag editor (vim `L`). */
+	onFocusTags: () => void;
 }
 
 export function FilePane({
@@ -136,6 +154,7 @@ export function FilePane({
 	tagClipboard,
 	onCopyTags,
 	onPasteTags,
+	onFocusTags,
 }: PaneProps) {
 	const {
 		listing,
@@ -164,6 +183,7 @@ export function FilePane({
 		setRenaming(null);
 		setCreatingIn(null);
 		setError(null);
+		nav.closeSearchBox();
 	}, [path]);
 
 	const { makeDir, rename, busy, fail, runMove, paste, remove, record } = useFsOps({
@@ -202,21 +222,7 @@ export function FilePane({
 	const pathsOf = (r?: TreeRow) => (r && !selected.has(r.path) ? [r.path] : [...selected]);
 	const onlySelected = selected.size === 1 ? rowByPath.get([...selected][0] ?? "") : undefined;
 	/** Where "new folder" and "paste" land from the keyboard: the selected folder, else this one. */
-	// Tell the tag pane about a newly selected song or folder (other files are ignored).
-	const selectRef = useRef(onSelectTarget);
-	selectRef.current = onSelectTarget;
-	const pickedPath = onlySelected?.path;
-	const pickedName = onlySelected?.entry.name;
-	const pickedDir = onlySelected?.entry.isDir;
-	useEffect(() => {
-		if (
-			pickedPath !== undefined &&
-			pickedName !== undefined &&
-			(pickedDir || isAudioName(pickedName))
-		) {
-			selectRef.current({ path: pickedPath, name: pickedName, isDir: pickedDir ?? false });
-		}
-	}, [pickedPath, pickedName, pickedDir]);
+	useReportTarget(onlySelected, onSelectTarget);
 	const keyboardDest = onlySelected?.entry.isDir ? onlySelected.path : path;
 
 	const actions: PaneActionSet = {
@@ -255,8 +261,29 @@ export function FilePane({
 		paneRef: sectionRef,
 	});
 
+	const jumpTo = (p: string | null | undefined) => {
+		if (p === undefined || p === null) {
+			return;
+		}
+		setSel({ selected: new Set([p]), anchor: p });
+		requestAnimationFrame(() =>
+			document
+				.querySelector(`[data-row-path="${CSS.escape(p)}"]`)
+				?.scrollIntoView({ block: "nearest" }),
+		);
+	};
+
+	const currentRow = sel.anchor ?? onlySelected?.path ?? null;
+	const nav = useVimNav({ rows, current: currentRow, jumpTo, paneRef: sectionRef });
+
 	const onKeyDown = (ev: KeyboardEvent) => {
-		const action = keyAction(ev, renaming !== null || creatingIn !== null);
+		const action = keyAction(
+			ev,
+			renaming !== null || creatingIn !== null || nav.searching !== null,
+		);
+		if (action !== "g") {
+			nav.resetG();
+		}
 		if (action === null) {
 			return;
 		}
@@ -273,6 +300,14 @@ export function FilePane({
 			delete: () => actions.remove(pathsOf()),
 			...issueNav.keys,
 			expand: () => onlySelected?.entry.isDir && setOpen(onlySelected.path, true),
+			expandIn: () => expandOrEnter(onlySelected, rows, expanded, setOpen, jumpTo),
+			top: () => jumpTo(visible[0]),
+			bottom: () => jumpTo(visible[visible.length - 1]),
+			g: () => nav.g(() => jumpTo(visible[0])),
+			search: nav.openSearch,
+			searchNext: () => nav.stepSearch(1),
+			searchPrev: () => nav.stepSearch(-1),
+			focusTags: onFocusTags,
 			collapse: () =>
 				collapseRow(onlySelected, expanded, path, setOpen, (p) =>
 					setSel({ selected: new Set([p]), anchor: p }),
@@ -360,6 +395,7 @@ export function FilePane({
 		// biome-ignore lint/a11y/noStaticElementInteractions: pane-level keyboard shortcuts
 		<section
 			ref={sectionRef}
+			data-file-pane
 			tabIndex={-1}
 			className={cn(
 				"flex min-h-0 min-w-0 flex-1 flex-col border-r bg-card/40 outline-none last:border-r-0",
@@ -394,12 +430,13 @@ export function FilePane({
 				/>
 			</div>
 
-			{error && (
-				<p className="border-b bg-destructive/10 px-3 py-1.5 text-destructive text-xs">{error}</p>
-			)}
-			{listing?.isError && (
-				<ErrorText className="px-3 py-2 text-destructive text-sm" message={String(listing.error)} />
-			)}
+			<PaneSearch
+				value={nav.searching}
+				onType={nav.typeSearch}
+				onEnd={nav.endSearch}
+				onBlur={nav.closeSearchBox}
+			/>
+			<Banners error={error} listError={listing?.isError ? String(listing.error) : null} />
 
 			<MenuShell items={paneMenu}>
 				{/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for the current folder */}
@@ -464,6 +501,19 @@ export function FilePane({
 				{selected.size > 0 && ` · ${selected.size} selected`}
 			</div>
 		</section>
+	);
+}
+
+function Banners({ error, listError }: { error: string | null; listError: string | null }) {
+	return (
+		<>
+			{error && (
+				<p className="border-b bg-destructive/10 px-3 py-1.5 text-destructive text-xs">{error}</p>
+			)}
+			{listError && (
+				<ErrorText className="px-3 py-2 text-destructive text-sm" message={listError} />
+			)}
+		</>
 	);
 }
 
@@ -593,6 +643,14 @@ type KeyAction =
 	| "delete"
 	| "expand"
 	| "collapse"
+	| "expandIn"
+	| "top"
+	| "bottom"
+	| "g"
+	| "search"
+	| "searchNext"
+	| "searchPrev"
+	| "focusTags"
 	| "next"
 	| "prev"
 	| "nextIssue"
@@ -621,14 +679,37 @@ const KEYS: Record<string, KeyAction> = {
 	enter: "open",
 	backspace: "up",
 	escape: "clear",
+	// Vim keys
+	j: "next",
+	k: "prev",
+	l: "expandIn",
+	h: "collapse",
+	H: "collapse",
+	L: "focusTags",
+	r: "rename",
+	d: "delete",
+	y: "copy",
+	x: "cut",
+	p: "paste",
+	a: "newFolder",
+	o: "open",
+	"-": "up",
+	g: "g",
+	G: "bottom",
+	"/": "search",
+	n: "searchNext",
+	N: "searchPrev",
 };
 
 function keyAction(ev: KeyboardEvent, editing: boolean): KeyAction {
-	if (editing) {
+	const t = ev.target;
+	if (editing || ev.altKey || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) {
 		return null;
 	}
-	const mod = ev.metaKey || ev.ctrlKey ? "mod+" : "";
-	return KEYS[`${mod}${ev.key.toLowerCase()}`] ?? null;
+	const hasMod = ev.metaKey || ev.ctrlKey;
+	// Vim letters are case-sensitive (`L` differs from `l`) and never fire with ⌘/Ctrl held.
+	const exact = hasMod ? undefined : KEYS[ev.key];
+	return exact ?? KEYS[`${hasMod ? "mod+" : ""}${ev.key.toLowerCase()}`] ?? null;
 }
 
 interface PaneActionSet {

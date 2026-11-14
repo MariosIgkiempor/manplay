@@ -1,4 +1,13 @@
-import { ChevronRight, Eraser, File as FileIcon, Folder, ImagePlus, Undo2, X } from "lucide-react";
+import {
+	ChevronRight,
+	Eraser,
+	File as FileIcon,
+	Folder,
+	ImagePlus,
+	TextCursorInput,
+	Undo2,
+	X,
+} from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { ErrorText } from "#/components/error-text.tsx";
 import { type ComboOption, TagCombobox } from "#/components/tag-combobox.tsx";
@@ -7,6 +16,7 @@ import { Input } from "#/components/ui/input.tsx";
 import { pathArtUrl, type TagValue, type TagView } from "#/lib/api.ts";
 import { useTagsRead, useTagsSetCover, useTagsWrite, useTagValues } from "#/lib/queries.ts";
 import { TAG_GROUPS, type TagField, type TagGroup } from "#/lib/tag-fields.ts";
+import { fillFromPath } from "#/lib/tag-fill.ts";
 import type { TagConfirmRequest } from "#/lib/use-tag-confirm.tsx";
 import { cn } from "#/lib/utils.ts";
 
@@ -403,6 +413,7 @@ function Body({
 				<Group
 					key={group.title}
 					group={group}
+					target={target}
 					fields={view.data.fields}
 					isDir={target.isDir}
 					draft={draft}
@@ -416,6 +427,7 @@ function Body({
 
 function Group({
 	group,
+	target,
 	fields,
 	isDir,
 	draft,
@@ -423,6 +435,7 @@ function Group({
 	onRevert,
 }: {
 	group: TagGroup;
+	target: TagTarget;
 	fields: Record<string, Shared>;
 	isDir: boolean;
 	draft: Draft;
@@ -453,6 +466,7 @@ function Group({
 					<FieldInput
 						key={f.id}
 						field={f}
+						fill={fillFromPath(f.id, target)}
 						shared={fields[f.id]}
 						draft={draft[f.id]}
 						onChange={(v) => onEdit(f.id, f.kind === "number" ? v.replace(/[^\d]/g, "") : v)}
@@ -466,6 +480,8 @@ function Group({
 
 interface FieldProps {
 	field: TagField;
+	/** Value this field can be filled with from the file / folder name, if any. */
+	fill: { value: string; from: string } | null;
 	shared: Shared | undefined;
 	draft: string | undefined;
 	onChange: (v: string) => void;
@@ -473,7 +489,7 @@ interface FieldProps {
 }
 
 function FieldInput(props: FieldProps) {
-	const { field, draft, onRevert } = props;
+	const { field, draft, onRevert, fill, shared, onChange } = props;
 	const id = useId();
 	const touched = draft !== undefined;
 	return (
@@ -486,6 +502,18 @@ function FieldInput(props: FieldProps) {
 				>
 					{field.label}
 				</label>
+				{fill &&
+					!(touched ? draft === fill.value : shared?.value === fill.value && !shared?.mixed) && (
+						<button
+							type="button"
+							onClick={() => onChange(fill.value)}
+							aria-label={`Copy ${field.label} from ${fill.from}`}
+							title={`Copy from ${fill.from}: ${fill.value}`}
+							className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+						>
+							<TextCursorInput className="size-3" />
+						</button>
+					)}
 				{touched && (
 					<button
 						type="button"
