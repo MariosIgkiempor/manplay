@@ -1,9 +1,14 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
+import { TextCursorInput } from "lucide-react";
 import type { ReactNode } from "react";
 import { PlaylistSubmenu } from "#/components/playlist-submenu.tsx";
 import { TagSubmenu } from "#/components/tag-submenu.tsx";
+import { useDetailNav } from "#/context/detail-context.ts";
 import type { Track } from "#/lib/api.ts";
+import { tagTargetFor } from "#/lib/tag-target.ts";
 
+const menuItem =
+	"flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-muted";
 const popup =
 	"z-50 min-w-48 rounded-lg border bg-popover p-1 text-popover-foreground text-sm shadow-lg outline-none";
 
@@ -15,8 +20,9 @@ interface Props {
 	children: ReactNode;
 }
 
-/** Wraps `children` so a right-click offers "Add to playlist" and "Tag" for `tracks`. */
+/** Wraps `children` so a right-click offers "Add to playlist", "Tag" and "Edit tags" for `tracks`. */
 export function AddToPlaylistMenu({ tracks, label, children }: Props) {
+	const go = useDetailNav();
 	return (
 		<ContextMenu.Root>
 			<ContextMenu.Trigger>{children}</ContextMenu.Trigger>
@@ -26,6 +32,17 @@ export function AddToPlaylistMenu({ tracks, label, children }: Props) {
 						<div className="max-w-64 truncate px-2 py-1 text-muted-foreground text-xs">{label}</div>
 						<PlaylistSubmenu tracks={tracks} />
 						<TagSubmenu tracks={tracks} />
+						<ContextMenu.Item
+							className={menuItem}
+							onClick={() => {
+								const target = tagTargetFor(tracks);
+								if (target) {
+									go({ kind: "edit", target });
+								}
+							}}
+						>
+							<TextCursorInput className="size-4" /> Edit tags…
+						</ContextMenu.Item>
 					</ContextMenu.Popup>
 				</ContextMenu.Positioner>
 			</ContextMenu.Portal>

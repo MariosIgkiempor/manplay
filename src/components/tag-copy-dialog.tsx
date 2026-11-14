@@ -15,7 +15,7 @@ export function TagCopyDialog({
 	onCopy: (clip: TagClipboard) => void;
 	onClose: () => void;
 }) {
-	const view = useTagsRead(target.path);
+	const view = useTagsRead(target.paths ?? target.path);
 	const [picked, setPicked] = useState<Set<string> | null>(null);
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();

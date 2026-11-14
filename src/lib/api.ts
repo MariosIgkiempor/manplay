@@ -577,14 +577,19 @@ const tagViewSchema = z.object({
 
 export type TagView = z.infer<typeof tagViewSchema>;
 
-/** Tags shared by a song, or by every song under a folder. */
-export async function tagsRead(path: string): Promise<TagView> {
-	return tagViewSchema.parse(await invoke("tags_read", { path }));
+/** A song or folder, or several of them (e.g. every song of an album). */
+export type TagPaths = string | readonly string[];
+
+const asPaths = (p: TagPaths): string[] => (typeof p === "string" ? [p] : [...p]);
+
+/** Tags shared by every song at or under `path` (songs and/or folders). */
+export async function tagsRead(path: TagPaths): Promise<TagView> {
+	return tagViewSchema.parse(await invoke("tags_read", { paths: asPaths(path) }));
 }
 
-/** Writes `edits` (field to value; empty clears) to a song or every song under a folder. */
-export async function tagsWrite(path: string, edits: Record<string, string>): Promise<FixReport> {
-	return fixReportSchema.parse(await invoke("tags_write", { path, edits }));
+/** Writes `edits` (field to value; empty clears) to every song at or under `path`. */
+export async function tagsWrite(path: TagPaths, edits: Record<string, string>): Promise<FixReport> {
+	return fixReportSchema.parse(await invoke("tags_write", { paths: asPaths(path), edits }));
 }
 
 /** Writes different edits to several songs at once (one rescan). */
@@ -594,10 +599,12 @@ export async function tagsWriteMany(
 	return fixReportSchema.parse(await invoke("tags_write_many", { items }));
 }
 
-/** Sets the front cover of a song, or of every song under a folder, from JPEG/PNG bytes. */
-export async function tagsSetCover(path: string, image: Uint8Array): Promise<FixReport> {
+/** Sets the front cover of every song at or under `path`, from JPEG/PNG bytes. */
+export async function tagsSetCover(path: TagPaths, image: Uint8Array): Promise<FixReport> {
 	return fixReportSchema.parse(
-		await invoke("tags_set_cover", image, { headers: { "x-path": encodeURIComponent(path) } }),
+		await invoke("tags_set_cover", image, {
+			headers: { "x-paths": encodeURIComponent(JSON.stringify(asPaths(path))) },
+		}),
 	);
 }
 
@@ -626,10 +633,10 @@ export type TagPreview = z.infer<typeof previewSchema>;
 
 /** What a tag edit would change in each song, without writing anything. */
 export async function tagsPreview(
-	path: string,
+	path: TagPaths,
 	edits: Record<string, string>,
 ): Promise<TagPreview> {
-	return previewSchema.parse(await invoke("tags_preview", { path, edits }));
+	return previewSchema.parse(await invoke("tags_preview", { paths: asPaths(path), edits }));
 }
 
 const libraryViewSchema = z.enum(["albums", "songs", "artists"]);

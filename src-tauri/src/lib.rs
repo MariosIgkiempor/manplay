@@ -995,11 +995,14 @@ async fn tag_values_migrate(
     Ok(report)
 }
 
-/// Tags shared by the song at `path`, or by every song under it when it is a folder.
+/// Tags shared by every song at or under `paths` (songs and/or folders).
 #[tauri::command]
-async fn tags_read(state: State<'_, AppState>, path: PathBuf) -> Result<tags::TagView, Error> {
+async fn tags_read(
+    state: State<'_, AppState>,
+    paths: Vec<PathBuf>,
+) -> Result<tags::TagView, Error> {
     let root = library_root(&state)?;
-    tauri::async_runtime::spawn_blocking(move || tags::read(&root, &path))
+    tauri::async_runtime::spawn_blocking(move || tags::read(&root, &paths))
         .await
         .map_err(|e| Error::Msg(e.to_string()))?
 }
@@ -1008,11 +1011,11 @@ async fn tags_read(state: State<'_, AppState>, path: PathBuf) -> Result<tags::Ta
 #[tauri::command]
 async fn tags_preview(
     state: State<'_, AppState>,
-    path: PathBuf,
+    paths: Vec<PathBuf>,
     edits: std::collections::BTreeMap<String, String>,
 ) -> Result<tags::Preview, Error> {
     let root = library_root(&state)?;
-    tauri::async_runtime::spawn_blocking(move || tags::preview(&root, &path, &edits))
+    tauri::async_runtime::spawn_blocking(move || tags::preview(&root, &paths, &edits))
         .await
         .map_err(|e| Error::Msg(e.to_string()))?
 }
@@ -1051,7 +1054,7 @@ fn set_tag_clipboard(state: State<'_, AppState>, json: Option<String>) -> Result
 #[tauri::command]
 async fn tags_write(
     state: State<'_, AppState>,
-    path: PathBuf,
+    paths: Vec<PathBuf>,
     edits: std::collections::BTreeMap<String, String>,
 ) -> Result<audit::FixReport, Error> {
     let root = library_root(&state)?;
@@ -1060,7 +1063,7 @@ async fn tags_write(
     }
     let _guard = SyncGuard(&state.fixing);
     let r = root.clone();
-    let report = tauri::async_runtime::spawn_blocking(move || tags::write(&r, &path, &edits))
+    let report = tauri::async_runtime::spawn_blocking(move || tags::write(&r, &paths, &edits))
         .await
         .map_err(|e| Error::Msg(e.to_string()))??;
     refresh_after_fs_change(&state, root).await;
@@ -1089,7 +1092,7 @@ async fn tags_write_many(
     let report = tauri::async_runtime::spawn_blocking(move || {
         let mut total = audit::FixReport::default();
         for item in items {
-            let one = tags::write(&r, &item.path, &item.edits)?;
+            let one = tags::write(&r, std::slice::from_ref(&item.path), &item.edits)?;
             total.fixed += one.fixed;
             total.failed.extend(one.failed);
         }
@@ -1113,13 +1116,14 @@ async fn tags_set_cover(
         return Err(Error::Msg("expected image bytes".to_owned()));
     };
     let bytes = bytes.clone();
-    let path = request
+    // Songs and/or folders, as a percent-encoded JSON array.
+    let paths: Vec<PathBuf> = request
         .headers()
-        .get("x-path")
+        .get("x-paths")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| percent_encoding::percent_decode_str(v).decode_utf8().ok())
-        .map(|p| PathBuf::from(p.as_ref()))
-        .ok_or_else(|| Error::Msg("missing path".to_owned()))?;
+        .and_then(|p| serde_json::from_str(&p).ok())
+        .ok_or_else(|| Error::Msg("missing paths".to_owned()))?;
     let root = library_root(&state)?;
     if state.fixing.swap(true, Ordering::SeqCst) {
         return Err(Error::Msg("a fix is already running".to_owned()));
@@ -1127,7 +1131,7 @@ async fn tags_set_cover(
     let _guard = SyncGuard(&state.fixing);
     let r = root.clone();
     let (files, report) =
-        tauri::async_runtime::spawn_blocking(move || tags::write_cover(&r, &path, &bytes))
+        tauri::async_runtime::spawn_blocking(move || tags::write_cover(&r, &paths, &bytes))
             .await
             .map_err(|e| Error::Msg(e.to_string()))??;
     if let Ok(dir) = app.path().app_cache_dir().map(|d| d.join("art")) {

@@ -1,11 +1,12 @@
 import { type ReactNode, useCallback, useRef, useState } from "react";
 import { TagConfirmDialog } from "#/components/tag-confirm-dialog.tsx";
+import type { TagPaths } from "#/lib/api.ts";
 
 export interface TagConfirmRequest {
 	title: string;
 	subtitle?: string | undefined;
 	/** Songs or folders to write to, each with the edits it would get. */
-	items: { path: string; name: string; edits: Record<string, string> }[];
+	items: { path: TagPaths; name: string; edits: Record<string, string> }[];
 }
 
 /** `ask` resolves to whether the user applied the changes; render `dialog` once in the view. */

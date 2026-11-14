@@ -32,6 +32,7 @@ import {
 	setTagClipboard,
 	syncHistory,
 	syncRun,
+	type TagPaths,
 	tagsPreview,
 	tagsRead,
 	tagsSetCover,
@@ -262,8 +263,8 @@ export function useAuditFix() {
 	});
 }
 
-/** Tags shared by the song or folder at `path`. */
-export function useTagsRead(path: string) {
+/** Tags shared by the songs at or under `path`. */
+export function useTagsRead(path: TagPaths) {
 	return useQuery({
 		queryKey: ["file-tags", path],
 		queryFn: () => tagsRead(path),
@@ -309,7 +310,7 @@ export function useTagsWrite() {
 	const queryClient = useQueryClient();
 	const { record } = useUndo();
 	return useMutation({
-		mutationFn: async ({ path, edits }: { path: string; edits: Record<string, string> }) => {
+		mutationFn: async ({ path, edits }: { path: TagPaths; edits: Record<string, string> }) => {
 			// Remember the old values first so the edit can be undone.
 			const before = await tagsPreview(path, edits).catch(() => null);
 			const report = await tagsWrite(path, edits);
@@ -329,7 +330,8 @@ export function useTagsWrite() {
 export function useTagsSetCover() {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: ({ path, image }: { path: string; image: Uint8Array }) => tagsSetCover(path, image),
+		mutationFn: ({ path, image }: { path: TagPaths; image: Uint8Array }) =>
+			tagsSetCover(path, image),
 		onSettled: () => refreshAfterFsChange(queryClient),
 	});
 }

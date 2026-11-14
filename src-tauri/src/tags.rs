@@ -138,7 +138,7 @@ pub struct TagView {
 }
 
 /// Audio files at `path` (a file), or under it (a folder), in path order.
-fn songs(root: &Path, path: &Path) -> Result<Vec<PathBuf>, Error> {
+fn songs_at(root: &Path, path: &Path) -> Result<Vec<PathBuf>, Error> {
     let target = fsops::inside(root, path)?;
     if target.is_file() {
         return Ok(if is_audio(&target) {
@@ -147,14 +147,23 @@ fn songs(root: &Path, path: &Path) -> Result<Vec<PathBuf>, Error> {
             vec![]
         });
     }
-    let mut out: Vec<PathBuf> = WalkDir::new(&target)
+    Ok(WalkDir::new(&target)
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file() && is_audio(e.path()))
         .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
         .map(walkdir::DirEntry::into_path)
-        .collect();
+        .collect())
+}
+
+/// Audio files at or under each of `paths` (songs and/or folders), once each, in path order.
+fn songs(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, Error> {
+    let mut out = Vec::new();
+    for path in paths {
+        out.extend(songs_at(root, path)?);
+    }
     out.sort();
+    out.dedup();
     Ok(out)
 }
 
@@ -163,9 +172,9 @@ fn read_value(tag: Option<&Tag>, key: ItemKey) -> Option<String> {
     (!v.is_empty()).then(|| v.to_owned())
 }
 
-/// What the editor shows: each field's shared value across the songs under `path`.
-pub fn read(root: &Path, path: &Path) -> Result<TagView, Error> {
-    let files = songs(root, path)?;
+/// What the editor shows: each field's shared value across the songs at or under `paths`.
+pub fn read(root: &Path, paths: &[PathBuf]) -> Result<TagView, Error> {
+    let files = songs(root, paths)?;
     let mut per_field: BTreeMap<&str, Vec<Option<String>>> = BTreeMap::new();
     for file in &files {
         let tagged = read_from_path(file).ok();
@@ -226,16 +235,16 @@ pub struct Preview {
     pub files: Vec<FileChanges>,
 }
 
-/// What `edits` would change in each song at or under `path`, without writing anything.
+/// What `edits` would change in each song at or under `paths`, without writing anything.
 pub fn preview(
     root: &Path,
-    path: &Path,
+    paths: &[PathBuf],
     edits: &BTreeMap<String, String>,
 ) -> Result<Preview, Error> {
     if let Some(bad) = edits.keys().find(|k| item_key(k).is_none()) {
         return Err(err(format!("unknown tag field: {bad}")));
     }
-    let songs = songs(root, path)?;
+    let songs = songs(root, paths)?;
     let mut files = Vec::new();
     for song in &songs {
         let tagged = read_from_path(song).ok();
@@ -347,11 +356,11 @@ fn write_edits(file: &Path, edits: &BTreeMap<String, String>) -> Result<(), Erro
     write_one(file, &|tag| apply(tag, edits), &|tag| verify(tag, edits))
 }
 
-/// Writes `edits` to the song at `path`, or to every song under it when it is a folder.
+/// Writes `edits` to every song at or under `paths` (songs and/or folders).
 /// Failures are reported per file and never undo the rest.
 pub fn write(
     root: &Path,
-    path: &Path,
+    paths: &[PathBuf],
     edits: &BTreeMap<String, String>,
 ) -> Result<FixReport, Error> {
     if let Some(bad) = edits.keys().find(|k| item_key(k).is_none()) {
@@ -361,7 +370,7 @@ pub fn write(
     if edits.is_empty() {
         return Ok(report);
     }
-    for file in songs(root, path)? {
+    for file in songs(root, paths)? {
         match write_edits(&file, edits) {
             Ok(()) => report.fixed += 1,
             Err(e) => report.failed.push(FixFailure {
@@ -409,7 +418,7 @@ pub fn migrate(
         return Err(err(format!("cannot manage values of: {field}")));
     }
     let mut report = FixReport::default();
-    for file in songs(root, root)? {
+    for file in songs(root, &[root.to_path_buf()])? {
         let tagged = read_from_path(&file).ok();
         let current = read_field(tagged.as_ref().and_then(|f| f.primary_tag()), field);
         let Some(new) = current.and_then(|c| migrated(field, &c, from, to)) else {
@@ -440,15 +449,15 @@ fn cover_mime(bytes: &[u8]) -> Result<MimeType, Error> {
     Ok(mime)
 }
 
-/// Sets the front cover of the song at `path`, or of every song under it when it is a folder.
+/// Sets the front cover of every song at or under `paths` (songs and/or folders).
 /// Failures are reported per file and never undo the rest.
 pub fn write_cover(
     root: &Path,
-    path: &Path,
+    paths: &[PathBuf],
     bytes: &[u8],
 ) -> Result<(Vec<PathBuf>, FixReport), Error> {
     let mime = cover_mime(bytes)?;
-    let files = songs(root, path)?;
+    let files = songs(root, paths)?;
     let mut report = FixReport::default();
     for file in &files {
         let change = |tag: &mut Tag| {
@@ -559,13 +568,13 @@ mod tests {
         std::fs::write(root.join("a.wav"), silent_wav()).unwrap_or_default();
         std::fs::write(root.join("b.wav"), silent_wav()).unwrap_or_default();
         let house = BTreeMap::from([("genre".to_owned(), "House".to_owned())]);
-        write(&root, &root.join("a.wav"), &house).expect("seed");
+        write(&root, &[root.join("a.wav")], &house).expect("seed");
 
         let edits = BTreeMap::from([
             ("genre".to_owned(), "House".to_owned()),
             ("label".to_owned(), String::new()),
         ]);
-        let p = preview(&root, &root, &edits).expect("preview");
+        let p = preview(&root, std::slice::from_ref(&root), &edits).expect("preview");
         assert_eq!(p.total, 2);
         // a.wav already matches; b.wav only gains the genre (clearing an unset label is no change).
         assert_eq!(p.files.len(), 1);
@@ -586,7 +595,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("manplay-tags-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap_or_default();
         let edits = BTreeMap::from([("bogus".to_owned(), "x".to_owned())]);
-        assert!(write(&dir, &dir, &edits).is_err());
+        assert!(write(&dir, std::slice::from_ref(&dir), &edits).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -622,7 +631,7 @@ mod tests {
         let album = root.join("A").join("B");
 
         let all = BTreeMap::from([("genre".to_owned(), "House".to_owned())]);
-        let report = write(&root, &album, &all).expect("folder write");
+        let report = write(&root, std::slice::from_ref(&album), &all).expect("folder write");
         assert_eq!(
             (report.fixed, report.failed.len()),
             (2, 0),
@@ -631,14 +640,47 @@ mod tests {
         );
 
         let one = BTreeMap::from([("title".to_owned(), "Solo".to_owned())]);
-        write(&root, &album.join("1.wav"), &one).expect("file write");
+        write(&root, &[album.join("1.wav")], &one).expect("file write");
 
-        let view = read(&root, &album).expect("read");
+        let view = read(&root, std::slice::from_ref(&album)).expect("read");
         assert_eq!(view.count, 2);
         assert_eq!(view.fields["genre"].value.as_deref(), Some("House"));
         assert!(view.fields["title"].mixed, "only one song got a title");
-        let single = read(&root, &album.join("1.wav")).expect("read one");
+        let single = read(&root, &[album.join("1.wav")]).expect("read one");
         assert_eq!(single.fields["title"].value.as_deref(), Some("Solo"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_list_of_songs_from_different_folders_is_edited_once_each() {
+        let root = std::env::temp_dir().join(format!("manplay-taglist-{}", std::process::id()));
+        for dir in ["X", "Y", "Z"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap_or_default();
+            std::fs::write(root.join(dir).join("s.wav"), silent_wav()).unwrap_or_default();
+        }
+        let root = root.canonicalize().unwrap_or(root);
+        // The same song twice, and a folder holding it, still count once.
+        let picked = vec![
+            root.join("X").join("s.wav"),
+            root.join("Y").join("s.wav"),
+            root.join("X"),
+        ];
+        let edits = BTreeMap::from([("album".to_owned(), "Joined".to_owned())]);
+        let report = write(&root, &picked, &edits).expect("write");
+        assert_eq!(
+            (report.fixed, report.failed.len()),
+            (2, 0),
+            "{:?}",
+            report.failed
+        );
+        let view = read(&root, &picked).expect("read");
+        assert_eq!(view.count, 2);
+        assert_eq!(view.fields["album"].value.as_deref(), Some("Joined"));
+        let other = read(&root, &[root.join("Z")]).expect("read other");
+        assert_eq!(
+            other.fields["album"].value, None,
+            "unpicked song is untouched"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

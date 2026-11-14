@@ -4,6 +4,8 @@ interface Target {
 	path: string;
 	name: string;
 	isDir: boolean;
+	/** Set for a group of songs (an album, a selection); `path` is then its first song. */
+	paths?: readonly string[] | undefined;
 }
 
 /** `Song.mp3` → `Song`. A leading dot (hidden file) is not an extension. */
@@ -33,9 +35,10 @@ export function fillFromPath(
 	if (fieldId === "title" && !target.isDir) {
 		fill = { value: stripExtension(target.name), from: "file name" };
 	} else if (fieldId === "album") {
-		fill = target.isDir
-			? { value: target.name, from: "folder name" }
-			: { value: lastSegment(parentPath(target.path)), from: "folder name" };
+		fill =
+			target.isDir && !target.paths
+				? { value: target.name, from: "folder name" }
+				: { value: lastSegment(parentPath(target.path)), from: "folder name" };
 	}
 	return fill && fill.value !== "" ? fill : null;
 }

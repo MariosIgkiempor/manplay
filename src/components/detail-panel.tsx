@@ -4,6 +4,7 @@ import { AlbumPanel } from "#/components/album-panel.tsx";
 import { ArtistPanel } from "#/components/artist-panel.tsx";
 import { DestinationServicePanel } from "#/components/destination-service.tsx";
 import { DownloadsPanel } from "#/components/downloads-source.tsx";
+import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
 import { ItunesPanel } from "#/components/itunes-source.tsx";
 import { RekordboxPanel } from "#/components/rekordbox-source.tsx";
 import { TagPanel } from "#/components/tag-panel.tsx";
@@ -36,6 +37,8 @@ function Content({ view }: { view: DetailView }) {
 		}
 		case "tag":
 			return <TagPanel name={view.name} />;
+		case "edit":
+			return <EditTagsPanel target={view.target} fromAlbum={view.fromAlbum ?? false} />;
 		default:
 			return null;
 	}

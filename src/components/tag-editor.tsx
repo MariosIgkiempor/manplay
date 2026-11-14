@@ -21,15 +21,31 @@ import type { TagConfirmRequest } from "#/lib/use-tag-confirm.tsx";
 import { cn } from "#/lib/utils.ts";
 
 export interface TagTarget {
+	/** The song or folder; for a group of songs, its first song (used for the cover). */
 	path: string;
 	name: string;
+	/** True for a folder or a group of songs: only fields that suit many songs are offered. */
 	isDir: boolean;
+	/** Set to edit a group of songs (an album, a selection) instead of `path`. */
+	paths?: readonly string[] | undefined;
+	/** What the group is, for the header ("Album", "Selection"). */
+	kind?: string | undefined;
 }
+
+/** What the editor reads and writes. */
+const where = (t: TagTarget) => t.paths ?? t.path;
 
 type Shared = TagView["fields"][string];
 type Draft = Record<string, string>;
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+function confirmTitle(target: TagTarget, count: number): string {
+	if (target.paths) {
+		return `Apply to ${plural(count, "song", "songs")} of "${target.name}"`;
+	}
+	return target.isDir ? `Apply to all songs in "${target.name}"` : `Apply to "${target.name}"`;
+}
 
 /** Groups opened by default; the rest open when they hold something or on demand. */
 const OPEN_BY_DEFAULT = new Set(["Core", "Numbering", "DJ"]);
@@ -47,7 +63,7 @@ export function TagEditor({
 	onClose: () => void;
 	confirm: (req: TagConfirmRequest) => Promise<boolean>;
 }) {
-	const view = useTagsRead(target.path);
+	const view = useTagsRead(where(target));
 	const write = useTagsWrite();
 	// Only edited fields live here; an empty string means "clear this tag".
 	const [draft, setDraft] = useState<Draft>({});
@@ -71,16 +87,16 @@ export function TagEditor({
 			return;
 		}
 		const ok = await confirm({
-			title: target.isDir ? `Apply to all songs in "${target.name}"` : `Apply to "${target.name}"`,
-			subtitle: target.isDir ? "Includes subfolders" : undefined,
-			items: [{ path: target.path, name: target.name, edits: draft }],
+			title: confirmTitle(target, count),
+			subtitle: target.isDir && !target.paths ? "Includes subfolders" : undefined,
+			items: [{ path: where(target), name: target.name, edits: draft }],
 		});
 		if (!ok) {
 			return;
 		}
 		setNotice(null);
 		write.mutate(
-			{ path: target.path, edits: draft },
+			{ path: where(target), edits: draft },
 			{
 				onSuccess: (report) => {
 					setDraft({});
@@ -201,7 +217,9 @@ function Header({
 	const [artFailed, setArtFailed] = useState(false);
 	const Icon = target.isDir ? Folder : FileIcon;
 	let subtitle = target.isDir ? "Folder" : "Song";
-	if (target.isDir && count !== null) {
+	if (target.paths) {
+		subtitle = `${target.kind ?? "Selection"}${count === null ? "" : ` · ${plural(count, "song", "songs")}`}`;
+	} else if (target.isDir && count !== null) {
 		subtitle = `Folder · ${plural(count, "song", "songs")}, subfolders included`;
 	}
 	return (
@@ -296,7 +314,7 @@ function CoverSection({
 		}
 		const image = new Uint8Array(await staged.file.arrayBuffer());
 		setCover.mutate(
-			{ path: target.path, image },
+			{ path: where(target), image },
 			{
 				onSuccess: (report) => {
 					const failed = report.failed.length;
