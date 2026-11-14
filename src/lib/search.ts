@@ -1,4 +1,5 @@
 import type { Playlist, Tag, Track } from "#/lib/api.ts";
+import { splitNames } from "#/lib/names.ts";
 
 export type PillKind = "artist" | "song" | "playlist" | "tag";
 
@@ -16,7 +17,7 @@ export type PlaylistMembers = ReadonlyMap<number, ReadonlySet<number>>;
 function matchesPill(t: Track, p: Pill, members: PlaylistMembers): boolean {
 	switch (p.kind) {
 		case "artist":
-			return t.artist === p.id;
+			return splitNames(t.artist).includes(String(p.id));
 		case "song":
 			return t.id === p.id;
 		case "playlist":
@@ -80,7 +81,9 @@ export function suggest(
 
 	const artists = new Map<string, number>();
 	for (const t of tracks) {
-		artists.set(t.artist, (artists.get(t.artist) ?? 0) + 1);
+		for (const name of splitNames(t.artist)) {
+			artists.set(name, (artists.get(name) ?? 0) + 1);
+		}
 	}
 	const groups: SuggestionGroup[] = [];
 	if (q !== "") {

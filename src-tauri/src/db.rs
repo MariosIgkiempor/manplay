@@ -36,6 +36,19 @@ pub struct NewTrack {
     pub sample_rate: Option<i64>,
 }
 
+/// Remembered tag values (artists, genres, ...), rebuilt on every scan.
+fn create_tag_values(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tag_values (
+             field TEXT NOT NULL,
+             value TEXT NOT NULL,
+             count INTEGER NOT NULL,
+             PRIMARY KEY (field, value)
+         );",
+    )?;
+    Ok(())
+}
+
 pub fn open(path: &Path) -> Result<Connection, Error> {
     let conn = Connection::open(path)?;
     conn.execute_batch(
@@ -136,7 +149,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "sync_runs", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
     add_column(&conn, "sync_runs", "errors", "TEXT NOT NULL DEFAULT '[]'")?;
     add_column(&conn, "sync_runs", "batch", "INTEGER NOT NULL DEFAULT 0")?;
-    Ok(conn)
+    create_tag_values(&conn).map(|()| conn)
 }
 
 fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), Error> {
@@ -213,6 +226,51 @@ fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         bitrate: r.get(9)?,
         sample_rate: r.get(10)?,
     })
+}
+
+/// Replaces the remembered tag values (artists, genres, ...) with what the last scan saw.
+pub fn replace_tag_values(
+    conn: &mut Connection,
+    values: &std::collections::HashMap<(&'static str, String), i64>,
+) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM tag_values", [])?;
+    {
+        let mut stmt =
+            tx.prepare("INSERT INTO tag_values (field, value, count) VALUES (?1, ?2, ?3)")?;
+        for ((field, value), count) in values {
+            stmt.execute(params![field, value, count])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct TagValue {
+    pub value: String,
+    pub count: i64,
+}
+
+/// Known values of one field, most used first.
+pub fn tag_values(conn: &Connection, field: &str) -> Result<Vec<TagValue>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT value, count FROM tag_values WHERE field = ?1
+         ORDER BY count DESC, value COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map(params![field], |r| {
+        Ok(TagValue {
+            value: r.get(0)?,
+            count: r.get(1)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Deletes every track; cascades to playlist/tag memberships and sync records.
+pub fn clear_tracks(conn: &Connection) -> Result<(), Error> {
+    conn.execute("DELETE FROM tracks", [])?;
+    Ok(())
 }
 
 pub fn list(conn: &Connection) -> Result<Vec<Track>, Error> {

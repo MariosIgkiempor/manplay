@@ -13,6 +13,7 @@ import {
 	Pencil,
 	Scissors,
 	Square,
+	Tags,
 	Trash2,
 	Wrench,
 } from "lucide-react";
@@ -32,6 +33,8 @@ import { type FsEntry, pathArtUrl } from "#/lib/api.ts";
 import type { IssueIndex } from "#/lib/audit.ts";
 import { isAudioName, joinPath, parentPath, relSegments } from "#/lib/fs-path.ts";
 import { applyClick, EMPTY_SELECTION, type Selection } from "#/lib/selection.ts";
+import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
+import { labelOf } from "#/lib/tag-preview.ts";
 import type { TreeRow } from "#/lib/tree.ts";
 import { useFileDrag } from "#/lib/use-file-drag.ts";
 import type { FsClipboard } from "#/lib/use-fs-ops.ts";
@@ -99,6 +102,14 @@ interface PaneProps {
 	fixing: boolean;
 	/** Fixes the fixable files at or under these paths (after asking the user). */
 	onFix: (scopes: string[]) => unknown;
+	/** Reports the single song or folder the user selected, for the tag pane. */
+	onSelectTarget: (target: { path: string; name: string; isDir: boolean }) => unknown;
+	/** Opens the tag editor for a song or folder. */
+	onEditTags: (target: { path: string; name: string; isDir: boolean }) => unknown;
+	/** Tags currently on the tag clipboard (`null` when empty), for the Paste entry. */
+	tagClipboard: TagClipboard | null;
+	onCopyTags: (target: { path: string; name: string; isDir: boolean }) => unknown;
+	onPasteTags: (targets: { path: string; name: string; isDir: boolean }[]) => unknown;
 }
 
 export function FilePane({
@@ -114,6 +125,11 @@ export function FilePane({
 	health,
 	fixing,
 	onFix,
+	onEditTags,
+	onSelectTarget,
+	tagClipboard,
+	onCopyTags,
+	onPasteTags,
 }: PaneProps) {
 	const {
 		listing,
@@ -179,6 +195,21 @@ export function FilePane({
 	const pathsOf = (r?: TreeRow) => (r && !selected.has(r.path) ? [r.path] : [...selected]);
 	const onlySelected = selected.size === 1 ? rowByPath.get([...selected][0] ?? "") : undefined;
 	/** Where "new folder" and "paste" land from the keyboard: the selected folder, else this one. */
+	// Tell the tag pane about a newly selected song or folder (other files are ignored).
+	const selectRef = useRef(onSelectTarget);
+	selectRef.current = onSelectTarget;
+	const pickedPath = onlySelected?.path;
+	const pickedName = onlySelected?.entry.name;
+	const pickedDir = onlySelected?.entry.isDir;
+	useEffect(() => {
+		if (
+			pickedPath !== undefined &&
+			pickedName !== undefined &&
+			(pickedDir || isAudioName(pickedName))
+		) {
+			selectRef.current({ path: pickedPath, name: pickedName, isDir: pickedDir ?? false });
+		}
+	}, [pickedPath, pickedName, pickedDir]);
 	const keyboardDest = onlySelected?.entry.isDir ? onlySelected.path : path;
 
 	const actions: PaneActionSet = {
@@ -194,6 +225,17 @@ export function FilePane({
 		remove,
 		moveToOther: (paths) => otherPath !== null && runMove(paths, otherPath),
 		fix: (paths) => onFix(paths),
+		editTags: (r) => onEditTags({ path: r.path, name: r.entry.name, isDir: r.entry.isDir }),
+		copyTags: (r) => onCopyTags({ path: r.path, name: r.entry.name, isDir: r.entry.isDir }),
+		pasteTags: (paths) =>
+			onPasteTags(
+				paths.flatMap((p) => {
+					const r = rowByPath.get(p);
+					return r && (r.entry.isDir || isAudioName(r.entry.name))
+						? [{ path: r.path, name: r.entry.name, isDir: r.entry.isDir }]
+						: [];
+				}),
+			),
 	};
 
 	const issueNav = useIssueNav({
@@ -268,6 +310,7 @@ export function FilePane({
 	const menuCtx = {
 		actions,
 		hasClipboard: clipboard !== null,
+		tagClipboard,
 		canMoveToOther: movable,
 		fixing,
 	};
@@ -589,11 +632,67 @@ interface PaneActionSet {
 	remove: (paths: string[]) => unknown;
 	moveToOther: (paths: string[]) => unknown;
 	fix: (paths: string[]) => unknown;
+	editTags: (r: TreeRow) => unknown;
+	copyTags: (r: TreeRow) => unknown;
+	pasteTags: (paths: string[]) => unknown;
+}
+
+const DETAIL_MAX = 5;
+
+/** The tags a paste onto this target would apply, one `Label: value` line each. */
+function pasteSummary(clip: TagClipboard, isDir: boolean): string[] {
+	const applied = Object.entries(forTarget(clip.values, isDir));
+	const lines = applied.slice(0, DETAIL_MAX).map(([id, v]) => `${labelOf(id)}: ${v}`);
+	if (applied.length > DETAIL_MAX) {
+		lines.push(`+${applied.length - DETAIL_MAX} more`);
+	}
+	const skipped = Object.keys(clip.values).length - applied.length;
+	if (skipped > 0) {
+		lines.push(`${skipped} song-only ${skipped === 1 ? "tag" : "tags"} skipped on folders`);
+	}
+	return lines;
+}
+
+/** Edit / copy / paste tag entries; only for songs and folders. */
+function tagItems(
+	a: PaneActionSet,
+	entry: TreeRow | undefined,
+	paths: string[],
+	clip: TagClipboard | null,
+): MenuItem[] {
+	if (!entry || !(entry.entry.isDir || isAudioName(entry.entry.name))) {
+		return [];
+	}
+	const single = paths.length <= 1;
+	const items: MenuItem[] = [];
+	if (single) {
+		items.push({
+			label: entry.entry.isDir ? "Edit tags for all songs…" : "Edit tags…",
+			icon: Tags,
+			run: () => a.editTags(entry),
+		});
+		items.push({ label: "Copy tags…", icon: Copy, run: () => a.copyTags(entry) });
+	}
+	if (clip) {
+		items.push({
+			label: "Paste tags",
+			icon: ClipboardPaste,
+			detail: pasteSummary(clip, entry.entry.isDir),
+			run: () => a.pasteTags(paths),
+		});
+	}
+	return items;
 }
 
 /** Right-click menu entries for `entry` (or for empty space when there is none). */
 function buildMenu(
-	ctx: { actions: PaneActionSet; hasClipboard: boolean; canMoveToOther: boolean; fixing: boolean },
+	ctx: {
+		actions: PaneActionSet;
+		hasClipboard: boolean;
+		tagClipboard: TagClipboard | null;
+		canMoveToOther: boolean;
+		fixing: boolean;
+	},
 	target: { entry?: TreeRow; paths: string[]; dest: string; fixable: number },
 ): MenuItem[] {
 	const { actions: a } = ctx;
@@ -610,6 +709,7 @@ function buildMenu(
 			run: () => a.fix(paths),
 		});
 	}
+	items.push(...tagItems(a, entry, paths, ctx.tagClipboard));
 	if (entry) {
 		items.push({ label: "Rename", icon: Pencil, shortcut: "F2", run: () => a.rename(entry.path) });
 		items.push({ label: "Cut", icon: Scissors, shortcut: "⌘X", run: () => a.cut(paths) });
@@ -825,6 +925,8 @@ interface MenuItem {
 	shortcut?: string;
 	disabled?: boolean;
 	danger?: boolean;
+	/** Muted lines under the label, e.g. the tags a paste would apply. */
+	detail?: string[];
 }
 
 const popup =
@@ -840,15 +942,25 @@ function MenuShell({ items, children }: { items: MenuItem[]; children: React.Rea
 			<ContextMenu.Portal>
 				<ContextMenu.Positioner className="z-50">
 					<ContextMenu.Popup className={popup}>
-						{items.map(({ label, icon: Icon, run, shortcut, disabled, danger }) => (
+						{items.map(({ label, icon: Icon, run, shortcut, disabled, danger, detail }) => (
 							<ContextMenu.Item
 								key={label}
 								className={cn(menuItem, danger && "text-destructive")}
 								disabled={disabled}
 								onClick={run}
 							>
-								<Icon className="size-4" />
-								<span className="flex-1">{label}</span>
+								<Icon className={cn("size-4", detail && "self-start mt-0.5")} />
+								<span className="min-w-0 flex-1">
+									{label}
+									{detail?.map((line) => (
+										<span
+											key={line}
+											className="block max-w-64 truncate text-muted-foreground text-xs"
+										>
+											{line}
+										</span>
+									))}
+								</span>
 								{shortcut && <span className="text-muted-foreground text-xs">{shortcut}</span>}
 							</ContextMenu.Item>
 						))}

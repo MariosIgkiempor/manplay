@@ -2,6 +2,7 @@ import { Pause, Play } from "lucide-react";
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
+import { ArtistLinks } from "#/components/artist-links.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { useDetailNav } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
@@ -134,7 +135,6 @@ function TitleCell({
 	hideArt?: boolean | undefined;
 	hideArtist?: boolean | undefined;
 }) {
-	const go = useDetailNav();
 	return (
 		<div className="flex min-w-0 items-center gap-3">
 			{!hideArt && <AlbumArt trackId={track.id} className="size-10 shrink-0 rounded" />}
@@ -147,12 +147,7 @@ function TitleCell({
 				</div>
 				{!hideArtist && (
 					<div className="truncate text-muted-foreground text-xs">
-						<LinkButton
-							title={track.artist}
-							onClick={() => go({ kind: "artist", name: track.artist })}
-						>
-							{track.artist}
-						</LinkButton>
+						<ArtistLinks artist={track.artist} />
 					</div>
 				)}
 			</div>

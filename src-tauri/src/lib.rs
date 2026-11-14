@@ -11,6 +11,7 @@ mod r2;
 mod rekordbox;
 mod scan;
 mod sync;
+mod tags;
 mod tailscale;
 mod webdav;
 
@@ -48,6 +49,7 @@ async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error>
     let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
     detect_moves(&mut conn, &state.data_dir, &root, &result)?;
     db::upsert(&mut conn, &result.tracks)?;
+    db::replace_tag_values(&mut conn, &result.values)?;
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
     reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
     drop(conn);
@@ -221,6 +223,22 @@ async fn rescan_library(state: State<'_, AppState>) -> Result<Option<usize>, Err
         )));
     }
     scan_and_store(&state, root).await.map(Some)
+}
+
+/// Wipes the track table and rebuilds it from the library folder. A backup is taken first.
+/// Playlist and tag memberships and sync records go with the tracks (foreign-key cascade);
+/// settings, destinations and the playlists/tags themselves stay.
+#[tauri::command]
+async fn reset_library(state: State<'_, AppState>) -> Result<Option<usize>, Error> {
+    if state.syncing.load(Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is running; try again when it finishes".to_owned()));
+    }
+    {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::backup(&conn, &state.data_dir.join("backups"), unix_now(), BACKUPS_KEEP)?;
+        db::clear_tracks(&conn)?;
+    }
+    rescan_library(state).await
 }
 
 #[tauri::command]
@@ -879,6 +897,72 @@ fn open_privacy_settings() -> Result<(), Error> {
     Ok(())
 }
 
+// ---- tag editor --------------------------------------------------------------
+
+/// Values already used in the library for a tag field, for the editor's pick lists.
+#[tauri::command]
+fn tag_values(state: State<'_, AppState>, field: String) -> Result<Vec<db::TagValue>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::tag_values(&conn, &field)
+}
+
+/// Tags shared by the song at `path`, or by every song under it when it is a folder.
+#[tauri::command]
+async fn tags_read(state: State<'_, AppState>, path: PathBuf) -> Result<tags::TagView, Error> {
+    let root = library_root(&state)?;
+    tauri::async_runtime::spawn_blocking(move || tags::read(&root, &path))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+/// What a tag edit would change per song, without writing anything.
+#[tauri::command]
+async fn tags_preview(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    edits: std::collections::BTreeMap<String, String>,
+) -> Result<tags::Preview, Error> {
+    let root = library_root(&state)?;
+    tauri::async_runtime::spawn_blocking(move || tags::preview(&root, &path, &edits))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+const SETTING_TAG_CLIPBOARD: &str = "tag_clipboard";
+
+/// Tags copied in the Files view (JSON), kept across restarts. `None` when nothing is copied.
+#[tauri::command]
+fn get_tag_clipboard(state: State<'_, AppState>) -> Result<Option<String>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::get_setting(&conn, SETTING_TAG_CLIPBOARD)
+}
+
+#[tauri::command]
+fn set_tag_clipboard(state: State<'_, AppState>, json: Option<String>) -> Result<(), Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::set_setting(&conn, SETTING_TAG_CLIPBOARD, json.as_deref())
+}
+
+/// Writes tag edits (field -> value, empty clears) to one song or every song under a folder.
+#[tauri::command]
+async fn tags_write(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    edits: std::collections::BTreeMap<String, String>,
+) -> Result<audit::FixReport, Error> {
+    let root = library_root(&state)?;
+    if state.fixing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a fix is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.fixing);
+    let r = root.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || tags::write(&r, &path, &edits))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    refresh_after_fs_change(&state, root).await;
+    Ok(report)
+}
+
 // ---- library health ----------------------------------------------------------
 
 /// Lists files that break the library conventions (see `audit`).
@@ -1486,6 +1570,7 @@ pub fn run() {
             library_status,
             remove_missing_now,
             rescan_library,
+            reset_library,
             list_tracks,
             list_playlists,
             create_playlist,
@@ -1531,6 +1616,12 @@ pub fn run() {
             fs_trash,
             open_privacy_settings,
             audit_library,
+            tags_read,
+            tag_values,
+            tags_preview,
+            get_tag_clipboard,
+            set_tag_clipboard,
+            tags_write,
             audit_fix,
             audit_place,
             import_get_folder,
@@ -1571,6 +1662,7 @@ mod tests {
 
         fn scan_of(&self, names: &[&str], errors: usize) -> ScanResult {
             ScanResult {
+                values: HashMap::new(),
                 tracks: names
                     .iter()
                     .map(|n| NewTrack {
@@ -1643,6 +1735,7 @@ mod tests {
     fn tracks_outside_the_scanned_root_are_left_alone() {
         let mut f = Fixture::new("outside");
         let other = ScanResult {
+            values: HashMap::new(),
             tracks: vec![NewTrack {
                 path: "/elsewhere/x".into(),
                 artist: "a".into(),

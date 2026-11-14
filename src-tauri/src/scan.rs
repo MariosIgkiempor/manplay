@@ -5,7 +5,7 @@ use std::path::Path;
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::properties::FileProperties;
 use lofty::read_from_path;
-use lofty::tag::Accessor;
+use lofty::tag::{Accessor, ItemKey};
 use walkdir::WalkDir;
 
 use crate::db::NewTrack;
@@ -75,6 +75,29 @@ pub struct ScanResult {
     pub tracks: Vec<NewTrack>,
     /// Entries that could not be read. A scan with errors is not trusted to say what is missing.
     pub errors: usize,
+    /// How often each value of the suggestion fields (artists, genres, ...) occurs.
+    pub values: std::collections::HashMap<(&'static str, String), i64>,
+}
+
+/// Counts the names in the suggestion fields of one file's tag.
+fn collect_values(
+    tag: Option<&lofty::tag::Tag>,
+    into: &mut std::collections::HashMap<(&'static str, String), i64>,
+) {
+    let Some(tag) = tag else { return };
+    for field in crate::tags::SUGGEST {
+        let Some(text) = crate::tags::key_for(field).and_then(|k| tag.get_string(k)) else {
+            continue;
+        };
+        let names = if crate::tags::MULTI.contains(field) {
+            crate::tags::split_names(text)
+        } else {
+            vec![text.trim().to_owned()]
+        };
+        for name in names.into_iter().filter(|n| !n.is_empty()) {
+            *into.entry((*field, name)).or_insert(0) += 1;
+        }
+    }
 }
 
 /// Artist and album as named by the folders: the two folders directly above the file
@@ -91,20 +114,35 @@ pub fn folder_names(root: &Path, path: &Path) -> Option<(String, String)> {
     }
 }
 
-fn read_track(root: &Path, entry: &walkdir::DirEntry) -> Option<NewTrack> {
+fn read_track(
+    root: &Path,
+    entry: &walkdir::DirEntry,
+    values: &mut std::collections::HashMap<(&'static str, String), i64>,
+) -> Option<NewTrack> {
     let path = entry.path();
     let folders = folder_names(root, path);
     let tagged = read_from_path(path).ok();
     let tag = tagged.as_ref().and_then(|f| f.primary_tag());
+    collect_values(tag, values);
     let tag_text = |get: fn(&lofty::tag::Tag) -> Option<std::borrow::Cow<'_, str>>| {
         tag.and_then(get).map(std::borrow::Cow::into_owned)
     };
-    let (artist, album) = folders.unwrap_or_else(|| {
-        (
-            tag_text(Accessor::artist).unwrap_or_else(|| "Unknown".to_owned()),
-            tag_text(Accessor::album).unwrap_or_else(|| "Unknown".to_owned()),
-        )
-    });
+    // Jellyfin's rule: tags decide grouping (album artist, else artist; album tag), and the
+    // folder names are only the fallback for untagged files.
+    let (folder_artist, folder_album) = folders.unzip();
+    let album_artist = tag
+        .and_then(|t| t.get_string(ItemKey::AlbumArtist))
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_owned);
+    let artist = album_artist
+        .or_else(|| tag_text(Accessor::artist).filter(|a| !a.trim().is_empty()))
+        .or(folder_artist)
+        .unwrap_or_else(|| "Unknown".to_owned());
+    let album = tag_text(Accessor::album)
+        .filter(|a| !a.trim().is_empty())
+        .or(folder_album)
+        .unwrap_or_else(|| "Unknown".to_owned());
     let stem = path.file_stem()?.to_str()?.to_owned();
     let title = tag_text(Accessor::title).unwrap_or(stem);
     let len = entry.metadata().ok()?.len();
@@ -123,17 +161,18 @@ fn read_track(root: &Path, entry: &walkdir::DirEntry) -> Option<NewTrack> {
     })
 }
 
-/// Library layout is `…/artist/album/track.ext`. Folder names win for anything inside an
-/// artist folder; only files loose in the root fall back to tags, then "Unknown".
+/// Library layout is `…/artist/album/track.ext`. Tags win (album artist, then artist; album),
+/// matching Jellyfin; folder names are the fallback for untagged files, then "Unknown".
 pub fn scan(root: &Path) -> ScanResult {
     let mut result = ScanResult {
         tracks: Vec::new(),
         errors: 0,
+        values: std::collections::HashMap::new(),
     };
     for entry in WalkDir::new(root) {
         match entry {
             Err(_) => result.errors += 1,
-            Ok(e) if e.file_type().is_file() && is_audio(e.path()) => match read_track(root, &e) {
+            Ok(e) if e.file_type().is_file() && is_audio(e.path()) => match read_track(root, &e, &mut result.values) {
                 Some(t) => result.tracks.push(t),
                 None => result.errors += 1,
             },

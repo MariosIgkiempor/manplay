@@ -1,8 +1,8 @@
 import { Play } from "lucide-react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
+import { ArtistLinks } from "#/components/artist-links.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
-import { useDetailNav } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import { type Album, syncState } from "#/lib/albums.ts";
 
@@ -22,7 +22,6 @@ function AlbumTile({
 	onOpen: () => void;
 }) {
 	const player = usePlayer();
-	const go = useDetailNav();
 	return (
 		<AddToPlaylistMenu
 			tracks={album.tracks}
@@ -60,14 +59,9 @@ function AlbumTile({
 						>
 							{album.album}
 						</button>
-						<button
-							type="button"
-							className="block max-w-full truncate text-left text-muted-foreground text-xs hover:text-foreground hover:underline"
-							title={album.artist}
-							onClick={() => go({ kind: "artist", name: album.artist })}
-						>
-							{album.artist}
-						</button>
+						<div className="truncate text-muted-foreground text-xs">
+							<ArtistLinks artist={album.artist} />
+						</div>
 					</div>
 					<SyncBadge state={syncState(album.tracks, targetCount)} />
 				</div>

@@ -4,6 +4,7 @@ import { PanelHeader } from "#/components/panel-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
+import { splitNames } from "#/lib/names.ts";
 import { useSyncTargets, useTracks } from "#/lib/queries.ts";
 
 export function ArtistPanel({ name }: { name: string }) {
@@ -11,7 +12,7 @@ export function ArtistPanel({ name }: { name: string }) {
 	const tracks = useTracks();
 	const targets = useSyncTargets();
 	const artistTracks = useMemo(
-		() => (tracks.data ?? []).filter((t) => t.artist === name),
+		() => (tracks.data ?? []).filter((t) => splitNames(t.artist).includes(name)),
 		[tracks.data, name],
 	);
 	const albums = useMemo(() => groupAlbums(artistTracks), [artistTracks]);

@@ -3,7 +3,9 @@ import { ErrorText } from "#/components/error-text.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import type { AuditIssue, FixReport } from "#/lib/api.ts";
 
-export type FixNotice = { kind: "report"; report: FixReport } | { kind: "error"; message: string };
+export type FixNotice =
+	| { kind: "report"; report: FixReport; verb?: string }
+	| { kind: "error"; message: string };
 
 interface BarProps {
 	issues: readonly AuditIssue[] | undefined;
@@ -115,7 +117,8 @@ function Notice({ notice, onDismiss }: { notice: FixNotice; onDismiss: () => voi
 				) : (
 					<>
 						<p>
-							Fixed {notice.report.fixed} {notice.report.fixed === 1 ? "file" : "files"}
+							{notice.verb ?? "Fixed"} {notice.report.fixed}{" "}
+							{notice.report.fixed === 1 ? "file" : "files"}
 							{failed.length > 0 && `, ${failed.length} failed and left as they were:`}
 						</p>
 						{failed.slice(0, MAX_SHOWN).map((f) => (

@@ -11,6 +11,7 @@ import {
 	fsRename,
 	fsTrash,
 	getLibraryRoot,
+	getTagClipboard,
 	itunesImport,
 	itunesPending,
 	libraryStatus,
@@ -19,11 +20,16 @@ import {
 	pickAndScan,
 	removeMissingNow,
 	rescanLibrary,
+	resetLibrary,
 	type ServiceId,
 	serviceFlags,
 	setServiceEnabled,
+	setTagClipboard,
 	syncHistory,
 	syncRun,
+	tagsRead,
+	tagsWrite,
+	tagValues,
 } from "#/lib/api.ts";
 
 export function useTracks() {
@@ -83,6 +89,20 @@ export function useRemoveMissing() {
 			});
 			if (targets.length > 0) {
 				sync.mutate(undefined);
+			}
+		},
+	});
+}
+
+/** Rebuilds the library database from disk. Does not trigger a sync. */
+export function useResetLibrary() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationKey: SCAN_KEY,
+		mutationFn: resetLibrary,
+		onSettled: async () => {
+			for (const key of ["tracks", "library-root", "library-status", "playlists", "tags"]) {
+				await queryClient.invalidateQueries({ queryKey: [key] });
 			}
 		},
 	});
@@ -159,7 +179,7 @@ export function useItunesImport() {
 /** Everything that can change when files move on disk (the backend rescans afterwards). */
 async function refreshAfterFsChange(queryClient: ReturnType<typeof useQueryClient>) {
 	await Promise.all(
-		["fs", "tracks", "playlists", "tags", "library-status", "audit"].map((k) =>
+		["fs", "tracks", "playlists", "tags", "library-status", "audit", "tag-values"].map((k) =>
 			queryClient.invalidateQueries({ queryKey: [k] }),
 		),
 	);
@@ -219,6 +239,49 @@ export function useAuditFix() {
 	return useMutation({
 		mutationFn: (paths: string[]) => auditFix(paths),
 		onSettled: () => refreshAfterFsChange(queryClient),
+	});
+}
+
+/** Tags shared by the song or folder at `path`. */
+export function useTagsRead(path: string) {
+	return useQuery({
+		queryKey: ["file-tags", path],
+		queryFn: () => tagsRead(path),
+		gcTime: 0,
+	});
+}
+
+/** Known values of a tag field (artists, genres, ...), refreshed by every scan. */
+export function useTagValues(field: string, enabled: boolean) {
+	return useQuery({
+		queryKey: ["tag-values", field],
+		queryFn: () => tagValues(field),
+		enabled,
+		staleTime: 30_000,
+	});
+}
+
+/** Tags copied in the Files view, stored in the database. */
+export function useTagClipboard() {
+	const queryClient = useQueryClient();
+	const query = useQuery({ queryKey: ["tag-clipboard"], queryFn: getTagClipboard });
+	const set = useMutation({
+		mutationFn: setTagClipboard,
+		onMutate: (clip) => queryClient.setQueryData(["tag-clipboard"], clip),
+		onError: () => queryClient.invalidateQueries({ queryKey: ["tag-clipboard"] }),
+	});
+	return { clip: query.data ?? null, setClip: set.mutate };
+}
+
+export function useTagsWrite() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ path, edits }: { path: string; edits: Record<string, string> }) =>
+			tagsWrite(path, edits),
+		onSettled: async () => {
+			await refreshAfterFsChange(queryClient);
+			await queryClient.invalidateQueries({ queryKey: ["file-tags"] });
+		},
 	});
 }
 

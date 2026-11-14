@@ -1,14 +1,13 @@
 import { useMemo } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
+import { ArtistLinks } from "#/components/artist-links.tsx";
 import { PanelHeader } from "#/components/panel-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
-import { useDetailNav } from "#/context/detail-context.ts";
 import { groupAlbums, syncState } from "#/lib/albums.ts";
 import { useSyncTargets, useTracks } from "#/lib/queries.ts";
 
 export function AlbumPanel({ albumKey }: { albumKey: string }) {
-	const go = useDetailNav();
 	const tracks = useTracks();
 	const targets = useSyncTargets();
 	const album = useMemo(
@@ -23,15 +22,7 @@ export function AlbumPanel({ albumKey }: { albumKey: string }) {
 		<div className="space-y-6">
 			<PanelHeader
 				title={album.album}
-				subtitle={
-					<button
-						type="button"
-						className="hover:underline"
-						onClick={() => go({ kind: "artist", name: album.artist })}
-					>
-						{album.artist}
-					</button>
-				}
+				subtitle={<ArtistLinks artist={album.artist} />}
 				meta={
 					<>
 						{album.tracks.length} tracks

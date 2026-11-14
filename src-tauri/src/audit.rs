@@ -68,7 +68,7 @@ pub struct FixReport {
     pub failed: Vec<FixFailure>,
 }
 
-fn is_mp3(path: &Path) -> bool {
+pub(crate) fn is_mp3(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
@@ -249,13 +249,13 @@ fn err(msg: impl Into<String>) -> Error {
 }
 
 /// A hidden scratch file next to `near`, unique per process and purpose.
-fn scratch(near: &Path, tag: &str) -> PathBuf {
+pub(crate) fn scratch(near: &Path, tag: &str) -> PathBuf {
     near.with_file_name(format!(".manplay-{tag}-{}.mp3", std::process::id()))
 }
 
 /// Swaps `new` in for `original` (same folder). The original is parked in a scratch folder
 /// first and goes back if the swap fails; afterwards it is trashed (`keep_in_trash`) or deleted.
-fn replace_file(original: &Path, new: &Path, keep_in_trash: bool) -> Result<(), Error> {
+pub(crate) fn replace_file(original: &Path, new: &Path, keep_in_trash: bool) -> Result<(), Error> {
     let name = original.file_name().ok_or_else(|| err("no file name"))?;
     let parent = original.parent().ok_or_else(|| err("no parent folder"))?;
     let aside_dir = parent.join(format!(".manplay-aside-{}", std::process::id()));

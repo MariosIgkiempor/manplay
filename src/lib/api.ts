@@ -41,6 +41,11 @@ export async function rescanLibrary(): Promise<number | null> {
 	return int.nullable().parse(await invoke("rescan_library"));
 }
 
+/** Backs up, clears the track table and rescans. Returns null when no folder has been chosen. */
+export async function resetLibrary(): Promise<number | null> {
+	return int.nullable().parse(await invoke("reset_library"));
+}
+
 export async function getLibraryRoot(): Promise<string | null> {
 	return z
 		.string()
@@ -523,6 +528,80 @@ export function confirmFix(lines: string[]): Promise<boolean> {
 		kind: "info",
 		okLabel: "Fix",
 	});
+}
+
+// ---- tag editor --------------------------------------------------------------
+
+const tagViewSchema = z.object({
+	count: int,
+	fields: z.record(z.string(), z.object({ value: z.string().nullable(), mixed: z.boolean() })),
+});
+
+export type TagView = z.infer<typeof tagViewSchema>;
+
+/** Tags shared by a song, or by every song under a folder. */
+export async function tagsRead(path: string): Promise<TagView> {
+	return tagViewSchema.parse(await invoke("tags_read", { path }));
+}
+
+/** Writes `edits` (field to value; empty clears) to a song or every song under a folder. */
+export async function tagsWrite(path: string, edits: Record<string, string>): Promise<FixReport> {
+	return fixReportSchema.parse(await invoke("tags_write", { path, edits }));
+}
+
+const tagValuesSchema = z.array(z.object({ value: z.string(), count: int }));
+
+export type TagValue = z.infer<typeof tagValuesSchema>[number];
+
+/** Values already used in the library for a tag field, most used first. */
+export async function tagValues(field: string): Promise<TagValue[]> {
+	return tagValuesSchema.parse(await invoke("tag_values", { field }));
+}
+
+const previewSchema = z.object({
+	total: int,
+	files: z.array(
+		z.object({
+			path: z.string(),
+			changes: z.array(
+				z.object({ field: z.string(), from: z.string().nullable(), to: z.string().nullable() }),
+			),
+		}),
+	),
+});
+
+export type TagPreview = z.infer<typeof previewSchema>;
+
+/** What a tag edit would change in each song, without writing anything. */
+export async function tagsPreview(
+	path: string,
+	edits: Record<string, string>,
+): Promise<TagPreview> {
+	return previewSchema.parse(await invoke("tags_preview", { path, edits }));
+}
+
+const tagClipboardSchema = z.object({
+	from: z.string(),
+	values: z.record(z.string(), z.string()),
+});
+
+export type TagClipboard = z.infer<typeof tagClipboardSchema>;
+
+/** Tags copied in the Files view; kept in the database so they survive switching views. */
+export async function getTagClipboard(): Promise<TagClipboard | null> {
+	const raw = z
+		.string()
+		.nullable()
+		.parse(await invoke("get_tag_clipboard"));
+	if (raw === null) {
+		return null;
+	}
+	const parsed = tagClipboardSchema.safeParse(JSON.parse(raw));
+	return parsed.success ? parsed.data : null;
+}
+
+export async function setTagClipboard(clip: TagClipboard | null): Promise<void> {
+	await invoke("set_tag_clipboard", { json: clip === null ? null : JSON.stringify(clip) });
 }
 
 // ---- import from downloads ---------------------------------------------------
