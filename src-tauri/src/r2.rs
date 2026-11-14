@@ -293,15 +293,31 @@ impl R2 {
     }
 
     pub fn save_credentials(&self, target_id: i64) -> Result<(), Error> {
+        let value = format!("{}\n{}", self.key_id, self.secret);
         entry(target_id)?
-            .set_password(&format!("{}\n{}", self.key_id, self.secret))
-            .map_err(|e| Error::Msg(format!("keychain: {e}")))
+            .set_password(&value)
+            .map_err(|e| Error::Msg(format!("keychain: {e}")))?;
+        if let Ok(mut c) = cache().lock() {
+            c.insert(target_id, value);
+        }
+        Ok(())
     }
 
     pub fn load(account: &str, bucket: &str, target_id: i64) -> Result<Self, Error> {
-        let stored = entry(target_id)?
-            .get_password()
-            .map_err(|e| Error::Msg(format!("keychain: {e}")))?;
+        // Read the keychain once per launch; macOS prompts on every read otherwise.
+        let cached = cache().lock().ok().and_then(|c| c.get(&target_id).cloned());
+        let stored = match cached {
+            Some(s) => s,
+            None => {
+                let s = entry(target_id)?
+                    .get_password()
+                    .map_err(|e| Error::Msg(format!("keychain: {e}")))?;
+                if let Ok(mut c) = cache().lock() {
+                    c.insert(target_id, s.clone());
+                }
+                s
+            }
+        };
         let (key_id, secret) = stored
             .split_once('\n')
             .ok_or_else(|| Error::Msg("keychain: malformed R2 credentials".to_owned()))?;
@@ -309,7 +325,16 @@ impl R2 {
     }
 }
 
+fn cache() -> &'static std::sync::Mutex<std::collections::HashMap<i64, String>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<i64, String>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
 pub fn forget_credentials(target_id: i64) {
+    if let Ok(mut c) = cache().lock() {
+        c.remove(&target_id);
+    }
     if let Ok(e) = entry(target_id) {
         let _ = e.delete_credential();
     }
