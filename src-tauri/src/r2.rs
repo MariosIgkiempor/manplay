@@ -217,7 +217,10 @@ impl R2 {
             if !prefix.is_empty() {
                 query.push(("prefix", prefix.as_str()));
             }
-            let resp = self.signed(client, &Method::GET, &[], &query).send().await?;
+            let resp = self
+                .signed(client, &Method::GET, &[], &query)
+                .send()
+                .await?;
             if !resp.status().is_success() {
                 return Err(Error::Msg(format!("r2 LIST {}", resp.status())));
             }

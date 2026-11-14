@@ -549,6 +549,13 @@ export async function tagsWrite(path: string, edits: Record<string, string>): Pr
 	return fixReportSchema.parse(await invoke("tags_write", { path, edits }));
 }
 
+/** Sets the front cover of a song, or of every song under a folder, from JPEG/PNG bytes. */
+export async function tagsSetCover(path: string, image: Uint8Array): Promise<FixReport> {
+	return fixReportSchema.parse(
+		await invoke("tags_set_cover", image, { headers: { "x-path": encodeURIComponent(path) } }),
+	);
+}
+
 const tagValuesSchema = z.array(z.object({ value: z.string(), count: int }));
 
 export type TagValue = z.infer<typeof tagValuesSchema>[number];

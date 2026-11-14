@@ -134,13 +134,12 @@ impl<'a> Backend<'a> {
                 .await?
                 .into_iter()
                 .filter_map(|(key, size)| {
-                    let rel: Vec<String> = key
-                        .split('/')
-                        .skip(base.len())
-                        .map(str::to_owned)
-                        .collect();
+                    let rel: Vec<String> =
+                        key.split('/').skip(base.len()).map(str::to_owned).collect();
                     // Folder placeholder keys end in "/" and leave an empty last segment.
-                    rel.iter().all(|s| !s.is_empty()).then_some(Remote { rel, size })
+                    rel.iter()
+                        .all(|s| !s.is_empty())
+                        .then_some(Remote { rel, size })
                 })
                 .collect()),
         }
@@ -331,9 +330,9 @@ struct PullProgress<'a> {
 /// A remote path is only trusted if every segment is a plain file or folder name.
 fn safe_rel(rel: &[String]) -> bool {
     !rel.is_empty()
-        && rel.iter().all(|s| {
-            !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\', '\0'])
-        })
+        && rel
+            .iter()
+            .all(|s| !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\', '\0']))
 }
 
 /// Downloads `files` from the destination into the library folder. Never overwrites an

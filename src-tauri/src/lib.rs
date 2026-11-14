@@ -231,11 +231,18 @@ async fn rescan_library(state: State<'_, AppState>) -> Result<Option<usize>, Err
 #[tauri::command]
 async fn reset_library(state: State<'_, AppState>) -> Result<Option<usize>, Error> {
     if state.syncing.load(Ordering::SeqCst) {
-        return Err(Error::Msg("a sync is running; try again when it finishes".to_owned()));
+        return Err(Error::Msg(
+            "a sync is running; try again when it finishes".to_owned(),
+        ));
     }
     {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        db::backup(&conn, &state.data_dir.join("backups"), unix_now(), BACKUPS_KEEP)?;
+        db::backup(
+            &conn,
+            &state.data_dir.join("backups"),
+            unix_now(),
+            BACKUPS_KEEP,
+        )?;
         db::clear_tracks(&conn)?;
     }
     rescan_library(state).await
@@ -963,6 +970,44 @@ async fn tags_write(
     Ok(report)
 }
 
+/// Sets the front cover of a song, or of every song under a folder, from raw image bytes
+/// (the request body). The target path travels URL-encoded in the `x-path` header.
+#[tauri::command]
+async fn tags_set_cover(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<audit::FixReport, Error> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(Error::Msg("expected image bytes".to_owned()));
+    };
+    let bytes = bytes.clone();
+    let path = request
+        .headers()
+        .get("x-path")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| percent_encoding::percent_decode_str(v).decode_utf8().ok())
+        .map(|p| PathBuf::from(p.as_ref()))
+        .ok_or_else(|| Error::Msg("missing path".to_owned()))?;
+    let root = library_root(&state)?;
+    if state.fixing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a fix is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.fixing);
+    let r = root.clone();
+    let (files, report) =
+        tauri::async_runtime::spawn_blocking(move || tags::write_cover(&r, &path, &bytes))
+            .await
+            .map_err(|e| Error::Msg(e.to_string()))??;
+    if let Ok(dir) = app.path().app_cache_dir().map(|d| d.join("art")) {
+        for f in &files {
+            art::forget(f, &dir);
+        }
+    }
+    refresh_after_fs_change(&state, root).await;
+    Ok(report)
+}
+
 // ---- library health ----------------------------------------------------------
 
 /// Lists files that break the library conventions (see `audit`).
@@ -1622,6 +1667,7 @@ pub fn run() {
             get_tag_clipboard,
             set_tag_clipboard,
             tags_write,
+            tags_set_cover,
             audit_fix,
             audit_place,
             import_get_folder,

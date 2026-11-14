@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use lofty::config::WriteOptions;
 use lofty::file::{AudioFile, TaggedFileExt};
+use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::read_from_path;
 use lofty::tag::{ItemKey, Tag, TagExt};
 use serde::Serialize;
@@ -268,7 +269,7 @@ fn scratch_copy(file: &Path) -> PathBuf {
     file.with_file_name(format!(".manplay-tags-{}.{ext}", std::process::id()))
 }
 
-fn write_one(file: &Path, edits: &BTreeMap<String, String>) -> Result<(), Error> {
+fn write_one(file: &Path, change: &dyn Fn(&mut Tag)) -> Result<(), Error> {
     let tmp = scratch_copy(file);
     std::fs::copy(file, &tmp)?;
     let result = (|| -> Result<(), Error> {
@@ -277,7 +278,7 @@ fn write_one(file: &Path, edits: &BTreeMap<String, String>) -> Result<(), Error>
             .primary_tag()
             .cloned()
             .unwrap_or_else(|| Tag::new(tagged.primary_tag_type()));
-        apply(&mut tag, edits);
+        change(&mut tag);
         // Library convention: MP3s carry ID3v2.3 tags.
         let options = WriteOptions::default().use_id3v23(is_mp3(file));
         tag.save_to_path(&tmp, options)
@@ -315,7 +316,7 @@ pub fn write(
         return Ok(report);
     }
     for file in songs(root, path)? {
-        match write_one(&file, edits) {
+        match write_one(&file, &|tag| apply(tag, edits)) {
             Ok(()) => report.fixed += 1,
             Err(e) => report.failed.push(FixFailure {
                 path: file.to_string_lossy().into_owned(),
@@ -324,6 +325,50 @@ pub fn write(
         }
     }
     Ok(report)
+}
+
+/// Checks `bytes` is a JPEG or PNG and returns its mime type.
+fn cover_mime(bytes: &[u8]) -> Result<MimeType, Error> {
+    let mime = if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        MimeType::Jpeg
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        MimeType::Png
+    } else {
+        return Err(err("cover must be a JPEG or PNG image"));
+    };
+    image::load_from_memory(bytes).map_err(|e| err(format!("unreadable image: {e}")))?;
+    Ok(mime)
+}
+
+/// Sets the front cover of the song at `path`, or of every song under it when it is a folder.
+/// Failures are reported per file and never undo the rest.
+pub fn write_cover(
+    root: &Path,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(Vec<PathBuf>, FixReport), Error> {
+    let mime = cover_mime(bytes)?;
+    let files = songs(root, path)?;
+    let mut report = FixReport::default();
+    for file in &files {
+        let change = |tag: &mut Tag| {
+            tag.remove_picture_type(PictureType::CoverFront);
+            tag.push_picture(
+                Picture::unchecked(bytes.to_vec())
+                    .pic_type(PictureType::CoverFront)
+                    .mime_type(mime.clone())
+                    .build(),
+            );
+        };
+        match write_one(file, &change) {
+            Ok(()) => report.fixed += 1,
+            Err(e) => report.failed.push(FixFailure {
+                path: file.to_string_lossy().into_owned(),
+                error: e.to_string(),
+            }),
+        }
+    }
+    Ok((files, report))
 }
 
 #[cfg(test)]
@@ -436,7 +481,12 @@ mod tests {
 
         let all = BTreeMap::from([("genre".to_owned(), "House".to_owned())]);
         let report = write(&root, &album, &all).expect("folder write");
-        assert_eq!((report.fixed, report.failed.len()), (2, 0), "{:?}", report.failed);
+        assert_eq!(
+            (report.fixed, report.failed.len()),
+            (2, 0),
+            "{:?}",
+            report.failed
+        );
 
         let one = BTreeMap::from([("title".to_owned(), "Solo".to_owned())]);
         write(&root, &album.join("1.wav"), &one).expect("file write");

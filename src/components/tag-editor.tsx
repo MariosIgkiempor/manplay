@@ -1,11 +1,11 @@
-import { ChevronRight, Eraser, File as FileIcon, Folder, Undo2, X } from "lucide-react";
-import { type KeyboardEvent, useId, useState } from "react";
+import { ChevronRight, Eraser, File as FileIcon, Folder, ImagePlus, Undo2, X } from "lucide-react";
+import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { ErrorText } from "#/components/error-text.tsx";
 import { type ComboOption, TagCombobox } from "#/components/tag-combobox.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { pathArtUrl, type TagValue, type TagView } from "#/lib/api.ts";
-import { useTagsRead, useTagsWrite, useTagValues } from "#/lib/queries.ts";
+import { useTagsRead, useTagsSetCover, useTagsWrite, useTagValues } from "#/lib/queries.ts";
 import { TAG_GROUPS, type TagField, type TagGroup } from "#/lib/tag-fields.ts";
 import type { TagConfirmRequest } from "#/lib/use-tag-confirm.tsx";
 import { cn } from "#/lib/utils.ts";
@@ -42,6 +42,7 @@ export function TagEditor({
 	// Only edited fields live here; an empty string means "clear this tag".
 	const [draft, setDraft] = useState<Draft>({});
 	const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+	const [artVersion, setArtVersion] = useState(0);
 	const count = view.data?.count ?? 0;
 	const edited = Object.keys(draft);
 
@@ -97,8 +98,21 @@ export function TagEditor({
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: Cmd+Enter applies from any field
 		<div className="flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown}>
-			<Header target={target} count={view.data ? count : null} onClose={onClose} />
+			<Header
+				target={target}
+				count={view.data ? count : null}
+				artVersion={artVersion}
+				onClose={onClose}
+			/>
 			<div className="min-h-0 flex-1 overflow-y-auto">
+				{view.data && count > 0 && (
+					<CoverSection
+						target={target}
+						count={count}
+						artVersion={artVersion}
+						onSaved={() => setArtVersion((v) => v + 1)}
+					/>
+				)}
 				<Body view={view} target={target} draft={draft} onEdit={edit} onRevert={revert} />
 			</div>
 			<footer className="flex items-center gap-2 border-t bg-background px-3 py-2.5">
@@ -149,10 +163,12 @@ function Status({
 function Header({
 	target,
 	count,
+	artVersion,
 	onClose,
 }: {
 	target: TagTarget;
 	count: number | null;
+	artVersion: number;
 	onClose: () => void;
 }) {
 	const [artFailed, setArtFailed] = useState(false);
@@ -169,8 +185,8 @@ function Header({
 				</span>
 			) : (
 				<img
-					key={target.path}
-					src={pathArtUrl(target.path)}
+					key={`${target.path}:${artVersion}`}
+					src={`${pathArtUrl(target.path)}?v=${artVersion}`}
 					alt=""
 					draggable={false}
 					onError={() => setArtFailed(true)}
@@ -187,6 +203,154 @@ function Header({
 				<X />
 			</Button>
 		</div>
+	);
+}
+
+const COVER_TYPES = ["image/jpeg", "image/png"];
+
+/** Cover art: choose an image file or paste one; applies to the song, or every song in a folder. */
+function CoverSection({
+	target,
+	count,
+	artVersion,
+	onSaved,
+}: {
+	target: TagTarget;
+	count: number;
+	artVersion: number;
+	onSaved: () => void;
+}) {
+	const setCover = useTagsSetCover();
+	const fileInput = useRef<HTMLInputElement>(null);
+	const [staged, setStaged] = useState<{ file: Blob; url: string } | null>(null);
+	const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+	useEffect(() => {
+		const url = staged?.url;
+		return () => {
+			if (url) {
+				URL.revokeObjectURL(url);
+			}
+		};
+	}, [staged]);
+
+	const stage = (file: Blob | null | undefined) => {
+		if (!file) {
+			return;
+		}
+		if (!COVER_TYPES.includes(file.type)) {
+			setNotice({ ok: false, text: "Cover must be a JPEG or PNG image." });
+			return;
+		}
+		setNotice(null);
+		setStaged({ file, url: URL.createObjectURL(file) });
+	};
+
+	// Paste works anywhere in the editor, except while typing in a field.
+	useEffect(() => {
+		const onPaste = (ev: ClipboardEvent) => {
+			const el = ev.target;
+			if (el instanceof HTMLElement && (el.isContentEditable || el.matches("input, textarea"))) {
+				return;
+			}
+			const item = [...(ev.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
+			if (item) {
+				ev.preventDefault();
+				stage(item.getAsFile());
+			}
+		};
+		document.addEventListener("paste", onPaste);
+		return () => document.removeEventListener("paste", onPaste);
+	});
+
+	const apply = async () => {
+		if (!staged) {
+			return;
+		}
+		const image = new Uint8Array(await staged.file.arrayBuffer());
+		setCover.mutate(
+			{ path: target.path, image },
+			{
+				onSuccess: (report) => {
+					const failed = report.failed.length;
+					setNotice(
+						failed === 0
+							? { ok: true, text: `Cover saved to ${plural(report.fixed, "song", "songs")}.` }
+							: {
+									ok: false,
+									text: `${report.fixed} saved, ${failed} failed: ${report.failed[0]?.error ?? ""}`,
+								},
+					);
+					setStaged(null);
+					onSaved();
+				},
+			},
+		);
+	};
+
+	const shown = staged?.url ?? `${pathArtUrl(target.path)}?v=${artVersion}`;
+	return (
+		<section className="flex items-center gap-3 border-b px-3 py-3">
+			<img
+				key={shown}
+				src={shown}
+				alt=""
+				draggable={false}
+				onError={(e) => {
+					e.currentTarget.style.visibility = "hidden";
+				}}
+				className="size-24 shrink-0 rounded-md bg-muted object-cover"
+			/>
+			<div className="flex min-w-0 flex-1 flex-col gap-2">
+				<div className="text-sm font-medium">Cover art</div>
+				<div className="text-muted-foreground text-xs">
+					{staged
+						? target.isDir
+							? `Will replace the cover of ${plural(count, "song", "songs")}.`
+							: "Will replace this song's cover."
+						: "Choose an image, or paste one (Cmd+V). JPEG or PNG."}
+				</div>
+				{notice && (
+					<div className={cn("text-xs", notice.ok ? "text-muted-foreground" : "text-destructive")}>
+						{notice.text}
+					</div>
+				)}
+				{setCover.isError && (
+					<ErrorText message={String(setCover.error)} className="text-destructive text-xs" />
+				)}
+				<div className="flex gap-2">
+					{staged ? (
+						<>
+							<Button size="sm" onClick={apply} disabled={setCover.isPending}>
+								{setCover.isPending ? "Saving…" : "Apply cover"}
+							</Button>
+							<Button
+								size="sm"
+								variant="ghost"
+								onClick={() => setStaged(null)}
+								disabled={setCover.isPending}
+							>
+								Cancel
+							</Button>
+						</>
+					) : (
+						<Button size="sm" variant="outline" onClick={() => fileInput.current?.click()}>
+							<ImagePlus /> Choose image…
+						</Button>
+					)}
+				</div>
+				<input
+					ref={fileInput}
+					type="file"
+					accept={COVER_TYPES.join(",")}
+					className="hidden"
+					onChange={(e) => {
+						stage(e.target.files?.[0]);
+						e.target.value = "";
+					}}
+				/>
+			</div>
+		</section>
 	);
 }
 

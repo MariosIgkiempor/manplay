@@ -28,6 +28,7 @@ import {
 	syncHistory,
 	syncRun,
 	tagsRead,
+	tagsSetCover,
 	tagsWrite,
 	tagValues,
 } from "#/lib/api.ts";
@@ -282,6 +283,14 @@ export function useTagsWrite() {
 			await refreshAfterFsChange(queryClient);
 			await queryClient.invalidateQueries({ queryKey: ["file-tags"] });
 		},
+	});
+}
+
+export function useTagsSetCover() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ path, image }: { path: string; image: Uint8Array }) => tagsSetCover(path, image),
+		onSettled: () => refreshAfterFsChange(queryClient),
 	});
 }
 

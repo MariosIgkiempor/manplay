@@ -54,10 +54,7 @@ pub fn sample_ranges(size: u64) -> Option<Vec<(u64, u64)>> {
         return Some(vec![(0, size)]);
     }
     let ranges: Vec<(u64, u64)> = (1..=2).map(|third| (size / 3 * third, SAMPLE)).collect();
-    ranges
-        .iter()
-        .all(|(o, l)| o + l <= size)
-        .then_some(ranges)
+    ranges.iter().all(|(o, l)| o + l <= size).then_some(ranges)
 }
 
 /// Fingerprint from already-fetched sample bytes (in [`sample_ranges`] order), so a remote file
@@ -172,10 +169,12 @@ pub fn scan(root: &Path) -> ScanResult {
     for entry in WalkDir::new(root) {
         match entry {
             Err(_) => result.errors += 1,
-            Ok(e) if e.file_type().is_file() && is_audio(e.path()) => match read_track(root, &e, &mut result.values) {
-                Some(t) => result.tracks.push(t),
-                None => result.errors += 1,
-            },
+            Ok(e) if e.file_type().is_file() && is_audio(e.path()) => {
+                match read_track(root, &e, &mut result.values) {
+                    Some(t) => result.tracks.push(t),
+                    None => result.errors += 1,
+                }
+            }
             Ok(_) => {}
         }
     }
@@ -188,7 +187,9 @@ mod tests {
     #[test]
     fn sampled_fingerprint_matches_reader() {
         for size in [10_u64, 131_072, 131_073, 500_000] {
-            let data: Vec<u8> = (0..size).map(|i| u8::try_from(i % 251).unwrap_or(0)).collect();
+            let data: Vec<u8> = (0..size)
+                .map(|i| u8::try_from(i % 251).unwrap_or(0))
+                .collect();
             let expect = super::fingerprint_reader(&mut std::io::Cursor::new(&data), size);
             let Some(ranges) = super::sample_ranges(size) else {
                 assert_eq!(expect, None, "size {size}");

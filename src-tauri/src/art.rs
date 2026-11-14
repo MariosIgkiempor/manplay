@@ -94,14 +94,12 @@ pub fn thumbnail(track: &Path, cache_dir: &Path) -> Option<Vec<u8>> {
         return None;
     }
 
-    let folder = folder_image(dir);
-    let raw = match folder {
+    // Embedded art first: it is what the tag editor sets, so edits show up even when a
+    // stale cover.jpg sits in the folder.
+    let raw = match embedded_image(track) {
         Lookup::Found(bytes) => Lookup::Found(bytes),
-        other => match embedded_image(track) {
-            Lookup::Found(bytes) => Lookup::Found(bytes),
-            Lookup::Unreadable => Lookup::Unreadable,
-            Lookup::Absent => other,
-        },
+        Lookup::Unreadable => Lookup::Unreadable,
+        Lookup::Absent => folder_image(dir),
     };
 
     // Cache writes are best-effort; failing to cache must not hide the art.
@@ -120,6 +118,15 @@ pub fn thumbnail(track: &Path, cache_dir: &Path) -> Option<Vec<u8>> {
             None
         }
         Lookup::Unreadable => None,
+    }
+}
+
+/// Forgets the cached thumbnail (or "no art" marker) for the folder holding `track`.
+pub fn forget(track: &Path, cache_dir: &Path) {
+    if let Some(dir) = track.parent() {
+        let key = cache_key(dir);
+        let _ = fs::remove_file(cache_dir.join(format!("{key}.jpg")));
+        let _ = fs::remove_file(cache_dir.join(format!("{key}.none")));
     }
 }
 
