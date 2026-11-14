@@ -1,20 +1,15 @@
-import { RefreshCw, TriangleAlert, X } from "lucide-react";
+import { X } from "lucide-react";
 import { ErrorText } from "#/components/error-text.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import type { AuditIssue, FixReport } from "#/lib/api.ts";
+import type { FixReport } from "#/lib/api.ts";
 
 export type FixNotice =
 	| { kind: "report"; report: FixReport; verb?: string }
 	| { kind: "error"; message: string };
 
 interface BarProps {
-	issues: readonly AuditIssue[] | undefined;
-	checking: boolean;
 	error: string | null;
-	fixing: boolean;
 	notice: FixNotice | null;
-	onFixAll: () => void;
-	onRecheck: () => void;
 	onDismiss: () => void;
 }
 
@@ -24,18 +19,11 @@ function name(path: string): string {
 	return path.split(/[\\/]/).pop() ?? path;
 }
 
-/** Summary of library problems above the file panes, with the one-press fix. */
-export function HealthBar({
-	issues,
-	checking,
-	error,
-	fixing,
-	notice,
-	onFixAll,
-	onRecheck,
-	onDismiss,
-}: BarProps) {
-	const all = issues ?? [];
+/** Errors and the outcome of the last fix above the file panes; the issue list is in the status bar. */
+export function HealthBar({ error, notice, onDismiss }: BarProps) {
+	if (!error && !notice) {
+		return null;
+	}
 	return (
 		<div className="border-b text-sm">
 			{error && (
@@ -45,61 +33,6 @@ export function HealthBar({
 				/>
 			)}
 			{notice && <Notice notice={notice} onDismiss={onDismiss} />}
-			{all.length > 0 && (
-				<Summary
-					issues={all}
-					checking={checking}
-					fixing={fixing}
-					onFixAll={onFixAll}
-					onRecheck={onRecheck}
-				/>
-			)}
-			{issues === undefined && checking && (
-				<p className="px-3 py-1 text-muted-foreground text-xs">Checking library…</p>
-			)}
-		</div>
-	);
-}
-
-function Summary({
-	issues,
-	checking,
-	fixing,
-	onFixAll,
-	onRecheck,
-}: {
-	issues: readonly AuditIssue[];
-	checking: boolean;
-	fixing: boolean;
-	onFixAll: () => void;
-	onRecheck: () => void;
-}) {
-	const files = new Set(issues.map((i) => i.path)).size;
-	const fixable = new Set(issues.filter((i) => i.fixable).map((i) => i.path)).size;
-	const manual = files - fixable;
-	const noFfmpeg = issues.some((i) => i.kind === "notMp3" && !i.fixable);
-	return (
-		<div className="flex flex-wrap items-center gap-3 bg-warning/10 px-3 py-1.5">
-			<TriangleAlert className="size-4 shrink-0 text-warning" />
-			<span className="min-w-0 flex-1">
-				{issues.length} {issues.length === 1 ? "issue" : "issues"} in {files}{" "}
-				{files === 1 ? "file" : "files"}
-				{manual > 0 && fixable > 0 && ` · ${manual} need manual attention`}
-				{noFfmpeg && " · install ffmpeg (brew install ffmpeg) to convert to MP3"}
-			</span>
-			<Button size="sm" disabled={fixable === 0 || fixing} onClick={onFixAll}>
-				{fixing ? "Fixing…" : `Fix all (${fixable})`}
-			</Button>
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				aria-label="Check again"
-				title="Check again"
-				disabled={checking || fixing}
-				onClick={onRecheck}
-			>
-				<RefreshCw className={checking ? "animate-spin" : undefined} />
-			</Button>
 		</div>
 	);
 }

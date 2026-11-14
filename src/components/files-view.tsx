@@ -1,4 +1,3 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { Tags, Undo2 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { FilePane } from "#/components/file-pane.tsx";
@@ -42,7 +41,7 @@ function saveAutoOpen(on: boolean) {
 	}
 }
 
-/** Asks, then applies the copied tags to each target; song-only tags are skipped on folders. */
+/** Asks, then applies the copied tags to each target; song-only fields are skipped on folders. */
 async function pasteTagsOnto(
 	clip: TagClipboard | null,
 	targets: TagTarget[],
@@ -58,8 +57,8 @@ async function pasteTagsOnto(
 		.filter((i) => Object.keys(i.edits).length > 0);
 	const only = targets.length === 1 ? `"${targets[0]?.name}"` : `${targets.length} items`;
 	const ok = await confirm({
-		title: `Paste tags onto ${only}`,
-		subtitle: `From "${clip.from}"${targets.some((t) => t.isDir) ? " · song-only tags are skipped on folders" : ""}`,
+		title: `Paste metadata onto ${only}`,
+		subtitle: `From "${clip.from}"${targets.some((t) => t.isDir) ? " · song-only fields are skipped on folders" : ""}`,
 		items,
 	});
 	if (!ok) {
@@ -77,7 +76,7 @@ async function pasteTagsOnto(
 			return;
 		}
 	}
-	setNotice({ kind: "report", report: total, verb: "Updated tags on" });
+	setNotice({ kind: "report", report: total, verb: "Updated metadata on" });
 }
 
 /** Two-pane file manager over the library folder. */
@@ -86,7 +85,6 @@ export function FilesView() {
 	const audit = useAudit();
 	const tracks = useTracks();
 	const fixer = useAuditFix();
-	const queryClient = useQueryClient();
 	const [split, setSplit] = useState(false);
 	const [clipboard, setClipboard] = useState<FsClipboard | null>(null);
 	const [active, setActive] = useState<0 | 1>(0);
@@ -168,25 +166,20 @@ export function FilesView() {
 	return (
 		<div ref={rootRef} className="relative flex h-full min-h-0 flex-col overflow-hidden border-t">
 			<HealthBar
-				issues={issues}
-				checking={audit.isFetching}
 				error={audit.isError ? String(audit.error) : null}
-				fixing={fixer.isPending}
 				notice={notice}
-				onFixAll={() => fix()}
-				onRecheck={() => queryClient.invalidateQueries({ queryKey: ["audit"] })}
 				onDismiss={() => setNotice(null)}
 			/>
 			<div className="flex items-center justify-end gap-3 border-b px-3 py-1 text-xs">
 				<span className="flex items-center gap-2 text-muted-foreground">
-					Open tags when selecting
+					Open metadata when selecting
 					<Switch
 						checked={autoOpen}
 						onChange={(on) => {
 							setAutoOpen(on);
 							saveAutoOpen(on);
 						}}
-						label="Open the tag pane automatically when selecting a song or folder"
+						label="Open the metadata pane automatically when selecting a song or folder"
 					/>
 				</span>
 				<Button
@@ -206,7 +199,7 @@ export function FilesView() {
 					disabled={tagTarget === null}
 				>
 					<Tags />
-					Tags
+					Metadata
 				</Button>
 			</div>
 			<div className="flex min-h-0 flex-1">
@@ -240,7 +233,7 @@ export function FilesView() {
 						tabIndex={-1}
 						onKeyDown={tagNav.onKeyDown}
 						className="flex w-[26rem] shrink-0 flex-col border-l outline-none"
-						aria-label="Tags"
+						aria-label="Metadata"
 					>
 						<TagEditor
 							key={tagTarget.path}

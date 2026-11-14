@@ -57,7 +57,7 @@ describe("describeFixes", () => {
 	it("names each kind of fix with its count", () => {
 		const lines = describeFixes(issues, fixablePaths(issues));
 		expect(lines[0]).toContain("Convert 1 file to MP3");
-		expect(lines[1]).toContain("Rewrite tags");
+		expect(lines[1]).toContain("Rewrite metadata");
 		expect(lines.join("\n")).not.toContain("Move");
 	});
 });

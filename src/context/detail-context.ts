@@ -5,7 +5,6 @@ import type { ServiceId } from "#/lib/api.ts";
 export type DetailView =
 	| { kind: "album"; key: string }
 	| { kind: "artist"; name: string }
-	| { kind: "tag"; name: string }
 	/** Tag editor for library songs. `fromAlbum` reopens that album (by its new name) on close. */
 	| { kind: "edit"; target: TagTarget; fromAlbum?: boolean }
 	| { kind: "service"; service: ServiceId };

@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link, useMatchRoute } from "@tanstack/react-router";
 import { ChevronRight, Tag } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useDetail } from "#/context/detail-context.ts";
+import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
+import { rowBase, rowClass } from "#/components/sidebar-row.ts";
 import { listTags } from "#/lib/api.ts";
 import { buildTagTree, type TagNode } from "#/lib/tag-tree.ts";
 import { cn } from "#/lib/utils.ts";
@@ -25,13 +27,12 @@ function saveOpen(open: ReadonlySet<string>) {
 	}
 }
 
-/** Library tags as a collapsible tree; clicking one opens its songs (and those below it). */
+/** Library tags as a collapsible tree; clicking one opens its page. */
 export function SidebarTagTree() {
 	const tags = useQuery({ queryKey: ["tags"], queryFn: listTags });
 	const tree = useMemo(() => buildTagTree(tags.data ?? []), [tags.data]);
 	const [open, setOpen] = useState(loadOpen);
-	const detail = useDetail();
-	const active = detail.view?.kind === "tag" ? detail.view.name.toLowerCase() : null;
+	const matchRoute = useMatchRoute();
 
 	const toggle = (key: string) =>
 		setOpen((s) => {
@@ -47,20 +48,27 @@ export function SidebarTagTree() {
 		nodes.map((n) => {
 			const key = n.name.toLowerCase();
 			const isOpen = open.has(key);
+			const active = !!matchRoute({ to: "/tags/$", params: { _splat: n.name } });
 			return (
 				<div key={key}>
-					<div
-						className={cn(
-							"group flex items-center gap-1 rounded-md py-1 pr-2 text-muted-foreground text-sm hover:bg-muted hover:text-foreground",
-							active === key && "bg-muted font-medium text-foreground",
-						)}
-						style={{ paddingLeft: `${depth * 12 + 4}px` }}
-					>
+					<div className={rowClass(active)}>
+						<Link
+							to="/tags/$"
+							params={{ _splat: n.name }}
+							title={n.name}
+							className={rowBase}
+							style={{ paddingLeft: `${8 + depth * 14}px` }}
+						>
+							<Tag className="size-4 shrink-0" />
+							<span className="truncate">{n.label}</span>
+							<RowCount n={n.trackCount} />
+						</Link>
 						{n.children.length > 0 ? (
 							<button
 								type="button"
 								aria-label={isOpen ? `Collapse ${n.label}` : `Expand ${n.label}`}
-								className="rounded p-0.5 hover:bg-background/60"
+								aria-expanded={isOpen}
+								className="grid size-5 shrink-0 place-items-center rounded hover:bg-background/60"
 								onClick={() => toggle(key)}
 							>
 								<ChevronRight
@@ -68,18 +76,8 @@ export function SidebarTagTree() {
 								/>
 							</button>
 						) : (
-							<span className="w-[18px] shrink-0" />
+							<span className="size-5 shrink-0" />
 						)}
-						<button
-							type="button"
-							className="flex min-w-0 flex-1 items-center gap-2 text-left"
-							title={n.name}
-							onClick={() => detail.open({ kind: "tag", name: n.name })}
-						>
-							<Tag className="size-3.5 shrink-0" />
-							<span className="truncate">{n.label}</span>
-							<span className="ml-auto text-xs">{n.trackCount}</span>
-						</button>
 					</div>
 					{isOpen && rows(n.children, depth + 1)}
 				</div>
@@ -90,11 +88,9 @@ export function SidebarTagTree() {
 		return null;
 	}
 	return (
-		<>
-			<div className="px-2 pt-3 pb-1 font-medium text-muted-foreground text-xs uppercase tracking-wide">
-				Tags
-			</div>
-			<div className="space-y-0.5">{rows(tree, 0)}</div>
-		</>
+		<section className="mt-4 space-y-0.5">
+			<SectionLabel>Tags</SectionLabel>
+			{rows(tree, 0)}
+		</section>
 	);
 }

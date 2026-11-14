@@ -123,7 +123,7 @@ export function fixablePaths(issues: readonly AuditIssue[], scopes?: readonly st
 
 const KIND_LABEL: Record<IssueKind, (n: number) => string> = {
 	notMp3: (n) => `Convert ${n} file${n === 1 ? "" : "s"} to MP3 (originals go to the Trash)`,
-	tagVersion: (n) => `Rewrite tags as ID3v2.3 on ${n} file${n === 1 ? "" : "s"}`,
+	tagVersion: (n) => `Rewrite metadata as ID3v2.3 on ${n} file${n === 1 ? "" : "s"}`,
 	misplaced: (n) => `Move ${n} file${n === 1 ? "" : "s"} into Artist/Album folders`,
 };
 
@@ -144,7 +144,7 @@ export function describeFixes(issues: readonly AuditIssue[], paths: readonly str
 
 const KIND_COUNT: Record<IssueKind, (n: number) => string> = {
 	notMp3: (n) => `${n} not MP3`,
-	tagVersion: (n) => `${n} with ID3v2.4 tags`,
+	tagVersion: (n) => `${n} with ID3v2.4 metadata`,
 	misplaced: (n) => `${n} in the wrong folder`,
 };
 

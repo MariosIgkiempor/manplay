@@ -738,7 +738,7 @@ function pasteSummary(clip: TagClipboard, isDir: boolean): string[] {
 	}
 	const skipped = Object.keys(clip.values).length - applied.length;
 	if (skipped > 0) {
-		lines.push(`${skipped} song-only ${skipped === 1 ? "tag" : "tags"} skipped on folders`);
+		lines.push(`${skipped} song-only ${skipped === 1 ? "field" : "fields"} skipped on folders`);
 	}
 	return lines;
 }
@@ -757,15 +757,15 @@ function tagItems(
 	const items: MenuItem[] = [];
 	if (single) {
 		items.push({
-			label: entry.entry.isDir ? "Edit tags for all songs…" : "Edit tags…",
+			label: entry.entry.isDir ? "Edit metadata for all songs…" : "Edit metadata…",
 			icon: Tags,
 			run: () => a.editTags(entry),
 		});
-		items.push({ label: "Copy tags…", icon: Copy, run: () => a.copyTags(entry) });
+		items.push({ label: "Copy metadata…", icon: Copy, run: () => a.copyTags(entry) });
 	}
 	if (clip) {
 		items.push({
-			label: "Paste tags",
+			label: "Paste metadata",
 			icon: ClipboardPaste,
 			detail: pasteSummary(clip, entry.entry.isDir),
 			run: () => a.pasteTags(paths),

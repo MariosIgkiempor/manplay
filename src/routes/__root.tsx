@@ -3,6 +3,7 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { AutoRefresh } from "#/components/auto-refresh.tsx";
 import { DetailPanel } from "#/components/detail-panel.tsx";
+import { IssuesDrawer, IssuesIndicator } from "#/components/issues-drawer.tsx";
 import { MissingDrawer, MissingIndicator } from "#/components/missing-files.tsx";
 import { PlayerBar } from "#/components/player-bar.tsx";
 import { Sidebar } from "#/components/sidebar.tsx";
@@ -31,6 +32,7 @@ export const Route = createRootRoute({
 function RootDocument({ children }: { children: ReactNode }) {
 	const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
 	const [missingOpen, setMissingOpen] = useState(false);
+	const [issuesOpen, setIssuesOpen] = useState(false);
 	return (
 		<html lang="en" className="dark">
 			<head>
@@ -53,10 +55,16 @@ function RootDocument({ children }: { children: ReactNode }) {
 													</StatusSlotContext.Provider>
 													<DetailPanel />
 													<MissingDrawer open={missingOpen} onClose={() => setMissingOpen(false)} />
+													<IssuesDrawer open={issuesOpen} onClose={() => setIssuesOpen(false)} />
 												</div>
 												<StatusBarHost
 													setSlot={setStatusSlot}
-													notices={<MissingIndicator onClick={() => setMissingOpen(true)} />}
+													notices={
+														<>
+															<IssuesIndicator onClick={() => setIssuesOpen(true)} />
+															<MissingIndicator onClick={() => setMissingOpen(true)} />
+														</>
+													}
 												/>
 											</div>
 										</div>

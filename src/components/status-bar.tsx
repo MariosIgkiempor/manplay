@@ -40,9 +40,7 @@ export function StatusBar({ children, leading }: { children: ReactNode; leading?
 			<div aria-hidden="true" className="h-9" />
 			{createPortal(
 				<div className="flex items-center gap-4 border-t bg-background/70 px-4 py-2 text-muted-foreground text-xs backdrop-blur-md">
-					<SyncStatusPill />
 					{leading}
-					{/* Pushed right so the stats do not move when a sync starts. */}
 					<div className="ml-auto flex items-center gap-4">{children}</div>
 				</div>,
 				slot,

@@ -41,7 +41,7 @@ export function AddToPlaylistMenu({ tracks, label, children }: Props) {
 								}
 							}}
 						>
-							<TextCursorInput className="size-4" /> Edit tags…
+							<TextCursorInput className="size-4" /> Edit metadata…
 						</ContextMenu.Item>
 					</ContextMenu.Popup>
 				</ContextMenu.Positioner>

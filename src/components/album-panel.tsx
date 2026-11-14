@@ -52,7 +52,7 @@ export function AlbumPanel({ albumKey }: { albumKey: string }) {
 					}
 				}}
 			>
-				<TextCursorInput /> Edit album tags
+				<TextCursorInput /> Edit album metadata
 			</Button>
 			<SelectableTrackList tracks={album.tracks} hideArt hideArtist hideAlbum showDuration />
 		</div>

@@ -21,7 +21,7 @@ export function undoTagWrite(before: TagPreview): UndoEntry | null {
 		edits: Object.fromEntries(f.changes.map((c) => [c.field, c.from ?? ""])),
 	}));
 	return {
-		label: `Tag edit on ${count(items.length, "song", "songs")}`,
+		label: `Metadata edit on ${count(items.length, "song", "songs")}`,
 		run: async () => {
 			const report = await tagsWriteMany(items);
 			if (report.failed.length > 0) {

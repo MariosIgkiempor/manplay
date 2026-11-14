@@ -12,7 +12,7 @@ import { type useImport, useImportProgress } from "#/lib/use-import.ts";
 const PHASE_LABEL = {
 	listing: "Looking through files",
 	checking: "Checking files",
-	tags: "Reading tags",
+	tags: "Reading metadata",
 } as const;
 
 function ScanPill({ progress }: { progress: ImportProgress | null }) {

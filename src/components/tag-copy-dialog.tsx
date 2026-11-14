@@ -57,15 +57,17 @@ export function TagCopyDialog({
 			/>
 			<div
 				role="dialog"
-				aria-label="Copy tags"
+				aria-label="Copy metadata"
 				className="relative flex max-h-[80vh] w-[28rem] max-w-[calc(100%-2rem)] flex-col rounded-xl border bg-background shadow-2xl"
 			>
 				<div className="border-b px-4 py-3">
-					<div className="font-medium text-sm">Copy tags</div>
+					<div className="font-medium text-sm">Copy metadata</div>
 					<div className="truncate text-muted-foreground text-xs">From {target.name}</div>
 				</div>
 				<div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
-					{view.isPending && <p className="py-2 text-muted-foreground text-sm">Reading tags…</p>}
+					{view.isPending && (
+						<p className="py-2 text-muted-foreground text-sm">Reading metadata…</p>
+					)}
 					{view.isSuccess && rows.length === 0 && (
 						<p className="py-2 text-muted-foreground text-sm">
 							Nothing to copy: no tags are set, or they differ between the songs.
@@ -88,7 +90,7 @@ export function TagCopyDialog({
 				</div>
 				<div className="flex items-center justify-between gap-2 border-t px-4 py-3">
 					<span className="text-muted-foreground text-xs">
-						{target.isDir ? "Folder: song-only tags are left out." : `${chosen.size} selected`}
+						{target.isDir ? "Folder: song-only fields are left out." : `${chosen.size} selected`}
 					</span>
 					<div className="flex gap-2">
 						<Button variant="ghost" onClick={onClose}>

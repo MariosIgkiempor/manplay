@@ -1,10 +1,11 @@
+import { useNavigate } from "@tanstack/react-router";
 import { Pause, Play } from "lucide-react";
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
-import { useDetailNav } from "#/context/detail-context.ts";
+import { useDetail, useDetailNav } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import { albumKey, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
@@ -77,7 +78,8 @@ function TagChips({
 	track: Track;
 	onRemoveTag: ((track: Track, tag: string) => void) | undefined;
 }) {
-	const go = useDetailNav();
+	const navigate = useNavigate();
+	const { close } = useDetail();
 	return (
 		<div className="flex flex-wrap gap-1">
 			{track.tags.map((tag) => (
@@ -90,7 +92,8 @@ function TagChips({
 						className="hover:underline"
 						onClick={(e) => {
 							e.stopPropagation();
-							go({ kind: "tag", name: tag });
+							close();
+							void navigate({ to: "/tags/$", params: { _splat: tag } });
 						}}
 						onDoubleClick={stop}
 					>

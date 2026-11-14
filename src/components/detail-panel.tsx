@@ -7,7 +7,6 @@ import { DownloadsPanel } from "#/components/downloads-source.tsx";
 import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
 import { ItunesPanel } from "#/components/itunes-source.tsx";
 import { RekordboxPanel } from "#/components/rekordbox-source.tsx";
-import { TagPanel } from "#/components/tag-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	type DetailView,
@@ -35,8 +34,6 @@ function Content({ view }: { view: DetailView }) {
 			const Panel = SERVICE_PANELS[view.service];
 			return <Panel />;
 		}
-		case "tag":
-			return <TagPanel name={view.name} />;
 		case "edit":
 			return <EditTagsPanel target={view.target} fromAlbum={view.fromAlbum ?? false} />;
 		default:
@@ -48,7 +45,7 @@ function isTyping(target: EventTarget | null): boolean {
 	return target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
 }
 
-/** Right-hand slide-over for album / artist / tag details, over a blurred backdrop; clicking the backdrop or pressing Escape closes it. */
+/** Right-hand slide-over for album / artist details, over a blurred backdrop; clicking the backdrop or pressing Escape closes it. */
 export function DetailPanel(): ReactNode {
 	const detail = useDetail();
 	// Keep the last view mounted while the panel slides out.

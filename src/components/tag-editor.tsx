@@ -65,7 +65,7 @@ export function TagEditor({
 }) {
 	const view = useTagsRead(where(target));
 	const write = useTagsWrite();
-	// Only edited fields live here; an empty string means "clear this tag".
+	// Only edited fields live here; an empty string means "clear this field".
 	const [draft, setDraft] = useState<Draft>({});
 	const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 	const [artVersion, setArtVersion] = useState(0);
@@ -244,7 +244,7 @@ function Header({
 				</div>
 				<div className="truncate text-muted-foreground text-xs">{subtitle}</div>
 			</div>
-			<Button variant="ghost" size="icon" aria-label="Close tags" onClick={onClose}>
+			<Button variant="ghost" size="icon" aria-label="Close metadata editor" onClick={onClose}>
 				<X />
 			</Button>
 		</div>
@@ -413,7 +413,7 @@ function Body({
 	onRevert: (id: string) => void;
 }) {
 	if (view.isPending) {
-		return <p className="p-4 text-muted-foreground text-sm">Reading tags…</p>;
+		return <p className="p-4 text-muted-foreground text-sm">Reading metadata…</p>;
 	}
 	if (view.isError) {
 		return <ErrorText message={String(view.error)} className="p-4 text-destructive text-sm" />;
@@ -633,7 +633,7 @@ function PlainControl({ id, field, shared, draft, onChange }: FieldProps & { id:
 				<button
 					type="button"
 					aria-label={`Clear ${field.label}`}
-					title="Clear this tag"
+					title="Clear this field"
 					onClick={() => onChange("")}
 					className="absolute inset-y-0 right-1 my-auto flex size-6 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-muted hover:text-foreground"
 				>
