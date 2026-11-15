@@ -16,6 +16,7 @@
 )]
 
 use crate::analysis::{Detail, WAVEFORM_RATE};
+use std::path::{Path, PathBuf};
 
 /// Columns of the waveform shown across the whole track.
 const PREVIEW: usize = 400;
@@ -91,14 +92,14 @@ fn extended_cue_sections() -> Vec<Vec<u8>> {
 }
 
 /// Beat grid: every beat from the first to the end, numbered 1–4 within its bar.
-fn beat_grid(d: &Detail, bpm: f64) -> Vec<u8> {
+fn beat_grid(d: &Stored, bpm: f64) -> Vec<u8> {
     let period = 60.0 / bpm;
     let tempo = (bpm * 100.0).round() as u16;
     let mut body = Vec::new();
     let mut count = 0u32;
     let mut t = d.first_beat;
     while t < d.duration {
-        let number = ((d.bar_offset + count as usize) % 4 + 1) as u16;
+        let number = ((usize::from(d.bar_offset) + count as usize) % 4 + 1) as u16;
         body.extend_from_slice(&number.to_be_bytes());
         body.extend_from_slice(&tempo.to_be_bytes());
         put(&mut body, (t * 1000.0).round() as u32);
@@ -141,6 +142,9 @@ fn byte((height, white): (u8, u8)) -> u8 {
 /// `n` columns summarising the whole track: the root mean square of the heights and the
 /// average whiteness in each slice.
 fn summary(cols: &[(u8, u8)], n: usize) -> Vec<(u8, u8)> {
+    if cols.is_empty() {
+        return vec![(0, 0); n];
+    }
     (0..n)
         .map(|i| {
             let lo = i * cols.len() / n;
@@ -165,10 +169,97 @@ fn preview_section(code: [u8; 4], bytes: &[u8]) -> Vec<u8> {
     section(code, &header, bytes)
 }
 
+/// A track's analysis as manplay keeps it: everything the drive's files are built from, so the
+/// library shows exactly what a CDJ will.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stored {
+    pub grid_bpm: Option<f64>,
+    /// Seconds.
+    pub first_beat: f64,
+    /// Position in the bar of the first beat (0 = downbeat).
+    pub bar_offset: u8,
+    /// Seconds.
+    pub duration: f64,
+    /// Detail waveform, `WAVEFORM_RATE` columns per second, each whiteness << 5 | height.
+    pub detail: Vec<u8>,
+}
+
+const MAGIC: &[u8; 4] = b"MPA1";
+
+impl Stored {
+    pub fn from_detail(d: &Detail) -> Self {
+        Self {
+            grid_bpm: d.grid_bpm,
+            first_beat: d.first_beat,
+            bar_offset: d.bar_offset as u8,
+            duration: d.duration,
+            detail: columns(d).into_iter().map(byte).collect(),
+        }
+    }
+
+    fn cols(&self) -> Vec<(u8, u8)> {
+        self.detail.iter().map(|b| (b & 0x1f, b >> 5)).collect()
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(36 + self.detail.len());
+        v.extend_from_slice(MAGIC);
+        v.extend_from_slice(&self.grid_bpm.unwrap_or(0.0).to_le_bytes());
+        v.extend_from_slice(&self.first_beat.to_le_bytes());
+        v.extend_from_slice(&self.duration.to_le_bytes());
+        v.push(self.bar_offset);
+        v.extend_from_slice(&(self.detail.len() as u32).to_le_bytes());
+        v.extend_from_slice(&self.detail);
+        v
+    }
+
+    pub fn decode(b: &[u8]) -> Option<Self> {
+        let f = |o: usize| -> Option<f64> {
+            Some(f64::from_le_bytes(b.get(o..o + 8)?.try_into().ok()?))
+        };
+        if b.get(..4)? != MAGIC {
+            return None;
+        }
+        let len = u32::from_le_bytes(b.get(29..33)?.try_into().ok()?) as usize;
+        let detail = b.get(33..33 + len)?.to_vec();
+        let bpm = f(4)?;
+        Some(Self {
+            grid_bpm: (bpm > 0.0).then_some(bpm),
+            first_beat: f(12)?,
+            duration: f(20)?,
+            bar_offset: *b.get(28)? % 4,
+            detail,
+        })
+    }
+}
+
+/// Where manplay keeps a track's analysis, by audio fingerprint.
+pub fn store_path(data_dir: &Path, fingerprint: &str) -> PathBuf {
+    let shard = fingerprint.get(..2).unwrap_or("00");
+    data_dir
+        .join("analysis")
+        .join(shard)
+        .join(format!("{fingerprint}.mpa"))
+}
+
+pub fn save(data_dir: &Path, fingerprint: &str, stored: &Stored) -> std::io::Result<()> {
+    let path = store_path(data_dir, fingerprint);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, stored.encode())?;
+    std::fs::rename(&tmp, &path)
+}
+
+pub fn load(data_dir: &Path, fingerprint: &str) -> Option<Stored> {
+    Stored::decode(&std::fs::read(store_path(data_dir, fingerprint)).ok()?)
+}
+
 /// The `.DAT` and `.EXT` files for a track at `path` on the drive. Without a tempo the grid is
 /// left out, as rekordbox does for beatless audio.
-pub fn files(path: &str, d: &Detail) -> (Vec<u8>, Vec<u8>) {
-    let cols = columns(d);
+pub fn files(path: &str, d: &Stored) -> (Vec<u8>, Vec<u8>) {
+    let cols = d.cols();
     let preview: Vec<u8> = summary(&cols, PREVIEW).into_iter().map(byte).collect();
     let tiny: Vec<u8> = summary(&cols, TINY)
         .into_iter()
@@ -183,12 +274,11 @@ pub fn files(path: &str, d: &Detail) -> (Vec<u8>, Vec<u8>) {
     dat.push(preview_section(*b"PWV2", &tiny));
     dat.extend(cue_sections());
 
-    let detail: Vec<u8> = cols.iter().copied().map(byte).collect();
     let mut header = Vec::new();
     put(&mut header, 1);
-    put(&mut header, detail.len() as u32);
+    put(&mut header, d.detail.len() as u32);
     put(&mut header, (WAVEFORM_RATE as u32) << 16);
-    let mut ext = vec![path_section(path), section(*b"PWV3", &header, &detail)];
+    let mut ext = vec![path_section(path), section(*b"PWV3", &header, &d.detail)];
     ext.extend(cue_sections());
     ext.extend(extended_cue_sections());
     (file(&dat), file(&ext))
@@ -250,7 +340,7 @@ mod tests {
 
     #[test]
     fn writes_rekordbox_shaped_files() {
-        let (dat, ext) = files("/Contents/A/B/x.mp3", &detail());
+        let (dat, ext) = files("/Contents/A/B/x.mp3", &Stored::from_detail(&detail()));
         let names: Vec<String> = tags(&dat).into_iter().map(|t| t.0).collect();
         assert_eq!(names, ["PPTH", "PQTZ", "PWAV", "PWV2", "PCOB", "PCOB"]);
         let names: Vec<String> = tags(&ext).into_iter().map(|t| t.0).collect();
@@ -282,7 +372,7 @@ mod tests {
     fn leaves_the_grid_out_without_a_tempo() {
         let mut d = detail();
         d.grid_bpm = None;
-        let (dat, _) = files("/x.mp3", &d);
+        let (dat, _) = files("/x.mp3", &Stored::from_detail(&d));
         assert!(tags(&dat).iter().all(|t| t.0 != "PQTZ"));
     }
 
@@ -292,5 +382,25 @@ mod tests {
         let b = dat_path(2, "/Contents/a.mp3");
         assert_ne!(a, b);
         assert!(a.starts_with("/PIONEER/USBANLZ/P") && a.ends_with("/ANLZ0000.DAT"));
+    }
+
+    #[test]
+    fn stored_analysis_round_trips() {
+        let stored = Stored::from_detail(&detail());
+        assert_eq!(Stored::decode(&stored.encode()), Some(stored.clone()));
+        assert_eq!(Stored::decode(b"nope"), None);
+        let mut none = stored;
+        none.grid_bpm = None;
+        assert_eq!(
+            Stored::decode(&none.encode()).and_then(|s| s.grid_bpm),
+            None
+        );
+
+        let dir = std::env::temp_dir().join(format!("manplay-anlz-{}", std::process::id()));
+        save(&dir, "abcdef", &none).expect("saves");
+        assert_eq!(load(&dir, "abcdef"), Some(none));
+        assert!(store_path(&dir, "abcdef").ends_with("analysis/ab/abcdef.mpa"));
+        assert_eq!(load(&dir, "missing"), None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

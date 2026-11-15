@@ -267,7 +267,7 @@ const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
      JOIN tags g ON g.id = tt.tag_id WHERE tt.track_id = t.id),
     (SELECT COUNT(*) FROM synced_files sf WHERE sf.track_id = t.id AND sf.size = t.size),
     t.duration_ms, t.bitrate, t.sample_rate,
-    COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key), a.fingerprint IS NOT NULL";
+    COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key), COALESCE(a.version, 0) >= 2";
 
 /// Joined wherever [`TRACK_COLS`] is selected.
 const ANALYSIS_JOIN: &str = "LEFT JOIN analysis a ON a.fingerprint = t.fingerprint";
@@ -1338,6 +1338,7 @@ pub struct ExportTrack {
     pub sample_rate: Option<i64>,
     pub bpm: Option<f64>,
     pub key: Option<String>,
+    pub fingerprint: Option<String>,
 }
 
 pub struct ExportPlaylist {
@@ -1351,7 +1352,8 @@ pub struct ExportPlaylist {
 pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPlaylist>), Error> {
     let mut stmt = conn.prepare(
         "SELECT t.id, t.path, t.artist, t.album, t.title, t.size, t.duration_ms, t.bitrate,
-                t.sample_rate, COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key)
+                t.sample_rate, COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key),
+                t.fingerprint
          FROM tracks t LEFT JOIN analysis a ON a.fingerprint = t.fingerprint
          WHERE t.missing_since IS NULL ORDER BY t.artist, t.album, t.path",
     )?;
@@ -1369,6 +1371,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
                 sample_rate: r.get(8)?,
                 bpm: r.get(9)?,
                 key: r.get(10)?,
+                fingerprint: r.get(11)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1504,7 +1507,8 @@ pub fn analysis_jobs(
         if wanted.as_ref().is_some_and(|w| !w.contains(&id)) {
             continue;
         }
-        if !force && version.is_some() {
+        // Up to date, or failed with the current version: nothing new to learn.
+        if !force && version.is_some_and(|v| v >= crate::analysis::VERSION) {
             continue;
         }
         if seen.insert(fingerprint.clone()) {
@@ -1621,6 +1625,11 @@ mod tests {
             tag_key: tag_bpm.map(|_| "Fm".to_owned()),
             ..NewTrack::default()
         }
+    }
+
+    #[test]
+    fn analyzed_flag_tracks_the_current_analysis_version() {
+        assert!(TRACK_COLS.contains(&format!(">= {}", crate::analysis::VERSION)));
     }
 
     #[test]

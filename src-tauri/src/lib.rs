@@ -522,7 +522,13 @@ fn run_analysis(
                     // A file that cannot be opened (no permission, unplugged drive) says nothing
                     // about its audio, so it is not remembered as failed and is tried next time.
                     let readable = std::fs::File::open(path).is_ok();
-                    let result = analysis::analyze(path);
+                    // The full analysis is kept so the library and USB exports share it.
+                    let result = analysis::analyze_detail(path, None).map(|d| {
+                        let stored = anlz::Stored::from_detail(&d);
+                        // Losing the waveform only costs a re-analysis at export.
+                        let _ = anlz::save(&state.data_dir, &job.fingerprint, &stored);
+                        d.analysis
+                    });
                     if tx.send((i, result, readable)).is_err() {
                         break;
                     }
@@ -1061,6 +1067,7 @@ async fn export_to_usb(
                         k
                     }
                 }),
+                fingerprint: t.fingerprint,
             })
             .collect();
         let playlists: Vec<usb_export::SourcePlaylist> = playlist_ids
@@ -1076,6 +1083,7 @@ async fn export_to_usb(
     if playlists.is_empty() {
         return Err(Error::Msg("Choose at least one playlist.".into()));
     }
+    let data_dir = state.data_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let drive = usb::list()
             .into_iter()
@@ -1092,6 +1100,7 @@ async fn export_to_usb(
             today: &today,
             stamp: &stamp,
             free_bytes: drive.free_bytes,
+            store: Some(&data_dir),
             camelot,
         };
         usb_export::export(&mount, &sources, &playlists, &opts, |p| {

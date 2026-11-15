@@ -32,6 +32,8 @@ pub struct Source {
     pub bpm: Option<f64>,
     /// As the player should show it, already in the chosen notation.
     pub key: Option<String>,
+    /// Audio fingerprint, under which manplay keeps the song's analysis.
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -335,14 +337,43 @@ fn back_up(mount: &Path, stamp: &str) -> io::Result<Option<String>> {
     Ok(Some(format!("/{rel}")))
 }
 
+/// A song's analysis for the drive, and a key detected along the way.
+struct Analyzed {
+    stored: anlz::Stored,
+    key: Option<String>,
+}
+
+/// The analysis manplay already keeps for the song, or a fresh one (then kept too). A kept
+/// analysis without a beat grid is redone when the library has a tempo to lay one out with.
+fn analyzed(source: &Source, store: Option<&Path>) -> Result<Analyzed, String> {
+    let kept = store
+        .zip(source.fingerprint.as_deref())
+        .and_then(|(dir, fp)| anlz::load(dir, fp))
+        .filter(|s| s.grid_bpm.is_some() || source.bpm.is_none());
+    if let Some(stored) = kept {
+        return Ok(Analyzed { stored, key: None });
+    }
+    let d: Detail = analysis::analyze_detail(&source.path, source.bpm)?;
+    let stored = anlz::Stored::from_detail(&d);
+    if let (Some(dir), Some(fp)) = (store, source.fingerprint.as_deref()) {
+        // Keeping it only saves time next export; failing to is not worth stopping for.
+        let _ = anlz::save(dir, fp, &stored);
+    }
+    Ok(Analyzed {
+        stored,
+        key: d.analysis.key,
+    })
+}
+
 /// Beat grid and waveform for each job's source file, on all but one core.
 fn analyze_all(
     jobs: &[(usize, &Source)],
+    store: Option<&Path>,
     progress: &mut impl FnMut(Progress),
-) -> Vec<Result<Detail, String>> {
+) -> Vec<Result<Analyzed, String>> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let total = jobs.len();
-    let mut out: Vec<Option<Result<Detail, String>>> = (0..total).map(|_| None).collect();
+    let mut out: Vec<Option<Result<Analyzed, String>>> = (0..total).map(|_| None).collect();
     if total == 0 {
         return Vec::new();
     }
@@ -363,7 +394,7 @@ fn analyze_all(
                     let Some((_, source)) = jobs.get(i) else {
                         break;
                     };
-                    let result = analysis::analyze_detail(&source.path, source.bpm);
+                    let result = analyzed(source, store);
                     if tx.send((i, result)).is_err() {
                         break;
                     }
@@ -391,9 +422,10 @@ fn analyze_all(
 fn write_analysis(
     mount: &Path,
     track: &mut pdb::Track,
-    d: &Detail,
+    a: &Analyzed,
     camelot: bool,
 ) -> Result<(), String> {
+    let d = &a.stored;
     let rel = anlz::dat_path(track.id, &track.path);
     let (dat, ext) = anlz::files(&track.path, d);
     let dat_path = on_drive(mount, &rel);
@@ -406,7 +438,7 @@ fn write_analysis(
         track.tempo = (bpm * 100.0).round() as u32;
     }
     if track.key.is_empty()
-        && let Some(key) = &d.analysis.key
+        && let Some(key) = &a.key
     {
         track.key = if camelot {
             analysis::camelot(key).unwrap_or_else(|| key.clone())
@@ -434,6 +466,9 @@ pub struct Options<'a> {
     /// Names the backup folder, e.g. `2026-11-15-1530`.
     pub stamp: &'a str,
     pub free_bytes: u64,
+    /// Where manplay keeps analyses (its data folder), to reuse and add to; `None` to always
+    /// analyse afresh.
+    pub store: Option<&'a Path>,
     /// Show detected keys as Camelot codes (`8A`) rather than `Am`.
     pub camelot: bool,
 }
@@ -544,7 +579,7 @@ pub fn export(
             Some((i, source))
         })
         .collect();
-    let results = analyze_all(&jobs, &mut progress);
+    let results = analyze_all(&jobs, opts.store, &mut progress);
     for ((index, source), result) in jobs.iter().zip(results) {
         let track = &mut lib.tracks[*index];
         match result.and_then(|d| write_analysis(mount, track, &d, opts.camelot).map(|()| d)) {
@@ -632,6 +667,7 @@ mod tests {
             sample_rate: Some(44_100),
             bpm: Some(140.0),
             key: Some("8A".into()),
+            fingerprint: None,
         }
     }
 
@@ -640,6 +676,7 @@ mod tests {
             today: "2026-11-15",
             stamp: "2026-11-15-1200",
             free_bytes: free,
+            store: None,
             camelot: true,
         }
     }
@@ -806,6 +843,37 @@ mod tests {
     }
 
     #[test]
+    fn uses_the_analysis_the_library_keeps() {
+        let lib_dir = dir("lib5");
+        let usb = dir("usb5");
+        let store = dir("store5");
+        // The "song" is not real audio, so only the kept analysis can give it a grid.
+        let mut song = source(&lib_dir, 1, "A", "B", "a.mp3", 100);
+        song.fingerprint = Some("ab12".into());
+        song.bpm = Some(128.0);
+        let kept = anlz::Stored {
+            grid_bpm: Some(128.0),
+            first_beat: 0.25,
+            bar_offset: 0,
+            duration: 30.0,
+            detail: vec![0x5f; 4500],
+        };
+        anlz::save(&store, "ab12", &kept).expect("saves");
+        let playlists = [SourcePlaylist {
+            name: "P".into(),
+            track_ids: vec![1],
+        }];
+        let mut o = opts(1 << 40);
+        o.store = Some(&store);
+        let report = export(&usb, &[song], &playlists, &o, |_| {}).expect("exports");
+        assert_eq!((report.analyzed, report.failed.len()), (1, 0));
+        let lib = crate::usb::library(&usb).expect("reads");
+        let t = &lib.tracks[0];
+        let written = fs::read(on_drive(&usb, &t.analyze_path)).expect("dat");
+        assert_eq!(written, anlz::files(&t.path, &kept).0);
+    }
+
+    #[test]
     fn refuses_when_the_drive_is_too_full() {
         let lib_dir = dir("lib3");
         let usb = dir("usb3");
@@ -850,6 +918,7 @@ mod tests {
             sample_rate: Some(44_100),
             bpm: Some(128.0),
             key: Some("8A".into()),
+            fingerprint: None,
         };
         let playlists = [SourcePlaylist {
             name: "manplay dry run".into(),

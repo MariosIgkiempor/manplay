@@ -35,7 +35,8 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 /// Bump when the algorithm changes in a way that makes old results worth redoing.
-pub const VERSION: i64 = 1;
+/// 2: beat grid and waveform kept alongside BPM and key.
+pub const VERSION: i64 = 2;
 
 /// Results outside this range are halved or doubled into it (rekordbox's default is similar).
 pub const BPM_MIN: f64 = 80.0;
@@ -74,15 +75,6 @@ pub struct Analysis {
     pub bpm: Option<f64>,
     /// Key in rekordbox spelling (`Am`, `F#`, ...); `None` for silence or unpitched audio.
     pub key: Option<String>,
-}
-
-/// Decodes `path` and detects its tempo and key.
-pub fn analyze(path: &Path) -> Result<Analysis, String> {
-    let features = extract(path)?;
-    Ok(Analysis {
-        bpm: detect_bpm(&features.onset, features.rate / HOP as f64),
-        key: detect_key(&features.chroma),
-    })
 }
 
 /// What a CDJ needs beyond BPM and key: where the beats fall and how loud the track is over time.
@@ -1110,11 +1102,11 @@ mod tests {
         let path = dir.join("loop.wav");
         std::fs::write(&path, wav(&mix, rate)).expect("write");
 
-        let got = analyze(&path).expect("analysis");
+        let got = analyze_detail(&path, None).expect("analysis").analysis;
         assert_eq!(got.bpm, Some(128.0));
         assert_eq!(got.key.as_deref(), Some("Am"));
 
-        assert!(analyze(&dir.join("missing.wav")).is_err());
+        assert!(analyze_detail(&dir.join("missing.wav"), None).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1126,7 +1118,7 @@ mod tests {
         let list = std::env::var("MANPLAY_ANALYZE").unwrap_or_default();
         for path in list.split(':').filter(|p| !p.is_empty()) {
             let start = std::time::Instant::now();
-            let got = analyze(Path::new(path));
+            let got = analyze_detail(Path::new(path), None).map(|d| d.analysis);
             println!("{:?}\t{:.2}s\t{path}", got, start.elapsed().as_secs_f64());
         }
     }
