@@ -1094,6 +1094,35 @@ export async function usbReset(mount: string): Promise<number> {
 	return int.parse(await invoke("usb_reset", { mount }));
 }
 
+/** Unmounts the drive so it can be unplugged. */
+export async function usbEject(mount: string): Promise<void> {
+	await invoke("usb_eject", { mount });
+}
+
+/** Opens the drive in Finder. */
+export async function usbReveal(mount: string): Promise<void> {
+	await invoke("usb_reveal", { mount });
+}
+
+const usbBackupsSchema = z.object({
+	count: int,
+	bytes: int,
+	/** Folder name of the newest backup, e.g. "2026-11-15-221530". */
+	latest: z.string().nullable(),
+});
+
+export type UsbBackups = z.infer<typeof usbBackupsSchema>;
+
+/** Copies of earlier libraries manplay kept on the drive (in `PIONEER/manplay-backup`). */
+export async function usbBackups(mount: string): Promise<UsbBackups> {
+	return usbBackupsSchema.parse(await invoke("usb_backups", { mount }));
+}
+
+/** Deletes all but the newest `keep` library backups; returns what is left. */
+export async function usbDeleteBackups(mount: string, keep: number): Promise<UsbBackups> {
+	return usbBackupsSchema.parse(await invoke("usb_delete_backups", { mount, keep }));
+}
+
 /** Edits the drive's rekordbox playlists and returns its library as it is now. */
 export async function usbEditPlaylists(mount: string, edit: UsbEdit): Promise<UsbEditOutcome> {
 	return usbEditOutcomeSchema.parse(await invoke("usb_edit_playlists", { mount, edit }));
@@ -1148,9 +1177,18 @@ const usbExportReportSchema = z.object({
 
 export type UsbExportReport = z.infer<typeof usbExportReportSchema>;
 
-/** Copies playlists and their songs onto a drive and rewrites its rekordbox library. */
-export async function exportToUsb(mount: string, playlistIds: number[]): Promise<UsbExportReport> {
-	return usbExportReportSchema.parse(await invoke("export_to_usb", { mount, playlistIds }));
+/**
+ * Copies playlists and their songs onto a drive and rewrites its rekordbox library. Each tag in
+ * `tagNames` becomes a top-level playlist of the songs tagged with it or anything below it.
+ */
+export async function exportToUsb(
+	mount: string,
+	playlistIds: number[],
+	tagNames: string[],
+): Promise<UsbExportReport> {
+	return usbExportReportSchema.parse(
+		await invoke("export_to_usb", { mount, playlistIds, tagNames }),
+	);
 }
 
 export function onUsbExportProgress(handler: (p: UsbExportProgress) => void): Promise<() => void> {

@@ -206,10 +206,133 @@ pub fn check_mount(mount: &Path) -> Result<(), String> {
     }
 }
 
+/// Unmounts the drive so it can be unplugged. Fails while another app has a file on it open.
+pub fn eject(mount: &Path) -> Result<(), String> {
+    let out = Command::new("diskutil")
+        .arg("eject")
+        .arg(mount)
+        .output()
+        .map_err(|e| format!("diskutil: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let why = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+    Err(if why.is_empty() {
+        "The drive could not be ejected. Close any app using it and try again.".to_owned()
+    } else {
+        why
+    })
+}
+
+/// Opens the drive in Finder.
+pub fn reveal(mount: &Path) -> Result<(), String> {
+    Command::new("open")
+        .arg(mount)
+        .status()
+        .map_err(|e| e.to_string())
+        .and_then(|s| {
+            s.success()
+                .then_some(())
+                .ok_or_else(|| "Finder could not open the drive.".to_owned())
+        })
+}
+
+/// Where each export and the first edit of a day keep a copy of the databases they replaced.
+pub const BACKUP_DIR: &str = "PIONEER/manplay-backup";
+
+/// The copies of earlier libraries manplay kept on a drive.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Backups {
+    pub count: usize,
+    pub bytes: u64,
+    /// Folder name of the newest, e.g. `2026-11-15-221530`.
+    pub latest: Option<String>,
+}
+
+fn dir_size(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path()),
+            Ok(_) => e.metadata().map_or(0, |m| m.len()),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+/// Backup folders, oldest first (their names are dates, so they sort by age).
+fn backup_dirs(mount: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(mount.join(BACKUP_DIR)) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.path())
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+pub fn backups(mount: &Path) -> Backups {
+    let dirs = backup_dirs(mount);
+    Backups {
+        count: dirs.len(),
+        bytes: dirs.iter().map(|d| dir_size(d)).sum(),
+        latest: dirs
+            .last()
+            .and_then(|d| d.file_name())
+            .map(|n| n.to_string_lossy().into_owned()),
+    }
+}
+
+/// Deletes all but the newest `keep` backups, for good (the drive's Trash would keep the space
+/// taken). Returns what is left.
+pub fn delete_backups(mount: &Path, keep: usize) -> Result<Backups, String> {
+    let dirs = backup_dirs(mount);
+    let drop = dirs.len().saturating_sub(keep);
+    for dir in &dirs[..drop] {
+        std::fs::remove_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    Ok(backups(mount))
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)] // tests: panicking is the failure mode
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_backups_go_and_the_newest_stay() {
+        let mount = std::env::temp_dir().join(format!("manplay-backups-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&mount);
+        for (stamp, bytes) in [
+            ("2026-01-02-100000", 10),
+            ("2026-03-01-edits", 20),
+            ("2026-02-01-090000", 30),
+        ] {
+            let dir = mount.join(BACKUP_DIR).join(stamp);
+            std::fs::create_dir_all(&dir).expect("dir");
+            std::fs::write(dir.join("export.pdb"), vec![0u8; bytes]).expect("file");
+        }
+        assert_eq!(
+            backups(&mount),
+            Backups {
+                count: 3,
+                bytes: 60,
+                latest: Some("2026-03-01-edits".into())
+            }
+        );
+        let left = delete_backups(&mount, 1).expect("deletes");
+        assert_eq!((left.count, left.bytes), (1, 20));
+        assert_eq!(delete_backups(&mount, 1).expect("again").count, 1);
+        assert_eq!(delete_backups(&mount, 0).expect("all").count, 0);
+        let _ = std::fs::remove_dir_all(&mount);
+    }
 
     const PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

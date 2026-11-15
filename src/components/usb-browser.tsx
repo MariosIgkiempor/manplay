@@ -101,54 +101,61 @@ export function UsbBrowser({
 	};
 
 	return (
-		<div className="space-y-3">
-			{editable && (
-				<div className="flex flex-wrap items-center gap-2">
-					<Button
-						size="sm"
-						variant="outline"
-						disabled={edit.isPending}
-						onClick={() => create(0, false)}
-					>
-						<ListPlus /> New playlist
-					</Button>
-					<Button
-						size="sm"
-						variant="outline"
-						disabled={edit.isPending}
-						onClick={() => create(0, true)}
-					>
-						<FolderPlus /> New folder
-					</Button>
-				</div>
-			)}
+		<div className="flex h-full min-h-0 flex-col gap-3">
 			{edit.isError && <ErrorLine>{String(edit.error)}</ErrorLine>}
-			<div className="grid grid-cols-[15rem_minmax(0,1fr)] gap-4">
-				<PlaylistNav
-					library={library}
-					view={view}
-					onView={setView}
-					renaming={renaming}
-					onRenamed={(p, name) => {
-						setRenaming(null);
-						if (name !== null) {
-							edit.mutate({ kind: "rename", id: p.id, name });
+			{/* Each column scrolls on its own, so the playlists stay in view beside a long list. */}
+			<div className="grid min-h-0 flex-1 grid-cols-[15rem_minmax(0,1fr)] gap-4">
+				<div className="flex min-h-0 flex-col gap-3">
+					{editable && (
+						<div className="grid shrink-0 grid-cols-2 gap-2">
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={edit.isPending}
+								onClick={() => create(0, false)}
+							>
+								<ListPlus /> Playlist
+							</Button>
+							<Button
+								size="sm"
+								variant="outline"
+								disabled={edit.isPending}
+								onClick={() => create(0, true)}
+							>
+								<FolderPlus /> Folder
+							</Button>
+						</div>
+					)}
+					<div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 pb-6">
+						<PlaylistNav
+							library={library}
+							view={view}
+							onView={setView}
+							renaming={renaming}
+							onRenamed={(p, name) => {
+								setRenaming(null);
+								if (name !== null) {
+									edit.mutate({ kind: "rename", id: p.id, name });
+								}
+							}}
+							actions={actions}
+						/>
+					</div>
+				</div>
+				<div className="-mx-1 min-h-0 overflow-y-auto px-1 pb-6">
+					<SongsView
+						mount={mount}
+						songs={tracks}
+						title={playlist?.name ?? "All tracks"}
+						isPlaylist={playlist !== undefined}
+						onRemove={
+							playlist && editable
+								? (positions) =>
+										edit.mutate({ kind: "removeTracks", playlistId: playlist.id, positions })
+								: undefined
 						}
-					}}
-					actions={actions}
-				/>
-				<SongsView
-					mount={mount}
-					songs={tracks}
-					title={playlist?.name ?? "All tracks"}
-					isPlaylist={playlist !== undefined}
-					onRemove={
-						playlist && editable
-							? (positions) =>
-									edit.mutate({ kind: "removeTracks", playlistId: playlist.id, positions })
-							: undefined
-					}
-				/>
+					/>
+				</div>
 			</div>
 			{deleting && (
 				<DeleteConfirm

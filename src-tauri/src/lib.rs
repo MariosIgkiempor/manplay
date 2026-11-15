@@ -1128,6 +1128,7 @@ async fn export_to_usb(
     state: State<'_, AppState>,
     mount: PathBuf,
     playlist_ids: Vec<i64>,
+    tag_names: Vec<String>,
 ) -> Result<usb_export::Report, Error> {
     if state.usb_exporting.swap(true, Ordering::SeqCst) {
         return Err(Error::Msg(
@@ -1167,7 +1168,7 @@ async fn export_to_usb(
                 grid_edited: t.grid_edited,
             })
             .collect();
-        let playlists: Vec<usb_export::SourcePlaylist> = playlist_ids
+        let mut playlists: Vec<usb_export::SourcePlaylist> = playlist_ids
             .iter()
             .filter_map(|id| lists.iter().find(|p| p.id == Some(*id)))
             .map(|p| usb_export::SourcePlaylist {
@@ -1175,10 +1176,20 @@ async fn export_to_usb(
                 track_ids: p.track_ids.clone(),
             })
             .collect();
+        // Tags become top-level playlists, named as in the rekordbox XML export ("Genre › House").
+        playlists.extend(
+            db::export_tag_playlists(&conn, &tag_names)?
+                .into_iter()
+                .filter(|p| !p.track_ids.is_empty())
+                .map(|p| usb_export::SourcePlaylist {
+                    name: p.name.replace('/', " › "),
+                    track_ids: p.track_ids,
+                }),
+        );
         (sources, playlists, camelot)
     };
     if playlists.is_empty() {
-        return Err(Error::Msg("Choose at least one playlist.".into()));
+        return Err(Error::Msg("Choose at least one playlist or tag.".into()));
     }
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -1232,6 +1243,68 @@ async fn usb_edit_playlists(
         let today = usb_export::date(unix_now());
         let stamp = format!("{today}-edits");
         usb_edit::edit(&mount, edit, &stamp, &today)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)
+}
+
+/// Unmounts a drive so it can be unplugged.
+#[tauri::command]
+async fn usb_eject(state: State<'_, AppState>, mount: PathBuf) -> Result<(), Error> {
+    if state.usb_exporting.load(Ordering::SeqCst) {
+        return Err(Error::Msg(
+            "Songs are being exported to a USB drive. Eject it when that finishes.".into(),
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        usb::check_mount(&mount)?;
+        usb::eject(&mount)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)
+}
+
+/// Opens a drive in Finder.
+#[tauri::command]
+async fn usb_reveal(mount: PathBuf) -> Result<(), Error> {
+    tauri::async_runtime::spawn_blocking(move || {
+        usb::check_mount(&mount)?;
+        usb::reveal(&mount)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)
+}
+
+/// The copies of earlier libraries manplay kept on a drive.
+#[tauri::command]
+async fn usb_backups(mount: PathBuf) -> Result<usb::Backups, Error> {
+    tauri::async_runtime::spawn_blocking(move || {
+        usb::check_mount(&mount)?;
+        Ok(usb::backups(&mount))
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)
+}
+
+/// Deletes all but the newest `keep` library backups on a drive; returns what is left.
+#[tauri::command]
+async fn usb_delete_backups(
+    state: State<'_, AppState>,
+    mount: PathBuf,
+    keep: usize,
+) -> Result<usb::Backups, Error> {
+    if state.usb_exporting.load(Ordering::SeqCst) {
+        return Err(Error::Msg(
+            "Songs are being exported to a USB drive. Try again when that finishes.".into(),
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        usb::check_mount(&mount)?;
+        usb::delete_backups(&mount, keep)
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))?
@@ -2596,6 +2669,10 @@ pub fn run() {
             export_to_usb,
             usb_edit_playlists,
             usb_reset,
+            usb_eject,
+            usb_reveal,
+            usb_backups,
+            usb_delete_backups,
             set_beat_grid,
             track_cues,
             set_track_cues,

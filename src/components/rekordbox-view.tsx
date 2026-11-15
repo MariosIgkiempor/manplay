@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, FileDown, FolderOpen, ListMusic, Search, Tag } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronRight, FileDown, FolderOpen, ListMusic } from "lucide-react";
+import { type ReactNode, useState } from "react";
 import { BrandIcon } from "#/components/brand-icon.tsx";
+import { CheckList, CheckRow, Filter, LinkButton, TagTree } from "#/components/check-list.tsx";
 import { Drawer } from "#/components/drawer.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Input } from "#/components/ui/input.tsx";
 import {
 	listPlaylists,
 	listTags,
@@ -18,8 +18,7 @@ import {
 	setRekordboxSelection,
 } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
-import { sameSelection, setTagTree, type TagCheck, tagCheck } from "#/lib/rekordbox-selection.ts";
-import { buildTagTree, type TagNode } from "#/lib/tag-tree.ts";
+import { sameSelection } from "#/lib/rekordbox-selection.ts";
 import { useAutosave } from "#/lib/unsaved.tsx";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { cn } from "#/lib/utils.ts";
@@ -28,56 +27,6 @@ const EMPTY: RekordboxSelection = { excludedPlaylists: [], tags: [] };
 
 function plural(n: number, one: string) {
 	return `${n} ${n === 1 ? one : `${one}s`}`;
-}
-
-function CheckRow({
-	state,
-	onChange,
-	label,
-	detail,
-	indent = 0,
-	lead,
-	icon,
-}: {
-	state: TagCheck;
-	onChange: (on: boolean) => void;
-	label: string;
-	detail: string;
-	indent?: number;
-	lead?: ReactNode;
-	icon: ReactNode;
-}) {
-	const box = useRef<HTMLInputElement>(null);
-	useEffect(() => {
-		if (box.current) {
-			box.current.indeterminate = state === "some";
-		}
-	}, [state]);
-	return (
-		<div
-			className={cn(
-				"flex items-center gap-1 rounded-lg pr-2 transition-colors hover:bg-muted/60",
-				state === "on" && "bg-primary/5",
-			)}
-			style={{ paddingLeft: `${4 + indent * 16}px` }}
-		>
-			<span className="flex size-6 shrink-0 items-center justify-center">{lead}</span>
-			<label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-1.5 text-sm">
-				<input
-					ref={box}
-					type="checkbox"
-					checked={state === "on"}
-					onChange={(e) => onChange(e.target.checked)}
-					className="size-4 accent-primary"
-				/>
-				<span className="shrink-0 text-muted-foreground">{icon}</span>
-				<span className={cn("min-w-0 flex-1 truncate", state === "off" && "text-muted-foreground")}>
-					{label}
-				</span>
-				<span className="shrink-0 text-muted-foreground text-xs tabular-nums">{detail}</span>
-			</label>
-		</div>
-	);
 }
 
 function Group({
@@ -111,52 +60,6 @@ function Group({
 		</section>
 	);
 }
-
-function LinkButton({
-	children,
-	onClick,
-	disabled,
-}: {
-	children: ReactNode;
-	onClick: () => void;
-	disabled?: boolean;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			disabled={disabled}
-			className="text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-		>
-			{children}
-		</button>
-	);
-}
-
-function Filter({
-	value,
-	onChange,
-	label,
-}: {
-	value: string;
-	onChange: (v: string) => void;
-	label: string;
-}) {
-	return (
-		<div className="relative">
-			<Search className="-translate-y-1/2 pointer-events-none absolute top-1/2 left-2.5 size-3.5 text-muted-foreground" />
-			<Input
-				value={value}
-				onChange={(e) => onChange(e.target.value)}
-				placeholder={label}
-				aria-label={label}
-				className="pl-8"
-			/>
-		</div>
-	);
-}
-
-const LIST = "max-h-72 space-y-0.5 overflow-y-auto rounded-lg border bg-background p-1";
 
 function Playlists({
 	selection,
@@ -205,7 +108,7 @@ function Playlists({
 					{all.length > 8 && (
 						<Filter value={filter} onChange={setFilter} label="Filter playlists" />
 					)}
-					<div className={LIST}>
+					<CheckList>
 						{shown.map((p) => (
 							<CheckRow
 								key={p.id}
@@ -219,73 +122,11 @@ function Playlists({
 						{shown.length === 0 && (
 							<p className="px-3 py-2 text-muted-foreground text-sm">No playlist matches.</p>
 						)}
-					</div>
+					</CheckList>
 				</>
 			)}
 		</Group>
 	);
-}
-
-function TagRows({
-	nodes,
-	depth,
-	selection,
-	open,
-	toggleOpen,
-	onChange,
-	flat,
-}: {
-	nodes: TagNode[];
-	depth: number;
-	selection: readonly string[];
-	open: ReadonlySet<string>;
-	toggleOpen: (key: string) => void;
-	onChange: (node: TagNode, on: boolean) => void;
-	flat: boolean;
-}) {
-	return nodes.map((n) => {
-		const key = n.name.toLowerCase();
-		const expanded = flat || open.has(key);
-		const hasKids = n.children.length > 0 && !flat;
-		return (
-			<div key={key}>
-				<CheckRow
-					indent={flat ? 0 : depth}
-					label={flat ? n.name : n.label}
-					detail={plural(n.trackCount, "track")}
-					icon={<Tag className="size-4" />}
-					state={tagCheck(selection, n)}
-					onChange={(on) => onChange(n, on)}
-					lead={
-						hasKids && (
-							<button
-								type="button"
-								aria-label={`${open.has(key) ? "Collapse" : "Expand"} ${n.label}`}
-								aria-expanded={open.has(key)}
-								onClick={() => toggleOpen(key)}
-								className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-							>
-								<ChevronRight
-									className={cn("size-4 transition-transform", open.has(key) && "rotate-90")}
-								/>
-							</button>
-						)
-					}
-				/>
-				{hasKids && expanded && (
-					<TagRows
-						nodes={n.children}
-						depth={depth + 1}
-						selection={selection}
-						open={open}
-						toggleOpen={toggleOpen}
-						onChange={onChange}
-						flat={flat}
-					/>
-				)}
-			</div>
-		);
-	});
 }
 
 function Tags({
@@ -296,34 +137,7 @@ function Tags({
 	onChange: (s: RekordboxSelection) => void;
 }) {
 	const tags = useQuery({ queryKey: ["tags"], queryFn: listTags });
-	const [filter, setFilter] = useState("");
-	const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
 	const all = tags.data ?? [];
-	const tree = useMemo(() => buildTagTree(all), [all]);
-	const needle = filter.trim().toLowerCase();
-	// While filtering, matching tags show as a flat list so a deep match is never hidden.
-	const matches = useMemo(
-		() =>
-			needle
-				? tree
-						.flatMap(function walk(n): TagNode[] {
-							return [n, ...n.children.flatMap(walk)];
-						})
-						.filter((n) => n.name.toLowerCase().includes(needle))
-				: [],
-		[tree, needle],
-	);
-	const toggleOpen = (key: string) =>
-		setOpen((s) => {
-			const next = new Set(s);
-			if (!next.delete(key)) {
-				next.add(key);
-			}
-			return next;
-		});
-	const set = (node: TagNode, on: boolean) =>
-		onChange({ ...selection, tags: setTagTree(selection.tags, node, on) });
-	const allNames = tree.length === 0 ? [] : all.map((t) => t.name);
 	return (
 		<Group
 			title="Tags as playlists"
@@ -331,8 +145,8 @@ function Tags({
 			actions={
 				<>
 					<LinkButton
-						disabled={selection.tags.length >= allNames.length}
-						onClick={() => onChange({ ...selection, tags: allNames })}
+						disabled={all.length === 0 || selection.tags.length >= all.length}
+						onClick={() => onChange({ ...selection, tags: all.map((t) => t.name) })}
 					>
 						Select all
 					</LinkButton>
@@ -348,23 +162,11 @@ function Tags({
 			{all.length === 0 ? (
 				<p className="text-muted-foreground text-sm">No tags yet.</p>
 			) : (
-				<>
-					{all.length > 8 && <Filter value={filter} onChange={setFilter} label="Filter tags" />}
-					<div className={LIST}>
-						<TagRows
-							nodes={needle ? matches : tree}
-							depth={0}
-							selection={selection.tags}
-							open={open}
-							toggleOpen={toggleOpen}
-							onChange={set}
-							flat={needle !== ""}
-						/>
-						{needle && matches.length === 0 && (
-							<p className="px-3 py-2 text-muted-foreground text-sm">No tag matches.</p>
-						)}
-					</div>
-				</>
+				<TagTree
+					tags={all}
+					selected={selection.tags}
+					onChange={(names) => onChange({ ...selection, tags: names })}
+				/>
 			)}
 		</Group>
 	);
