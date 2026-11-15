@@ -18,6 +18,7 @@ const track = (id: number, fields: Record<string, string>, extra: Partial<Track>
 	bpm: null,
 	key: null,
 	analyzed: false,
+	edited: { bpm: false, key: false, grid: false },
 	...extra,
 });
 

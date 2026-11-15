@@ -88,6 +88,9 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 				{report.analyzed > 0 && (
 					<li>{plural(report.analyzed, "song", "songs")} given a beat grid and waveform</li>
 				)}
+				{report.regridded > 0 && (
+					<li>{plural(report.regridded, "edited beat grid", "edited beat grids")} updated</li>
+				)}
 				<li>{plural(report.libraryTracks, "track", "tracks")} in the drive's library now</li>
 				{report.backup && (
 					<li>

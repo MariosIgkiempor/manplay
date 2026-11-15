@@ -11,15 +11,17 @@ function patched(track: Track, field: InlineField, value: string): Track {
 	if (field === "title") {
 		return { ...track, title: value };
 	}
+	const edited = { ...track.edited, [field]: true };
 	if (field === "bpm") {
-		return { ...track, bpm: value === "" ? null : Number(value) };
+		return { ...track, edited, bpm: value === "" ? null : Number(value) };
 	}
-	return { ...track, key: value === "" ? null : (normalizeKey(value) ?? track.key) };
+	return { ...track, edited, key: value === "" ? null : (normalizeKey(value) ?? track.key) };
 }
 
 /**
  * Saves one value of one song from a list row. The lists update at once; the library rescan
- * that follows confirms (or reverts) it. A BPM or key typed by hand replaces the detected one.
+ * that follows confirms (or reverts) it. A BPM or key typed by hand replaces the detected one
+ * and is kept through re-analysis.
  */
 export function useTrackEdit() {
 	const queryClient = useQueryClient();

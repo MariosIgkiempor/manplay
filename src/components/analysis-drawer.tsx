@@ -38,6 +38,8 @@ interface Counts {
 	withKey: number;
 	/** Analyzed songs with a BPM or key to write into tags. */
 	withResults: number;
+	/** Songs with a BPM, key or beat grid set by hand. */
+	edited: number;
 }
 
 function count(tracks: readonly Track[]): Counts {
@@ -49,6 +51,7 @@ function count(tracks: readonly Track[]): Counts {
 		withBpm: analyzed.filter((t) => t.bpm !== null).length,
 		withKey: analyzed.filter((t) => t.key !== null).length,
 		withResults: analyzed.filter((t) => t.bpm !== null || t.key !== null).length,
+		edited: tracks.filter((t) => t.edited.bpm || t.edited.key || t.edited.grid).length,
 	};
 }
 
@@ -169,8 +172,11 @@ function RunControls({
 	saving,
 	onRun,
 	onStop,
+	replaceEdits,
 }: {
 	counts: Counts;
+	/** Whether re-analysis replaces values set by hand (the setting). */
+	replaceEdits: boolean;
 	running: boolean;
 	stopping: boolean;
 	saving: boolean;
@@ -211,8 +217,14 @@ function RunControls({
 						onRun(true);
 					}}
 				>
-					BPM and key found earlier, including values you typed in, are replaced. You can stop at
-					any time and keep what is done.
+					{counts.edited === 0 || replaceEdits
+						? "Every BPM, key and beat grid is detected again"
+						: "Detected BPM, keys and beat grids are replaced"}
+					{counts.edited > 0 &&
+						(replaceEdits
+							? `, including the ${plural(counts.edited, "song", "songs")} you edited by hand.`
+							: `; the ${plural(counts.edited, "song", "songs")} you edited by hand keep your values.`)}
+					{counts.edited === 0 && "."} You can stop at any time and keep what is done.
 				</ConfirmDialog>
 			)}
 		</div>
@@ -345,6 +357,32 @@ function FileTags({
 	);
 }
 
+/** Whether re-analysis may replace BPM, keys and grids set by hand. Off unless chosen. */
+function HandEdits({ edited }: { edited: number }) {
+	const settings = useAnalysisSettings();
+	const setSettings = useSetAnalysisSettings();
+	const current = settings.data;
+	if (!current) {
+		return null;
+	}
+	return (
+		<Section title="Your edits" count={edited}>
+			<div className="divide-y rounded-lg border px-3">
+				<SettingRow
+					label="Re-analysis replaces my edits"
+					title="Off: a BPM, key or beat grid you set by hand stays when songs are analyzed again. Right-click a song to discard its edits."
+				>
+					<Switch
+						label="Re-analysis replaces BPM, keys and beat grids set by hand"
+						checked={current.replaceEdits}
+						onChange={(on) => setSettings.mutate({ ...current, replaceEdits: on })}
+					/>
+				</SettingRow>
+			</div>
+		</Section>
+	);
+}
+
 function Failures({
 	failures,
 	root,
@@ -418,6 +456,7 @@ function AnalysisBody() {
 	const counts = useMemo(() => count(tracks), [tracks]);
 	const idByPath = useMemo(() => new Map(tracks.map((t) => [t.path, t.id])), [tracks]);
 	const analyze = useAnalyze();
+	const replaceEdits = useAnalysisSettings().data?.replaceEdits ?? false;
 	const { running, progress } = useAnalysisProgress();
 	const [stopping, setStopping] = useState(false);
 	const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -438,6 +477,7 @@ function AnalysisBody() {
 				<Figures counts={counts} failed={failures.length} />
 				<RunControls
 					counts={counts}
+					replaceEdits={replaceEdits}
 					running={running}
 					stopping={stopping}
 					saving={progress?.phase === "saving"}
@@ -450,6 +490,7 @@ function AnalysisBody() {
 				{outcome && !running && <OutcomeLine outcome={outcome} />}
 			</section>
 			<FileTags withResults={counts.withResults} running={running} onOutcome={setOutcome} />
+			<HandEdits edited={counts.edited} />
 			<Failures
 				failures={failures}
 				root={root}

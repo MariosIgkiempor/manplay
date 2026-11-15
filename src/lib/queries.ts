@@ -151,6 +151,16 @@ export function useAnalyze() {
 	});
 }
 
+/** Analyzes songs afresh, discarding the BPM, key and grid set on them by hand. */
+export function useRedetect() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationKey: ANALYSIS_KEY,
+		mutationFn: (trackIds: number[]) => analyzeTracks(trackIds, true, true),
+		onSettled: () => refreshAfterAnalysis(queryClient),
+	});
+}
+
 async function refreshAfterAnalysis(queryClient: ReturnType<typeof useQueryClient>) {
 	for (const key of [
 		"tracks",

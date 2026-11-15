@@ -28,6 +28,8 @@ pub struct Track {
     pub analyzed: bool,
     /// Tag values shown in lists (BPM, key, genre, label, ...), as stored in the file.
     pub fields: std::collections::BTreeMap<String, String>,
+    /// Which of BPM, key and beat grid were set by hand.
+    pub edited: Edited,
 }
 
 #[derive(Default)]
@@ -195,6 +197,25 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "sync_runs", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
     add_column(&conn, "sync_runs", "errors", "TEXT NOT NULL DEFAULT '[]'")?;
     add_column(&conn, "sync_runs", "batch", "INTEGER NOT NULL DEFAULT 0")?;
+    // Values set by hand, which a new analysis keeps unless told to replace them.
+    add_column(
+        &conn,
+        "analysis",
+        "bpm_edited",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column(
+        &conn,
+        "analysis",
+        "key_edited",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column(
+        &conn,
+        "analysis",
+        "grid_edited",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     prepare_tags(&conn).map(|()| conn)
 }
 
@@ -220,8 +241,10 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
         // analysis follows it to the new one rather than being lost.
         let mut carry = tx.prepare(
             "INSERT OR IGNORE INTO analysis
-                 (fingerprint, bpm, musical_key, error, version, analyzed_at)
-             SELECT ?2, a.bpm, a.musical_key, a.error, a.version, a.analyzed_at
+                 (fingerprint, bpm, musical_key, error, version, analyzed_at,
+                  bpm_edited, key_edited, grid_edited)
+             SELECT ?2, a.bpm, a.musical_key, a.error, a.version, a.analyzed_at,
+                    a.bpm_edited, a.key_edited, a.grid_edited
              FROM tracks t JOIN analysis a ON a.fingerprint = t.fingerprint
              WHERE t.path = ?1 AND t.fingerprint <> ?2",
         )?;
@@ -275,7 +298,7 @@ const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
     (SELECT COUNT(*) FROM synced_files sf WHERE sf.track_id = t.id AND sf.size = t.size),
     t.duration_ms, t.bitrate, t.sample_rate,
     COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key), COALESCE(a.version, 0) >= 2,
-    t.fields";
+    t.fields, COALESCE(a.bpm_edited, 0), COALESCE(a.key_edited, 0), COALESCE(a.grid_edited, 0)";
 
 /// Joined wherever [`TRACK_COLS`] is selected.
 const ANALYSIS_JOIN: &str = "LEFT JOIN analysis a ON a.fingerprint = t.fingerprint";
@@ -303,7 +326,20 @@ fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
             .get::<_, Option<String>>(14)?
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default(),
+        edited: Edited {
+            bpm: r.get(15)?,
+            key: r.get(16)?,
+            grid: r.get(17)?,
+        },
     })
+}
+
+/// Which of a song's analysis values were set by hand.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Edited {
+    pub bpm: bool,
+    pub key: bool,
+    pub grid: bool,
 }
 
 /// Replaces the remembered tag values (artists, genres, ...) with what the last scan saw.
@@ -783,20 +819,37 @@ pub fn set_tempo_key(
     bpm: Option<Option<f64>>,
     key: Option<Option<&str>>,
 ) -> Result<(), Error> {
+    // A song never analysed gets a row (version 0, so it is still analysed later) to hold the
+    // value; the analysis then fills in the rest around it.
+    conn.execute(
+        "INSERT OR IGNORE INTO analysis (fingerprint, version, analyzed_at)
+         SELECT fingerprint, 0, 0 FROM tracks WHERE id = ?1 AND fingerprint IS NOT NULL",
+        params![id],
+    )?;
     if let Some(bpm) = bpm {
         conn.execute(
-            "UPDATE analysis SET bpm = ?2, error = NULL
+            "UPDATE analysis SET bpm = ?2, bpm_edited = 1, error = NULL
              WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
             params![id, bpm],
         )?;
     }
     if let Some(key) = key {
         conn.execute(
-            "UPDATE analysis SET musical_key = ?2, error = NULL
+            "UPDATE analysis SET musical_key = ?2, key_edited = 1, error = NULL
              WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
             params![id, key],
         )?;
     }
+    Ok(())
+}
+
+/// Marks a song's beat grid as set by hand.
+pub fn mark_grid_edited(conn: &Connection, id: i64) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE analysis SET grid_edited = 1
+         WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
+        params![id],
+    )?;
     Ok(())
 }
 
@@ -1518,6 +1571,8 @@ pub fn put_import_cache(conn: &Connection, folder: &str, data: &str) -> Result<(
 pub struct AnalysisJob {
     pub path: String,
     pub fingerprint: String,
+    /// The beat grid was set by hand: keep it, take only the new waveform.
+    pub keep_grid: bool,
 }
 
 /// Present tracks to analyse: those in `ids` (every track when `None`), one per distinct audio
@@ -1526,10 +1581,11 @@ pub fn analysis_jobs(
     conn: &Connection,
     ids: Option<&[i64]>,
     force: bool,
+    replace_edits: bool,
 ) -> Result<Vec<AnalysisJob>, Error> {
     let wanted: Option<std::collections::HashSet<i64>> = ids.map(|i| i.iter().copied().collect());
     let mut stmt = conn.prepare(
-        "SELECT t.id, t.path, t.fingerprint, a.version FROM tracks t
+        "SELECT t.id, t.path, t.fingerprint, a.version, COALESCE(a.grid_edited, 0) FROM tracks t
          LEFT JOIN analysis a ON a.fingerprint = t.fingerprint
          WHERE t.missing_since IS NULL AND t.fingerprint IS NOT NULL
          ORDER BY t.artist, t.album, t.path",
@@ -1540,12 +1596,13 @@ pub fn analysis_jobs(
             r.get::<_, String>(1)?,
             r.get::<_, String>(2)?,
             r.get::<_, Option<i64>>(3)?,
+            r.get::<_, bool>(4)?,
         ))
     })?;
     let mut seen = std::collections::HashSet::new();
     let mut jobs = Vec::new();
     for row in rows {
-        let (id, path, fingerprint, version) = row?;
+        let (id, path, fingerprint, version, grid_edited) = row?;
         if wanted.as_ref().is_some_and(|w| !w.contains(&id)) {
             continue;
         }
@@ -1554,7 +1611,11 @@ pub fn analysis_jobs(
             continue;
         }
         if seen.insert(fingerprint.clone()) {
-            jobs.push(AnalysisJob { path, fingerprint });
+            jobs.push(AnalysisJob {
+                path,
+                fingerprint,
+                keep_grid: grid_edited && !replace_edits,
+            });
         }
     }
     Ok(jobs)
@@ -1662,12 +1723,14 @@ pub fn analysis_failures(conn: &Connection) -> Result<Vec<crate::audit::FixFailu
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-/// Stores the outcome of analysing the audio with this fingerprint.
+/// Stores the outcome of analysing the audio with this fingerprint. BPM and key set by hand
+/// stay, unless `replace_edits`, which also forgets that they were set by hand.
 pub fn store_analysis(
     conn: &Connection,
     fingerprint: &str,
     result: &Result<crate::analysis::Analysis, String>,
     now: i64,
+    replace_edits: bool,
 ) -> Result<(), Error> {
     let (bpm, key, error) = match result {
         Ok(a) => (a.bpm, a.key.as_deref(), None),
@@ -1676,10 +1739,24 @@ pub fn store_analysis(
     conn.execute(
         "INSERT INTO analysis (fingerprint, bpm, musical_key, error, version, analyzed_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(fingerprint) DO UPDATE SET bpm = excluded.bpm,
-             musical_key = excluded.musical_key, error = excluded.error,
-             version = excluded.version, analyzed_at = excluded.analyzed_at",
-        params![fingerprint, bpm, key, error, crate::analysis::VERSION, now],
+         ON CONFLICT(fingerprint) DO UPDATE SET
+             bpm = CASE WHEN analysis.bpm_edited AND NOT ?7 THEN analysis.bpm ELSE excluded.bpm END,
+             musical_key = CASE WHEN analysis.key_edited AND NOT ?7
+                 THEN analysis.musical_key ELSE excluded.musical_key END,
+             error = excluded.error, version = excluded.version,
+             analyzed_at = excluded.analyzed_at,
+             bpm_edited = analysis.bpm_edited AND NOT ?7,
+             key_edited = analysis.key_edited AND NOT ?7,
+             grid_edited = analysis.grid_edited AND NOT ?7",
+        params![
+            fingerprint,
+            bpm,
+            key,
+            error,
+            crate::analysis::VERSION,
+            now,
+            replace_edits
+        ],
     )?;
     Ok(())
 }
@@ -1710,6 +1787,40 @@ mod tests {
     }
 
     #[test]
+    fn hand_edits_survive_reanalysis_unless_replaced() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
+        // Typed before any analysis: kept in a row that still counts as not analysed.
+        set_tempo_key(&conn, 1, Some(Some(126.0)), None).expect("edit");
+        let jobs = analysis_jobs(&conn, None, false, false).expect("jobs");
+        assert_eq!(jobs.len(), 1, "still analysed");
+        let found = Ok(Analysis {
+            bpm: Some(128.0),
+            key: Some("Am".into()),
+        });
+        store_analysis(&conn, "x", &found, 1, false).expect("store");
+        let t = &list(&conn).expect("list")[0];
+        assert_eq!((t.bpm, t.key.as_deref()), (Some(126.0), Some("Am")));
+        assert_eq!(
+            t.edited,
+            Edited {
+                bpm: true,
+                key: false,
+                grid: false
+            }
+        );
+
+        mark_grid_edited(&conn, 1).expect("grid");
+        assert!(analysis_jobs(&conn, None, true, false).expect("jobs")[0].keep_grid);
+        assert!(!analysis_jobs(&conn, None, true, true).expect("jobs")[0].keep_grid);
+
+        store_analysis(&conn, "x", &found, 2, true).expect("replace");
+        let t = &list(&conn).expect("list")[0];
+        assert_eq!(t.bpm, Some(128.0));
+        assert_eq!(t.edited, Edited::default(), "replacing forgets the edits");
+    }
+
+    #[test]
     fn analysis_follows_content_and_falls_back_to_tags() {
         let mut conn = open(Path::new(":memory:")).expect("db");
         upsert(
@@ -1722,18 +1833,22 @@ mod tests {
         )
         .expect("upsert");
 
-        let jobs = analysis_jobs(&conn, None, false).expect("jobs");
+        let jobs = analysis_jobs(&conn, None, false, false).expect("jobs");
         assert_eq!(jobs.len(), 2, "duplicates are analysed once");
 
         let found = Ok(Analysis {
             bpm: Some(128.0),
             key: Some("Am".into()),
         });
-        store_analysis(&conn, "x", &found, 1).expect("store");
-        store_analysis(&conn, "y", &Err("bad file".into()), 1).expect("store");
+        store_analysis(&conn, "x", &found, 1, false).expect("store");
+        store_analysis(&conn, "y", &Err("bad file".into()), 1, false).expect("store");
 
-        assert!(analysis_jobs(&conn, None, false).expect("jobs").is_empty());
-        let by_id = analysis_jobs(&conn, Some(&[1]), true).expect("forced");
+        assert!(
+            analysis_jobs(&conn, None, false, false)
+                .expect("jobs")
+                .is_empty()
+        );
+        let by_id = analysis_jobs(&conn, Some(&[1]), true, false).expect("forced");
         assert_eq!(by_id.len(), 1);
         assert_eq!(by_id[0].path, "/a.mp3");
 

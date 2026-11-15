@@ -320,6 +320,8 @@ struct AnalysisSettings {
     write_tags: bool,
     /// Key notation in the tags: `musical` (`Am`) or `camelot` (`8A`).
     key_format: KeyFormat,
+    /// Re-analysing replaces BPM, key and beat grids set by hand. Off: they are kept.
+    replace_edits: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -571,6 +573,7 @@ struct AnalysisReport {
 fn run_analysis(
     state: &AppState,
     jobs: &[db::AnalysisJob],
+    replace_edits: bool,
     report: &(dyn Fn(AnalysisProgress) + Sync),
 ) -> Result<AnalysisReport, Error> {
     use std::sync::atomic::AtomicUsize;
@@ -597,7 +600,15 @@ fn run_analysis(
                     let readable = std::fs::File::open(path).is_ok();
                     // The full analysis is kept so the library and USB exports share it.
                     let result = analysis::analyze_detail(path, None).map(|d| {
-                        let stored = anlz::Stored::from_detail(&d);
+                        let mut stored = anlz::Stored::from_detail(&d);
+                        // A grid set by hand stays; only the waveform is new.
+                        if job.keep_grid
+                            && let Some(old) = anlz::load(&state.data_dir, &job.fingerprint)
+                        {
+                            stored.grid_bpm = old.grid_bpm;
+                            stored.first_beat = old.first_beat;
+                            stored.bar_offset = old.bar_offset;
+                        }
                         // Losing the waveform only costs a re-analysis at export.
                         let _ = anlz::save(&state.data_dir, &job.fingerprint, &stored);
                         d.analysis
@@ -617,7 +628,13 @@ fn run_analysis(
         for (i, result, readable) in rx {
             if readable {
                 let conn = state.db.lock().map_err(|_| Error::Lock)?;
-                db::store_analysis(&conn, &jobs[i].fingerprint, &result, unix_now())?;
+                db::store_analysis(
+                    &conn,
+                    &jobs[i].fingerprint,
+                    &result,
+                    unix_now(),
+                    replace_edits,
+                )?;
             }
             if result.is_ok() {
                 out.analyzed += 1;
@@ -637,22 +654,25 @@ fn run_analysis(
 }
 
 /// Detects BPM and key for the tracks in `track_ids` (every track when `None`). Unless
-/// `force`, audio that was analysed before is skipped. Emits `analysis-progress` events.
+/// `force`, audio that was analysed before is skipped. Values set by hand are kept unless
+/// `replace_edits` (the setting's value when `None`). Emits `analysis-progress` events.
 #[tauri::command]
 async fn analyze_tracks(
     app: AppHandle,
     state: State<'_, AppState>,
     track_ids: Option<Vec<i64>>,
     force: bool,
+    replace_edits: Option<bool>,
 ) -> Result<AnalysisReport, Error> {
     if state.analyzing.swap(true, Ordering::SeqCst) {
         return Err(Error::Msg("an analysis is already running".to_owned()));
     }
     let _guard = SyncGuard(&state.analyzing);
     state.cancel_analysis.store(false, Ordering::SeqCst);
-    let (jobs, ids) = {
+    let (jobs, ids, replace_edits) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        let jobs = db::analysis_jobs(&conn, track_ids.as_deref(), force)?;
+        let replace_edits = replace_edits.unwrap_or(analysis_settings_of(&conn)?.replace_edits);
+        let jobs = db::analysis_jobs(&conn, track_ids.as_deref(), force, replace_edits)?;
         let ids = db::track_ids_with_fingerprints(
             &conn,
             &jobs
@@ -660,7 +680,7 @@ async fn analyze_tracks(
                 .map(|j| j.fingerprint.as_str())
                 .collect::<Vec<_>>(),
         )?;
-        (jobs, ids)
+        (jobs, ids, replace_edits)
     };
     if jobs.is_empty() {
         return Ok(AnalysisReport::default());
@@ -671,7 +691,7 @@ async fn analyze_tracks(
         let report = |p: AnalysisProgress| {
             let _ = handle.emit("analysis-progress", p);
         };
-        run_analysis(&state, &jobs, &report)
+        run_analysis(&state, &jobs, replace_edits, &report)
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))??;
@@ -1285,14 +1305,12 @@ async fn set_beat_grid(
     .await
     .map_err(|e| Error::Msg(e.to_string()))?
     .map_err(Error::Msg)?;
-    if let Some(bpm) = stored.grid_bpm {
-        with_db!(state, |c| db::set_tempo_key(
-            c,
-            track_id,
-            Some(Some(bpm)),
-            None
-        ))?;
-    }
+    with_db!(state, |c| {
+        if let Some(bpm) = stored.grid_bpm {
+            db::set_tempo_key(c, track_id, Some(Some(bpm)), None)?;
+        }
+        db::mark_grid_edited(c, track_id)
+    })?;
     Ok(Some(TrackAnalysisView {
         grid_bpm: stored.grid_bpm,
         first_beat: stored.first_beat,

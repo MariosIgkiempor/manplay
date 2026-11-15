@@ -99,6 +99,7 @@ function asTrack(u: UsbTrack, mount: string, known: Track | undefined): Track {
 		key: u.key === "" ? null : (normalizeKey(u.key) ?? u.key),
 		analyzed: u.analyzePath !== "",
 		fields: known?.fields ?? {},
+		edited: known?.edited ?? { bpm: false, key: false, grid: false },
 	};
 }
 

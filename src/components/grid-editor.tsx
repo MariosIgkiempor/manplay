@@ -218,6 +218,14 @@ function Header({
 					<span>{track.artist}</span>
 					<span>{grid.bpm ? `${formatBpm(grid.bpm)} BPM` : "No tempo"}</span>
 					{dirty && <span className="text-warning">Not saved</span>}
+					{!dirty && track.edited.grid && (
+						<span
+							className="text-primary"
+							title="Re-analysis keeps this grid unless the BPM and key drawer says to replace edits"
+						>
+							Edited by you
+						</span>
+					)}
 				</p>
 			</div>
 			<div className="flex shrink-0 gap-2">{children}</div>

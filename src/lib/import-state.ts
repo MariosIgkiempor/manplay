@@ -151,5 +151,6 @@ export function previewTrack(path: string, t: ImportTrack, edit: Edit): Track {
 		bpm: null,
 		key: null,
 		analyzed: false,
+		edited: { bpm: false, key: false, grid: false },
 	};
 }

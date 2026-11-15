@@ -77,6 +77,9 @@ pub struct Report {
     pub bytes_copied: u64,
     /// Songs given a beat grid and waveform.
     pub analyzed: usize,
+    /// Songs already on the drive whose beat grid changed since (edited in manplay) and was
+    /// rewritten.
+    pub regridded: usize,
     /// Playlists written (new or replaced).
     pub playlists: usize,
     /// Tracks in the drive's library afterwards.
@@ -452,6 +455,56 @@ fn write_analysis(
     Ok(())
 }
 
+/// Songs already on the drive whose analysis files manplay wrote get them rewritten from the
+/// kept analysis when it changed since, so grid edits reach the drive. Files rekordbox wrote
+/// stay as they are: they hold its cue points.
+fn refresh_grids(
+    mount: &Path,
+    lib: &mut Library,
+    planned: &[Planned],
+    store: Option<&Path>,
+    report: &mut Report,
+) {
+    let Some(dir) = store else { return };
+    for p in planned {
+        let Some(id) = p.existing else { continue };
+        let Some(track) = lib.tracks.iter_mut().find(|t| t.id == id) else {
+            continue;
+        };
+        if track.analyze_path != anlz::dat_path(track.id, &track.path) {
+            continue;
+        }
+        let Some(stored) = p
+            .source
+            .fingerprint
+            .as_deref()
+            .and_then(|fp| anlz::load(dir, fp))
+        else {
+            continue;
+        };
+        let (dat, ext) = anlz::files(&track.path, &stored);
+        let dat_path = on_drive(mount, &track.analyze_path);
+        let ext_path = dat_path.with_extension("EXT");
+        if fs::read(&dat_path).ok().as_deref() == Some(dat.as_slice())
+            && fs::read(&ext_path).ok().as_deref() == Some(ext.as_slice())
+        {
+            continue;
+        }
+        match write_atomic(&dat_path, &dat).and_then(|()| write_atomic(&ext_path, &ext)) {
+            Ok(()) => {
+                if let Some(bpm) = stored.grid_bpm {
+                    track.tempo = (bpm * 100.0).round() as u32;
+                }
+                report.regridded += 1;
+            }
+            Err(e) => report.failed.push(Failure {
+                path: p.source.path.display().to_string(),
+                error: format!("beat grid: {e}"),
+            }),
+        }
+    }
+}
+
 /// Writes under a temporary name and renames, so a pulled drive never holds half a file.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
@@ -593,6 +646,8 @@ pub fn export(
             }),
         }
     }
+
+    refresh_grids(mount, &mut lib, &planned, opts.store, &mut report);
 
     progress(Progress {
         phase: Phase::Writing,
@@ -872,6 +927,45 @@ mod tests {
         assert_eq!((report.analyzed, report.failed.len()), (1, 0));
         let lib = crate::usb::library(&usb).expect("reads");
         let t = &lib.tracks[0];
+        let written = fs::read(on_drive(&usb, &t.analyze_path)).expect("dat");
+        assert_eq!(written, anlz::files(&t.path, &kept).0);
+    }
+
+    #[test]
+    fn an_edited_grid_reaches_songs_already_on_the_drive() {
+        let lib_dir = dir("lib6");
+        let usb = dir("usb6");
+        let store = dir("store6");
+        let mut song = source(&lib_dir, 1, "A", "B", "a.mp3", 100);
+        song.fingerprint = Some("cd34".into());
+        let mut kept = anlz::Stored {
+            grid_bpm: Some(128.0),
+            first_beat: 0.25,
+            bar_offset: 0,
+            duration: 30.0,
+            detail: vec![0x5f; 4500],
+        };
+        anlz::save(&store, "cd34", &kept).expect("saves");
+        let playlists = [SourcePlaylist {
+            name: "P".into(),
+            track_ids: vec![1],
+        }];
+        let mut o = opts(1 << 40);
+        o.store = Some(&store);
+        export(&usb, std::slice::from_ref(&song), &playlists, &o, |_| {}).expect("first");
+
+        // Same again: nothing changed, nothing rewritten.
+        let again =
+            export(&usb, std::slice::from_ref(&song), &playlists, &o, |_| {}).expect("again");
+        assert_eq!((again.analyzed, again.regridded), (0, 0));
+
+        kept.set_grid(Some(126.0), 0.3, 1);
+        anlz::save(&store, "cd34", &kept).expect("edits");
+        let edited = export(&usb, &[song], &playlists, &o, |_| {}).expect("edited");
+        assert_eq!(edited.regridded, 1);
+        let lib = crate::usb::library(&usb).expect("reads");
+        let t = &lib.tracks[0];
+        assert_eq!(t.tempo, 12_600);
         let written = fs::read(on_drive(&usb, &t.analyze_path)).expect("dat");
         assert_eq!(written, anlz::files(&t.path, &kept).0);
     }

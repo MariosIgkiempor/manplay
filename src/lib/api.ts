@@ -27,6 +27,10 @@ const trackSchema = z.object({
 	analyzed: z.boolean(),
 	/** BPM, key, genre, label, ... as stored in the file (see `LISTED` in `src-tauri/src/tags.rs`). */
 	fields: z.record(z.string(), z.string()).default({}),
+	/** Which of BPM, key and beat grid were set by hand; re-analysis keeps them unless told not to. */
+	edited: z
+		.object({ bpm: z.boolean(), key: z.boolean(), grid: z.boolean() })
+		.default({ bpm: false, key: false, grid: false }),
 });
 
 export type Track = z.infer<typeof trackSchema>;
@@ -65,6 +69,8 @@ const analysisSettingsSchema = z.object({
 	writeTags: z.boolean(),
 	/** Key notation in the tags. */
 	keyFormat: z.enum(["musical", "camelot"]),
+	/** Re-analysing replaces BPM, key and beat grids set by hand. */
+	replaceEdits: z.boolean().default(false),
 });
 
 export type AnalysisSettings = z.infer<typeof analysisSettingsSchema>;
@@ -91,9 +97,18 @@ export async function saveAnalysisToFiles(): Promise<TagWriteReport> {
  * Detects BPM and key for `trackIds` (every track when omitted). Without `force`, audio that
  * was analyzed before is skipped.
  */
-export async function analyzeTracks(trackIds?: number[], force = false): Promise<AnalysisReport> {
+/** `replaceEdits` overrides the setting for this run: `true` discards values set by hand. */
+export async function analyzeTracks(
+	trackIds?: number[],
+	force = false,
+	replaceEdits?: boolean,
+): Promise<AnalysisReport> {
 	return analysisReportSchema.parse(
-		await invoke("analyze_tracks", { trackIds: trackIds ?? null, force }),
+		await invoke("analyze_tracks", {
+			trackIds: trackIds ?? null,
+			force,
+			replaceEdits: replaceEdits ?? null,
+		}),
 	);
 }
 
@@ -1084,6 +1099,8 @@ const usbExportReportSchema = z.object({
 	bytesCopied: int,
 	/** Songs given a beat grid and waveform. */
 	analyzed: int,
+	/** Songs already on the drive whose edited beat grid was written again. */
+	regridded: int.default(0),
 	playlists: int,
 	libraryTracks: int,
 	/** Folder on the drive with the previous database and rekordbox's OneLibrary files. */

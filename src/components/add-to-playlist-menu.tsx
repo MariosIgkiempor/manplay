@@ -7,6 +7,7 @@ import {
 	PencilLine,
 	Play,
 	TextCursorInput,
+	Undo2,
 	UserRound,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -18,7 +19,7 @@ import { usePlayer } from "#/context/player-context.ts";
 import { albumKey } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { popup } from "#/lib/menu-styles.ts";
-import { ANALYSIS_KEY, useAnalyze } from "#/lib/queries.ts";
+import { ANALYSIS_KEY, useAnalyze, useRedetect } from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
 
 interface Props {
@@ -67,6 +68,8 @@ export function AddToPlaylistMenu({
 	const go = useDetailNav();
 	const player = usePlayer();
 	const analyze = useAnalyze();
+	const redetect = useRedetect();
+	const hasEdits = tracks.some((t) => t.edited.bpm || t.edited.key || t.edited.grid);
 	const analyzing = useIsMutating({ mutationKey: ANALYSIS_KEY }) > 0;
 	const { album, artist } = noGoTo ? { album: null, artist: null } : shared(tracks);
 	const target = tagTargetFor(tracks);
@@ -93,6 +96,13 @@ export function AddToPlaylistMenu({
 			icon: <AudioWaveform />,
 			disabled: analyzing,
 			onSelect: () => analyze.mutate(tracks.map((t) => t.id)),
+		},
+		hasEdits && {
+			label: "Discard my BPM, key & grid edits",
+			icon: <Undo2 />,
+			destructive: true,
+			disabled: analyzing,
+			onSelect: () => redetect.mutate(tracks.map((t) => t.id)),
 		},
 		"separator",
 		album !== null && {

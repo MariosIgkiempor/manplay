@@ -263,24 +263,35 @@ function FieldCell({
 	field: "bpm" | "key";
 	onEdit: Props["onEdit"];
 }) {
-	const { value, hint } = shown(track, field);
+	const { value, hint: base } = shown(track, field);
+	const edited = track.edited[field];
+	const hint = edited ? `${base}, set by you` : base;
+	// Values set by hand carry a dot, and re-analysis keeps them unless told otherwise.
+	const mark =
+		edited &&
+		"relative before:absolute before:top-1/2 before:-left-2 before:size-1 before:-translate-y-1/2 before:rounded-full before:bg-primary";
 	if (!onEdit) {
 		return (
-			<div title={hint} className={cn("tabular-nums", value === "" && "text-muted-foreground/50")}>
+			<div
+				title={hint}
+				className={cn("tabular-nums", value === "" && "text-muted-foreground/50", mark)}
+			>
 				{value || "–"}
 			</div>
 		);
 	}
 	return (
-		<InlineEdit
-			value={value}
-			hint={`${hint}. Click to edit`}
-			label={field === "bpm" ? "BPM" : "Key"}
-			inputMode={field === "bpm" ? "numeric" : "text"}
-			parse={field === "bpm" ? parseBpm : parseKey}
-			suggestions={field === "key" ? CAMELOT : undefined}
-			onCommit={(v) => onEdit(track, field, v)}
-		/>
+		<div className={cn("min-w-0", mark)}>
+			<InlineEdit
+				value={value}
+				hint={`${hint}. Click to edit`}
+				label={field === "bpm" ? "BPM" : "Key"}
+				inputMode={field === "bpm" ? "numeric" : "text"}
+				parse={field === "bpm" ? parseBpm : parseKey}
+				suggestions={field === "key" ? CAMELOT : undefined}
+				onCommit={(v) => onEdit(track, field, v)}
+			/>
+		</div>
 	);
 }
 
