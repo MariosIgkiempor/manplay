@@ -9,6 +9,7 @@ mod error;
 mod fsops;
 mod import;
 mod itunes;
+mod onelib;
 mod pdb;
 mod r2;
 mod rekordbox;
@@ -1110,6 +1111,18 @@ async fn usb_drives() -> Result<Vec<usb::Drive>, Error> {
         .map_err(|e| Error::Msg(e.to_string()))
 }
 
+/// Which rekordbox library formats a plugged-in drive holds, with their sizes.
+#[tauri::command]
+async fn usb_formats(mount: PathBuf) -> Result<usb::Formats, Error> {
+    tauri::async_runtime::spawn_blocking(move || {
+        usb::check_mount(&mount)?;
+        Ok(usb::formats(&mount))
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)
+}
+
 /// The rekordbox library on a plugged-in drive; empty if it has none.
 #[tauri::command]
 async fn usb_library(mount: PathBuf) -> Result<pdb::Library, Error> {
@@ -1231,8 +1244,9 @@ async fn usb_edit_playlists(
     }
     tauri::async_runtime::spawn_blocking(move || {
         usb::check_mount(&mount)?;
-        let stamp = format!("{}-edits", usb_export::date(unix_now()));
-        usb_edit::edit(&mount, edit, &stamp)
+        let today = usb_export::date(unix_now());
+        let stamp = format!("{today}-edits");
+        usb_edit::edit(&mount, edit, &stamp, &today)
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))?
@@ -2564,6 +2578,7 @@ pub fn run() {
             analysis_failures,
             usb_drives,
             usb_library,
+            usb_formats,
             export_to_usb,
             usb_edit_playlists,
             set_beat_grid,

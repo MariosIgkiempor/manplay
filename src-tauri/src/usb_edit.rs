@@ -1,21 +1,19 @@
 //! Edits to the playlists on a CDJ USB drive: rename, delete, create, move, and remove songs.
 //!
-//! Each edit reads the drive's `export.pdb`, changes its playlist tree and writes it back whole,
-//! with a higher sequence number so players notice. Songs and their files are never touched: a
-//! song taken out of every playlist stays on the drive, as it does in rekordbox. The first edit
-//! of a day keeps a copy of the database it started from, and rekordbox's `OneLibrary` files are
-//! moved aside so every player reads the edited library.
+//! Each edit reads the drive's library (`export.pdb`, plus anything only its `OneLibrary` has),
+//! changes its playlist tree and writes both databases back, as an export does, so every player
+//! reads the same playlists. Songs and their files are never touched: a song taken out of every
+//! playlist stays on the drive, as it does in rekordbox. The first edit of a day keeps a copy of
+//! the databases it started from.
 
 use std::collections::HashSet;
-use std::fs;
-use std::io;
 use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::pdb::{self, Library, Playlist};
-use crate::usb::PDB_PATH;
-use crate::usb_export::{back_up, write_atomic};
+use crate::pdb::{Library, Playlist};
+use crate::usb::{ONE_LIBRARY_PATH, PDB_PATH};
+use crate::usb_export::{read_libraries, write_libraries};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(
@@ -167,23 +165,15 @@ pub struct Outcome {
     pub created: Option<u32>,
 }
 
-/// Reads the drive's library, applies `edit` and writes it back.
-pub fn edit(mount: &Path, edit: Edit, stamp: &str) -> Result<Outcome, String> {
-    let path = mount.join(PDB_PATH);
-    let bytes = match fs::read(&path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Err("This drive has no rekordbox library yet.".into());
-        }
-        Err(e) => return Err(format!("{}: {e}", path.display())),
-    };
-    let mut lib = pdb::read(&bytes)
-        .map_err(|e| format!("The drive's library could not be read, so it was left alone: {e}"))?;
-    let sequence = pdb::sequence(&bytes).unwrap_or(1);
+/// Reads the drive's library, applies `edit` and writes it back as both databases.
+pub fn edit(mount: &Path, edit: Edit, stamp: &str, today: &str) -> Result<Outcome, String> {
+    if !mount.join(PDB_PATH).is_file() && !mount.join(ONE_LIBRARY_PATH).is_file() {
+        return Err("This drive has no rekordbox library yet.".into());
+    }
+    let (mut lib, sequence) = read_libraries(mount)?;
     let created = apply(&mut lib, edit)?;
-    back_up(mount, stamp).map_err(|e| format!("backing up the library: {e}"))?;
-    write_atomic(&path, &pdb::write(&lib, sequence + 1))
-        .map_err(|e| format!("writing {}: {e}", path.display()))?;
+    let (_, one) = write_libraries(mount, &lib, sequence, stamp, today)?;
+    one.map_err(|e| format!("The Device Library was saved, but the OneLibrary was not: {e}"))?;
     Ok(Outcome {
         library: lib,
         created,
@@ -194,6 +184,8 @@ pub fn edit(mount: &Path, edit: Edit, stamp: &str) -> Result<Outcome, String> {
 #[allow(clippy::expect_used)] // tests: panicking is the failure mode
 mod tests {
     use super::*;
+    use crate::pdb;
+    use std::fs;
 
     fn list(id: u32, parent_id: u32, name: &str, folder: bool, tracks: &[u32]) -> Playlist {
         Playlist {
@@ -330,9 +322,9 @@ mod tests {
         let original = pdb::write(&lib(), 7);
         fs::write(&path, &original).expect("pdb");
 
-        let out = edit(&mount, Edit::Delete { id: 5 }, "day-edits").expect("edit");
+        let out = edit(&mount, Edit::Delete { id: 5 }, "day-edits", "2026-11-15").expect("edit");
         assert_eq!(ids(&out.library), [1, 2, 3, 4]);
-        edit(&mount, Edit::Delete { id: 1 }, "day-edits").expect("edit");
+        edit(&mount, Edit::Delete { id: 1 }, "day-edits", "2026-11-15").expect("edit");
 
         let now = fs::read(&path).expect("read");
         assert_eq!(pdb::read(&now).expect("parse").playlists, []);
@@ -340,6 +332,9 @@ mod tests {
         let kept =
             fs::read(mount.join("PIONEER/manplay-backup/day-edits/export.pdb")).expect("copy");
         assert_eq!(kept, original);
+        // Players that read the newer library see the same (now empty) playlists.
+        let one = crate::onelib::read(&mount.join(ONE_LIBRARY_PATH)).expect("OneLibrary");
+        assert_eq!(one.playlists, []);
         let _ = fs::remove_dir_all(&mount);
     }
 }

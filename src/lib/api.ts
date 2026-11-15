@@ -1084,6 +1084,25 @@ export async function usbEditPlaylists(mount: string, edit: UsbEdit): Promise<Us
 	return usbEditOutcomeSchema.parse(await invoke("usb_edit_playlists", { mount, edit }));
 }
 
+const usbLibrarySummarySchema = z.object({ tracks: int, playlists: int });
+
+const usbFormatsSchema = z.object({
+	/** `export.pdb`, read by the CDJ-3000 and older players. */
+	deviceLibrary: usbLibrarySummarySchema.nullable(),
+	/** `exportLibrary.db`, read by the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo. */
+	oneLibrary: usbLibrarySummarySchema.nullable(),
+	deviceLibraryError: z.string().nullable(),
+	oneLibraryError: z.string().nullable(),
+});
+
+export type UsbFormats = z.infer<typeof usbFormatsSchema>;
+export type UsbLibrarySummary = z.infer<typeof usbLibrarySummarySchema>;
+
+/** Which rekordbox library formats a drive holds, with their sizes. */
+export async function usbFormats(mount: string): Promise<UsbFormats> {
+	return usbFormatsSchema.parse(await invoke("usb_formats", { mount }));
+}
+
 const usbExportProgressSchema = z.object({
 	phase: z.enum(["copying", "analyzing", "writing"]),
 	done: int,
@@ -1103,8 +1122,12 @@ const usbExportReportSchema = z.object({
 	regridded: int.default(0),
 	playlists: int,
 	libraryTracks: int,
-	/** Folder on the drive with the previous database and rekordbox's OneLibrary files. */
+	/** Folder on the drive with copies of both previous databases. */
 	backup: z.string().nullable(),
+	/** Whether the OneLibrary (`exportLibrary.db`) was written alongside `export.pdb`. */
+	oneLibrary: z.boolean(),
+	/** Why it was not; the drive's old OneLibrary was then removed. */
+	oneLibraryError: z.string().nullable(),
 	failed: z.array(fileFailureSchema),
 });
 
