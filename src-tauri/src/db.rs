@@ -1293,6 +1293,8 @@ pub struct ExportTrack {
 }
 
 pub struct ExportPlaylist {
+    /// Playlist id; `None` for playlists made from a tag.
+    pub id: Option<i64>,
     pub name: String,
     pub track_ids: Vec<i64>,
 }
@@ -1333,9 +1335,49 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
         let track_ids = member_stmt
             .query_map(params![id], |r| r.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
-        playlists.push(ExportPlaylist { name, track_ids });
+        playlists.push(ExportPlaylist {
+            id: Some(id),
+            name,
+            track_ids,
+        });
     }
     Ok((tracks, playlists))
+}
+
+/// One playlist per tag name: the present songs tagged with it or anything below it. Unknown
+/// tags are skipped.
+pub fn export_tag_playlists(
+    conn: &Connection,
+    names: &[String],
+) -> Result<Vec<ExportPlaylist>, Error> {
+    let mut head = conn.prepare("SELECT id, name FROM tags WHERE name = ?1 COLLATE NOCASE")?;
+    let mut members = conn.prepare(&format!(
+        "SELECT DISTINCT t.id FROM tags g
+         JOIN tags c ON {IN_SUBTREE}
+         JOIN track_tags tt ON tt.tag_id = c.id
+         JOIN tracks t ON t.id = tt.track_id AND t.missing_since IS NULL
+         WHERE g.id = ?1 ORDER BY t.artist, t.album, t.path"
+    ))?;
+    let mut out = Vec::new();
+    for wanted in names {
+        let found = head
+            .query_row(params![wanted], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })
+            .optional()?;
+        let Some((id, name)) = found else {
+            continue;
+        };
+        let track_ids = members
+            .query_map(params![id], |r| r.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        out.push(ExportPlaylist {
+            id: None,
+            name,
+            track_ids,
+        });
+    }
+    Ok(out)
 }
 
 /// Sizes and fingerprints of the tracks currently in the library, for spotting files that are

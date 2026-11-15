@@ -57,7 +57,6 @@ async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error>
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
     reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
     drop(conn);
-    auto_export(state);
     Ok(result.tracks.len())
 }
 
@@ -303,21 +302,18 @@ fn list_playlists(state: State<'_, AppState>) -> Result<Vec<Playlist>, Error> {
 #[tauri::command]
 fn create_playlist(state: State<'_, AppState>, name: String) -> Result<i64, Error> {
     let id = with_db!(state, |c| db::create_playlist(c, name.trim()))?;
-    auto_export(&state);
     Ok(id)
 }
 
 #[tauri::command]
 fn rename_playlist(state: State<'_, AppState>, id: i64, name: String) -> Result<(), Error> {
     with_db!(state, |c| db::rename_playlist(c, id, name.trim()))?;
-    auto_export(&state);
     Ok(())
 }
 
 #[tauri::command]
 fn delete_playlist(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
     with_db!(state, |c| db::delete_playlist(c, id))?;
-    auto_export(&state);
     Ok(())
 }
 
@@ -328,7 +324,6 @@ fn add_to_playlist(
     track_ids: Vec<i64>,
 ) -> Result<(), Error> {
     with_db!(state, |c| db::add_to_playlist(c, playlist_id, &track_ids))?;
-    auto_export(&state);
     Ok(())
 }
 
@@ -343,7 +338,6 @@ fn remove_from_playlist(
         playlist_id,
         track_id
     ))?;
-    auto_export(&state);
     Ok(())
 }
 
@@ -359,12 +353,14 @@ fn list_tags(state: State<'_, AppState>) -> Result<Vec<Tag>, Error> {
 
 #[tauri::command]
 fn tag_tracks(state: State<'_, AppState>, name: String, track_ids: Vec<i64>) -> Result<(), Error> {
-    with_db!(state, |c| db::tag_tracks(c, name.trim(), &track_ids))
+    with_db!(state, |c| db::tag_tracks(c, name.trim(), &track_ids))?;
+    Ok(())
 }
 
 #[tauri::command]
 fn untag_track(state: State<'_, AppState>, name: String, track_id: i64) -> Result<(), Error> {
-    with_db!(state, |c| db::untag_track(c, &name, track_id))
+    with_db!(state, |c| db::untag_track(c, &name, track_id))?;
+    Ok(())
 }
 
 /// Renames, merges or deletes library tags by name (see `db::migrate_tags`).
@@ -376,13 +372,13 @@ fn migrate_library_tags(
 ) -> Result<(), Error> {
     let to = to.as_deref().map(str::trim).filter(|t| !t.is_empty());
     with_db!(state, |c| db::migrate_tags(c, &from, to))?;
-    auto_export(&state);
     Ok(())
 }
 
 #[tauri::command]
 fn delete_tag(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
-    with_db!(state, |c| db::delete_tag(c, id))
+    with_db!(state, |c| db::delete_tag(c, id))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1422,6 +1418,23 @@ async fn import_run(
 
 const SETTING_RB_PATH: &str = "rekordbox_xml_path";
 const SETTING_RB_LAST: &str = "rekordbox_last_export";
+const SETTING_RB_SELECTION: &str = "rekordbox_selection";
+
+/// What goes into the playlists part of the file. Every playlist is exported unless it is listed
+/// in `excluded_playlists`, so new playlists appear in rekordbox without a visit to this menu.
+/// Tags are opt-in: each name in `tags` becomes a playlist.
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+struct RekordboxSelection {
+    excluded_playlists: Vec<i64>,
+    tags: Vec<String>,
+}
+
+fn rekordbox_selection_of(conn: &Connection) -> Result<RekordboxSelection, Error> {
+    Ok(db::get_setting(conn, SETTING_RB_SELECTION)?
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default())
+}
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -1455,24 +1468,24 @@ fn store_last(conn: &Connection, last: &RekordboxLast) -> Result<(), Error> {
     db::set_setting(conn, SETTING_RB_LAST, Some(&raw))
 }
 
-/// Writes the rekordbox XML to the configured file. `Ok(false)` when no file is configured.
-/// The file is written atomically so rekordbox never reads a half-written library.
-fn run_export(state: &AppState) -> Result<bool, Error> {
-    export_inner(state, false)
-}
-
-/// `record_ok` adds successful runs to the history; failures are always recorded.
+/// Writes the rekordbox XML to the configured file, atomically so rekordbox never reads a
+/// half-written library. `Ok(false)` when no file is configured. `record_ok` adds successful runs to the history; failures are always recorded.
 fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
     let started_at = unix_now();
-    let (path, tracks, playlists) = {
+    let (path, tracks, playlists, tag_playlists) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let Some(path) = db::get_setting(&conn, SETTING_RB_PATH)? else {
             return Ok(false);
         };
-        let (tracks, playlists) = db::export_data(&conn)?;
-        (PathBuf::from(path), tracks, playlists)
+        let selection = rekordbox_selection_of(&conn)?;
+        let (tracks, mut playlists) = db::export_data(&conn)?;
+        playlists.retain(|p| {
+            p.id.is_none_or(|id| !selection.excluded_playlists.contains(&id))
+        });
+        let tag_playlists = db::export_tag_playlists(&conn, &selection.tags)?;
+        (PathBuf::from(path), tracks, playlists, tag_playlists)
     };
-    let xml = rekordbox::build_xml(&tracks, &playlists);
+    let xml = rekordbox::build_xml(&tracks, &playlists, &tag_playlists);
     let tmp = path.with_extension("xml.tmp");
     let written = std::fs::write(&tmp, xml).and_then(|()| std::fs::rename(&tmp, &path));
 
@@ -1482,7 +1495,7 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
         Ok(()) => {
             last = RekordboxLast {
                 exported_at: Some(unix_now()),
-                playlists: playlists.len(),
+                playlists: playlists.len() + tag_playlists.len(),
                 tracks: tracks.len(),
                 error: None,
             };
@@ -1498,7 +1511,7 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
                         items: vec![format!(
                             "{} tracks · {} playlists",
                             tracks.len(),
-                            playlists.len()
+                            playlists.len() + tag_playlists.len()
                         )],
                         ..db::Activity::default()
                     },
@@ -1526,43 +1539,23 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
     }
 }
 
-/// Keeps the exported file current after playlist or library changes. Failures are recorded
-/// in the export status (shown on the Rekordbox page) rather than failing the user's action.
-fn auto_export(state: &AppState) {
-    let off = state
-        .db
-        .lock()
-        .ok()
-        .and_then(|c| db::service_off(&c, "rekordbox").ok())
-        .unwrap_or(false);
-    if !off {
-        let _ = run_export(state);
-    }
-}
-
 #[tauri::command]
 fn rekordbox_status(state: State<'_, AppState>) -> Result<RekordboxStatus, Error> {
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     rekordbox_status_of(&conn)
 }
 
-/// Chooses (or clears, with `None`) the XML file, and writes it right away.
+/// Chooses (or clears, with `None`) the XML file. Nothing is written until an export is asked for.
 #[tauri::command]
 fn rekordbox_set_path(
     state: State<'_, AppState>,
     path: Option<String>,
 ) -> Result<RekordboxStatus, Error> {
-    {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        db::set_setting(&conn, SETTING_RB_PATH, path.as_deref())?;
-        if path.is_none() {
-            db::set_setting(&conn, SETTING_RB_LAST, None)?;
-        }
-    }
-    if path.is_some() {
-        export_inner(&state, true)?;
-    }
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::set_setting(&conn, SETTING_RB_PATH, path.as_deref())?;
+    if path.is_none() {
+        db::set_setting(&conn, SETTING_RB_LAST, None)?;
+    }
     rekordbox_status_of(&conn)
 }
 
@@ -1575,6 +1568,46 @@ fn rekordbox_export(state: State<'_, AppState>) -> Result<RekordboxStatus, Error
     }
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     rekordbox_status_of(&conn)
+}
+
+/// What the configured rekordbox file holds right now, read back from disk. `None` before a file
+/// is chosen or written.
+#[tauri::command]
+fn rekordbox_library(state: State<'_, AppState>) -> Result<Option<rekordbox::Library>, Error> {
+    let path = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::get_setting(&conn, SETTING_RB_PATH)?
+    };
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let xml = match std::fs::read_to_string(&path) {
+        Ok(xml) => xml,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::Io(e)),
+    };
+    rekordbox::read_library(&xml).map(Some).map_err(Error::Msg)
+}
+
+#[tauri::command]
+fn rekordbox_selection(state: State<'_, AppState>) -> Result<RekordboxSelection, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    rekordbox_selection_of(&conn)
+}
+
+/// Saves what to export and writes the file (recorded in the history).
+#[tauri::command]
+fn rekordbox_set_selection(
+    state: State<'_, AppState>,
+    selection: RekordboxSelection,
+) -> Result<RekordboxSelection, Error> {
+    {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let raw = serde_json::to_string(&selection).map_err(|e| Error::Msg(e.to_string()))?;
+        db::set_setting(&conn, SETTING_RB_SELECTION, Some(&raw))?;
+    }
+    export_inner(&state, true)?;
+    Ok(selection)
 }
 
 // ---- iTunes import -----------------------------------------------------------
@@ -1856,6 +1889,9 @@ pub fn run() {
             rekordbox_status,
             rekordbox_set_path,
             rekordbox_export,
+            rekordbox_library,
+            rekordbox_selection,
+            rekordbox_set_selection,
             itunes_status,
             itunes_set_path,
             itunes_import,
@@ -2266,7 +2302,7 @@ mod tests {
             fixing: AtomicBool::new(false),
             plan: Mutex::new(None),
         };
-        assert!(run_export(&state).expect("export"));
+        assert!(export_inner(&state, false).expect("export"));
 
         let xml = std::fs::read_to_string(&out).expect("file written");
         let doc = roxmltree::Document::parse(&xml).expect("well-formed");
@@ -2294,6 +2330,65 @@ mod tests {
     }
 
     #[test]
+    fn export_honours_excluded_playlists_and_tag_selection() {
+        let mut f = Fixture::new("rekordbox-select");
+        f.apply(&f.scan_of(&["1", "2", "3"], 0));
+        let ids: Vec<i64> = db::list(&f.conn)
+            .expect("list")
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        let keep = db::create_playlist(&f.conn, "Keep").expect("playlist");
+        let skip = db::create_playlist(&f.conn, "Skip").expect("playlist");
+        db::add_to_playlist(&mut f.conn, keep, &[ids[0]]).expect("add");
+        db::add_to_playlist(&mut f.conn, skip, &[ids[1]]).expect("add");
+        db::tag_tracks(&mut f.conn, "Genre/House", &[ids[0], ids[2]]).expect("tag");
+        db::tag_tracks(&mut f.conn, "Genre/House/Deep", &[ids[1]]).expect("tag");
+
+        let out = f.dir.join("out").join("rekordbox.xml");
+        std::fs::create_dir_all(out.parent().expect("parent")).expect("mkdir");
+        db::set_setting(&f.conn, SETTING_RB_PATH, out.to_str()).expect("setting");
+        let selection = RekordboxSelection {
+            excluded_playlists: vec![skip],
+            tags: vec!["genre/house".to_owned(), "Nope".to_owned()],
+        };
+        db::set_setting(
+            &f.conn,
+            SETTING_RB_SELECTION,
+            Some(&serde_json::to_string(&selection).expect("json")),
+        )
+        .expect("setting");
+
+        let dir = f.dir.clone();
+        let conn = std::mem::replace(&mut f.conn, Connection::open_in_memory().expect("mem"));
+        let state = AppState {
+            db: Mutex::new(conn),
+            data_dir: dir,
+            http: reqwest::Client::new(),
+            syncing: AtomicBool::new(false),
+            fixing: AtomicBool::new(false),
+            plan: Mutex::new(None),
+        };
+        assert!(export_inner(&state, false).expect("export"));
+
+        let lib = rekordbox::read_library(&std::fs::read_to_string(&out).expect("file"))
+            .expect("library");
+        let names: Vec<_> = lib
+            .playlists
+            .iter()
+            .map(|p| (p.folders.join("/"), p.name.clone(), p.tracks.len()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("manplay".to_owned(), "Keep".to_owned(), 1),
+                ("manplay/Tags".to_owned(), "Genre › House".to_owned(), 3),
+            ],
+            "Skip is excluded, the tag includes songs from tags below it, unknown tags vanish"
+        );
+    }
+
+    #[test]
     fn export_is_a_no_op_until_a_file_is_chosen() {
         let mut f = Fixture::new("rekordbox-off");
         f.apply(&f.scan_of(&["1"], 0));
@@ -2307,6 +2402,6 @@ mod tests {
             fixing: AtomicBool::new(false),
             plan: Mutex::new(None),
         };
-        assert!(!run_export(&state).expect("no-op"));
+        assert!(!export_inner(&state, false).expect("no-op"));
     }
 }

@@ -1,23 +1,21 @@
 import { useEffect } from "react";
-import { useItunesImport, useScan } from "#/lib/queries.ts";
+import { useScan } from "#/lib/queries.ts";
 
 // Module-level so React StrictMode's double effect (and remounts) cannot trigger two launches.
 let launched = false;
 
 /**
- * Rescans the remembered library folder, then imports new iTunes songs (if configured) and
- * re-syncs, once per app launch. Renders nothing.
+ * Rescans the remembered library folder once per app launch so the library matches the disk.
+ * Only reads files; it imports, exports and syncs nothing. Renders nothing.
  */
 export function AutoRefresh() {
 	const { mutate } = useScan();
-	const itunes = useItunesImport();
-	const importItunes = itunes.mutate;
 	useEffect(() => {
 		if (launched) {
 			return;
 		}
 		launched = true;
-		mutate("saved", { onSuccess: () => importItunes() });
-	}, [mutate, importItunes]);
+		mutate("saved");
+	}, [mutate]);
 	return null;
 }

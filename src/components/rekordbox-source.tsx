@@ -1,58 +1,22 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, FileDown, FolderOpen } from "lucide-react";
+import { Copy, FolderOpen } from "lucide-react";
 import { useState } from "react";
 import { MutationErrors, PathSetting } from "#/components/path-setting.tsx";
+import { RekordboxExportButton } from "#/components/rekordbox-view.tsx";
 import { SourceCard } from "#/components/source-card.tsx";
 import { SourcePanel } from "#/components/source-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useDetail } from "#/context/detail-context.ts";
-import {
-	exportRekordbox,
-	pickRekordboxFile,
-	type RekordboxStatus,
-	rekordboxStatus,
-	setRekordboxPath,
-} from "#/lib/api.ts";
+import type { RekordboxStatus } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
 import { activityEntries } from "#/lib/history.ts";
-import { useActivity, useServices } from "#/lib/queries.ts";
+import { useActivity } from "#/lib/queries.ts";
+import { useRekordbox } from "#/lib/use-rekordbox.ts";
 
 const STEPS = [
 	"In rekordbox open Settings → Advanced → Database, and under “rekordbox xml” click Browse and choose the file above.",
 	"In Settings → View → Layout, tick “rekordbox xml” so it appears in the left-hand tree.",
 	"Open “rekordbox xml” → “manplay” in the tree, right-click a playlist and choose Import Playlist.",
 ] as const;
-
-function useRekordbox() {
-	const queryClient = useQueryClient();
-	const status = useQuery({ queryKey: ["rekordbox"], queryFn: rekordboxStatus });
-	const update = (next: RekordboxStatus) => {
-		queryClient.setQueryData(["rekordbox"], next);
-		void queryClient.invalidateQueries({ queryKey: ["activity", "rekordbox"] });
-	};
-	const choose = useMutation({
-		mutationFn: async () => {
-			const path = await pickRekordboxFile();
-			return path === null ? null : setRekordboxPath(path);
-		},
-		onSuccess: (next) => {
-			if (next) {
-				update(next);
-			}
-		},
-	});
-	const exportNow = useMutation({ mutationFn: exportRekordbox, onSuccess: update });
-	const stop = useMutation({ mutationFn: () => setRekordboxPath(null), onSuccess: update });
-	const services = useServices();
-	return {
-		status,
-		choose,
-		exportNow,
-		stop,
-		enabled: services.isEnabled("rekordbox", status.data?.path != null),
-		setEnabled: (on: boolean) => services.setEnabled("rekordbox", on),
-	};
-}
 
 function lastLine(s: RekordboxStatus | undefined) {
 	if (!s) {
@@ -69,7 +33,7 @@ function lastLine(s: RekordboxStatus | undefined) {
 
 export function RekordboxCard() {
 	const detail = useDetail();
-	const { status, choose, exportNow, enabled, setEnabled } = useRekordbox();
+	const { status, choose, enabled, setEnabled } = useRekordbox();
 	const path = status.data?.path ?? null;
 	return (
 		<SourceCard
@@ -86,9 +50,7 @@ export function RekordboxCard() {
 						<FolderOpen /> Choose location…
 					</Button>
 				) : (
-					<Button size="sm" onClick={() => exportNow.mutate()} disabled={exportNow.isPending}>
-						<FileDown /> Export now
-					</Button>
+					<RekordboxExportButton size="sm" />
 				)
 			}
 		/>
@@ -105,16 +67,16 @@ function Setup() {
 				))}
 			</ol>
 			<p className="mt-3 text-muted-foreground text-xs">
-				Menu names can differ slightly between rekordbox versions. manplay rewrites the file
-				whenever a playlist or the library changes, but rekordbox only reads it when you import, so
-				re-import a playlist after changing it.
+				Menu names can differ slightly between rekordbox versions. manplay only rewrites the file
+				when you export, and rekordbox only reads it when you import. After changing a playlist,
+				export again and re-import it.
 			</p>
 		</details>
 	);
 }
 
 export function RekordboxPanel() {
-	const { status, choose, exportNow, stop, enabled, setEnabled } = useRekordbox();
+	const { status, choose, stop, enabled, setEnabled } = useRekordbox();
 	const history = useActivity("rekordbox");
 	const [copied, setCopied] = useState(false);
 	const path = status.data?.path ?? null;
@@ -136,7 +98,7 @@ export function RekordboxPanel() {
 		<SourcePanel
 			brand="rekordbox"
 			title="Rekordbox"
-			subtitle="Your whole library and playlists as a rekordbox library file. Playlists appear in a “manplay” folder."
+			subtitle="Your whole library, plus the playlists and tags you pick, as a rekordbox library file. They appear in a “manplay” folder."
 			enabled={enabled}
 			onToggle={setEnabled}
 			empty="Not exported yet."
@@ -145,7 +107,7 @@ export function RekordboxPanel() {
 				<>
 					<PathSetting
 						path={path}
-						emptyHint="Choose where manplay should save a rekordbox library file. It is kept up to date automatically after that."
+						emptyHint="Choose where manplay should save a rekordbox library file. Nothing is written until you export."
 					>
 						<Button
 							variant={path === null ? "default" : "outline"}
@@ -156,9 +118,7 @@ export function RekordboxPanel() {
 						</Button>
 						{path !== null && (
 							<>
-								<Button onClick={() => exportNow.mutate()} disabled={exportNow.isPending}>
-									<FileDown /> Export now
-								</Button>
+								<RekordboxExportButton label="Choose what to export…" />
 								<Button variant="outline" onClick={() => void copy()}>
 									<Copy /> {copied ? "Copied" : "Copy path"}
 								</Button>
@@ -168,7 +128,7 @@ export function RekordboxPanel() {
 							</>
 						)}
 					</PathSetting>
-					<MutationErrors mutations={[choose, exportNow, stop]} />
+					<MutationErrors mutations={[choose, stop]} />
 					<Setup />
 				</>
 			}

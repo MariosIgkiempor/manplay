@@ -459,6 +459,46 @@ export async function exportRekordbox(): Promise<RekordboxStatus> {
 	return rekordboxSchema.parse(await invoke("rekordbox_export"));
 }
 
+const rekordboxLibrarySchema = z
+	.object({
+		tracks: int,
+		playlists: z.array(
+			z.object({
+				folders: z.array(z.string()),
+				name: z.string(),
+				tracks: z.array(z.object({ title: z.string(), artist: z.string() })),
+			}),
+		),
+	})
+	.nullable();
+
+export type RekordboxLibrary = NonNullable<z.infer<typeof rekordboxLibrarySchema>>;
+
+/** What the exported rekordbox file holds right now; null before it has been written. */
+export async function rekordboxLibrary(): Promise<RekordboxLibrary | null> {
+	return rekordboxLibrarySchema.parse(await invoke("rekordbox_library"));
+}
+
+const rekordboxSelectionSchema = z.object({
+	/** Every playlist is exported except these. */
+	excludedPlaylists: z.array(int),
+	/** Tags exported as playlists (a tag includes the songs of the tags below it). */
+	tags: z.array(z.string()),
+});
+
+export type RekordboxSelection = z.infer<typeof rekordboxSelectionSchema>;
+
+export async function rekordboxSelection(): Promise<RekordboxSelection> {
+	return rekordboxSelectionSchema.parse(await invoke("rekordbox_selection"));
+}
+
+/** Saves the selection and rewrites the rekordbox file with it. */
+export async function setRekordboxSelection(
+	selection: RekordboxSelection,
+): Promise<RekordboxSelection> {
+	return rekordboxSelectionSchema.parse(await invoke("rekordbox_set_selection", { selection }));
+}
+
 // ---- iTunes import --------------------------------------------------------
 
 const itunesReportSchema = z.object({

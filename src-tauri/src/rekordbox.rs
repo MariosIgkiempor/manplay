@@ -79,8 +79,40 @@ fn write_track(out: &mut String, t: &ExportTrack) {
     let _ = writeln!(out, " Location=\"{}\"/>", esc(&location(&t.path)));
 }
 
-/// Builds the XML document. Playlist entries that point at unknown tracks are dropped.
-pub fn build_xml(tracks: &[ExportTrack], playlists: &[ExportPlaylist]) -> String {
+/// Tag playlists live in this sub-folder of the manplay folder.
+pub const TAGS_FOLDER_NAME: &str = "Tags";
+
+fn write_playlist(
+    out: &mut String,
+    known: &std::collections::HashSet<i64>,
+    name: &str,
+    track_ids: &[i64],
+    indent: &str,
+) {
+    let ids: Vec<i64> = track_ids
+        .iter()
+        .copied()
+        .filter(|id| known.contains(id))
+        .collect();
+    let _ = writeln!(
+        out,
+        "{indent}<NODE Name=\"{}\" Type=\"1\" KeyType=\"0\" Entries=\"{}\">",
+        esc(name),
+        ids.len()
+    );
+    for id in ids {
+        let _ = writeln!(out, "{indent}  <TRACK Key=\"{id}\"/>");
+    }
+    let _ = writeln!(out, "{indent}</NODE>");
+}
+
+/// Builds the XML document. Playlist entries that point at unknown tracks are dropped. Tag
+/// playlists go in a "Tags" sub-folder, which is left out when there are none.
+pub fn build_xml(
+    tracks: &[ExportTrack],
+    playlists: &[ExportPlaylist],
+    tag_playlists: &[ExportPlaylist],
+) -> String {
     let known: std::collections::HashSet<i64> = tracks.iter().map(|t| t.id).collect();
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -93,26 +125,23 @@ pub fn build_xml(tracks: &[ExportTrack], playlists: &[ExportPlaylist]) -> String
     out.push_str("  </COLLECTION>\n");
     out.push_str("  <PLAYLISTS>\n");
     out.push_str("    <NODE Type=\"0\" Name=\"ROOT\" Count=\"1\">\n");
+    let folder_count = playlists.len() + usize::from(!tag_playlists.is_empty());
     let _ = writeln!(
         out,
-        "      <NODE Type=\"0\" Name=\"{FOLDER_NAME}\" Count=\"{}\">",
-        playlists.len()
+        "      <NODE Type=\"0\" Name=\"{FOLDER_NAME}\" Count=\"{folder_count}\">"
     );
     for p in playlists {
-        let ids: Vec<i64> = p
-            .track_ids
-            .iter()
-            .copied()
-            .filter(|id| known.contains(id))
-            .collect();
+        write_playlist(&mut out, &known, &p.name, &p.track_ids, "        ");
+    }
+    if !tag_playlists.is_empty() {
         let _ = writeln!(
             out,
-            "        <NODE Name=\"{}\" Type=\"1\" KeyType=\"0\" Entries=\"{}\">",
-            esc(&p.name),
-            ids.len()
+            "        <NODE Type=\"0\" Name=\"{TAGS_FOLDER_NAME}\" Count=\"{}\">",
+            tag_playlists.len()
         );
-        for id in ids {
-            let _ = writeln!(out, "          <TRACK Key=\"{id}\"/>");
+        for p in tag_playlists {
+            let name = p.name.replace('/', " › ");
+            write_playlist(&mut out, &known, &name, &p.track_ids, "          ");
         }
         out.push_str("        </NODE>\n");
     }
@@ -121,6 +150,104 @@ pub fn build_xml(tracks: &[ExportTrack], playlists: &[ExportPlaylist]) -> String
     out.push_str("  </PLAYLISTS>\n");
     out.push_str("</DJ_PLAYLISTS>\n");
     out
+}
+
+// ---- reading an existing library file --------------------------------------
+
+#[derive(serde::Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrack {
+    pub title: String,
+    pub artist: String,
+}
+
+#[derive(serde::Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryPlaylist {
+    /// Folders above the playlist, outermost first (without the hidden ROOT).
+    pub folders: Vec<String>,
+    pub name: String,
+    pub tracks: Vec<LibraryTrack>,
+}
+
+#[derive(serde::Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Library {
+    pub tracks: usize,
+    pub playlists: Vec<LibraryPlaylist>,
+}
+
+fn collect_playlists(
+    node: roxmltree::Node<'_, '_>,
+    folders: &mut Vec<String>,
+    by_id: &std::collections::HashMap<&str, LibraryTrack>,
+    out: &mut Vec<LibraryPlaylist>,
+) {
+    for child in node.children().filter(|n| n.has_tag_name("NODE")) {
+        let name = child.attribute("Name").unwrap_or_default().to_owned();
+        if child.attribute("Type") == Some("1") {
+            let tracks = child
+                .children()
+                .filter(|n| n.has_tag_name("TRACK"))
+                .filter_map(|n| n.attribute("Key"))
+                .map(|key| {
+                    by_id.get(key).map_or_else(
+                        || LibraryTrack {
+                            title: format!("(unknown track {key})"),
+                            artist: String::new(),
+                        },
+                        |t| LibraryTrack {
+                            title: t.title.clone(),
+                            artist: t.artist.clone(),
+                        },
+                    )
+                })
+                .collect();
+            out.push(LibraryPlaylist {
+                folders: folders.clone(),
+                name,
+                tracks,
+            });
+        } else {
+            folders.push(name);
+            collect_playlists(child, folders, by_id, out);
+            folders.pop();
+        }
+    }
+}
+
+/// What a rekordbox XML library holds: how many tracks and every playlist with its songs.
+pub fn read_library(xml: &str) -> Result<Library, String> {
+    let doc = roxmltree::Document::parse(xml).map_err(|e| format!("not a rekordbox file: {e}"))?;
+    let root = doc.root_element();
+    if !root.has_tag_name("DJ_PLAYLISTS") {
+        return Err("not a rekordbox file".to_owned());
+    }
+    let mut by_id = std::collections::HashMap::new();
+    if let Some(collection) = root.children().find(|n| n.has_tag_name("COLLECTION")) {
+        for t in collection.children().filter(|n| n.has_tag_name("TRACK")) {
+            if let Some(id) = t.attribute("TrackID") {
+                by_id.insert(
+                    id,
+                    LibraryTrack {
+                        title: t.attribute("Name").unwrap_or_default().to_owned(),
+                        artist: t.attribute("Artist").unwrap_or_default().to_owned(),
+                    },
+                );
+            }
+        }
+    }
+    let mut playlists = Vec::new();
+    if let Some(node) = root.children().find(|n| n.has_tag_name("PLAYLISTS")) {
+        // The top NODE is rekordbox's hidden ROOT folder.
+        for top in node.children().filter(|n| n.has_tag_name("NODE")) {
+            collect_playlists(top, &mut Vec::new(), &by_id, &mut playlists);
+        }
+    }
+    Ok(Library {
+        tracks: by_id.len(),
+        playlists,
+    })
 }
 
 #[cfg(test)]
@@ -159,15 +286,17 @@ mod tests {
         ];
         let playlists = vec![
             ExportPlaylist {
+                id: Some(1),
                 name: "Warm up \"set\" & chill".into(),
                 track_ids: vec![3, 1, 99],
             },
             ExportPlaylist {
+                id: Some(2),
                 name: "Empty".into(),
                 track_ids: vec![],
             },
         ];
-        let xml = build_xml(&tracks, &playlists);
+        let xml = build_xml(&tracks, &playlists, &[]);
         let doc = roxmltree::Document::parse(&xml).expect("well-formed xml");
 
         let root = doc.root_element();
@@ -239,7 +368,49 @@ mod tests {
     #[test]
     fn control_characters_cannot_break_the_document() {
         let tracks = vec![track(1, "/m/a.mp3", "bad\u{0}\u{1}title\nline")];
-        let xml = build_xml(&tracks, &[]);
+        let xml = build_xml(&tracks, &[], &[]);
         assert!(roxmltree::Document::parse(&xml).is_ok());
+    }
+
+    #[test]
+    fn tag_playlists_go_in_a_tags_folder_and_the_library_reads_back() {
+        let tracks = vec![track(1, "/m/a.mp3", "One"), track(2, "/m/b.mp3", "Two")];
+        let playlists = vec![ExportPlaylist {
+            id: Some(1),
+            name: "Friday".into(),
+            track_ids: vec![2],
+        }];
+        let tags = vec![ExportPlaylist {
+            id: None,
+            name: "Genre/House".into(),
+            track_ids: vec![1, 2],
+        }];
+        let xml = build_xml(&tracks, &playlists, &tags);
+        let doc = roxmltree::Document::parse(&xml).expect("well-formed xml");
+        let folder = doc
+            .descendants()
+            .find(|n| n.has_tag_name("NODE") && n.attribute("Name") == Some(FOLDER_NAME))
+            .expect("manplay folder");
+        assert_eq!(
+            folder.attribute("Count"),
+            Some("2"),
+            "playlist + Tags folder"
+        );
+
+        let lib = read_library(&xml).expect("reads back");
+        assert_eq!(lib.tracks, 2);
+        assert_eq!(lib.playlists.len(), 2);
+        assert_eq!(lib.playlists[0].folders, ["manplay"]);
+        assert_eq!(lib.playlists[0].name, "Friday");
+        assert_eq!(lib.playlists[0].tracks[0].title, "Two");
+        assert_eq!(lib.playlists[1].folders, ["manplay", "Tags"]);
+        assert_eq!(lib.playlists[1].name, "Genre › House");
+        assert_eq!(lib.playlists[1].tracks.len(), 2);
+    }
+
+    #[test]
+    fn reading_rejects_other_xml() {
+        assert!(read_library("<nope/>").is_err());
+        assert!(read_library("garbage").is_err());
     }
 }
