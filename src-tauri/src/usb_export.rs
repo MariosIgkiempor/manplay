@@ -7,6 +7,8 @@
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
+use crate::analysis::{self, Detail};
+use crate::anlz;
 use crate::pdb::{self, Library};
 use crate::usb::PDB_PATH;
 use serde::Serialize;
@@ -42,6 +44,8 @@ pub struct SourcePlaylist {
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
     Copying,
+    /// Working out beat grids and waveforms for songs new to the drive.
+    Analyzing,
     Writing,
 }
 
@@ -69,6 +73,8 @@ pub struct Report {
     /// Songs that were already on the drive.
     pub already_there: usize,
     pub bytes_copied: u64,
+    /// Songs given a beat grid and waveform.
+    pub analyzed: usize,
     /// Playlists written (new or replaced).
     pub playlists: usize,
     /// Tracks in the drive's library afterwards.
@@ -329,11 +335,107 @@ fn back_up(mount: &Path, stamp: &str) -> io::Result<Option<String>> {
     Ok(Some(format!("/{rel}")))
 }
 
+/// Beat grid and waveform for each job's source file, on all but one core.
+fn analyze_all(
+    jobs: &[(usize, &Source)],
+    progress: &mut impl FnMut(Progress),
+) -> Vec<Result<Detail, String>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let total = jobs.len();
+    let mut out: Vec<Option<Result<Detail, String>>> = (0..total).map(|_| None).collect();
+    if total == 0 {
+        return Vec::new();
+    }
+    let workers = std::thread::available_parallelism()
+        .map_or(2, std::num::NonZero::get)
+        .saturating_sub(1)
+        .clamp(1, 8)
+        .min(total);
+    let next = AtomicUsize::new(0);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let next = &next;
+            scope.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, Ordering::SeqCst);
+                    let Some((_, source)) = jobs.get(i) else {
+                        break;
+                    };
+                    let result = analysis::analyze_detail(&source.path, source.bpm);
+                    if tx.send((i, result)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        for (done, (i, result)) in rx.iter().enumerate() {
+            progress(Progress {
+                phase: Phase::Analyzing,
+                done,
+                total,
+                current: jobs[i].1.title.clone(),
+            });
+            out[i] = Some(result);
+        }
+    });
+    out.into_iter()
+        .map(|r| r.unwrap_or_else(|| Err("not analyzed".to_owned())))
+        .collect()
+}
+
+/// Writes a track's `.DAT` and `.EXT` files and points the track at them; fills in a tempo and
+/// key the library did not have.
+fn write_analysis(
+    mount: &Path,
+    track: &mut pdb::Track,
+    d: &Detail,
+    camelot: bool,
+) -> Result<(), String> {
+    let rel = anlz::dat_path(track.id, &track.path);
+    let (dat, ext) = anlz::files(&track.path, d);
+    let dat_path = on_drive(mount, &rel);
+    write_atomic(&dat_path, &dat).map_err(|e| e.to_string())?;
+    write_atomic(&dat_path.with_extension("EXT"), &ext).map_err(|e| e.to_string())?;
+    track.analyze_path = rel;
+    if track.tempo == 0
+        && let Some(bpm) = d.grid_bpm
+    {
+        track.tempo = (bpm * 100.0).round() as u32;
+    }
+    if track.key.is_empty()
+        && let Some(key) = &d.analysis.key
+    {
+        track.key = if camelot {
+            analysis::camelot(key).unwrap_or_else(|| key.clone())
+        } else {
+            key.clone()
+        };
+    }
+    Ok(())
+}
+
+/// Writes under a temporary name and renames, so a pulled drive never holds half a file.
+fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("manplay-tmp");
+    let mut f = fs::File::create(&tmp)?;
+    io::Write::write_all(&mut f, bytes)?;
+    f.sync_all()?;
+    fs::rename(&tmp, path)
+}
+
 pub struct Options<'a> {
     pub today: &'a str,
     /// Names the backup folder, e.g. `2026-11-15-1530`.
     pub stamp: &'a str,
     pub free_bytes: u64,
+    /// Show detected keys as Camelot codes (`8A`) rather than `Am`.
+    pub camelot: bool,
 }
 
 /// Puts `playlists` (with their songs from `sources`) on the drive at `mount`.
@@ -429,6 +531,31 @@ pub fn export(
         next_id += 1;
     }
 
+    let jobs: Vec<(usize, &Source)> = lib
+        .tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.analyze_path.is_empty())
+        .filter_map(|(i, t)| {
+            let source = planned
+                .iter()
+                .find(|p| placed.get(&p.source.id) == Some(&t.id))?
+                .source;
+            Some((i, source))
+        })
+        .collect();
+    let results = analyze_all(&jobs, &mut progress);
+    for ((index, source), result) in jobs.iter().zip(results) {
+        let track = &mut lib.tracks[*index];
+        match result.and_then(|d| write_analysis(mount, track, &d, opts.camelot).map(|()| d)) {
+            Ok(_) => report.analyzed += 1,
+            Err(e) => report.failed.push(Failure {
+                path: source.path.display().to_string(),
+                error: format!("analysis: {e}"),
+            }),
+        }
+    }
+
     progress(Progress {
         phase: Phase::Writing,
         done: total,
@@ -473,17 +600,7 @@ pub fn export(
     report.backup =
         back_up(mount, opts.stamp).map_err(|e| format!("backing up the old library: {e}"))?;
     let bytes = pdb::write(&lib, sequence + 1);
-    let tmp = pdb_path.with_extension("pdb.manplay-tmp");
-    if let Some(dir) = pdb_path.parent() {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    (|| {
-        let mut f = fs::File::create(&tmp)?;
-        io::Write::write_all(&mut f, &bytes)?;
-        f.sync_all()?;
-        fs::rename(&tmp, &pdb_path)
-    })()
-    .map_err(|e| format!("writing {}: {e}", pdb_path.display()))?;
+    write_atomic(&pdb_path, &bytes).map_err(|e| format!("writing {}: {e}", pdb_path.display()))?;
     report.library_tracks = lib.tracks.len();
     Ok(report)
 }
@@ -523,6 +640,7 @@ mod tests {
             today: "2026-11-15",
             stamp: "2026-11-15-1200",
             free_bytes: free,
+            camelot: true,
         }
     }
 

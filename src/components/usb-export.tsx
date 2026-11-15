@@ -52,10 +52,13 @@ function ProgressLine({ progress }: { progress: UsbExportProgress | null }) {
 		return <p className="text-muted-foreground text-sm">Writing the rekordbox library…</p>;
 	}
 	const pct = progress.total === 0 ? 100 : Math.round((progress.done / progress.total) * 100);
+	const verb = progress.phase === "analyzing" ? "Beat grid and waveform for" : "Copying";
 	return (
 		<div className="space-y-2">
 			<div className="flex justify-between gap-3 text-sm">
-				<span className="min-w-0 truncate">Copying {progress.current}</span>
+				<span className="min-w-0 truncate">
+					{verb} {progress.current}
+				</span>
 				<span className="shrink-0 text-muted-foreground tabular-nums">
 					{progress.done + 1} of {progress.total}
 				</span>
@@ -79,6 +82,9 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 					{plural(report.copied, "song", "songs")} copied ({formatBytes(report.bytesCopied)}),{" "}
 					{report.alreadyThere.toLocaleString()} already there
 				</li>
+				{report.analyzed > 0 && (
+					<li>{plural(report.analyzed, "song", "songs")} given a beat grid and waveform</li>
+				)}
 				<li>{plural(report.libraryTracks, "track", "tracks")} in the drive's library now</li>
 				{report.backup && (
 					<li>
@@ -89,7 +95,7 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 			{report.failed.length > 0 && (
 				<div className="space-y-1">
 					<p className="font-medium text-destructive">
-						{plural(report.failed.length, "song", "songs")} could not be copied
+						{plural(report.failed.length, "problem", "problems")}
 					</p>
 					<ul className="space-y-1 text-xs">
 						{report.failed.map((f) => (
@@ -156,9 +162,9 @@ export function UsbExportButton({
 					<div className="space-y-1">
 						<h2 className="font-semibold text-xl tracking-tight">Export to {drive.name}</h2>
 						<p className="text-muted-foreground text-sm">
-							Copies the songs into <code className="text-xs">/Contents</code> and adds the
-							playlists to the drive's rekordbox library. Songs already on the drive are not copied
-							again, and everything else on it stays.
+							Copies the songs into <code className="text-xs">/Contents</code>, works out their beat
+							grids and waveforms, and adds the playlists to the drive's rekordbox library. Songs
+							already on the drive are not copied again, and everything else on it stays.
 						</p>
 					</div>
 

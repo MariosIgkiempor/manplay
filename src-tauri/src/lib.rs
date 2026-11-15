@@ -1,6 +1,7 @@
 #![allow(clippy::needless_pass_by_value)] // Tauri command args are taken by value
 
 mod analysis;
+mod anlz;
 mod art;
 mod audit;
 mod db;
@@ -1036,7 +1037,7 @@ async fn export_to_usb(
         return Err(Error::Msg("An export to a USB drive is already running.".into()));
     }
     let _guard = SyncGuard(&state.usb_exporting);
-    let (sources, playlists) = {
+    let (sources, playlists, camelot) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let camelot = analysis_settings_of(&conn)?.key_format == KeyFormat::Camelot;
         let (tracks, lists) = db::export_data(&conn)?;
@@ -1070,7 +1071,7 @@ async fn export_to_usb(
                 track_ids: p.track_ids.clone(),
             })
             .collect();
-        (sources, playlists)
+        (sources, playlists, camelot)
     };
     if playlists.is_empty() {
         return Err(Error::Msg("Choose at least one playlist.".into()));
@@ -1091,6 +1092,7 @@ async fn export_to_usb(
             today: &today,
             stamp: &stamp,
             free_bytes: drive.free_bytes,
+            camelot,
         };
         usb_export::export(&mount, &sources, &playlists, &opts, |p| {
             let _ = app.emit("usb-export-progress", p);

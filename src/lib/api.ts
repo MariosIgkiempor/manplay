@@ -1034,7 +1034,7 @@ export async function usbLibrary(mount: string): Promise<UsbLibrary> {
 }
 
 const usbExportProgressSchema = z.object({
-	phase: z.enum(["copying", "writing"]),
+	phase: z.enum(["copying", "analyzing", "writing"]),
 	done: int,
 	total: int,
 	current: z.string(),
@@ -1046,6 +1046,8 @@ const usbExportReportSchema = z.object({
 	copied: int,
 	alreadyThere: int,
 	bytesCopied: int,
+	/** Songs given a beat grid and waveform. */
+	analyzed: int,
 	playlists: int,
 	libraryTracks: int,
 	/** Folder on the drive with the previous database and rekordbox's OneLibrary files. */

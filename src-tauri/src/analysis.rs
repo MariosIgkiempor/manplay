@@ -85,13 +85,61 @@ pub fn analyze(path: &Path) -> Result<Analysis, String> {
     })
 }
 
+/// What a CDJ needs beyond BPM and key: where the beats fall and how loud the track is over time.
+#[derive(Debug, Clone)]
+pub struct Detail {
+    pub analysis: Analysis,
+    /// Tempo of the grid: the one asked for, else the detected one.
+    pub grid_bpm: Option<f64>,
+    /// Time of the grid's first beat, in seconds, within the first beat period.
+    pub first_beat: f64,
+    /// Position in the bar of the first beat (0 = downbeat).
+    pub bar_offset: usize,
+    /// Length of the decoded audio, in seconds.
+    pub duration: f64,
+    /// One column per 1/150 s: peak level and brightness, both 0..=1.
+    pub waveform: Vec<(f32, f32)>,
+}
+
+/// Columns per second of [`Detail::waveform`], rekordbox's detail waveform rate.
+pub const WAVEFORM_RATE: f64 = 150.0;
+
+/// Decodes `path` and finds its tempo, key, beat grid and waveform. `bpm` overrides the
+/// detected tempo for the grid, so the grid agrees with the BPM the library shows.
+pub fn analyze_detail(path: &Path, bpm: Option<f64>) -> Result<Detail, String> {
+    let features = extract(path)?;
+    Ok(detail_of(features, bpm))
+}
+
+fn detail_of(features: Features, bpm: Option<f64>) -> Detail {
+    let fps = features.rate / HOP as f64;
+    let analysis = Analysis {
+        bpm: detect_bpm(&features.onset, fps),
+        key: detect_key(&features.chroma),
+    };
+    let grid_bpm = bpm.filter(|b| *b > 0.0).or(analysis.bpm);
+    let (first_beat, bar_offset) = grid_bpm.map_or((0.0, 0), |b| beat_phase(&features.pulse, b));
+    Detail {
+        analysis,
+        grid_bpm,
+        first_beat,
+        bar_offset,
+        duration: features.samples as f64 / features.rate,
+        waveform: features.waveform,
+    }
+}
+
 // ---- decoding --------------------------------------------------------------------------------
 
 struct Features {
     /// Rate of the resampled signal, in Hz.
     rate: f64,
     onset: Vec<f32>,
+    pulse: Pulse,
     chroma: [f64; 12],
+    /// Resampled samples seen.
+    samples: usize,
+    waveform: Vec<(f32, f32)>,
 }
 
 fn extract(path: &Path) -> Result<Features, String> {
@@ -262,6 +310,109 @@ struct Extractor {
     chroma: [f64; 12],
     /// For each semitone used (MIDI 36..=95), its FFT bin range in a chroma frame.
     bands: Vec<(usize, usize, usize)>,
+    wave: Wave,
+    pulse: Pulse,
+}
+
+/// Fine-grained loudness envelopes for placing beats: the whole signal and its bass band, as
+/// peak followers that jump on a hit and decay over about 10 ms, sampled every `PULSE_HOP`.
+struct Pulse {
+    /// Steps per second.
+    rate: f64,
+    lp1: f32,
+    lp2: f32,
+    /// One-pole low-pass coefficient for `LOW_HZ`.
+    lp_a: f32,
+    decay: f32,
+    low_peak: f32,
+    all_peak: f32,
+    count: usize,
+    low: Vec<f32>,
+    all: Vec<f32>,
+}
+
+/// Resampled samples per pulse step (~1.5 ms).
+const PULSE_HOP: usize = 16;
+
+impl Pulse {
+    fn new(rate: f64) -> Self {
+        Self {
+            rate: rate / PULSE_HOP as f64,
+            lp1: 0.0,
+            lp2: 0.0,
+            lp_a: (1.0 - (-2.0 * PI * LOW_HZ / rate).exp()) as f32,
+            decay: (-1.0 / (0.010 * rate)).exp() as f32,
+            low_peak: 0.0,
+            all_peak: 0.0,
+            count: 0,
+            low: Vec::new(),
+            all: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, s: f32) {
+        self.lp1 += self.lp_a * (s - self.lp1);
+        self.lp2 += self.lp_a * (self.lp1 - self.lp2);
+        self.low_peak = (self.low_peak * self.decay).max(self.lp2.abs());
+        self.all_peak = (self.all_peak * self.decay).max(s.abs());
+        self.count += 1;
+        if self.count.is_multiple_of(PULSE_HOP) {
+            self.low.push(self.low_peak);
+            self.all.push(self.all_peak);
+        }
+    }
+}
+
+/// Peak and brightness per 1/150 s column of the resampled signal.
+#[derive(Default)]
+struct Wave {
+    samples: usize,
+    /// Stream index where the current column ends.
+    next: f64,
+    step: f64,
+    peak: f32,
+    energy: f64,
+    /// Energy of the sample-to-sample difference: high frequencies weigh more in it.
+    edge: f64,
+    prev: f32,
+    columns: Vec<(f32, f32)>,
+}
+
+impl Wave {
+    fn new(rate: f64) -> Self {
+        let step = rate / WAVEFORM_RATE;
+        Self {
+            next: step,
+            step,
+            ..Self::default()
+        }
+    }
+
+    fn push(&mut self, s: f32) {
+        self.peak = self.peak.max(s.abs());
+        self.energy += f64::from(s * s);
+        let d = s - self.prev;
+        self.edge += f64::from(d * d);
+        self.prev = s;
+        self.samples += 1;
+        if self.samples as f64 >= self.next {
+            self.close();
+            self.next += self.step;
+        }
+    }
+
+    fn close(&mut self) {
+        // A full-band signal has edge energy around twice its energy; a bass line almost none.
+        let bright = if self.energy > 1e-9 {
+            (self.edge / (2.0 * self.energy)).sqrt().min(1.0) as f32
+        } else {
+            0.0
+        };
+        self.columns.push((self.peak.min(1.0), bright));
+        self.peak = 0.0;
+        self.energy = 0.0;
+        self.edge = 0.0;
+    }
 }
 
 impl Extractor {
@@ -293,10 +444,14 @@ impl Extractor {
             onset: Vec::new(),
             chroma: [0.0; 12],
             bands,
+            wave: Wave::new(rate),
+            pulse: Pulse::new(rate),
         }
     }
 
     fn push(&mut self, sample: f32) {
+        self.wave.push(sample);
+        self.pulse.push(sample);
         self.buf.push(sample);
         if self.dropped + self.buf.len() < self.next_end {
             return;
@@ -374,11 +529,17 @@ impl Extractor {
         }
     }
 
-    fn finish(self) -> Features {
+    fn finish(mut self) -> Features {
+        if self.wave.peak > 0.0 || self.wave.energy > 0.0 {
+            self.wave.close();
+        }
         Features {
             rate: self.rate,
             onset: self.onset,
+            pulse: self.pulse,
             chroma: self.chroma,
+            samples: self.wave.samples,
+            waveform: self.wave.columns,
         }
     }
 }
@@ -404,8 +565,8 @@ fn detrend(env: &[f32], fps: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Magnitude of the envelope's Fourier component at `cycles` per frame.
-fn component(env: &[f64], cycles: f64) -> f64 {
+/// The envelope's Fourier component at `cycles` per frame.
+fn fourier(env: &[f64], cycles: f64) -> Complex<f64> {
     let step = Complex::from_polar(1.0, -2.0 * PI * cycles);
     let mut phasor = Complex::new(1.0_f64, 0.0);
     let mut sum = Complex::new(0.0_f64, 0.0);
@@ -417,8 +578,107 @@ fn component(env: &[f64], cycles: f64) -> f64 {
             phasor /= phasor.norm();
         }
     }
-    sum.norm()
+    sum
 }
+
+/// Magnitude of the envelope's Fourier component at `cycles` per frame.
+fn component(env: &[f64], cycles: f64) -> f64 {
+    fourier(env, cycles).norm()
+}
+
+/// Rises of an envelope: how much it grew since the previous step.
+fn rises(env: &[f32]) -> Vec<f64> {
+    let mut prev = 0.0_f32;
+    env.iter()
+        .map(|v| {
+            let r = f64::from((*v - prev).max(0.0));
+            prev = *v;
+            r
+        })
+        .collect()
+}
+
+/// Sum over a grid starting at step `start` (fractional) of each beat's strongest rise, within
+/// a few steps either side so a hit slightly off the grid still counts.
+fn comb(env: &[f64], start: f64, period: f64) -> f64 {
+    let mut total = 0.0;
+    let mut t = start;
+    while t < env.len() as f64 {
+        let i = t.round() as usize;
+        let hi = (i + 3).min(env.len());
+        total += env[i.saturating_sub(2)..hi]
+            .iter()
+            .copied()
+            .fold(0.0, f64::max);
+        t += period;
+    }
+    total
+}
+
+/// Where the beats of a `bpm` grid fall: the time of the first one (within the first beat
+/// period) and its place in the bar. Every start within one beat is tried; a grid scores by how
+/// sharply the bass (the kick) and the whole mix rise on its beats, each scaled to its own best
+/// so neither drowns the other. The bar starts on the beat whose rises are strongest, which in
+/// most dance music is the kick on "one".
+fn beat_phase(pulse: &Pulse, bpm: f64) -> (f64, usize) {
+    let low = rises(&pulse.low);
+    let all = rises(&pulse.all);
+    let period = 60.0 / bpm * pulse.rate;
+    if all.len() < 2 || period < 2.0 {
+        return (0.0, 0);
+    }
+    let starts: Vec<f64> = (0..period as usize).map(|i| i as f64).collect();
+    let score =
+        |env: &[f64]| -> Vec<f64> { starts.iter().map(|s| comb(env, *s, period)).collect() };
+    let (ls, als) = (score(&low), score(&all));
+    let lmax = ls.iter().copied().fold(0.0, f64::max);
+    let amax = als.iter().copied().fold(0.0, f64::max);
+    if amax <= 0.0 {
+        return (0.0, 0);
+    }
+    let use_low = lmax > 1e-9;
+    let best = (0..starts.len())
+        .max_by(|a, b| {
+            let v = |i: usize| als[i] / amax + if use_low { ls[i] / lmax } else { 0.0 };
+            v(*a).total_cmp(&v(*b))
+        })
+        .unwrap_or(0);
+    // The bass picks the beat, but it swells after the attack: snap to where the whole mix
+    // rises, within a few tens of milliseconds, which is where rekordbox puts its grid.
+    let reach = (SNAP_SECS * pulse.rate) as i64;
+    let start = (-reach..=reach)
+        .map(|d| starts[best] + d as f64)
+        .filter(|t| *t >= 0.0)
+        .max_by(|a, b| comb(&all, *a, period).total_cmp(&comb(&all, *b, period)))
+        .unwrap_or(starts[best]);
+    let first = ((start / pulse.rate) - PULSE_DELAY).rem_euclid(60.0 / bpm);
+
+    let env = if use_low { &low } else { &all };
+    let mut bars = [0.0_f64; 4];
+    let mut t = start;
+    let mut index = 0;
+    while t < env.len() as f64 {
+        let i = t.round() as usize;
+        let hi = (i + 3).min(env.len());
+        bars[index % 4] += env[i.saturating_sub(2)..hi]
+            .iter()
+            .copied()
+            .fold(0.0, f64::max);
+        t += period;
+        index += 1;
+    }
+    let strongest = (0..4)
+        .max_by(|a, b| bars[*a].total_cmp(&bars[*b]))
+        .unwrap_or(0);
+    (first, (4 - strongest) % 4)
+}
+
+/// Seconds between a hit and the rise of its envelope; measured on synthetic drums.
+const PULSE_DELAY: f64 = 0.0;
+/// How far the grid may move from the bass hits onto the attack of the whole mix.
+const SNAP_SECS: f64 = 0.045;
+/// Upper edge of the band beats are placed on: kick drums and bass.
+const LOW_HZ: f64 = 150.0;
 
 /// How strongly the envelope pulses at `bpm`: the beat rate plus its first harmonics, so a
 /// tempo whose beats line up with sharp onsets beats one that only matches every other hit.
@@ -659,6 +919,60 @@ mod tests {
         detect_bpm(&f.onset, f.rate / HOP as f64)
     }
 
+    /// `drums` delayed by `start` seconds, with every fourth kick from `accent` doubled.
+    fn drums_from(bpm: f64, start: f64, accent: usize, secs: f64) -> Vec<f32> {
+        let mut v = vec![0.0; (start * RATE) as usize];
+        let period = 60.0 / bpm * RATE;
+        v.extend(
+            drums(bpm, secs, RATE)
+                .into_iter()
+                .enumerate()
+                .map(|(i, x)| {
+                    let beat = (i as f64 / period) as usize;
+                    if beat % 4 == accent { x * 2.0 } else { x }
+                }),
+        );
+        v
+    }
+
+    #[test]
+    fn places_the_beat_grid() {
+        for (bpm, start, accent) in [
+            (174.0, 0.31, 3),
+            (140.0, 0.05, 1),
+            (128.0, 0.2, 0),
+            (92.0, 0.0, 2),
+        ] {
+            let f = features(&drums_from(bpm, start, accent, 60.0), RATE);
+            let d = detail_of(f, None);
+            assert_eq!(d.grid_bpm, Some(bpm));
+            let period = 60.0 / bpm;
+            let expected = start.rem_euclid(period);
+            let err = (d.first_beat - expected + period / 2.0).rem_euclid(period) - period / 2.0;
+            assert!(
+                err.abs() < 0.008,
+                "{bpm}: first beat {} vs {expected}",
+                d.first_beat
+            );
+            // Which kick the grid starts on, and so where in the bar it is.
+            let kick = ((d.first_beat - start) / period).round() as i64;
+            let place = (kick - i64::try_from(accent).unwrap_or(0)).rem_euclid(4) as usize;
+            assert_eq!(d.bar_offset, place, "{bpm}");
+        }
+    }
+
+    #[test]
+    fn draws_a_waveform() {
+        let mut signal = drums(128.0, 10.0, RATE);
+        signal.extend(vec![0.0; (2.0 * RATE) as usize]);
+        let d = detail_of(features(&signal, RATE), None);
+        assert!((d.duration - 12.0).abs() < 0.01);
+        assert_eq!(d.waveform.len(), 1800);
+        let loud = d.waveform[..1500].iter().map(|c| c.0).fold(0.0, f32::max);
+        assert!(loud > 0.5, "{loud}");
+        assert!(d.waveform[1600..].iter().all(|c| c.0 == 0.0));
+    }
+
     #[test]
     fn finds_whole_tempos() {
         for bpm in [92.0, 124.0, 128.0, 140.0, 174.0] {
@@ -814,6 +1128,25 @@ mod tests {
             let start = std::time::Instant::now();
             let got = analyze(Path::new(path));
             println!("{:?}\t{:.2}s\t{path}", got, start.elapsed().as_secs_f64());
+        }
+    }
+
+    /// Prints the beat grid of real files: `MANPLAY_ANALYZE=a.mp3:b.mp3 cargo test --release --
+    /// --ignored grid_files --nocapture`.
+    #[test]
+    #[ignore = "needs audio files"]
+    fn grid_files() {
+        let paths = std::env::var("MANPLAY_ANALYZE").expect("MANPLAY_ANALYZE");
+        for p in paths.split(':').filter(|p| !p.is_empty()) {
+            match analyze_detail(Path::new(p), None) {
+                Ok(d) => println!(
+                    "GRID {:>7.2} first={:>7.1}ms bar={} | {p}",
+                    d.grid_bpm.unwrap_or(0.0),
+                    d.first_beat * 1000.0,
+                    d.bar_offset
+                ),
+                Err(e) => println!("GRID error {e} | {p}"),
+            }
         }
     }
 }
