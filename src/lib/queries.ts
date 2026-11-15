@@ -30,8 +30,9 @@ import {
 	setLibraryView,
 	setServiceEnabled,
 	setTagClipboard,
+	syncApply,
 	syncHistory,
-	syncRun,
+	syncPlan,
 	type TagPaths,
 	tagsPreview,
 	tagsRead,
@@ -65,14 +66,23 @@ export function useSyncTargets() {
 	return useQuery({ queryKey: ["sync-targets"], queryFn: listSyncTargets });
 }
 
-/** Mutation that syncs the given target ids, or every target of an enabled service (pass undefined). */
 export const SYNC_KEY = ["sync-run"] as const;
 
-export function useSyncRun() {
+/** Reads what a sync of the given target ids (or every enabled target) would do. Changes nothing. */
+export function useSyncPlan() {
+	return useMutation({
+		mutationKey: SYNC_KEY,
+		mutationFn: (ids?: number[]) => syncPlan(ids),
+	});
+}
+
+/** Runs the actions of a reviewed plan that the user confirmed. */
+export function useSyncApply() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationKey: SYNC_KEY,
-		mutationFn: (ids?: number[]) => syncRun(ids),
+		mutationFn: ({ planId, actionIds }: { planId: string; actionIds: number[] }) =>
+			syncApply(planId, actionIds),
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["sync-history"] });
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
@@ -94,23 +104,15 @@ export function useMissingTracks(enabled: boolean) {
 	return useQuery({ queryKey: ["missing-tracks"], queryFn: listMissing, enabled });
 }
 
-/** Ends the grace period for missing tracks, then syncs so remote copies are removed too. */
+/** Ends the grace period for missing tracks. Their remote copies are offered for deletion at the next sync review. */
 export function useRemoveMissing() {
 	const queryClient = useQueryClient();
-	const sync = useSyncRun();
 	return useMutation({
 		mutationFn: removeMissingNow,
 		onSuccess: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["library-status"] });
 			await queryClient.invalidateQueries({ queryKey: ["missing-tracks"] });
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
-			const targets = await queryClient.ensureQueryData({
-				queryKey: ["sync-targets"],
-				queryFn: listSyncTargets,
-			});
-			if (targets.length > 0) {
-				sync.mutate(undefined);
-			}
 		},
 	});
 }
@@ -135,11 +137,10 @@ export type ScanMode = "saved" | "pick";
 
 /**
  * Scans the library: `"saved"` rescans the remembered folder, `"pick"` asks for a new one.
- * New files are mirrored to every sync destination afterwards.
+ * Nothing is sent to a sync destination until it is reviewed and confirmed in Export.
  */
 export function useScan() {
 	const queryClient = useQueryClient();
-	const sync = useSyncRun();
 	return useMutation({
 		mutationKey: SCAN_KEY,
 		mutationFn: (mode: ScanMode) => (mode === "pick" ? pickAndScan() : rescanLibrary()),
@@ -152,18 +153,10 @@ export function useScan() {
 			if (count === null) {
 				return;
 			}
-			const targets = await queryClient.ensureQueryData({
-				queryKey: ["sync-targets"],
-				queryFn: listSyncTargets,
-			});
-			if (targets.length > 0) {
-				sync.mutate(undefined);
-			}
 		},
 	});
 }
 
-/** Imports new iTunes songs, then refreshes the library and syncs the new files. */
 /** Songs waiting in the iTunes folder (empty while iTunes is off or unset). */
 export function useItunesPending(enabled: boolean) {
 	return useQuery({ queryKey: ["itunes-pending"], queryFn: itunesPending, enabled });
@@ -171,7 +164,6 @@ export function useItunesPending(enabled: boolean) {
 
 export function useItunesImport() {
 	const queryClient = useQueryClient();
-	const sync = useSyncRun();
 	return useMutation({
 		mutationKey: ["itunes-import"],
 		mutationFn: itunesImport,
@@ -186,13 +178,6 @@ export function useItunesImport() {
 			}
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
 			await queryClient.invalidateQueries({ queryKey: ["library-status"] });
-			const targets = await queryClient.ensureQueryData({
-				queryKey: ["sync-targets"],
-				queryFn: listSyncTargets,
-			});
-			if (targets.length > 0) {
-				sync.mutate(undefined);
-			}
 		},
 	});
 }

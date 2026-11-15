@@ -27,7 +27,7 @@ import {
 	withAll,
 	withToggled,
 } from "#/lib/import-state.ts";
-import { useLibraryRoot, useSyncRun, useSyncTargets } from "#/lib/queries.ts";
+import { useLibraryRoot } from "#/lib/queries.ts";
 
 /** Live progress of the running scan, or null when idle. */
 export function useImportProgress(active: boolean): ImportProgress | null {
@@ -104,8 +104,6 @@ export function useImport(enabled = true) {
 	const queryClient = useQueryClient();
 	const savedFolder = useQuery({ queryKey: ["import-folder"], queryFn: importGetFolder });
 	const root = useLibraryRoot();
-	const targets = useSyncTargets();
-	const sync = useSyncRun();
 	const folder = savedFolder.data ?? null;
 
 	const [scan, setScan] = useState<ImportScan | null>(null);
@@ -169,9 +167,6 @@ export function useImport(enabled = true) {
 			setScan((prev) => prev && applyAdded(prev, ok));
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
 			await queryClient.invalidateQueries({ queryKey: ["library-status"] });
-			if (done.imported > 0 && (targets.data?.length ?? 0) > 0) {
-				sync.mutate(undefined);
-			}
 		},
 	});
 

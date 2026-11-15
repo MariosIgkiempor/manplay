@@ -1,24 +1,21 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { CloudUpload } from "lucide-react";
 import { DestinationServiceCard } from "#/components/destination-service.tsx";
-import { MutationErrors } from "#/components/path-setting.tsx";
 import { RekordboxCard } from "#/components/rekordbox-source.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
-import { Button } from "#/components/ui/button.tsx";
+import { SyncReviewButton } from "#/components/sync-review.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
-import { useSyncRun, useSyncTargets, useTracks } from "#/lib/queries.ts";
+import { useSyncTargets, useTracks } from "#/lib/queries.ts";
 
 export const Route = createFileRoute("/export")({ component: ExportPage });
 
 function ExportPage() {
 	const progress = useSyncProgress();
 	const targets = useSyncTargets();
-	const run = useSyncRun();
 	const tracks = useTracks();
 	const targetCount = targets.data?.length ?? 0;
 	const pending =
 		targetCount === 0 ? 0 : (tracks.data ?? []).filter((t) => t.syncedCount < targetCount).length;
-	const busy = progress.size > 0 || run.isPending;
+	const busy = progress.size > 0;
 
 	return (
 		<main className="mx-auto w-full max-w-5xl space-y-8 p-6 lg:p-8">
@@ -26,18 +23,13 @@ function ExportPage() {
 				<div className="space-y-1">
 					<h1 className="font-semibold text-2xl tracking-tight">Export</h1>
 					<p className="max-w-xl text-muted-foreground text-sm">
-						Back up or hand off your library. Files are copied one way and never modified. Switch a
-						service off to pause it.
+						Back up or hand off your library. Nothing is sent until you review and confirm it. Files
+						missing from your library are removed from a destination only after a backup copy is
+						saved. Switch a service off to pause it.
 					</p>
 				</div>
-				<Button
-					onClick={() => run.mutate(undefined)}
-					disabled={busy || (targets.data?.length ?? 0) === 0}
-				>
-					<CloudUpload /> Sync all
-				</Button>
+				<SyncReviewButton label="Review all" disabled={busy || targetCount === 0} />
 			</header>
-			<MutationErrors mutations={[run]} />
 			<section className="grid gap-4 lg:grid-cols-2">
 				<DestinationServiceCard kind="tailscale" />
 				<DestinationServiceCard kind="r2" />

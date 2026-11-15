@@ -626,23 +626,6 @@ pub fn set_setting(conn: &Connection, key: &str, value: Option<&str>) -> Result<
     Ok(())
 }
 
-pub struct TrackFile {
-    pub id: i64,
-    pub path: String,
-}
-
-pub fn all_files(conn: &Connection) -> Result<Vec<TrackFile>, Error> {
-    let mut stmt =
-        conn.prepare("SELECT id, path FROM tracks WHERE missing_since IS NULL ORDER BY path")?;
-    let rows = stmt.query_map([], |r| {
-        Ok(TrackFile {
-            id: r.get(0)?,
-            path: r.get(1)?,
-        })
-    })?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
-}
-
 /// `(path, size)` of every track currently on disk.
 pub fn present_sizes(conn: &Connection) -> Result<Vec<(String, i64)>, Error> {
     let mut stmt = conn.prepare("SELECT path, size FROM tracks WHERE missing_since IS NULL")?;
@@ -658,6 +641,38 @@ pub fn present_fingerprints(conn: &Connection) -> Result<Vec<(String, String)>, 
     )?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Every track record, present or missing, for matching destination files against the library.
+pub struct TrackRow {
+    pub id: i64,
+    pub path: String,
+    pub fingerprint: Option<String>,
+    pub missing_since: Option<i64>,
+}
+
+pub fn all_track_rows(conn: &Connection) -> Result<Vec<TrackRow>, Error> {
+    let mut stmt = conn.prepare("SELECT id, path, fingerprint, missing_since FROM tracks")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(TrackRow {
+            id: r.get(0)?,
+            path: r.get(1)?,
+            fingerprint: r.get(2)?,
+            missing_since: r.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// `track id -> when it was last confirmed on the target` for every synced file.
+pub fn synced_times(
+    conn: &Connection,
+    target_id: i64,
+) -> Result<std::collections::HashMap<i64, i64>, Error> {
+    let mut stmt =
+        conn.prepare("SELECT track_id, synced_at FROM synced_files WHERE target_id = ?1")?;
+    let rows = stmt.query_map(params![target_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 pub fn track_path(conn: &Connection, id: i64) -> Result<Option<String>, Error> {

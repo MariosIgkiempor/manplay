@@ -292,9 +292,56 @@ export async function dismissActivity(ids: number[]): Promise<void> {
 	await invoke("dismiss_activity", { ids });
 }
 
-/** Syncs the given targets, or every target of an enabled service when `ids` is omitted. */
-export async function syncRun(ids?: number[]): Promise<void> {
-	await invoke("sync_run", { targetIds: ids ?? null });
+const actionSchema = z.object({
+	id: int,
+	targetId: int,
+	kind: z.enum(["upload", "replace", "move", "delete"]),
+	rel: z.array(z.string()),
+	from: z.array(z.string()).nullable(),
+	size: int,
+	remoteSize: int.nullable(),
+	note: z.string().nullable(),
+});
+export type SyncAction = z.infer<typeof actionSchema>;
+
+const targetPlanSchema = z.object({
+	targetId: int,
+	name: z.string(),
+	error: z.string().nullable(),
+	actions: z.array(actionSchema),
+	held: z.array(z.object({ rel: z.array(z.string()), reason: z.string() })),
+	inSync: int,
+	remoteTotal: int,
+	unchecked: int,
+});
+export type TargetPlan = z.infer<typeof targetPlanSchema>;
+
+const planSchema = z.object({ id: z.string(), targets: z.array(targetPlanSchema) });
+export type SyncPlan = z.infer<typeof planSchema>;
+
+/**
+ * Compares destinations with the library and returns what a sync would push, rename and delete.
+ * Changes nothing. Omit `ids` for every target of an enabled service.
+ */
+export async function syncPlan(ids?: number[]): Promise<SyncPlan> {
+	return planSchema.parse(await invoke("sync_plan", { targetIds: ids ?? null }));
+}
+
+const applySummarySchema = z.object({
+	targetId: int,
+	name: z.string(),
+	uploaded: int,
+	moved: int,
+	deleted: int,
+	failed: z.array(z.string()),
+	failedTotal: int,
+	backupDir: z.string().nullable(),
+});
+export type ApplySummary = z.infer<typeof applySummarySchema>;
+
+/** Runs the confirmed actions of a plan. Overwritten and deleted files are backed up first. */
+export async function syncApply(planId: string, actionIds: number[]): Promise<ApplySummary[]> {
+	return z.array(applySummarySchema).parse(await invoke("sync_apply", { planId, actionIds }));
 }
 
 const remoteFileSchema = z.object({ rel: z.array(z.string()), size: int });

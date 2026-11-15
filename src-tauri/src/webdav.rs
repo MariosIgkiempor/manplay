@@ -196,6 +196,20 @@ pub async fn delete(client: &Client, segments: &[String]) -> Result<(), Error> {
     }
 }
 
+/// Moves a remote file. Fails (412) rather than overwrite something already at `to`.
+pub async fn move_file(client: &Client, from: &[String], to: &[String]) -> Result<(), Error> {
+    let resp = client
+        .request(method("MOVE")?, url(from))
+        .header("Destination", url(to))
+        .header("Overwrite", "F")
+        .send()
+        .await?;
+    match resp.status() {
+        s if s.is_success() => Ok(()),
+        s => Err(Error::Msg(format!("webdav MOVE {s}"))),
+    }
+}
+
 pub async fn put(client: &Client, segments: &[String], file: &Path) -> Result<(), Error> {
     let handle = tokio::fs::File::open(file).await?;
     let len = handle.metadata().await?.len();

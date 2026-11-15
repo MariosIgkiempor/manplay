@@ -102,13 +102,25 @@ impl R2 {
         self.signed(client, method, key, &[])
     }
 
-    /// `query` pairs must already be sorted by name, as `SigV4` requires.
     fn signed(
         &self,
         client: &Client,
         method: &Method,
         key: &[String],
         query: &[(&str, &str)],
+    ) -> reqwest::RequestBuilder {
+        self.signed_with(client, method, key, query, &[])
+    }
+
+    /// `query` pairs must already be sorted by name, as `SigV4` requires. `extra` are additional
+    /// headers to sign and send (lower-case names).
+    fn signed_with(
+        &self,
+        client: &Client,
+        method: &Method,
+        key: &[String],
+        query: &[(&str, &str)],
+        extra: &[(&str, &str)],
     ) -> reqwest::RequestBuilder {
         let host = self.host();
         let path = self.path(key);
@@ -124,9 +136,21 @@ impl R2 {
             .collect::<Vec<_>>()
             .join("&");
         let (date, stamp) = timestamps(now());
-        let canonical = format!(
-            "{method}\n{path}\n{query}\nhost:{host}\nx-amz-content-sha256:{UNSIGNED}\nx-amz-date:{stamp}\n\nhost;x-amz-content-sha256;x-amz-date\n{UNSIGNED}"
-        );
+        let mut headers: Vec<(&str, &str)> = vec![
+            ("host", host.as_str()),
+            ("x-amz-content-sha256", UNSIGNED),
+            ("x-amz-date", stamp.as_str()),
+        ];
+        headers.extend_from_slice(extra);
+        headers.sort_by(|a, b| a.0.cmp(b.0));
+        let canonical_headers: String = headers.iter().map(|(k, v)| format!("{k}:{v}\n")).collect();
+        let signed_headers = headers
+            .iter()
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>()
+            .join(";");
+        let canonical =
+            format!("{method}\n{path}\n{query}\n{canonical_headers}\n{signed_headers}\n{UNSIGNED}");
         let scope = format!("{date}/auto/s3/aws4_request");
         let to_sign = format!(
             "AWS4-HMAC-SHA256\n{stamp}\n{scope}\n{}",
@@ -138,7 +162,7 @@ impl R2 {
         let k = hmac(&k, "aws4_request");
         let sig = hex(&hmac(&k, &to_sign));
         let auth = format!(
-            "AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={sig}",
+            "AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={sig}",
             self.key_id
         );
         let url = if query.is_empty() {
@@ -146,11 +170,36 @@ impl R2 {
         } else {
             format!("https://{host}{path}?{query}")
         };
-        client
+        let mut req = client
             .request(method.clone(), url)
             .header("x-amz-date", stamp)
             .header("x-amz-content-sha256", UNSIGNED)
-            .header(header::AUTHORIZATION, auth)
+            .header(header::AUTHORIZATION, auth);
+        for (k, v) in extra {
+            req = req.header(*k, *v);
+        }
+        req
+    }
+
+    /// Server-side copy of `from` to `to` inside the bucket.
+    pub async fn copy(&self, client: &Client, from: &[String], to: &[String]) -> Result<(), Error> {
+        let source = self.path(from);
+        let resp = self
+            .signed_with(
+                client,
+                &Method::PUT,
+                to,
+                &[],
+                &[("x-amz-copy-source", source.as_str())],
+            )
+            .header(header::CONTENT_LENGTH, 0)
+            .send()
+            .await?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(Error::Msg(format!("r2 COPY {}", resp.status())))
+        }
     }
 
     /// Verifies credentials and that the bucket exists.

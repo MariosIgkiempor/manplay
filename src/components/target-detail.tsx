@@ -1,16 +1,17 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CloudUpload, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { BrandIcon } from "#/components/brand-icon.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { SectionTitle } from "#/components/source-panel.tsx";
+import { SyncReviewButton } from "#/components/sync-review.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { isR2, removeSyncTarget, type SyncTarget, updateSyncTarget } from "#/lib/api.ts";
 import { syncEntries } from "#/lib/history.ts";
-import { useSyncHistory, useSyncRun, useSyncTargets } from "#/lib/queries.ts";
+import { useSyncHistory, useSyncTargets } from "#/lib/queries.ts";
 
 function Field({
 	label,
@@ -161,7 +162,6 @@ function SettingsForm({ target }: { target: SyncTarget }) {
 function Actions({ target, onRemoved }: { target: SyncTarget; onRemoved: () => void }) {
 	const queryClient = useQueryClient();
 	const progress = useSyncProgress();
-	const run = useSyncRun();
 	const remove = useMutation({
 		mutationFn: removeSyncTarget,
 		onSuccess: async () => {
@@ -171,18 +171,16 @@ function Actions({ target, onRemoved }: { target: SyncTarget; onRemoved: () => v
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
 		},
 	});
-	const busy = progress.size > 0 || run.isPending;
+	const busy = progress.size > 0;
 	return (
 		<div className="space-y-2">
 			<div className="flex flex-wrap gap-2">
-				<Button onClick={() => run.mutate([target.id])} disabled={busy}>
-					<CloudUpload /> Sync now
-				</Button>
+				<SyncReviewButton ids={[target.id]} label="Review sync" disabled={busy} />
 				<Button variant="ghost" onClick={() => remove.mutate(target.id)} disabled={busy}>
 					<Trash2 /> Remove
 				</Button>
 			</div>
-			<MutationErrors mutations={[run, remove]} />
+			<MutationErrors mutations={[remove]} />
 		</div>
 	);
 }

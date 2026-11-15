@@ -32,6 +32,8 @@ struct AppState {
     http: reqwest::Client,
     syncing: AtomicBool,
     fixing: AtomicBool,
+    /// The last sync review, awaiting the user's confirmation.
+    plan: Mutex<Option<sync::Plan>>,
 }
 
 const SETTING_ROOT: &str = "library_root";
@@ -39,6 +41,8 @@ const SETTING_ROOT: &str = "library_root";
 const GRACE_SECS: i64 = 7 * 24 * 60 * 60;
 const GRACE_DAYS: i64 = 7;
 const BACKUPS_KEEP: usize = 5;
+/// How long copies of files removed from destinations are kept.
+const SYNC_BACKUP_KEEP_SECS: i64 = 30 * 24 * 60 * 60;
 
 /// Scans `root` off the UI thread, stores the results, and remembers `root` as the library folder.
 async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error> {
@@ -707,25 +711,49 @@ fn collect_items(conn: &Connection) -> Result<Vec<sync::Item>, Error> {
         ));
     };
     let root = Path::new(&root);
-    Ok(db::all_files(conn)?
+    let mut items: Vec<sync::Item> = db::all_track_rows(conn)?
         .into_iter()
-        .filter_map(|f| {
-            let local = PathBuf::from(f.path);
+        .filter(|t| t.missing_since.is_none())
+        .filter_map(|t| {
+            let local = PathBuf::from(&t.path);
             // Files deleted since the last scan are skipped rather than reported as failures.
-            if !local.exists() {
-                return None;
-            }
-            let rel = local
-                .strip_prefix(root)
-                .ok()?
-                .iter()
-                .map(|s| s.to_str().map(str::to_owned))
-                .collect::<Option<Vec<_>>>()?;
+            let meta = std::fs::metadata(&local).ok()?;
+            let size = meta.len();
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
             Some(sync::Item {
-                track_id: f.id,
+                track_id: t.id,
+                rel: rel_path(root, &t.path)?,
                 local,
-                rel,
+                size,
+                fingerprint: t.fingerprint,
+                modified,
             })
+        })
+        .collect();
+    items.sort_by(|a, b| a.rel.cmp(&b.rel));
+    Ok(items)
+}
+
+/// Every library path (present or missing) that maps onto a destination, for recognising which
+/// destination files belong to tracks that are only missing for now.
+fn collect_known(conn: &Connection) -> Result<HashMap<Vec<String>, sync::Known>, Error> {
+    let Some(root) = db::get_setting(conn, SETTING_ROOT)? else {
+        return Ok(HashMap::new());
+    };
+    let root = Path::new(&root);
+    let cutoff = unix_now() - GRACE_SECS;
+    Ok(db::all_track_rows(conn)?
+        .into_iter()
+        .filter_map(|t| {
+            let known = sync::Known {
+                track_id: t.id,
+                in_grace: t.missing_since.is_some_and(|m| m > cutoff),
+            };
+            Some((rel_path(root, &t.path)?, known))
         })
         .collect())
 }
@@ -739,23 +767,32 @@ impl Drop for SyncGuard<'_> {
     }
 }
 
-/// Syncs the given targets, or every target of an enabled service when `target_ids` is `None`.
+/// Compares the given targets (or every target of an enabled service) with the library and
+/// returns what a sync would push, rename and delete. Changes nothing on any destination.
 #[tauri::command]
-async fn sync_run(
+async fn sync_plan(
     app: AppHandle,
     state: State<'_, AppState>,
     target_ids: Option<Vec<i64>>,
-) -> Result<(), Error> {
-    let (targets, items, mut victims) = {
+) -> Result<sync::Plan, Error> {
+    let (targets, items, known, synced) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let targets = db::get_targets(&conn, target_ids.as_deref())?;
-        let items = collect_items(&conn)?;
-        let victims = collect_victims(&conn, &targets)?;
-        (targets, items, victims)
+        let synced = targets
+            .iter()
+            .map(|t| Ok((t.id, db::synced_times(&conn, t.id)?)))
+            .collect::<Result<HashMap<_, _>, Error>>()?;
+        (
+            targets,
+            collect_items(&conn)?,
+            collect_known(&conn)?,
+            synced,
+        )
     };
     if targets.is_empty() {
         return Err(Error::Msg("no sync target selected".to_owned()));
     }
+    // An empty library would propose deleting everything on the destination.
     if items.is_empty() {
         return Err(Error::Msg(
             "no tracks under the library folder to sync".to_owned(),
@@ -766,85 +803,106 @@ async fn sync_run(
     }
     let _guard = SyncGuard(&state.syncing);
 
-    let batch = unix_now();
+    let mut next_id = 0;
+    let mut plans = Vec::new();
     for target in &targets {
+        let times = synced.get(&target.id).cloned().unwrap_or_default();
+        plans.push(
+            sync::plan_target(
+                &app,
+                &state.http,
+                target,
+                &items,
+                &known,
+                &times,
+                &mut next_id,
+            )
+            .await,
+        );
+    }
+    let plan = sync::Plan {
+        id: unix_now().to_string(),
+        targets: plans,
+    };
+    *state.plan.lock().map_err(|_| Error::Lock)? = Some(plan.clone());
+    Ok(plan)
+}
+
+/// Executes the actions the user confirmed from the last [`sync_plan`]. Anything that would be
+/// overwritten or deleted is copied to the app's backup folder first.
+#[tauri::command]
+async fn sync_apply(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    plan_id: String,
+    action_ids: Vec<u32>,
+) -> Result<Vec<sync::ApplySummary>, Error> {
+    let plan = {
+        let mut slot = state.plan.lock().map_err(|_| Error::Lock)?;
+        match slot.as_ref() {
+            Some(p) if p.id == plan_id => slot.take(),
+            _ => None,
+        }
+    }
+    .ok_or_else(|| Error::Msg("this review is out of date: review the changes again".to_owned()))?;
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+
+    let selected: HashSet<u32> = action_ids.into_iter().collect();
+    let ids: Vec<i64> = plan.targets.iter().map(|t| t.target_id).collect();
+    let targets = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        // Safety net for the library records, taken before anything on a destination changes.
+        db::backup(
+            &conn,
+            &state.data_dir.join("backups"),
+            unix_now(),
+            BACKUPS_KEEP,
+        )?;
+        db::get_targets(&conn, Some(&ids))?
+    };
+    let backups = state.data_dir.join("sync-backups");
+    let batch = unix_now();
+    let backup_dir = backups.join(format!("{batch:012}"));
+    let mut summaries = Vec::new();
+    for tp in &plan.targets {
+        let Some(target) = targets.iter().find(|t| t.id == tp.target_id) else {
+            continue;
+        };
+        if tp.error.is_some() || !tp.actions.iter().any(|a| selected.contains(&a.id)) {
+            continue;
+        }
         let started_at = unix_now();
-        let mut outcome = sync::run(&app, &state.http, target, &items).await;
-        let cleanup = if outcome.reachable {
-            let list = victims.remove(&target.id).unwrap_or_default();
-            sync::cleanup(&state.http, target, &list).await
-        } else {
-            sync::Cleanup::default()
-        };
-        // Old locations of moved files go only once the new copy is confirmed on the target.
-        let confirmed: HashSet<i64> = outcome.present.iter().map(|(id, _)| *id).collect();
-        let moved_cleanup = if outcome.reachable {
-            let pending = {
-                let conn = state.db.lock().map_err(|_| Error::Lock)?;
-                db::stale_for(&conn, target.id)?
-            };
-            let list: Vec<sync::Victim> = pending
-                .into_iter()
-                .filter(|(id, _)| confirmed.contains(id))
-                .map(|(track_id, rel)| sync::Victim { track_id, rel })
-                .collect();
-            sync::cleanup(&state.http, target, &list).await
-        } else {
-            sync::Cleanup::default()
-        };
-        outcome.summary.failed_total += cleanup.errors.len() + moved_cleanup.errors.len();
-        outcome.summary.failed.extend(cleanup.errors);
-        outcome.summary.failed.extend(moved_cleanup.errors);
-        let removed_ids: Vec<i64> = cleanup.deleted.iter().map(|(id, _)| *id).collect();
+        let applied =
+            sync::apply_target(&app, &state.http, target, tp, &selected, &backup_dir).await;
+        let s = &applied.summary;
         let record = db::RunRecord {
             target_id: target.id,
             started_at,
             finished_at: unix_now(),
-            uploaded: outcome.summary.uploaded,
-            skipped: outcome.summary.skipped,
-            failed: outcome.summary.failed_total,
-            deleted: cleanup.deleted.len() + moved_cleanup.deleted.len(),
-            first_error: outcome.summary.failed.first().cloned(),
-            errors: outcome.summary.failed.clone(),
+            uploaded: s.uploaded + s.moved,
+            skipped: tp.in_sync,
+            failed: s.failed_total,
+            deleted: s.deleted,
+            first_error: s.failed.first().cloned(),
+            errors: s.failed.clone(),
             batch,
         };
         let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
-        db::record_run(&mut conn, &record, &outcome.present, &removed_ids)?;
-        db::clear_stale(&conn, target.id, &moved_cleanup.deleted)?;
+        db::record_run(&mut conn, &record, &applied.present, &applied.removed)?;
+        // Destination files are now matched by content, so old-location bookkeeping is moot.
+        let old_places = db::stale_for(&conn, target.id)?;
+        db::clear_stale(&conn, target.id, &old_places)?;
+        drop(conn);
+        summaries.push(applied.summary);
     }
 
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
-    purge_expired(&conn, &state.data_dir.join("backups"), unix_now())
-}
-
-/// Remote copies of long-missing tracks, per target. Only files this app recorded syncing
-/// (and that map under the current library folder) are ever considered.
-fn collect_victims(
-    conn: &Connection,
-    targets: &[db::SyncTarget],
-) -> Result<HashMap<i64, Vec<sync::Victim>>, Error> {
-    let Some(root) = db::get_setting(conn, SETTING_ROOT)? else {
-        return Ok(HashMap::new());
-    };
-    let root = Path::new(&root);
-    let cutoff = unix_now() - GRACE_SECS;
-    let mut out = HashMap::new();
-    for t in targets {
-        let victims = db::expired_synced(conn, t.id, cutoff)?
-            .into_iter()
-            .filter_map(|(track_id, path)| {
-                let rel = Path::new(&path)
-                    .strip_prefix(root)
-                    .ok()?
-                    .iter()
-                    .map(|s| s.to_str().map(str::to_owned))
-                    .collect::<Option<Vec<_>>>()?;
-                Some(sync::Victim { track_id, rel })
-            })
-            .collect();
-        out.insert(t.id, victims);
-    }
-    Ok(out)
+    purge_expired(&conn, &state.data_dir.join("backups"), unix_now())?;
+    sync::prune_backups(&backups, unix_now(), SYNC_BACKUP_KEEP_SECS);
+    Ok(summaries)
 }
 
 #[tauri::command]
@@ -1741,6 +1799,7 @@ pub fn run() {
                 http,
                 syncing: AtomicBool::new(false),
                 fixing: AtomicBool::new(false),
+                plan: Mutex::new(None),
             });
             Ok(())
         })
@@ -1778,7 +1837,8 @@ pub fn run() {
             set_service_enabled,
             dismiss_activity,
             dismiss_sync_runs,
-            sync_run,
+            sync_plan,
+            sync_apply,
             remote_scan,
             remote_pull,
             remote_verify,
@@ -2194,6 +2254,7 @@ mod tests {
             http: reqwest::Client::new(),
             syncing: AtomicBool::new(false),
             fixing: AtomicBool::new(false),
+            plan: Mutex::new(None),
         };
         assert!(run_export(&state).expect("export"));
 
@@ -2234,6 +2295,7 @@ mod tests {
             http: reqwest::Client::new(),
             syncing: AtomicBool::new(false),
             fixing: AtomicBool::new(false),
+            plan: Mutex::new(None),
         };
         assert!(!run_export(&state).expect("no-op"));
     }

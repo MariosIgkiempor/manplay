@@ -32,7 +32,10 @@ export function formatBytes(bytes: number): string {
 	if (bytes < 1024 * 1024) {
 		return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 	}
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	if (bytes < 1024 * 1024 * 1024) {
+		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	}
+	return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 /** "1m 05s" / "42s" / "<1s" for a duration in seconds. */

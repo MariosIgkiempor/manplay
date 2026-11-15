@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, CloudUpload, Plus } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { useState } from "react";
 import { AddR2, AddTailscale } from "#/components/add-destination.tsx";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
@@ -7,13 +7,14 @@ import { Drawer } from "#/components/drawer.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
 import { SourceCard } from "#/components/source-card.tsx";
 import { SectionTitle, SourcePanel } from "#/components/source-panel.tsx";
+import { SyncReviewButton } from "#/components/sync-review.tsx";
 import { TargetDetail } from "#/components/target-detail.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { isR2, type SyncTarget, tailscaleStatus } from "#/lib/api.ts";
 import { duration, timeAgo } from "#/lib/format.ts";
-import { useServices, useSyncHistory, useSyncRun, useSyncTargets } from "#/lib/queries.ts";
+import { useServices, useSyncHistory, useSyncTargets } from "#/lib/queries.ts";
 
 export type DestinationKind = "tailscale" | "r2";
 
@@ -22,7 +23,7 @@ const COPY = {
 		brand: "tailscale" as Brand,
 		title: "Tailscale",
 		blurb:
-			"Back up to folders shared from your other machines over Tailscale. Files are copied one way and never modified; removing a track locally only removes its backup after a grace period.",
+			"Back up to folders shared from your other machines over Tailscale. Nothing is sent until you review and confirm it. Files that no longer match your library are deleted from the folder only after a backup copy is saved on this computer.",
 		list: "Machines & folders",
 		add: "Add folder",
 	},
@@ -30,7 +31,7 @@ const COPY = {
 		brand: "cloudflare" as Brand,
 		title: "Cloudflare R2",
 		blurb:
-			"Back up to a Cloudflare R2 bucket. Files are copied one way and never modified; removing a track locally only removes its backup after a grace period.",
+			"Back up to a Cloudflare R2 bucket. Nothing is sent until you review and confirm it. Files that no longer match your library are deleted from the folder only after a backup copy is saved on this computer.",
 		list: "Buckets & folders",
 		add: "Add bucket",
 	},
@@ -63,12 +64,11 @@ export function DestinationServiceCard({ kind }: { kind: DestinationKind }) {
 	const detail = useDetail();
 	const { mine, enabled, setEnabled } = useDestinations(kind);
 	const progress = useSyncProgress();
-	const run = useSyncRun();
 	const history = useSyncHistory();
 	const ids = new Set(mine.map((t) => t.id));
 	const active = [...progress.values()].filter((p) => ids.has(p.targetId));
 	const last = history.data?.find((r) => ids.has(r.targetId));
-	const busy = progress.size > 0 || run.isPending;
+	const busy = progress.size > 0;
 	const open = () => detail.open({ kind: "service", service: kind });
 
 	let status: string;
@@ -94,9 +94,7 @@ export function DestinationServiceCard({ kind }: { kind: DestinationKind }) {
 						<Plus /> Set up
 					</Button>
 				) : (
-					<Button size="sm" onClick={() => run.mutate([...ids])} disabled={busy}>
-						<CloudUpload /> Sync now
-					</Button>
+					<SyncReviewButton size="sm" ids={[...ids]} label="Review sync" disabled={busy} />
 				)
 			}
 		/>

@@ -1,6 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Disc3, Download, FileAudio, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Download, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
+import {
+	DiffHunk,
+	DiffLine,
+	DiffNote,
+	DiffRow,
+	groupByDir,
+	ProgressBar,
+	Tally,
+	type Tone,
+} from "#/components/diff-view.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	onPullProgress,
@@ -15,6 +25,9 @@ import {
 import { formatBytes } from "#/lib/format.ts";
 
 const key = (f: RemoteFile) => f.rel.join("/");
+const dirOf = (f: RemoteFile) => f.rel.slice(0, -1).join("/") || "(top level)";
+const nameOf = (f: RemoteFile) => f.rel.at(-1) ?? "";
+const HUNKS_PER_PAGE = 40;
 
 function Notice({ text, onDone }: { text: string; onDone: () => void }) {
 	return (
@@ -27,66 +40,21 @@ function Notice({ text, onDone }: { text: string; onDone: () => void }) {
 	);
 }
 
-const PILL = "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 font-medium text-xs";
-
-/** Short status pill shown beside the size. */
-function Status({ file, verdict }: { file: RemoteFile; verdict: Verified | undefined }) {
+/** How one destination file looks in the diff, and why. */
+function describe(
+	file: RemoteFile,
+	verdict: Verified | undefined,
+): { tone: Tone; note: string | null } {
 	if (verdict?.duplicateOf) {
-		return (
-			<span className={`${PILL} bg-warning/15 text-warning`}>
-				<Copy className="size-3" /> Duplicate
-			</span>
-		);
+		return { tone: "change", note: `Same audio as ${verdict.duplicateOf}` };
 	}
 	if (verdict && !verdict.checked) {
-		return <span className={`${PILL} bg-muted text-muted-foreground`}>Unchecked</span>;
+		return { tone: "add", note: "Audio could not be compared" };
 	}
-	if (verdict) {
-		return (
-			<span className={`${PILL} bg-success/15 text-success`}>
-				<Check className="size-3" /> New audio
-			</span>
-		);
+	if (!verdict && file.otherFormat) {
+		return { tone: "move", note: `Your library has this as .${file.otherFormat}` };
 	}
-	if (file.otherFormat) {
-		return (
-			<span className={`${PILL} bg-sky-500/15 text-sky-400`}>
-				<FileAudio className="size-3" /> Have .{file.otherFormat}
-			</span>
-		);
-	}
-	return null;
-}
-
-/** Checkbox that can show a partly-selected state. */
-function Checkbox({
-	checked,
-	partial = false,
-	onChange,
-	disabled,
-	label,
-}: {
-	checked: boolean;
-	partial?: boolean;
-	onChange: () => void;
-	disabled?: boolean;
-	label: string;
-}) {
-	return (
-		<input
-			type="checkbox"
-			aria-label={label}
-			className="size-4 shrink-0 accent-primary"
-			checked={checked}
-			ref={(el) => {
-				if (el) {
-					el.indeterminate = partial && !checked;
-				}
-			}}
-			onChange={onChange}
-			disabled={disabled}
-		/>
-	);
+	return { tone: "add", note: null };
 }
 
 function FileRow({
@@ -102,110 +70,40 @@ function FileRow({
 	disabled: boolean;
 	onToggle: () => void;
 }) {
-	const name = file.rel.at(-1) ?? "";
-	const album = file.rel.slice(1, -1).join(" / ");
+	const { tone, note } = describe(file, verdict);
 	return (
-		<label className="flex cursor-pointer items-start gap-3 rounded-lg py-2 pr-2 pl-9 hover:bg-muted/40">
-			<input
-				type="checkbox"
-				className="mt-0.5 size-4 shrink-0 accent-primary"
-				checked={picked}
-				onChange={onToggle}
-				disabled={disabled}
-			/>
-			<span className="min-w-0 flex-1 space-y-1">
-				<span className="block break-words text-sm leading-snug">{name}</span>
-				{album && (
-					<span className="flex items-start gap-1.5 text-muted-foreground text-xs">
-						<Disc3 className="mt-px size-3 shrink-0" />
-						<span className="min-w-0 break-words">{album}</span>
-					</span>
-				)}
-				{verdict?.duplicateOf && (
-					<span className="block break-words text-warning/90 text-xs">
-						Same audio as {verdict.duplicateOf}
-					</span>
-				)}
-			</span>
-			<span className="flex shrink-0 flex-col items-end gap-1">
-				<span className="text-muted-foreground text-xs tabular-nums">{formatBytes(file.size)}</span>
-				<Status file={file} verdict={verdict} />
-			</span>
-		</label>
+		<DiffRow
+			picked={picked}
+			onToggle={onToggle}
+			disabled={disabled}
+			label={key(file)}
+			aside={formatBytes(file.size)}
+		>
+			<DiffLine tone={tone}>{nameOf(file)}</DiffLine>
+			{note && <DiffNote>{note}</DiffNote>}
+		</DiffRow>
 	);
-}
-
-function Group({
-	name,
-	files,
-	skipped,
-	verdicts,
-	disabled,
-	onToggle,
-	onToggleGroup,
-}: {
-	name: string;
-	files: RemoteFile[];
-	skipped: Set<string>;
-	verdicts: Map<string, Verified>;
-	disabled: boolean;
-	onToggle: (f: RemoteFile) => void;
-	onToggleGroup: (files: RemoteFile[], on: boolean) => void;
-}) {
-	const picked = files.filter((f) => !skipped.has(key(f))).length;
-	return (
-		<section>
-			<div className="sticky -top-4 z-10 flex items-center gap-3 border-b bg-background px-2 pt-5 pb-2">
-				<Checkbox
-					checked={picked === files.length}
-					partial={picked > 0}
-					onChange={() => onToggleGroup(files, picked !== files.length)}
-					disabled={disabled}
-					label={`Select ${name}`}
-				/>
-				<h3 className="min-w-0 flex-1 break-words font-semibold text-base tracking-tight">
-					{name}
-				</h3>
-				<span className="shrink-0 text-muted-foreground text-xs tabular-nums">
-					{picked}/{files.length}
-				</span>
-			</div>
-			<div>
-				{files.map((f) => (
-					<FileRow
-						key={key(f)}
-						file={f}
-						picked={!skipped.has(key(f))}
-						verdict={verdicts.get(key(f))}
-						disabled={disabled}
-						onToggle={() => onToggle(f)}
-					/>
-				))}
-			</div>
-		</section>
-	);
-}
-
-/** Top-level folder (usually the artist) → its files, in listing order. */
-function groupByFolder(files: RemoteFile[]): [string, RemoteFile[]][] {
-	const groups = new Map<string, RemoteFile[]>();
-	for (const f of files) {
-		const name = f.rel.length > 1 ? (f.rel[0] ?? "") : "Loose files";
-		groups.set(name, [...(groups.get(name) ?? []), f]);
-	}
-	return [...groups].sort(([x], [y]) => x.localeCompare(y, undefined, { sensitivity: "base" }));
 }
 
 function PullResult({ outcome: r, onDone }: { outcome: PullOutcome; onDone: () => void }) {
 	return (
-		<div className="space-y-3">
-			<p className="text-sm">
-				Pulled {r.pulled.toLocaleString()} {r.pulled === 1 ? "file" : "files"} into your library.
-				{r.skipped > 0 && ` ${r.skipped} already existed.`}
-			</p>
+		<div className="space-y-5">
+			<div className="flex items-center gap-2">
+				<CheckCircle2 className={`size-5 ${r.failedTotal > 0 ? "text-warning" : "text-success"}`} />
+				<h3 className="font-semibold text-lg tracking-tight">
+					{r.failedTotal > 0 ? `Pulled with ${r.failedTotal} errors` : "Pull complete"}
+				</h3>
+			</div>
+			<Tally
+				items={[
+					{ tone: "add", label: "pulled", count: r.pulled },
+					{ tone: "change", label: "already existed", count: r.skipped },
+				]}
+				empty="Nothing was pulled"
+			/>
 			{r.failedTotal > 0 && (
-				<div className="space-y-1 text-destructive text-xs">
-					<p>{r.failedTotal} failed:</p>
+				<div className="space-y-1 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-destructive text-xs">
+					<p className="font-medium">{r.failedTotal} failed:</p>
 					{r.failed.map((m) => (
 						<p key={m} className="break-all">
 							{m}
@@ -304,6 +202,8 @@ function Picker({
 		};
 	}, []);
 
+	const [shown, setShown] = useState(HUNKS_PER_PAGE);
+
 	if (pull.isSuccess) {
 		return <PullResult outcome={pull.data} onDone={onDone} />;
 	}
@@ -330,71 +230,93 @@ function Picker({
 			}
 			return next;
 		});
+	const hunks = groupByDir(missing, dirOf, nameOf);
+	const duplicates = missing.filter((f) => verdicts.get(key(f))?.duplicateOf).length;
+	const otherFormat = missing.filter((f) => !verdicts.has(key(f)) && f.otherFormat).length;
 	return (
 		<div className="space-y-5">
-			<div className="space-y-1">
+			<div className="space-y-2">
 				<h2 className="font-semibold text-xl tracking-tight">
-					{missing.length.toLocaleString()} {missing.length === 1 ? "track" : "tracks"} to pull
+					{missing.length.toLocaleString()} {missing.length === 1 ? "track" : "tracks"} not in your
+					library
 				</h2>
 				<p className="text-muted-foreground text-sm">
-					This folder already has audio your library is missing. Choose what to bring in before the
-					first sync.
+					This folder already has audio your library is missing. Tick what to pull in before the
+					first sync. Anything left behind will be proposed for deletion at the next review.
 				</p>
+				<Tally
+					items={[
+						{ tone: "add", label: "new", count: missing.length - duplicates - otherFormat },
+						{ tone: "change", label: "duplicate", count: duplicates },
+						{ tone: "move", label: "other format", count: otherFormat },
+					]}
+				/>
 			</div>
 
-			<div className="space-y-4">
-				{groupByFolder(missing).map(([name, files]) => (
-					<Group
-						key={name}
-						name={name}
-						files={files}
-						skipped={skipped}
-						verdicts={verdicts}
+			<div className="space-y-2">
+				{hunks.slice(0, shown).map(([dir, files]) => (
+					<DiffHunk
+						key={dir}
+						dir={dir}
+						total={files.length}
+						picked={files.filter((f) => !skipped.has(key(f))).length}
+						onToggleAll={(on) => toggleGroup(files, on)}
 						disabled={busy}
-						onToggle={toggle}
-						onToggleGroup={toggleGroup}
-					/>
+						tallies={[{ tone: "add", count: files.length }]}
+					>
+						{files.map((f) => (
+							<FileRow
+								key={key(f)}
+								file={f}
+								picked={!skipped.has(key(f))}
+								verdict={verdicts.get(key(f))}
+								disabled={busy}
+								onToggle={() => toggle(f)}
+							/>
+						))}
+					</DiffHunk>
 				))}
+				{hunks.length > shown && (
+					<Button variant="ghost" size="sm" onClick={() => setShown(shown + HUNKS_PER_PAGE)}>
+						Show more folders ({hunks.length - shown} hidden)
+					</Button>
+				)}
 			</div>
 
-			<div className="sticky -bottom-4 z-20 -mx-4 -mb-4 space-y-2 border-t bg-background px-4 pt-3 pb-4">
+			<div className="sticky -bottom-4 z-20 -mx-4 -mb-4 space-y-3 border-t bg-background px-4 pt-3 pb-4">
 				{verify.isError && <p className="text-destructive text-sm">{String(verify.error)}</p>}
 				{pull.isError && <p className="text-destructive text-sm">{String(pull.error)}</p>}
-				<div className="flex flex-wrap items-center justify-between gap-2">
-					<div className="text-sm">
-						<span className="font-medium">{chosen.length.toLocaleString()} selected</span>
-						<span className="text-muted-foreground"> · {formatBytes(totalSize(chosen))}</span>
-					</div>
-					<div className="flex items-center gap-2">
-						<Button
-							variant="ghost"
-							size="sm"
-							disabled={busy}
-							onClick={() => setSkipped(all ? new Set(missing.map(key)) : new Set())}
-						>
-							{all ? "Select none" : "Select all"}
-						</Button>
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={busy || chosen.length === 0}
-							onClick={() => verify.mutate(chosen.map((f) => f.rel))}
-							title="Compares audio content with your library. Reads a few KB per file."
-						>
-							<ShieldCheck /> {verify.isPending ? "Verifying…" : "Check for duplicates"}
-						</Button>
-					</div>
+				<div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+					<Tally
+						items={[{ tone: "add", label: "to pull", count: chosen.length }]}
+						empty="Nothing selected"
+					/>
+					<span className="text-muted-foreground text-xs">{formatBytes(totalSize(chosen))}</span>
+				</div>
+				<div className="flex flex-wrap items-center gap-2">
+					<Button
+						variant="ghost"
+						size="sm"
+						disabled={busy}
+						onClick={() => setSkipped(all ? new Set(missing.map(key)) : new Set())}
+					>
+						{all ? "Select none" : "Select all"}
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={busy || chosen.length === 0}
+						onClick={() => verify.mutate(chosen.map((f) => f.rel))}
+						title="Compares audio content with your library. Reads a few KB per file."
+					>
+						<ShieldCheck /> {verify.isPending ? "Checking…" : "Check for duplicates"}
+					</Button>
 				</div>
 				{busy && progress && progress.total > 0 && (
 					<div className="space-y-1">
-						<div className="h-1 overflow-hidden rounded-full bg-muted">
-							<div
-								className="h-full bg-primary transition-all"
-								style={{ width: `${(progress.done / progress.total) * 100}%` }}
-							/>
-						</div>
-						<p className="break-words text-muted-foreground text-xs">
-							{progress.done}/{progress.total} · {progress.current}
+						<ProgressBar done={progress.done} total={progress.total} />
+						<p className="break-all text-muted-foreground text-xs">
+							{progress.done}/{progress.total}: {progress.current}
 						</p>
 					</div>
 				)}
@@ -407,7 +329,8 @@ function Picker({
 						disabled={busy || chosen.length === 0}
 						onClick={() => pull.mutate(chosen.map((f) => f.rel))}
 					>
-						<Download /> {pull.isPending ? "Pulling…" : `Pull ${chosen.length.toLocaleString()}`}
+						<Download />{" "}
+						{pull.isPending ? "Pulling…" : `Pull ${chosen.length.toLocaleString()} into library`}
 					</Button>
 				</div>
 			</div>
