@@ -93,21 +93,50 @@ fn write_track(out: &mut String, t: &ExportTrack) {
         let _ = write!(out, " Tonality=\"{}\"", esc(key));
     }
     let _ = write!(out, " Location=\"{}\"", esc(&location(&t.path)));
-    match t.grid {
-        // One marker: rekordbox extends a constant grid both ways from it.
-        Some(g) if g.bpm > 0.0 => {
-            let _ = writeln!(
-                out,
-                ">\n      <TEMPO Inizio=\"{:.3}\" Bpm=\"{:.2}\" Metro=\"4/4\" Battito=\"{}\"/>\n    </TRACK>",
-                g.first_beat.max(0.0),
-                g.bpm,
-                g.bar_offset % 4 + 1,
-            );
-        }
-        _ => {
-            let _ = writeln!(out, "/>");
-        }
+    let grid = t.grid.filter(|g| g.bpm > 0.0);
+    if grid.is_none() && t.cues.is_empty() {
+        let _ = writeln!(out, "/>");
+        return;
     }
+    let _ = writeln!(out, ">");
+    // One marker: rekordbox extends a constant grid both ways from it.
+    if let Some(g) = grid {
+        let _ = writeln!(
+            out,
+            "      <TEMPO Inizio=\"{:.3}\" Bpm=\"{:.2}\" Metro=\"4/4\" Battito=\"{}\"/>",
+            g.first_beat.max(0.0),
+            g.bpm,
+            g.bar_offset % 4 + 1,
+        );
+    }
+    for c in &t.cues {
+        write_cue(out, c);
+    }
+    let _ = writeln!(out, "    </TRACK>");
+}
+
+/// A memory cue (`Num` -1) or hot cue (`Num` 0-7 for A-H), with its colour for hot cues.
+fn write_cue(out: &mut String, c: &crate::db::Cue) {
+    let num = c.slot.map_or(-1, i32::from);
+    let _ = write!(
+        out,
+        "      <POSITION_MARK Name=\"{}\" Type=\"0\" Start=\"{:.3}\" Num=\"{num}\"",
+        esc(&c.name),
+        c.start.max(0.0),
+    );
+    if c.slot.is_some()
+        && let Some(hex) = c.color.strip_prefix('#')
+        && let Ok(n) = u32::from_str_radix(hex, 16)
+    {
+        let _ = write!(
+            out,
+            " Red=\"{}\" Green=\"{}\" Blue=\"{}\"",
+            n >> 16 & 0xff,
+            n >> 8 & 0xff,
+            n & 0xff
+        );
+    }
+    let _ = writeln!(out, "/>");
 }
 
 /// Tag playlists live in this sub-folder of the manplay folder.
@@ -302,6 +331,7 @@ mod tests {
             fingerprint: None,
             grid: None,
             grid_edited: false,
+            cues: Vec::new(),
         }
     }
 
@@ -320,6 +350,32 @@ mod tests {
         );
         let doc = roxmltree::Document::parse(&xml).expect("well-formed");
         assert!(doc.descendants().any(|n| n.has_tag_name("TEMPO")));
+    }
+
+    #[test]
+    fn cues_become_position_marks() {
+        let mut t = track(1, "/m/a.mp3", "A");
+        t.cues = vec![
+            crate::db::Cue {
+                slot: Some(1),
+                start: 12.3456,
+                name: "Drop & go".into(),
+                color: "#305aff".into(),
+            },
+            crate::db::Cue {
+                slot: None,
+                start: 1.0,
+                name: String::new(),
+                color: String::new(),
+            },
+        ];
+        let xml = build_xml(&[t], &[], &[]);
+        assert!(
+            xml.contains(r#"<POSITION_MARK Name="Drop &amp; go" Type="0" Start="12.346" Num="1" Red="48" Green="90" Blue="255"/>"#),
+            "{xml}"
+        );
+        assert!(xml.contains(r#"<POSITION_MARK Name="" Type="0" Start="1.000" Num="-1"/>"#));
+        roxmltree::Document::parse(&xml).expect("well-formed");
     }
 
     #[test]

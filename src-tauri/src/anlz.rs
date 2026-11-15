@@ -16,6 +16,7 @@
 )]
 
 use crate::analysis::{Detail, WAVEFORM_RATE};
+use crate::db::Cue;
 use std::path::{Path, PathBuf};
 
 /// Columns of the waveform shown across the whole track.
@@ -65,30 +66,113 @@ fn path_section(path: &str) -> Vec<u8> {
     section(*b"PPTH", &header, &body)
 }
 
-/// Hot cues (type 1) and memory cues (type 0), both empty.
-fn cue_sections() -> Vec<Vec<u8>> {
-    [1u32, 0]
-        .iter()
-        .map(|kind| {
-            let mut header = Vec::new();
-            put(&mut header, *kind);
-            put(&mut header, 0);
-            put(&mut header, 0xffff_ffff);
-            section(*b"PCOB", &header, &[])
-        })
-        .collect()
+fn put16(v: &mut Vec<u8>, x: u16) {
+    v.extend_from_slice(&x.to_be_bytes());
 }
 
-fn extended_cue_sections() -> Vec<Vec<u8>> {
-    [1u32, 0]
-        .iter()
-        .map(|kind| {
-            let mut header = Vec::new();
-            put(&mut header, *kind);
-            put(&mut header, 0);
-            section(*b"PCO2", &header, &[])
-        })
-        .collect()
+/// Hot cues (list type 1) or memory cues (type 0) of `cues`, in time order.
+fn listed(cues: &[Cue], hot: bool) -> Vec<&Cue> {
+    let mut out: Vec<&Cue> = cues.iter().filter(|c| c.slot.is_some() == hot).collect();
+    out.sort_by(|a, b| a.slot.cmp(&b.slot).then(a.start.total_cmp(&b.start)));
+    out
+}
+
+fn ms(seconds: f64) -> u32 {
+    (seconds.max(0.0) * 1000.0).round() as u32
+}
+
+/// `#rrggbb` as bytes.
+fn rgb(color: &str) -> Option<[u8; 3]> {
+    let hex = color.strip_prefix('#')?;
+    let n = u32::from_str_radix(hex, 16)
+        .ok()
+        .filter(|_| hex.len() == 6)?;
+    Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
+}
+
+/// A cue list in the original format every player reads (`PCOB` of `PCPT` entries).
+fn cue_list(cues: &[Cue], hot: bool) -> Vec<u8> {
+    let list = listed(cues, hot);
+    let mut body = Vec::new();
+    for (i, c) in list.iter().enumerate() {
+        let mut e = Vec::new();
+        e.extend_from_slice(b"PCPT");
+        put(&mut e, 0x1c);
+        put(&mut e, 0x38);
+        put(&mut e, c.slot.map_or(0, |s| u32::from(s) + 1));
+        put(&mut e, 0);
+        put(&mut e, 0x0001_0000);
+        // A linked list by position: the first has no previous, the last no next.
+        put16(&mut e, if i == 0 { 0xffff } else { (i - 1) as u16 });
+        put16(
+            &mut e,
+            if i + 1 == list.len() {
+                0xffff
+            } else {
+                (i + 1) as u16
+            },
+        );
+        e.push(1); // a cue point, not a loop
+        e.push(0);
+        put16(&mut e, 1000);
+        put(&mut e, ms(c.start));
+        put(&mut e, 0xffff_ffff);
+        e.extend_from_slice(&[0; 16]);
+        body.extend(e);
+    }
+    let mut header = Vec::new();
+    put(&mut header, u32::from(hot));
+    put16(&mut header, 0);
+    put16(&mut header, list.len() as u16);
+    put(&mut header, 0xffff_ffff);
+    section(*b"PCOB", &header, &body)
+}
+
+/// The same list in the newer format (`PCO2` of `PCP2` entries), which adds names and colours.
+fn cue_list_ext(cues: &[Cue], hot: bool) -> Vec<u8> {
+    let list = listed(cues, hot);
+    let mut body = Vec::new();
+    for c in &list {
+        let mut comment = Vec::new();
+        if !c.name.is_empty() {
+            for u in c.name.encode_utf16().chain([0]) {
+                comment.extend_from_slice(&u.to_be_bytes());
+            }
+        }
+        let len = 48 + comment.len();
+        let mut e = Vec::with_capacity(len);
+        e.extend_from_slice(b"PCP2");
+        put(&mut e, 0x10);
+        put(&mut e, len as u32);
+        put(&mut e, c.slot.map_or(0, |s| u32::from(s) + 1));
+        e.push(1);
+        e.extend_from_slice(&[0, 0x03, 0xe8]);
+        put(&mut e, ms(c.start));
+        put(&mut e, 0xffff_ffff);
+        e.push(0); // memory cue colour: none
+        e.extend_from_slice(&[0; 7]);
+        put16(&mut e, 0);
+        put16(&mut e, 0);
+        put(&mut e, comment.len() as u32);
+        e.extend_from_slice(&comment);
+        let [r, g, b] = rgb(&c.color).unwrap_or([0, 0, 0]);
+        e.extend_from_slice(&[0, r, g, b]);
+        body.extend(e);
+    }
+    let mut header = Vec::new();
+    put(&mut header, u32::from(hot));
+    put16(&mut header, list.len() as u16);
+    put16(&mut header, 0);
+    section(*b"PCO2", &header, &body)
+}
+
+/// Hot cues then memory cues, as rekordbox orders them.
+fn cue_sections(cues: &[Cue]) -> Vec<Vec<u8>> {
+    vec![cue_list(cues, true), cue_list(cues, false)]
+}
+
+fn extended_cue_sections(cues: &[Cue]) -> Vec<Vec<u8>> {
+    vec![cue_list_ext(cues, true), cue_list_ext(cues, false)]
 }
 
 /// Beat grid: every beat from the first to the end, numbered 1–4 within its bar.
@@ -133,36 +217,37 @@ fn sections(b: &[u8]) -> Option<(&[u8], Vec<&[u8]>)> {
     Some((b.get(..header_len)?, out))
 }
 
-/// An analysis file written by someone else (rekordbox) with its beat grid replaced by `d`'s,
-/// and everything else (cues, waveforms) as it was. The extended grid (`PQT2`) newer players
-/// prefer is dropped, so they read the replaced one. `None` when `b` is not an analysis file.
-pub fn with_grid(b: &[u8], d: &Stored) -> Option<Vec<u8>> {
+/// An analysis file written by someone else (rekordbox) with its beat grid replaced by `grid`'s
+/// and its cue lists by `cues`, each only when given, and everything else (waveforms, the other
+/// of the two) as it was. Replacing the grid drops the extended grid (`PQT2`) newer players
+/// prefer, so they read the replaced one. `None` when `b` is not an analysis file.
+pub fn patch(b: &[u8], grid: Option<&Stored>, cues: Option<&[Cue]>) -> Option<Vec<u8>> {
     let (header, old) = sections(b)?;
-    let grid = d.grid_bpm.map(|bpm| beat_grid(d, bpm));
+    let new_grid = grid.and_then(|d| d.grid_bpm.map(|bpm| beat_grid(d, bpm)));
+    let list_kind = |s: &[u8]| s.get(12..16).map(|k| k != [0, 0, 0, 0]);
     let mut out: Vec<Vec<u8>> = Vec::with_capacity(old.len() + 1);
     let mut placed = false;
     for s in old {
-        match s.get(..4)? {
-            b"PQTZ" => {
-                if let Some(g) = &grid {
-                    out.push(g.clone());
-                }
+        match (s.get(..4)?, grid, cues) {
+            (b"PQTZ", Some(_), _) => {
+                out.extend(new_grid.clone());
                 placed = true;
             }
-            b"PQT2" => {}
+            (b"PQT2", Some(_), _) => {}
+            (b"PCOB", _, Some(c)) => out.push(cue_list(c, list_kind(s)?)),
+            (b"PCO2", _, Some(c)) => out.push(cue_list_ext(c, list_kind(s)?)),
             _ => out.push(s.to_vec()),
         }
     }
-    // A file with no grid yet gets one after its path and VBR index, where rekordbox puts it.
-    if let (false, Some(g)) = (placed, grid) {
+    // A `.DAT` with no grid yet gets one after its path and VBR index, where rekordbox puts it.
+    if let (false, Some(g)) = (placed, new_grid)
+        && out.iter().any(|s| s.get(..4) == Some(b"PWAV"))
+    {
         let at = out
             .iter()
             .take_while(|s| matches!(s.get(..4), Some(b"PPTH" | b"PVBR")))
             .count();
-        // Only `.DAT` files carry this grid; others just lose their extended one.
-        if out.iter().any(|s| s.get(..4) == Some(b"PWAV")) {
-            out.insert(at, g);
-        }
+        out.insert(at, g);
     }
     let total: usize = header.len() + out.iter().map(Vec::len).sum::<usize>();
     let mut v = header.to_vec();
@@ -350,7 +435,7 @@ pub fn load(data_dir: &Path, fingerprint: &str) -> Option<Stored> {
 
 /// The `.DAT` and `.EXT` files for a track at `path` on the drive. Without a tempo the grid is
 /// left out, as rekordbox does for beatless audio.
-pub fn files(path: &str, d: &Stored) -> (Vec<u8>, Vec<u8>) {
+pub fn files(path: &str, d: &Stored, cues: &[Cue]) -> (Vec<u8>, Vec<u8>) {
     let cols = d.cols();
     let preview: Vec<u8> = summary(&cols, PREVIEW).into_iter().map(byte).collect();
     let tiny: Vec<u8> = summary(&cols, TINY)
@@ -364,15 +449,15 @@ pub fn files(path: &str, d: &Stored) -> (Vec<u8>, Vec<u8>) {
     }
     dat.push(preview_section(*b"PWAV", &preview));
     dat.push(preview_section(*b"PWV2", &tiny));
-    dat.extend(cue_sections());
+    dat.extend(cue_sections(cues));
 
     let mut header = Vec::new();
     put(&mut header, 1);
     put(&mut header, d.detail.len() as u32);
     put(&mut header, (WAVEFORM_RATE as u32) << 16);
     let mut ext = vec![path_section(path), section(*b"PWV3", &header, &d.detail)];
-    ext.extend(cue_sections());
-    ext.extend(extended_cue_sections());
+    ext.extend(cue_sections(cues));
+    ext.extend(extended_cue_sections(cues));
     (file(&dat), file(&ext))
 }
 
@@ -402,7 +487,7 @@ mod tests {
             duration: 3.0,
             detail: vec![0x5f; 450],
         };
-        let (dat, ext) = files("/Contents/a.mp3", &d);
+        let (dat, ext) = files("/Contents/a.mp3", &d, &[]);
         // Pretend rekordbox wrote these, with an extended grid in the .EXT.
         let mut theirs_ext = ext.clone();
         let pqt2 = section(*b"PQT2", &[0; 44], &[7; 16]);
@@ -411,15 +496,64 @@ mod tests {
         theirs_ext[8..12].copy_from_slice(&total.to_be_bytes());
 
         d.set_grid(Some(100.0), 0.2, 2);
-        let new_dat = with_grid(&dat, &d).expect("dat");
+        let new_dat = patch(&dat, Some(&d), None).expect("dat");
         assert_eq!(
             new_dat,
-            files("/Contents/a.mp3", &d).0,
+            files("/Contents/a.mp3", &d, &[]).0,
             "only the grid changed"
         );
-        let new_ext = with_grid(&theirs_ext, &d).expect("ext");
+        let new_ext = patch(&theirs_ext, Some(&d), None).expect("ext");
         assert_eq!(new_ext, ext, "extended grid dropped, the rest kept");
-        assert!(with_grid(b"nope", &d).is_none());
+        assert!(patch(b"nope", Some(&d), None).is_none());
+
+        let cues = [
+            Cue {
+                slot: Some(0),
+                start: 1.5,
+                name: "Drop".into(),
+                color: "#28e214".into(),
+            },
+            Cue {
+                slot: None,
+                start: 0.25,
+                name: String::new(),
+                color: String::new(),
+            },
+        ];
+        let (with_cues_dat, with_cues_ext) = files("/Contents/a.mp3", &d, &cues);
+        assert_eq!(
+            patch(&new_dat, None, Some(&cues)).expect("cues"),
+            with_cues_dat
+        );
+        assert_eq!(patch(&ext, None, Some(&cues)).expect("cues"), with_cues_ext);
+    }
+
+    #[test]
+    fn cue_entries_follow_the_published_layout() {
+        let cues = [Cue {
+            slot: Some(2),
+            start: 1.5,
+            name: "Hi".into(),
+            color: "#305aff".into(),
+        }];
+        let pcob = cue_list(&cues, true);
+        assert_eq!(&pcob[..4], b"PCOB");
+        assert_eq!(&pcob[12..16], &[0, 0, 0, 1], "hot cue list");
+        assert_eq!(&pcob[18..20], &[0, 1], "one cue");
+        let e = &pcob[24..];
+        assert_eq!(&e[..4], b"PCPT");
+        assert_eq!(&e[12..16], &[0, 0, 0, 3], "hot cue C");
+        assert_eq!(&e[32..36], &1500u32.to_be_bytes());
+        assert_eq!(e.len(), 0x38);
+
+        let extended = cue_list_ext(&cues, true);
+        let e = &extended[20..];
+        assert_eq!(&e[..4], b"PCP2");
+        let len = u32::from_be_bytes(e[8..12].try_into().expect("len")) as usize;
+        assert_eq!(len, e.len());
+        assert_eq!(&e[20..24], &1500u32.to_be_bytes());
+        assert_eq!(&e[40..44], &6u32.to_be_bytes(), "Hi and a NUL in UTF-16");
+        assert_eq!(&e[len - 3..], &[0x30, 0x5a, 0xff]);
     }
 
     #[test]
@@ -482,7 +616,7 @@ mod tests {
 
     #[test]
     fn writes_rekordbox_shaped_files() {
-        let (dat, ext) = files("/Contents/A/B/x.mp3", &Stored::from_detail(&detail()));
+        let (dat, ext) = files("/Contents/A/B/x.mp3", &Stored::from_detail(&detail()), &[]);
         let names: Vec<String> = tags(&dat).into_iter().map(|t| t.0).collect();
         assert_eq!(names, ["PPTH", "PQTZ", "PWAV", "PWV2", "PCOB", "PCOB"]);
         let names: Vec<String> = tags(&ext).into_iter().map(|t| t.0).collect();
@@ -514,7 +648,7 @@ mod tests {
     fn leaves_the_grid_out_without_a_tempo() {
         let mut d = detail();
         d.grid_bpm = None;
-        let (dat, _) = files("/x.mp3", &Stored::from_detail(&d));
+        let (dat, _) = files("/x.mp3", &Stored::from_detail(&d), &[]);
         assert!(tags(&dat).iter().all(|t| t.0 != "PQTZ"));
     }
 

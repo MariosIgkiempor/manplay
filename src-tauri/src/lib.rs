@@ -1161,6 +1161,10 @@ async fn export_to_usb(
                         k
                     }
                 }),
+                cues: t
+                    .fingerprint
+                    .as_deref()
+                    .and_then(|fp| db::cues_of(&conn, fp).ok().flatten()),
                 fingerprint: t.fingerprint,
                 grid_edited: t.grid_edited,
             })
@@ -1320,6 +1324,28 @@ async fn set_beat_grid(
         rate: analysis::WAVEFORM_RATE,
         detail: stored.detail,
     }))
+}
+
+/// The cues set in manplay for a song; empty when there are none.
+#[tauri::command]
+fn track_cues(state: State<'_, AppState>, track_id: i64) -> Result<Vec<db::Cue>, Error> {
+    with_db!(state, |c| {
+        match db::fingerprint_of(c, track_id)? {
+            Some(fp) => Ok(db::cues_of(c, &fp)?.unwrap_or_default()),
+            None => Ok(Vec::new()),
+        }
+    })
+}
+
+/// Replaces a song's cues. From then on they go into the rekordbox file and onto USB drives,
+/// replacing the cues already there.
+#[tauri::command]
+fn set_track_cues(
+    state: State<'_, AppState>,
+    track_id: i64,
+    cues: Vec<db::Cue>,
+) -> Result<(), Error> {
+    with_db!(state, |c| db::set_cues(c, track_id, &cues))
 }
 
 #[tauri::command]
@@ -2132,6 +2158,13 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
         let selection = rekordbox_selection_of(&conn)?;
         let (mut tracks, mut playlists) = db::export_data(&conn)?;
         for t in &mut tracks {
+            t.cues = t
+                .fingerprint
+                .as_deref()
+                .map(|fp| db::cues_of(&conn, fp))
+                .transpose()?
+                .flatten()
+                .unwrap_or_default();
             t.grid = t
                 .fingerprint
                 .as_deref()
@@ -2534,6 +2567,8 @@ pub fn run() {
             export_to_usb,
             usb_edit_playlists,
             set_beat_grid,
+            track_cues,
+            set_track_cues,
             track_analysis,
             is_exporting_to_usb,
             save_analysis_to_files,

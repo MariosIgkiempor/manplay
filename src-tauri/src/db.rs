@@ -187,6 +187,18 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              version     INTEGER NOT NULL,
              analyzed_at INTEGER NOT NULL
          );
+         -- Hot and memory cues set in manplay, by audio content like the analysis.
+         CREATE TABLE IF NOT EXISTS cues (
+             id          INTEGER PRIMARY KEY,
+             fingerprint TEXT NOT NULL,
+             -- 0-7 for hot cues A-H, NULL for a memory cue.
+             slot        INTEGER,
+             start       REAL NOT NULL,
+             name        TEXT NOT NULL DEFAULT '',
+             -- #rrggbb, or '' for the player's default.
+             color       TEXT NOT NULL DEFAULT ''
+         );
+         CREATE INDEX IF NOT EXISTS cues_fingerprint ON cues(fingerprint);
          CREATE TABLE IF NOT EXISTS stale_remote (
              target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
              track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
@@ -216,6 +228,13 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
         "grid_edited",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
+    // Cues were set in manplay (possibly to none): they replace a drive's own on export.
+    add_column(
+        &conn,
+        "analysis",
+        "cues_edited",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     prepare_tags(&conn).map(|()| conn)
 }
 
@@ -242,15 +261,23 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
         let mut carry = tx.prepare(
             "INSERT OR IGNORE INTO analysis
                  (fingerprint, bpm, musical_key, error, version, analyzed_at,
-                  bpm_edited, key_edited, grid_edited)
+                  bpm_edited, key_edited, grid_edited, cues_edited)
              SELECT ?2, a.bpm, a.musical_key, a.error, a.version, a.analyzed_at,
-                    a.bpm_edited, a.key_edited, a.grid_edited
+                    a.bpm_edited, a.key_edited, a.grid_edited, a.cues_edited
              FROM tracks t JOIN analysis a ON a.fingerprint = t.fingerprint
              WHERE t.path = ?1 AND t.fingerprint <> ?2",
+        )?;
+        let mut carry_cues = tx.prepare(
+            "INSERT INTO cues (fingerprint, slot, start, name, color)
+             SELECT ?2, c.slot, c.start, c.name, c.color
+             FROM tracks t JOIN cues c ON c.fingerprint = t.fingerprint
+             WHERE t.path = ?1 AND t.fingerprint <> ?2
+               AND NOT EXISTS (SELECT 1 FROM cues WHERE fingerprint = ?2)",
         )?;
         for t in tracks {
             if let Some(fp) = &t.fingerprint {
                 carry.execute(params![t.path, fp])?;
+                carry_cues.execute(params![t.path, fp])?;
             }
         }
         let mut stmt = tx.prepare(
@@ -840,6 +867,90 @@ pub fn set_tempo_key(
             params![id, key],
         )?;
     }
+    Ok(())
+}
+
+/// A hot cue (`slot` 0-7 for A-H) or memory cue (`slot` `None`).
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cue {
+    pub slot: Option<u8>,
+    /// Seconds.
+    pub start: f64,
+    pub name: String,
+    /// `#rrggbb`, or empty for the player's default.
+    pub color: String,
+}
+
+/// The cues set in manplay for audio with this fingerprint, hot cues first; `None` when cues
+/// were never set here (so a drive's own cues are left alone).
+pub fn cues_of(conn: &Connection, fingerprint: &str) -> Result<Option<Vec<Cue>>, Error> {
+    let edited: bool = conn
+        .query_row(
+            "SELECT cues_edited FROM analysis WHERE fingerprint = ?1",
+            params![fingerprint],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if !edited {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT slot, start, name, color FROM cues WHERE fingerprint = ?1
+         ORDER BY slot IS NULL, slot, start",
+    )?;
+    let rows = stmt.query_map(params![fingerprint], |r| {
+        Ok(Cue {
+            slot: r.get(0)?,
+            start: r.get(1)?,
+            name: r.get(2)?,
+            color: r.get(3)?,
+        })
+    })?;
+    Ok(Some(rows.collect::<Result<Vec<_>, _>>()?))
+}
+
+/// Replaces a song's cues with `cues` and marks them as set in manplay.
+pub fn set_cues(conn: &mut Connection, track_id: i64, cues: &[Cue]) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    let fp: Option<String> = tx
+        .query_row(
+            "SELECT fingerprint FROM tracks WHERE id = ?1",
+            params![track_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(fp) = fp else {
+        return Err(Error::Msg(
+            "This song has no audio to keep cues for.".into(),
+        ));
+    };
+    tx.execute(
+        "INSERT OR IGNORE INTO analysis (fingerprint, version, analyzed_at) VALUES (?1, 0, 0)",
+        params![fp],
+    )?;
+    tx.execute(
+        "UPDATE analysis SET cues_edited = 1 WHERE fingerprint = ?1",
+        params![fp],
+    )?;
+    tx.execute("DELETE FROM cues WHERE fingerprint = ?1", params![fp])?;
+    {
+        let mut ins = tx.prepare(
+            "INSERT INTO cues (fingerprint, slot, start, name, color) VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for c in cues {
+            ins.execute(params![
+                fp,
+                c.slot,
+                c.start.max(0.0),
+                c.name.trim(),
+                c.color
+            ])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -1435,6 +1546,8 @@ pub struct ExportTrack {
     pub grid: Option<crate::rekordbox::Grid>,
     /// The beat grid was set by hand in manplay.
     pub grid_edited: bool,
+    /// Cues set in manplay, written as `POSITION_MARK`s; filled in by the caller.
+    pub cues: Vec<Cue>,
 }
 
 pub struct ExportPlaylist {
@@ -1470,6 +1583,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
                 fingerprint: r.get(11)?,
                 grid: None,
                 grid_edited: r.get(12)?,
+                cues: Vec::new(),
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1787,6 +1901,43 @@ mod tests {
     #[test]
     fn analyzed_flag_tracks_the_current_analysis_version() {
         assert!(TRACK_COLS.contains(&format!(">= {}", crate::analysis::VERSION)));
+    }
+
+    #[test]
+    fn cues_are_kept_by_audio_and_follow_a_tag_edit() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
+        assert_eq!(cues_of(&conn, "x").expect("none"), None, "never set");
+        let hot = Cue {
+            slot: Some(0),
+            start: 32.5,
+            name: " Drop ".into(),
+            color: "#28e214".into(),
+        };
+        let memory = Cue {
+            slot: None,
+            start: 1.0,
+            name: String::new(),
+            color: String::new(),
+        };
+        set_cues(&mut conn, 1, &[memory.clone(), hot.clone()]).expect("set");
+        let kept = cues_of(&conn, "x").expect("cues").expect("set");
+        assert_eq!(kept[0].name, "Drop", "hot cues first, names trimmed");
+        assert_eq!(kept[1], memory);
+
+        // A tag write changes the fingerprint; the cues come along.
+        upsert(&mut conn, &[track("/a.mp3", "x2", None)]).expect("upsert");
+        assert_eq!(
+            cues_of(&conn, "x2").expect("cues").map(|c| c.len()),
+            Some(2)
+        );
+
+        set_cues(&mut conn, 1, &[]).expect("clear");
+        assert_eq!(
+            cues_of(&conn, "x2").expect("cues"),
+            Some(Vec::new()),
+            "cleared, not unset"
+        );
     }
 
     #[test]

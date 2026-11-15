@@ -1156,6 +1156,26 @@ export async function setBeatGrid(
 	);
 }
 
+const cueSchema = z.object({
+	/** 0–7 for hot cues A–H, null for a memory cue. */
+	slot: int.nullable(),
+	start: z.number(),
+	name: z.string(),
+	color: z.string(),
+});
+
+/** Cues set in manplay for a song; they go into the rekordbox file and onto USB drives. */
+export async function trackCues(trackId: number): Promise<z.infer<typeof cueSchema>[]> {
+	return z.array(cueSchema).parse(await invoke("track_cues", { trackId }));
+}
+
+export async function setTrackCues(
+	trackId: number,
+	cues: readonly z.infer<typeof cueSchema>[],
+): Promise<void> {
+	await invoke("set_track_cues", { trackId, cues });
+}
+
 /** The kept beat grid and waveform of a track; null until it has been analysed. */
 export async function trackAnalysis(trackId: number): Promise<TrackAnalysis | null> {
 	return trackAnalysisSchema.nullable().parse(await invoke("track_analysis", { trackId }));

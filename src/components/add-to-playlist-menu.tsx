@@ -87,7 +87,7 @@ export function AddToPlaylistMenu({
 		},
 		tracks.length === 1 &&
 			tracks[0]?.analyzed && {
-				label: "Edit beat grid…",
+				label: "Edit grid & cues…",
 				icon: <Grid3x3 />,
 				onSelect: () => go({ kind: "grid", trackId: tracks[0]?.id ?? 0 }),
 			},

@@ -1,5 +1,6 @@
 import { type PointerEvent, useCallback, useEffect, useRef } from "react";
 import type { TrackAnalysis } from "#/lib/api.ts";
+import type { Cue } from "#/lib/cues.ts";
 import { type SmoothClock, tick } from "#/lib/smooth-clock.ts";
 import { cn } from "#/lib/utils.ts";
 import { drawDetail, drawOverview } from "#/lib/waveform-draw.ts";
@@ -55,20 +56,24 @@ export function WaveformSeek({
 	duration,
 	disabled,
 	onSeek,
+	cues,
+	className,
 }: {
 	analysis: TrackAnalysis;
 	time: number;
 	duration: number;
 	disabled: boolean;
 	onSeek: (seconds: number) => void;
+	cues?: readonly Cue[];
+	className?: string;
 }) {
 	const length = duration > 0 ? duration : analysis.duration;
 	const { ref, paint } = useCanvas();
 	useEffect(() => {
-		paint((ctx, w, h) => drawOverview(ctx, w, h, analysis, length > 0 ? time / length : 0));
-	}, [paint, analysis, time, length]);
+		paint((ctx, w, h) => drawOverview(ctx, w, h, analysis, length > 0 ? time / length : 0, cues));
+	}, [paint, analysis, time, length, cues]);
 	return (
-		<div className="relative h-8 flex-1">
+		<div className={cn("relative h-8 flex-1", className)}>
 			<canvas ref={ref} className="pointer-events-none absolute inset-0 size-full" />
 			<input
 				type="range"
@@ -97,6 +102,7 @@ export function WaveformDetail({
 	window = WINDOW,
 	onScrub,
 	revision,
+	cues,
 	className,
 }: {
 	analysis: TrackAnalysis;
@@ -108,6 +114,7 @@ export function WaveformDetail({
 	onScrub?: (seconds: number) => void;
 	/** Anything that changes when a still picture should be redrawn, e.g. a seek while paused. */
 	revision?: unknown;
+	cues?: readonly Cue[];
 	className?: string;
 }) {
 	const { ref, paint } = useCanvas();
@@ -118,7 +125,7 @@ export function WaveformDetail({
 	useEffect(() => {
 		const frame = () => {
 			const now = tick(clock.current, position(), performance.now(), running);
-			paint((ctx, w, h) => drawDetail(ctx, w, h, analysis, now, window));
+			paint((ctx, w, h) => drawDetail(ctx, w, h, analysis, now, window, cues));
 		};
 		frame();
 		if (!running) {
@@ -129,7 +136,7 @@ export function WaveformDetail({
 			id = requestAnimationFrame(loop);
 		});
 		return () => cancelAnimationFrame(id);
-	}, [paint, analysis, position, running, window, revision]);
+	}, [paint, analysis, position, running, window, revision, cues]);
 
 	const onPointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
 		if (!onScrub) {

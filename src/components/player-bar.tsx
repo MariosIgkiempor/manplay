@@ -113,8 +113,8 @@ export function PlayerBar() {
 						<Button
 							variant="ghost"
 							size="icon-sm"
-							aria-label="Edit beat grid"
-							title="Edit beat grid"
+							aria-label="Edit grid and cues"
+							title="Edit grid and cues"
 							onClick={() => detail.open({ kind: "grid", trackId: current.id })}
 						>
 							<Grid3x3 />

@@ -1,4 +1,5 @@
 import type { TrackAnalysis } from "#/lib/api.ts";
+import { type Cue, MEMORY_COLOR, PAD_LETTERS } from "#/lib/cues.ts";
 import { beatsBetween, colour, column, overview } from "#/lib/waveform.ts";
 
 const PLAYHEAD = "rgba(255, 70, 70, 0.95)";
@@ -10,6 +11,7 @@ export function drawOverview(
 	h: number,
 	analysis: TrackAnalysis,
 	played: number,
+	cues: readonly Cue[] = [],
 ) {
 	const bar = Math.max(1, Math.round(w / 400));
 	const gap = bar > 2 ? 1 : 0;
@@ -22,8 +24,54 @@ export function drawOverview(
 		ctx.fillStyle = colour(c.white, x / w < played ? 1 : 0.4);
 		ctx.fillRect(x, h - height, Math.max(1, bar - gap), height);
 	});
+	const length = analysis.duration;
+	if (length > 0) {
+		for (const c of cues) {
+			const x = Math.round((c.start / length) * w);
+			ctx.fillStyle = c.slot === null ? MEMORY_COLOR : c.color || "#28e214";
+			// Memory cues as a notch at the top, hot cues as a full-height pin, as on a CDJ.
+			ctx.fillRect(x - 1, 0, 2, c.slot === null ? h * 0.3 : h);
+		}
+	}
 	ctx.fillStyle = PLAYHEAD;
 	ctx.fillRect(Math.round(played * w) - 1, 0, 2, h);
+}
+
+/** Cue markers in the scrolling view: a lettered flag per hot cue, a red notch per memory cue. */
+function drawCues(
+	ctx: CanvasRenderingContext2D,
+	h: number,
+	cues: readonly Cue[],
+	from: number,
+	perPixel: number,
+	w: number,
+) {
+	const flag = Math.round(h * 0.16);
+	ctx.font = `600 ${Math.round(flag * 0.8)}px ui-sans-serif, system-ui, sans-serif`;
+	ctx.textAlign = "center";
+	ctx.textBaseline = "middle";
+	for (const c of cues) {
+		const x = (c.start - from) / perPixel;
+		if (x < -flag * 2 || x > w + flag * 2) {
+			continue;
+		}
+		if (c.slot === null) {
+			ctx.fillStyle = MEMORY_COLOR;
+			ctx.beginPath();
+			ctx.moveTo(x - flag * 0.6, 0);
+			ctx.lineTo(x + flag * 0.6, 0);
+			ctx.lineTo(x, flag);
+			ctx.fill();
+			ctx.fillRect(x - 0.75, 0, 1.5, h);
+			continue;
+		}
+		const color = c.color || "#28e214";
+		ctx.fillStyle = color;
+		ctx.fillRect(x - 0.75, 0, 1.5, h);
+		ctx.fillRect(x, 0, flag * 1.1, flag);
+		ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+		ctx.fillText(PAD_LETTERS[c.slot] ?? "", x + flag * 0.55, flag / 2 + 0.5);
+	}
 }
 
 /**
@@ -70,6 +118,7 @@ export function drawDetail(
 	analysis: TrackAnalysis,
 	now: number,
 	window: number,
+	cues: readonly Cue[] = [],
 ) {
 	const from = now - window;
 	const perPixel = (2 * window) / w;
@@ -82,6 +131,7 @@ export function drawDetail(
 		ctx.fillRect(x, 0, width, tick);
 		ctx.fillRect(x, h - tick, width, tick);
 	}
+	drawCues(ctx, h, cues, from, perPixel, w);
 	ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
 	ctx.fillRect(Math.round(w / 2) - 1, 0, 2, h);
 }

@@ -36,6 +36,8 @@ pub struct Source {
     pub fingerprint: Option<String>,
     /// The beat grid was set by hand: it replaces the grid in analysis files rekordbox wrote.
     pub grid_edited: bool,
+    /// Cues set in manplay, which replace the drive's own; `None` when never set here.
+    pub cues: Option<Vec<crate::db::Cue>>,
 }
 
 #[derive(Debug, Clone)]
@@ -431,11 +433,12 @@ fn write_analysis(
     mount: &Path,
     track: &mut pdb::Track,
     a: &Analyzed,
+    source: &Source,
     camelot: bool,
 ) -> Result<(), String> {
     let d = &a.stored;
     let rel = anlz::dat_path(track.id, &track.path);
-    let (dat, ext) = anlz::files(&track.path, d);
+    let (dat, ext) = anlz::files(&track.path, d, source.cues.as_deref().unwrap_or_default());
     let dat_path = on_drive(mount, &rel);
     write_atomic(&dat_path, &dat).map_err(|e| e.to_string())?;
     write_atomic(&dat_path.with_extension("EXT"), &ext).map_err(|e| e.to_string())?;
@@ -458,30 +461,32 @@ fn write_analysis(
 }
 
 /// New contents for a song's analysis files on the drive, from the kept analysis: the whole files
-/// when manplay wrote them, or just the beat grid swapped into rekordbox's (keeping its cues and
-/// waveforms) when the grid was set by hand in manplay. `None` to leave the song alone.
+/// when manplay wrote them; when rekordbox did, just what was set by hand in manplay (beat grid,
+/// cues) swapped into its files, keeping the rest. `None` to leave the song alone.
 fn refreshed(
     mount: &Path,
     track: &pdb::Track,
     stored: &anlz::Stored,
-    grid_edited: bool,
+    source: &Source,
 ) -> Option<Vec<(PathBuf, Vec<u8>)>> {
     if track.analyze_path.is_empty() {
         return None;
     }
     let dat_path = on_drive(mount, &track.analyze_path);
     let ext_path = dat_path.with_extension("EXT");
+    let cues = source.cues.as_deref();
     if track.analyze_path == anlz::dat_path(track.id, &track.path) {
-        let (dat, ext) = anlz::files(&track.path, stored);
+        let (dat, ext) = anlz::files(&track.path, stored, cues.unwrap_or_default());
         return Some(vec![(dat_path, dat), (ext_path, ext)]);
     }
-    if !grid_edited {
+    let grid = source.grid_edited.then_some(stored);
+    if grid.is_none() && cues.is_none() {
         return None;
     }
     let mut out = Vec::new();
     for path in [dat_path, ext_path] {
         if let Ok(old) = fs::read(&path)
-            && let Some(new) = anlz::with_grid(&old, stored)
+            && let Some(new) = anlz::patch(&old, grid, cues)
         {
             out.push((path, new));
         }
@@ -512,15 +517,18 @@ fn refresh_grids(
         else {
             continue;
         };
-        let Some(files) = refreshed(mount, track, &stored, p.source.grid_edited) else {
+        let Some(files) = refreshed(mount, track, &stored, p.source) else {
             continue;
         };
         let changed: Vec<_> = files
             .into_iter()
             .filter(|(path, bytes)| fs::read(path).ok().as_deref() != Some(bytes.as_slice()))
             .collect();
-        // The tempo the player lists goes with the grid it draws.
-        if let Some(bpm) = stored.grid_bpm {
+        // The tempo the player lists goes with the grid it draws (unless that grid is rekordbox's).
+        if let (Some(bpm), true) = (
+            stored.grid_bpm,
+            p.source.grid_edited || track.analyze_path == anlz::dat_path(track.id, &track.path),
+        ) {
             track.tempo = (bpm * 100.0).round() as u32;
         }
         if changed.is_empty() {
@@ -672,7 +680,9 @@ pub fn export(
     let results = analyze_all(&jobs, opts.store, &mut progress);
     for ((index, source), result) in jobs.iter().zip(results) {
         let track = &mut lib.tracks[*index];
-        match result.and_then(|d| write_analysis(mount, track, &d, opts.camelot).map(|()| d)) {
+        match result
+            .and_then(|d| write_analysis(mount, track, &d, source, opts.camelot).map(|()| d))
+        {
             Ok(_) => report.analyzed += 1,
             Err(e) => report.failed.push(Failure {
                 path: source.path.display().to_string(),
@@ -761,6 +771,7 @@ mod tests {
             key: Some("8A".into()),
             fingerprint: None,
             grid_edited: false,
+            cues: None,
         }
     }
 
@@ -963,7 +974,7 @@ mod tests {
         let lib = crate::usb::library(&usb).expect("reads");
         let t = &lib.tracks[0];
         let written = fs::read(on_drive(&usb, &t.analyze_path)).expect("dat");
-        assert_eq!(written, anlz::files(&t.path, &kept).0);
+        assert_eq!(written, anlz::files(&t.path, &kept, &[]).0);
     }
 
     #[test]
@@ -1002,7 +1013,7 @@ mod tests {
         let t = &lib.tracks[0];
         assert_eq!(t.tempo, 12_600);
         let written = fs::read(on_drive(&usb, &t.analyze_path)).expect("dat");
-        assert_eq!(written, anlz::files(&t.path, &kept).0);
+        assert_eq!(written, anlz::files(&t.path, &kept, &[]).0);
     }
 
     #[test]
@@ -1052,6 +1063,7 @@ mod tests {
             key: Some("8A".into()),
             fingerprint: None,
             grid_edited: false,
+            cues: None,
         };
         let playlists = [SourcePlaylist {
             name: "manplay dry run".into(),
