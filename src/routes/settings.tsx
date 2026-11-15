@@ -10,10 +10,7 @@ export const Route = createFileRoute("/settings")({ component: SettingsPage });
 function SettingsPage() {
 	const tracks = useTracks();
 	return (
-		<Page
-			title="Settings"
-			description="Where your library lives, and which version of manplay you run."
-		>
+		<Page title="Settings">
 			<LibrarySettings />
 			<AppUpdate />
 			<StatusBar>

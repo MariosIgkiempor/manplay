@@ -67,12 +67,7 @@ export function ValuePanel({ field, value }: { field: string; value: string }) {
 			<SelectableTrackList
 				tracks={matching}
 				showDuration
-				empty={
-					<EmptyState title={tracks.isPending ? "Loading songs…" : "No songs use this yet"}>
-						{!tracks.isPending &&
-							"Values made on the Metadata screen show up here once a song uses them. A rescan picks up tags edited in other apps."}
-					</EmptyState>
-				}
+				empty={<EmptyState title={tracks.isPending ? "Loading songs…" : "No songs use this yet"} />}
 			/>
 		</div>
 	);

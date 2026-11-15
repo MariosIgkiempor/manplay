@@ -538,6 +538,7 @@ export function SyncReviewButton({
 				size={size}
 				variant={variant}
 				disabled={disabled}
+				title="See what will be sent, renamed or deleted before anything changes."
 				onClick={() => {
 					setSession((n) => n + 1);
 					setOpen(true);

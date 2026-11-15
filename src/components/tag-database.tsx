@@ -354,15 +354,11 @@ function NoValues({
 	searching: boolean;
 }) {
 	if (searching) {
-		return (
-			<EmptyState title="No match">Try a shorter search, or create it as a new value.</EmptyState>
-		);
+		return <EmptyState title="No match" />;
 	}
 	return (
 		<EmptyState title={`No ${label.toLowerCase()} yet`}>
-			{isLibrary
-				? "Tag songs from their right-click menu, or create a tag here."
-				: "Values appear here once a song has them. Create one to offer it in the tag editor."}
+			{isLibrary ? "Tag songs from their right-click menu." : "Values appear once a song has them."}
 		</EmptyState>
 	);
 }

@@ -21,11 +21,7 @@ export function ArtistPanel({ name }: { name: string }) {
 	const albums = useMemo(() => groupAlbums(artistTracks), [artistTracks]);
 
 	if (artistTracks.length === 0) {
-		return (
-			<EmptyState title="No songs by this artist">
-				The artist may have been renamed. Close this panel and open it again from the library.
-			</EmptyState>
-		);
+		return <EmptyState title="No songs by this artist" />;
 	}
 	return (
 		<div className="space-y-6">

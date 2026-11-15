@@ -73,11 +73,7 @@ function AlbumTile({
 
 export function AlbumGrid({ albums, targetCount, onOpen }: Props) {
 	if (albums.length === 0) {
-		return (
-			<EmptyState title="No albums">
-				Nothing matches. Clear the search, or rescan the library folder.
-			</EmptyState>
-		);
+		return <EmptyState title="No albums">Clear the search to see everything.</EmptyState>;
 	}
 	return (
 		<div className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-x-4 gap-y-6">

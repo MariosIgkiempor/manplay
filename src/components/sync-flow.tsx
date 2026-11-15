@@ -53,6 +53,7 @@ export function PullButton({ ids, size, variant = "outline", disabled }: Props) 
 				size={size}
 				variant={variant}
 				disabled={disabled === true || all.length === 0}
+				title="Copy songs your library is missing from destinations. A pull never deletes."
 				onClick={() => {
 					setSession((n) => n + 1);
 					setOpen(true);
@@ -97,6 +98,7 @@ export function SyncButton({ ids, size, variant, disabled }: Props) {
 				size={size}
 				variant={variant}
 				disabled={disabled === true || all.length === 0}
+				title="Pull, then push. You review each step before anything changes."
 				onClick={() => {
 					setSession((n) => n + 1);
 					setOpen(true);

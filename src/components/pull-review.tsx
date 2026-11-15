@@ -286,10 +286,6 @@ function Picker({
 					{missing.length.toLocaleString()} {missing.length === 1 ? "track" : "tracks"} not in your
 					library
 				</h2>
-				<p className="text-muted-foreground text-sm">
-					This folder has audio your library is missing. Tick what to copy into your library.
-					Anything you leave behind stays on the destination and is never deleted by a pull.
-				</p>
 				<Tally
 					items={[
 						{ tone: "add", label: "new", count: missing.length - duplicates - otherFormat },

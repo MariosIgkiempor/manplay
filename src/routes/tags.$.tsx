@@ -132,7 +132,7 @@ function TagPage() {
 				{migrate.isError && <ErrorLine>{String(migrate.error)}</ErrorLine>}
 				{tagged.length === 0 && !tracks.isPending ? (
 					<EmptyState icon={<Tag />} title="No songs have this tag">
-						Right-click songs in the library and choose Tag to add it.
+						Right-click songs in the library to tag them.
 					</EmptyState>
 				) : (
 					<SelectableTrackList tracks={tagged} />

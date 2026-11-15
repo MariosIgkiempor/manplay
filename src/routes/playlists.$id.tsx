@@ -89,7 +89,7 @@ function PlaylistPage() {
 				)}
 				{list.length === 0 && !tracks.isPending ? (
 					<EmptyState icon={<ListMusic />} title="This playlist is empty">
-						Right-click songs in the library and choose Add to playlist.
+						Right-click songs in the library to add them.
 					</EmptyState>
 				) : (
 					<SelectableTrackList

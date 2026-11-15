@@ -22,22 +22,14 @@ export function LibrarySettings() {
 	const count = tracks.data?.length ?? 0;
 
 	return (
-		<Section
-			title="Library folder"
-			description={
-				<>
-					Songs are read from <code className="text-foreground">artist/album/track</code> folders.
-					The folder is rescanned every time manplay opens.
-				</>
-			}
-		>
+		<Section title="Library folder">
 			<Panel className="space-y-3">
 				<div className="flex flex-wrap items-center gap-2">
 					<code
 						className="min-w-0 flex-1 truncate rounded-md bg-muted px-2.5 py-1.5 font-mono text-xs"
 						title={root.data ?? undefined}
 					>
-						{root.data ?? "No folder chosen"}
+						{root.data ?? "Choose a folder laid out as artist/album/track"}
 					</code>
 					<Button variant="outline" onClick={() => scan.mutate("pick")} disabled={scanning}>
 						<FolderOpen />
@@ -51,19 +43,13 @@ export function LibrarySettings() {
 					)}
 				</div>
 				<p className="text-muted-foreground text-xs tabular-nums">
-					{count} {count === 1 ? "song" : "songs"} found.
+					{count} {count === 1 ? "song" : "songs"}, rescanned on launch
 				</p>
 				{lastError && !scanning && <ErrorLine>{lastError}</ErrorLine>}
 			</Panel>
 			{root.data && (
 				<Panel className="flex flex-wrap items-center justify-between gap-3">
-					<div className="min-w-0 space-y-0.5">
-						<p className="font-medium text-sm">Reset database</p>
-						<p className="text-muted-foreground text-xs">
-							Rebuilds the song list from the folder. Playlists, tags and sync records are cleared;
-							a backup is kept and your files are not touched.
-						</p>
-					</div>
+					<p className="font-medium text-sm">Library database</p>
 					<Button variant="destructive" disabled={scanning} onClick={() => setConfirming(true)}>
 						<Trash2 />
 						Reset database

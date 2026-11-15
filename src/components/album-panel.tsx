@@ -22,11 +22,7 @@ export function AlbumPanel({ albumKey }: { albumKey: string }) {
 	);
 
 	if (!album) {
-		return (
-			<EmptyState title="Album not found">
-				It may have been renamed or removed. Close this panel and open it again from the library.
-			</EmptyState>
-		);
+		return <EmptyState title="Album not found" />;
 	}
 	return (
 		<div className="space-y-6">

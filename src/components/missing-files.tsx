@@ -62,10 +62,8 @@ function MissingBody({ onEmpty }: { onEmpty: () => void }) {
 	}
 	return (
 		<div className="space-y-4">
-			<p className="text-sm">
-				These files are gone from disk. They are hidden, keep their playlists and tags, and come
-				back if the files return. After {status.graceDays} days they are removed here and from sync
-				destinations.
+			<p className="text-muted-foreground text-sm">
+				Hidden until the files return. Removed after {status.graceDays} days.
 			</p>
 			<Button
 				variant="outline"

@@ -567,16 +567,19 @@ pub async fn plan_target(
 
 /// Reads the tags region and audio samples of every destination file an action would overwrite,
 /// rename or remove, so applying can refuse if someone changed it after this review.
-async fn record_seen(app: &AppHandle, client: &Client, target: &SyncTarget, actions: &mut [Action]) {
+async fn record_seen(
+    app: &AppHandle,
+    client: &Client,
+    target: &SyncTarget,
+    actions: &mut [Action],
+) {
     let Ok(backend) = Backend::for_target(client, target) else {
         return;
     };
     let base = base_of(target);
     let touched: Vec<&mut Action> = actions
         .iter_mut()
-        .filter(|a| {
-            a.seen.is_none() && matches!(a.kind, Kind::Replace | Kind::Move | Kind::Delete)
-        })
+        .filter(|a| a.seen.is_none() && matches!(a.kind, Kind::Replace | Kind::Move | Kind::Delete))
         .collect();
     let total = touched.len();
     for (n, a) in touched.into_iter().enumerate() {
@@ -600,7 +603,11 @@ async fn record_seen(app: &AppHandle, client: &Client, target: &SyncTarget, acti
         };
         if a.seen.is_none() {
             let warn = "Could not be read for comparison: will not be applied";
-            a.note = Some(a.note.take().map_or(warn.to_owned(), |n| format!("{n}. {warn}")));
+            a.note = Some(
+                a.note
+                    .take()
+                    .map_or(warn.to_owned(), |n| format!("{n}. {warn}")),
+            );
         }
     }
 }
@@ -620,7 +627,11 @@ fn signature_ranges(size: u64) -> Vec<(u64, u64)> {
 }
 
 /// Hash of the size, tags region and audio samples of a destination file.
-async fn remote_signature(backend: &Backend<'_>, dest: &[String], size: u64) -> Result<String, Error> {
+async fn remote_signature(
+    backend: &Backend<'_>,
+    dest: &[String],
+    size: u64,
+) -> Result<String, Error> {
     let mut parts = Vec::new();
     for (start, len) in signature_ranges(size) {
         parts.push(if len == 0 {
@@ -867,7 +878,16 @@ pub async fn apply_target(
         let label = a.rel.join("/");
         emit(app, target.id, done, total, &format!("Backing up {label}"));
         let expected = a.remote_size.unwrap_or(a.size);
-        match backup_one(&backend, &base, &a.rel, expected, a.seen.as_deref(), &target_backup).await {
+        match backup_one(
+            &backend,
+            &base,
+            &a.rel,
+            expected,
+            a.seen.as_deref(),
+            &target_backup,
+        )
+        .await
+        {
             Ok(()) => {
                 backed_up.insert(a.id);
                 out.summary.backup_dir = Some(backup_dir.to_string_lossy().into_owned());
@@ -1038,9 +1058,7 @@ async fn backup_one(
         }
         let copied = local_signature(&tmp, got).await.ok();
         if seen.is_none() || copied.as_deref() != seen {
-            return Err(Error::Msg(
-                "tags or audio differ from review".to_owned(),
-            ));
+            return Err(Error::Msg("tags or audio differ from review".to_owned()));
         }
         tokio::fs::rename(&tmp, &dest).await?;
         Ok(())

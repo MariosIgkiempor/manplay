@@ -56,11 +56,7 @@ export function ArtistGrid({
 	onOpen: (artist: Artist) => void;
 }) {
 	if (artists.length === 0) {
-		return (
-			<EmptyState title="No artists">
-				Nothing matches. Clear the search, or rescan the library folder.
-			</EmptyState>
-		);
+		return <EmptyState title="No artists">Clear the search to see everything.</EmptyState>;
 	}
 	return (
 		<div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-x-4 gap-y-6">

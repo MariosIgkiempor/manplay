@@ -23,7 +23,6 @@ function ExportPage() {
 	return (
 		<Page
 			title="Export"
-			description="Send your library to other machines and DJ software. Nothing is copied or deleted until you review it. Pull brings files back, push sends yours, sync does both."
 			actions={
 				<>
 					<PullButton disabled={busy || targetCount === 0} />
@@ -32,10 +31,7 @@ function ExportPage() {
 				</>
 			}
 		>
-			<Section
-				title="Destinations"
-				description="Switch a destination off to pause it. Deleting remote files is opt-in and backed up first."
-			>
+			<Section title="Destinations">
 				<div className="grid gap-4 lg:grid-cols-2">
 					<DestinationServiceCard kind="tailscale" />
 					<DestinationServiceCard kind="r2" />

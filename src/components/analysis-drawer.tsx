@@ -1,12 +1,13 @@
-import { AudioWaveform, FileAudio, Square } from "lucide-react";
+import { AudioWaveform, FileAudio, RotateCcw, Square } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { Drawer } from "#/components/drawer.tsx";
-import { ProgressPill } from "#/components/progress-pill.tsx";
+import { ErrorLine, Section } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { closeAnalysisDrawer, useAnalysisDrawerOpen } from "#/lib/analysis-drawer.ts";
 import {
+	type AnalysisProgress,
 	type AnalysisReport,
 	type AnalysisSettings,
 	cancelAnalysis,
@@ -23,10 +24,11 @@ import {
 	useSetAnalysisSettings,
 	useTracks,
 } from "#/lib/queries.ts";
-import { progressLabel, useAnalysisProgress } from "#/lib/use-analysis-progress.ts";
+import { useAnalysisProgress } from "#/lib/use-analysis-progress.ts";
 import { cn } from "#/lib/utils.ts";
 
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const plural = (n: number, one: string, many: string) =>
+	`${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 interface Counts {
 	total: number;
@@ -34,6 +36,8 @@ interface Counts {
 	pending: number;
 	withBpm: number;
 	withKey: number;
+	/** Analyzed songs with a BPM or key to write into tags. */
+	withResults: number;
 }
 
 function count(tracks: readonly Track[]): Counts {
@@ -44,29 +48,8 @@ function count(tracks: readonly Track[]): Counts {
 		pending: tracks.length - analyzed.length,
 		withBpm: analyzed.filter((t) => t.bpm !== null).length,
 		withKey: analyzed.filter((t) => t.key !== null).length,
+		withResults: analyzed.filter((t) => t.bpm !== null || t.key !== null).length,
 	};
-}
-
-function Stat({ label, value, tone }: { label: string; value: number; tone?: "warn" }) {
-	return (
-		<div className="rounded-lg border bg-card/40 px-3 py-2">
-			<div
-				className={cn("font-semibold text-lg tabular-nums", tone === "warn" && "text-destructive")}
-			>
-				{value}
-			</div>
-			<div className="text-muted-foreground text-xs">{label}</div>
-		</div>
-	);
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-	return (
-		<section className="space-y-3">
-			<h3 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">{title}</h3>
-			{children}
-		</section>
-	);
 }
 
 /** Where a file sits under the library folder, for compact lists. */
@@ -74,126 +57,148 @@ function relative(path: string, root: string): string {
 	return root && path.startsWith(root) ? path.slice(root.length).replace(/^[\\/]/, "") : path;
 }
 
-function tagLine(r: TagWriteReport): string {
-	const parts = [`Saved to ${plural(r.written, "file", "files")}`];
-	if (r.unchanged > 0) {
-		parts.push(`${r.unchanged} already up to date`);
-	}
-	if (r.failed.length > 0) {
-		parts.push(`${r.failed.length} failed`);
-	}
-	return parts.join(" · ");
-}
-
 type Outcome =
 	| { kind: "analysis"; report: AnalysisReport }
 	| { kind: "tags"; report: TagWriteReport }
 	| { kind: "error"; message: string };
 
-function OutcomeLine({ outcome, root }: { outcome: Outcome; root: string }) {
-	if (outcome.kind === "error") {
-		return <p className="text-destructive text-sm">{outcome.message}</p>;
+function tagSummary(r: TagWriteReport): string {
+	return [
+		`Wrote ${plural(r.written, "file", "files")}`,
+		r.unchanged > 0 && `${r.unchanged.toLocaleString()} already matched`,
+		r.failed.length > 0 && `${r.failed.length.toLocaleString()} failed`,
+	]
+		.filter(Boolean)
+		.join(", ");
+}
+
+function summary(outcome: Exclude<Outcome, { kind: "error" }>): string {
+	if (outcome.kind === "tags") {
+		return `${tagSummary(outcome.report)}.`;
 	}
-	const lines: string[] = [];
-	let failed: FileFailure[] = [];
-	if (outcome.kind === "analysis") {
-		const r = outcome.report;
-		lines.push(
-			[
-				`Analyzed ${plural(r.analyzed, "song", "songs")}`,
-				r.failed > 0 && `${r.failed} failed`,
-				r.cancelled > 0 && `${r.cancelled} skipped (stopped)`,
-			]
-				.filter(Boolean)
-				.join(" · "),
-		);
-		if (r.tags) {
-			lines.push(tagLine(r.tags));
-			failed = r.tags.failed;
+	const r = outcome.report;
+	const parts = [
+		`Analyzed ${plural(r.analyzed, "song", "songs")}`,
+		r.failed > 0 && `${r.failed.toLocaleString()} failed`,
+		r.cancelled > 0 && `${r.cancelled.toLocaleString()} left after stopping`,
+	].filter(Boolean);
+	return `${parts.join(", ")}.${r.tags ? ` ${tagSummary(r.tags)}.` : ""}`;
+}
+
+function OutcomeLine({ outcome }: { outcome: Outcome }) {
+	if (outcome.kind === "error") {
+		return <ErrorLine>{outcome.message}</ErrorLine>;
+	}
+	return <p className="text-muted-foreground text-sm">{summary(outcome)}</p>;
+}
+
+/** How much of the library has been analyzed, or how far the running analysis has got. */
+function Meter({
+	counts,
+	running,
+	progress,
+}: {
+	counts: Counts;
+	running: boolean;
+	progress: AnalysisProgress | null;
+}) {
+	const live = running && progress !== null && progress.total > 0;
+	const done = live ? progress.done : counts.analyzed;
+	const total = live ? progress.total : counts.total;
+	const percent = total === 0 ? 0 : Math.min(100, (done / total) * 100);
+	let label = `${done.toLocaleString()} of ${plural(total, "song", "songs")} analyzed`;
+	if (running) {
+		label = progress?.phase === "saving" ? "Writing tags" : "Analyzing";
+		if (live) {
+			label += ` ${done.toLocaleString()} of ${total.toLocaleString()}`;
 		}
-	} else {
-		lines.push(tagLine(outcome.report));
-		failed = outcome.report.failed;
 	}
 	return (
-		<div className="space-y-0.5 text-sm">
-			{lines.map((l) => (
-				<p key={l} className="text-success">
-					{l}
-				</p>
-			))}
-			{failed.slice(0, 3).map((f) => (
-				<p key={f.path} className="truncate text-destructive text-xs" title={f.error}>
-					{relative(f.path, root)}: {f.error}
-				</p>
-			))}
-			{failed.length > 3 && (
-				<p className="text-destructive text-xs">and {failed.length - 3} more</p>
-			)}
+		<div className="space-y-2">
+			<p className="font-medium text-sm tabular-nums">{label}</p>
+			<div
+				role="progressbar"
+				aria-label={label}
+				aria-valuemin={0}
+				aria-valuemax={100}
+				aria-valuenow={Math.round(percent)}
+				className="h-1.5 overflow-hidden rounded-full bg-muted"
+			>
+				<div
+					className={cn(
+						"h-full rounded-full bg-primary transition-[width] duration-300",
+						running && !live && "w-full animate-pulse",
+					)}
+					style={running && !live ? undefined : { width: `${percent}%` }}
+				/>
+			</div>
 		</div>
+	);
+}
+
+function Figures({ counts, failed }: { counts: Counts; failed: number }) {
+	const items = [
+		{ label: "with BPM", value: counts.withBpm },
+		{ label: "with key", value: counts.withKey },
+		{ label: "not analyzed", value: counts.pending },
+	];
+	return (
+		<dl className="flex flex-wrap gap-x-5 gap-y-1 text-muted-foreground text-xs tabular-nums">
+			{items.map((i) => (
+				<div key={i.label} className="flex gap-1">
+					<dt className="sr-only">{i.label}</dt>
+					<dd>
+						<span className="text-foreground">{i.value.toLocaleString()}</span> {i.label}
+					</dd>
+				</div>
+			))}
+			{failed > 0 && (
+				<div className="flex gap-1 text-destructive">
+					<dt className="sr-only">failed</dt>
+					<dd>{failed.toLocaleString()} failed</dd>
+				</div>
+			)}
+		</dl>
 	);
 }
 
 function RunControls({
 	counts,
-	allIds,
-	onOutcome,
+	running,
+	stopping,
+	saving,
+	onRun,
+	onStop,
 }: {
 	counts: Counts;
-	/** Every track id, for "Re-analyze all". */
-	allIds: number[];
-	onOutcome: (o: Outcome) => void;
+	running: boolean;
+	stopping: boolean;
+	saving: boolean;
+	onRun: (all: boolean) => void;
+	onStop: () => void;
 }) {
-	const analyze = useAnalyze();
-	const { running, progress } = useAnalysisProgress();
-	const [stopping, setStopping] = useState(false);
 	const [confirmAll, setConfirmAll] = useState(false);
-
-	const run = (ids?: number[]) =>
-		analyze.mutate(ids, {
-			onSuccess: (report) => onOutcome({ kind: "analysis", report }),
-			onError: (e) => onOutcome({ kind: "error", message: String(e) }),
-			onSettled: () => setStopping(false),
-		});
-
 	if (running) {
 		return (
-			<div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs">
-				<ProgressPill
-					label={progressLabel(progress, stopping)}
-					done={progress?.done ?? 0}
-					total={progress?.total ?? 0}
-				/>
-				{progress?.phase !== "saving" && (
-					<Button
-						size="sm"
-						variant="outline"
-						disabled={stopping}
-						onClick={() => {
-							setStopping(true);
-							void cancelAnalysis();
-						}}
-					>
-						<Square />
-						Stop
-					</Button>
-				)}
-			</div>
+			<Button variant="outline" disabled={stopping || saving} onClick={onStop}>
+				<Square />
+				{stopping ? "Stopping…" : "Stop"}
+			</Button>
 		);
 	}
 	return (
-		<div className="flex flex-wrap gap-2">
-			<Button disabled={counts.pending === 0} onClick={() => run()}>
+		<div className="flex flex-wrap items-center gap-2">
+			<Button disabled={counts.pending === 0} onClick={() => onRun(false)}>
 				<AudioWaveform />
-				{counts.pending === 0
-					? "Everything is analyzed"
-					: `Analyze ${plural(counts.pending, "new song", "new songs")}`}
+				{counts.pending === 0 ? "All analyzed" : `Analyze ${counts.pending.toLocaleString()} new`}
 			</Button>
 			<Button
-				variant="outline"
+				variant="ghost"
 				disabled={counts.analyzed === 0}
+				title="Detect BPM and key again for every song, replacing earlier results"
 				onClick={() => setConfirmAll(true)}
 			>
+				<RotateCcw />
 				Re-analyze all
 			</Button>
 			{confirmAll && (
@@ -203,11 +208,11 @@ function RunControls({
 					onCancel={() => setConfirmAll(false)}
 					onConfirm={() => {
 						setConfirmAll(false);
-						run(allIds);
+						onRun(true);
 					}}
 				>
-					Replaces the BPM and key found earlier. Runs in the background; you can stop it at any
-					time and keep what is done.
+					BPM and key found earlier, including values you typed in, are replaced. You can stop at
+					any time and keep what is done.
 				</ConfirmDialog>
 			)}
 		</div>
@@ -222,76 +227,103 @@ function KeyFormatPicker({
 	onChange: (s: AnalysisSettings) => void;
 }) {
 	const options = [
-		{ id: "musical", label: "Musical", example: "Am" },
-		{ id: "camelot", label: "Camelot", example: "8A" },
+		{ id: "musical", label: "Am", title: "Musical (Am, F#)" },
+		{ id: "camelot", label: "8A", title: "Camelot (8A, 2B)" },
 	] as const;
 	return (
-		<div className="flex items-center justify-between gap-3 text-sm">
-			<span>Key notation in tags</span>
-			<div className="inline-flex rounded-md border p-0.5">
-				{options.map((o) => (
-					<button
-						key={o.id}
-						type="button"
-						aria-pressed={settings.keyFormat === o.id}
-						onClick={() => onChange({ ...settings, keyFormat: o.id })}
-						className={cn(
-							"rounded px-2.5 py-1 text-xs",
-							settings.keyFormat === o.id
-								? "bg-primary text-primary-foreground"
-								: "text-muted-foreground hover:text-foreground",
-						)}
-					>
-						{o.label} <span className="opacity-70">({o.example})</span>
-					</button>
-				))}
-			</div>
+		<div
+			role="radiogroup"
+			aria-label="Key notation"
+			className="inline-flex rounded-md border p-0.5"
+		>
+			{options.map((o) => (
+				<button
+					key={o.id}
+					type="button"
+					aria-pressed={settings.keyFormat === o.id}
+					title={o.title}
+					onClick={() => onChange({ ...settings, keyFormat: o.id })}
+					className={cn(
+						"rounded px-2.5 py-0.5 text-xs tabular-nums",
+						settings.keyFormat === o.id
+							? "bg-muted font-medium text-foreground"
+							: "text-muted-foreground hover:text-foreground",
+					)}
+				>
+					{o.label}
+				</button>
+			))}
 		</div>
 	);
 }
 
-function SaveToFiles({
+/** A labelled setting: name on the left, control on the right. */
+function SettingRow({
+	label,
+	title,
+	children,
+}: {
+	label: string;
+	title?: string;
+	children: React.ReactNode;
+}) {
+	return (
+		<div className="flex items-center justify-between gap-4 py-2.5" title={title}>
+			<span className="text-sm">{label}</span>
+			{children}
+		</div>
+	);
+}
+
+function FileTags({
 	withResults,
+	running,
 	onOutcome,
 }: {
 	withResults: number;
+	running: boolean;
 	onOutcome: (o: Outcome) => void;
 }) {
 	const settings = useAnalysisSettings();
 	const setSettings = useSetAnalysisSettings();
 	const save = useSaveAnalysisToFiles();
-	const { running } = useAnalysisProgress();
 	const [confirm, setConfirm] = useState(false);
 	const current = settings.data;
 	if (!current) {
 		return null;
 	}
+	const notation = current.keyFormat === "camelot" ? "Camelot (8A)" : "musical (Am)";
 	return (
-		<div className="space-y-3">
-			<div className="flex items-start justify-between gap-4">
-				<div className="space-y-0.5">
-					<div className="text-sm">Also save to file metadata</div>
-					<p className="text-muted-foreground text-xs">
-						After each analysis, write BPM and key into the songs' tags, so rekordbox, CDJs and
-						other apps see them too. BPM is stored as a whole number. The audio is never changed.
-					</p>
-				</div>
-				<Switch
-					label="Also save to file metadata"
-					checked={current.writeTags}
-					onChange={(on) => setSettings.mutate({ ...current, writeTags: on })}
-				/>
+		<Section
+			title="File tags"
+			action={
+				<Button
+					variant="ghost"
+					size="sm"
+					disabled={running || withResults === 0}
+					title={`Write the saved BPM and key of ${plural(withResults, "song", "songs")} into their files`}
+					onClick={() => setConfirm(true)}
+				>
+					<FileAudio />
+					Write now
+				</Button>
+			}
+		>
+			<div className="divide-y rounded-lg border px-3">
+				<SettingRow
+					label="Write after each analysis"
+					title="So rekordbox, CDJs and other apps see them. BPM is rounded; the audio is never changed."
+				>
+					<Switch
+						label="Write BPM and key into files after each analysis"
+						checked={current.writeTags}
+						onChange={(on) => setSettings.mutate({ ...current, writeTags: on })}
+					/>
+				</SettingRow>
+				<SettingRow label="Key notation">
+					<KeyFormatPicker settings={current} onChange={(s) => setSettings.mutate(s)} />
+				</SettingRow>
 			</div>
-			<KeyFormatPicker settings={current} onChange={(s) => setSettings.mutate(s)} />
-			<Button
-				variant="outline"
-				size="sm"
-				disabled={running || withResults === 0}
-				onClick={() => setConfirm(true)}
-			>
-				<FileAudio />
-				Save existing results to files now
-			</Button>
 			{confirm && (
 				<ConfirmDialog
 					title={`Write BPM and key into ${plural(withResults, "song", "songs")}?`}
@@ -305,42 +337,76 @@ function SaveToFiles({
 						});
 					}}
 				>
-					Replaces the BPM and key tags these files hold now, in{" "}
-					{current.keyFormat === "camelot" ? "Camelot (8A)" : "musical (Am)"} notation. Files that
-					already match are left alone.
+					Their BPM and key tags are replaced, with keys in {notation} notation. Files that already
+					match are left alone.
 				</ConfirmDialog>
 			)}
-		</div>
+		</Section>
 	);
 }
 
-function Failures({ root }: { root: string }) {
-	const failures = useAnalysisFailures(true).data ?? [];
+function Failures({
+	failures,
+	root,
+	idOf,
+	running,
+	onRetry,
+}: {
+	failures: readonly FileFailure[];
+	root: string;
+	idOf: (path: string) => number | undefined;
+	running: boolean;
+	onRetry: (ids: number[]) => void;
+}) {
 	const [showAll, setShowAll] = useState(false);
 	if (failures.length === 0) {
 		return null;
 	}
 	const shown = showAll ? failures : failures.slice(0, 5);
+	const ids = failures.map((f) => idOf(f.path)).filter((id) => id !== undefined);
 	return (
-		<Section title={`Could not analyze (${failures.length})`}>
-			<ul className="divide-y rounded-lg border text-xs">
-				{shown.map((f) => (
-					<li key={f.path} className="space-y-0.5 px-3 py-2">
-						<div className="truncate" title={f.path}>
-							{relative(f.path, root)}
-						</div>
-						<div className="text-destructive">{f.error}</div>
-					</li>
-				))}
+		<Section
+			title="Could not analyze"
+			count={failures.length}
+			action={
+				<Button variant="ghost" size="sm" disabled={running} onClick={() => onRetry(ids)}>
+					<RotateCcw />
+					Retry all
+				</Button>
+			}
+		>
+			<ul className="divide-y rounded-lg border">
+				{shown.map((f) => {
+					const id = idOf(f.path);
+					return (
+						<li key={f.path} className="flex items-center gap-3 px-3 py-2">
+							<div className="min-w-0 flex-1 text-xs">
+								<div className="truncate" title={f.path}>
+									{relative(f.path, root)}
+								</div>
+								<div className="truncate text-destructive" title={f.error}>
+									{f.error}
+								</div>
+							</div>
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								aria-label={`Retry ${relative(f.path, root)}`}
+								title="Retry"
+								disabled={running || id === undefined}
+								onClick={() => id !== undefined && onRetry([id])}
+							>
+								<RotateCcw />
+							</Button>
+						</li>
+					);
+				})}
 			</ul>
 			{failures.length > shown.length && (
 				<Button variant="ghost" size="sm" onClick={() => setShowAll(true)}>
-					Show all {failures.length}
+					Show all {failures.length.toLocaleString()}
 				</Button>
 			)}
-			<p className="text-muted-foreground text-xs">
-				Right-click a song and choose “Analyze BPM &amp; key” to try it again.
-			</p>
 		</Section>
 	);
 }
@@ -350,43 +416,56 @@ function AnalysisBody() {
 	const root = useLibraryRoot().data ?? "";
 	const failures = useAnalysisFailures(true).data ?? [];
 	const counts = useMemo(() => count(tracks), [tracks]);
-	const withResults = tracks.filter((t) => t.analyzed && (t.bpm !== null || t.key !== null)).length;
+	const idByPath = useMemo(() => new Map(tracks.map((t) => [t.path, t.id])), [tracks]);
+	const analyze = useAnalyze();
+	const { running, progress } = useAnalysisProgress();
+	const [stopping, setStopping] = useState(false);
 	const [outcome, setOutcome] = useState<Outcome | null>(null);
 
+	const run = (ids?: number[]) => {
+		setOutcome(null);
+		analyze.mutate(ids, {
+			onSuccess: (report) => setOutcome({ kind: "analysis", report }),
+			onError: (e) => setOutcome({ kind: "error", message: String(e) }),
+			onSettled: () => setStopping(false),
+		});
+	};
+
 	return (
-		<div className="space-y-6">
-			<p className="text-muted-foreground text-sm">
-				Detects each song's tempo and musical key from its audio, like rekordbox's track analysis.
-				Results show in the BPM and key columns and go into the rekordbox export.
-			</p>
-			<Section title="Library">
-				<div className="grid grid-cols-2 gap-2">
-					<Stat label={`of ${counts.total} songs analyzed`} value={counts.analyzed} />
-					<Stat label="not analyzed yet" value={counts.pending} />
-					<Stat label="with BPM" value={counts.withBpm} />
-					<Stat label="with key" value={counts.withKey} />
-				</div>
-				{failures.length > 0 && (
-					<p className="text-destructive text-xs">
-						{plural(failures.length, "song", "songs")} could not be analyzed (see below).
-					</p>
-				)}
-				<RunControls counts={counts} allIds={tracks.map((t) => t.id)} onOutcome={setOutcome} />
-				{outcome && <OutcomeLine outcome={outcome} root={root} />}
-			</Section>
-			<Section title="File metadata">
-				<SaveToFiles withResults={withResults} onOutcome={setOutcome} />
-			</Section>
-			<Failures root={root} />
+		<div className="space-y-8">
+			<section className="space-y-3">
+				<Meter counts={counts} running={running} progress={progress} />
+				<Figures counts={counts} failed={failures.length} />
+				<RunControls
+					counts={counts}
+					running={running}
+					stopping={stopping}
+					saving={progress?.phase === "saving"}
+					onRun={(all) => run(all ? tracks.map((t) => t.id) : undefined)}
+					onStop={() => {
+						setStopping(true);
+						void cancelAnalysis();
+					}}
+				/>
+				{outcome && !running && <OutcomeLine outcome={outcome} />}
+			</section>
+			<FileTags withResults={counts.withResults} running={running} onOutcome={setOutcome} />
+			<Failures
+				failures={failures}
+				root={root}
+				idOf={(path) => idByPath.get(path)}
+				running={running}
+				onRetry={(ids) => run(ids)}
+			/>
 		</div>
 	);
 }
 
-/** Slide-over for BPM and key analysis: progress, results and saving them into file tags. */
+/** Slide-over for BPM and key analysis: coverage, running it, file tags and failures. */
 export function AnalysisDrawer() {
 	const open = useAnalysisDrawerOpen();
 	return (
-		<Drawer open={open} onClose={closeAnalysisDrawer} title="BPM & key analysis" width="w-[32rem]">
+		<Drawer open={open} onClose={closeAnalysisDrawer} title="BPM and key" width="w-[30rem]">
 			<AnalysisBody />
 		</Drawer>
 	);

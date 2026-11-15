@@ -327,7 +327,6 @@ function Tags({
 		<Group
 			title="Tags as playlists"
 			count={`${selection.tags.length} selected`}
-			hint="Each ticked tag becomes a playlist in manplay → Tags. Ticking a parent ticks the tags below it; each keeps its own playlist."
 			actions={
 				<>
 					<LinkButton
@@ -425,7 +424,6 @@ function InFile() {
 					? `${plural(data.tracks, "track")} · ${plural(data.playlists.length, "playlist")}`
 					: undefined
 			}
-			hint="What rekordbox will see the next time you import. Exporting rewrites it."
 		>
 			{library.isError && <p className="text-destructive text-sm">{String(library.error)}</p>}
 			{library.isPending && <p className="text-muted-foreground text-sm">Reading the file…</p>}

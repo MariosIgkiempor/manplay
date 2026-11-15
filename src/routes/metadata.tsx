@@ -6,10 +6,7 @@ export const Route = createFileRoute("/metadata")({ component: MetadataPage });
 
 function MetadataPage() {
 	return (
-		<Page
-			title="Metadata"
-			description="Every artist, genre, label and library tag in your music. Click a value to see its songs. Rename, merge or delete it and every song that uses it is updated."
-		>
+		<Page title="Metadata">
 			<TagDatabase />
 		</Page>
 	);

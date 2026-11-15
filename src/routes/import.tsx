@@ -13,11 +13,8 @@ function ImportPage() {
 	const s = useImport(enabled);
 	const itunesOn = useItunesOn();
 	return (
-		<Page
-			title="Import"
-			description="Bring music into your library. Sources are only read, never changed."
-		>
-			<Section title="Sources" description="Switch a source off to pause it.">
+		<Page title="Import">
+			<Section title="Sources">
 				<div className="grid gap-4 lg:grid-cols-2">
 					<DownloadsCard s={s} />
 					<ItunesCard />
@@ -34,9 +31,7 @@ function ImportPage() {
 					)}
 				</div>
 				{!(itunesOn || (enabled && s.folder !== null)) && (
-					<EmptyState title="No source is on">
-						Turn on Downloads or iTunes above to see what is new.
-					</EmptyState>
+					<EmptyState title="No source is on">Turn on a source above.</EmptyState>
 				)}
 			</Section>
 		</Page>
