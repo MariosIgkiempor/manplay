@@ -71,7 +71,7 @@ from one list.
    and crate both wait on one). Needs a test on an XDJ-AZ / Opus Quad / Omnis Duo / CDJ-3000X.
 2. Meaning of `analysedBits`, `contentLink`, `masterDbId`; whether 0 or omitted values are fine.
    Plan: copy rekordbox's values (41, 788224) for tracks manplay analysed.
-3. Whether players need `cue` rows or read cues from ANLZ only (manplay writes no cues today).
+3. ~~Whether players need `cue` rows~~ Answered 2026-11-15: rekordbox 7 leaves `cue` empty even for songs with hot cues (checked on a drive it exported, A and B set). Cues live in the ANLZ files only: `.DAT` `PCOB` lists (hot cues from the last pad back to A, unlinked) and `.EXT` `PCO2` lists (88-byte entries), with the `.EXT`'s `PCOB` lists left empty. Every rekordbox `.DAT` also has a `PVBR`: a zero word, 400 zero entries for CBR MP3s, then the length in samples (MPEG frames × 1152). A memory cue list as manplay wrote it (`PCPT`/`PCP2` entries with hot cue 0) made rekordbox 7 discard the whole `.DAT`, grid and hot cues included (2026-11-15, The Lover on NOCTURN); with the memory lists empty the same files load with grid and hot cues. manplay leaves memory cues out until a rekordbox-written memory cue entry is available to copy.
 4. `playlist.attribute` value for folders; `property.dbVersion` 1000 vs 10000.
 5. `exportExt.pdb` / `playlists3Plus.sync`: rekordbox writes them; baken says they are optional.
 

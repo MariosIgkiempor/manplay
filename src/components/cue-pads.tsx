@@ -4,7 +4,7 @@ import { useState } from "react";
 import { InlineEdit, InlineInput } from "#/components/inline-edit.tsx";
 import { type MenuEntry, MenuItems, MenuLabel } from "#/components/menu.tsx";
 import { Section } from "#/components/page.tsx";
-import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
+import { SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	beforeStart,
@@ -181,34 +181,75 @@ function TimeButton({ time, onJump }: { time: number; onJump: (t: number) => voi
 }
 
 /**
- * Where the song starts (rekordbox's yellow main cue) and the memory cues, in time order.
- * Players set to auto-cue on memory cues load the song at the earliest one, so the start is
- * exported as a memory cue and warned about when another comes before it.
+ * Where the song starts (rekordbox's yellow main cue), for the transport bar: jumps there, or
+ * to the grid's first beat while none is set. The CUE button sets it.
  */
-export function CuePoints({
+export function StartCue({
 	cues,
-	onSetStart,
-	onClearStart,
+	firstBeat,
+	onJump,
+	onClear,
+}: {
+	cues: readonly Cue[];
+	firstBeat: number;
+	onJump: (time: number) => void;
+	onClear: () => void;
+}) {
+	const start = startOf(cues);
+	return (
+		<div className="flex items-center rounded-md bg-white/5">
+			<button
+				type="button"
+				onClick={() => onJump(start ? start.start : firstBeat)}
+				title={
+					start
+						? "Where the song loads (rekordbox's main cue). Jump here."
+						: "No start set: the song loads at the first beat. Press CUE to start it at the playhead."
+				}
+				className="flex items-center gap-2 rounded-md px-2 py-1 text-neutral-300 text-xs tabular-nums outline-none transition-colors hover:bg-white/10 hover:text-neutral-50 focus-visible:ring-2 focus-visible:ring-ring/60"
+			>
+				<Marker color={START_COLOR} start />
+				{start ? stamp(start.start) : "First beat"}
+			</button>
+			{start && (
+				<button
+					type="button"
+					aria-label="Clear the start"
+					title="Clear the start"
+					onClick={onClear}
+					className="grid size-6 place-items-center rounded-md text-neutral-500 outline-none transition-colors hover:bg-white/10 hover:text-neutral-100 focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3"
+				>
+					<X />
+				</button>
+			)}
+		</div>
+	);
+}
+
+/**
+ * The memory cues, in time order. Players set to auto-cue on memory cues load the song at the
+ * earliest one, so the start is exported as a memory cue and warned about when another comes
+ * before it.
+ */
+export function MemoryCues({
+	cues,
 	onAdd,
 	onJump,
 	onRename,
 	onDelete,
 }: {
 	cues: readonly Cue[];
-	onSetStart: () => void;
-	onClearStart: () => void;
 	onAdd: () => void;
 	onJump: (time: number) => void;
 	onRename: (cue: Cue, name: string) => void;
 	onDelete: (cue: Cue) => void;
 }) {
-	const start = startOf(cues);
 	const list = cues.filter((c) => c.slot === null && !c.main).sort((a, b) => a.start - b.start);
 	const early = beforeStart(cues)[0];
 	return (
 		<Section
-			title="Cue points"
-			count={list.length + (start ? 1 : 0)}
+			title="Memory cues"
+			count={list.length}
 			action={
 				<Button
 					size="sm"
@@ -220,68 +261,40 @@ export function CuePoints({
 				</Button>
 			}
 		>
-			<SettingRows>
-				<SettingRow
-					label={
-						<span className="flex items-center gap-2.5">
-							<Marker color={START_COLOR} start />
-							<span>Start</span>
-							{start ? (
-								<TimeButton time={start.start} onJump={onJump} />
-							) : (
-								<span className="text-muted-foreground text-xs">First beat</span>
-							)}
-						</span>
-					}
-					title="Where the song loads: rekordbox's main cue. Exported as the first memory cue; set players to auto-cue on memory cues."
-				>
-					<Button
-						size="sm"
-						variant="outline"
-						onClick={onSetStart}
-						title="Start the song at the playhead (C)"
-					>
-						<Crosshair /> Set here
-					</Button>
-					{start && (
-						<Button
-							size="icon-sm"
-							variant="ghost"
-							aria-label="Clear the start"
-							title="Clear"
-							onClick={onClearStart}
-						>
-							<X />
-						</Button>
-					)}
-				</SettingRow>
-				{list.map((c) => (
-					<div key={`${c.start}`} className="group flex min-h-11 items-center gap-2.5 py-1.5">
-						<Marker color={MEMORY_COLOR} />
-						<TimeButton time={c.start} onJump={onJump} />
-						<div className="min-w-0 flex-1">
-							<InlineEdit
-								value={c.name}
-								label="Memory cue name"
-								placeholder="Add a name"
-								className="text-sm"
-								parse={(v) => v.trim()}
-								onCommit={(name) => onRename(c, name)}
-							/>
+			{list.length === 0 ? (
+				<p className="text-muted-foreground text-sm">
+					None yet. Press M to add one at the playhead.
+				</p>
+			) : (
+				<SettingRows>
+					{list.map((c) => (
+						<div key={`${c.start}`} className="group flex min-h-11 items-center gap-2.5 py-1.5">
+							<Marker color={MEMORY_COLOR} />
+							<TimeButton time={c.start} onJump={onJump} />
+							<div className="min-w-0 flex-1">
+								<InlineEdit
+									value={c.name}
+									label="Memory cue name"
+									placeholder="Add a name"
+									className="text-sm"
+									parse={(v) => v.trim()}
+									onCommit={(name) => onRename(c, name)}
+								/>
+							</div>
+							<Button
+								size="icon-sm"
+								variant="ghost"
+								aria-label={`Remove memory cue at ${stamp(c.start)}`}
+								title="Remove"
+								className="opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+								onClick={() => onDelete(c)}
+							>
+								<X />
+							</Button>
 						</div>
-						<Button
-							size="icon-sm"
-							variant="ghost"
-							aria-label={`Remove memory cue at ${stamp(c.start)}`}
-							title="Remove"
-							className="opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-							onClick={() => onDelete(c)}
-						>
-							<X />
-						</Button>
-					</div>
-				))}
-			</SettingRows>
+					))}
+				</SettingRows>
+			)}
 			{early && (
 				<p className="flex items-center gap-2 text-warning text-xs">
 					<TriangleAlert className="size-3.5 shrink-0" />

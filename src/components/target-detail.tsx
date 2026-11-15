@@ -1,11 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { BrandIcon } from "#/components/brand-icon.tsx";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { Section } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
+import { SaveState } from "#/components/save-state.tsx";
 import { PullButton, SyncButton } from "#/components/sync-flow.tsx";
 import { SyncReviewButton } from "#/components/sync-review.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -16,6 +17,7 @@ import { isR2, removeSyncTarget, type SyncTarget, updateSyncTarget } from "#/lib
 import { syncEntries } from "#/lib/history.ts";
 import { useSyncHistory, useSyncTargets, useTracks } from "#/lib/queries.ts";
 import { typeScale } from "#/lib/type-scale.ts";
+import { useAutosave } from "#/lib/unsaved.tsx";
 import { cn } from "#/lib/utils.ts";
 
 function Field({
@@ -73,41 +75,21 @@ function CredentialFields(p: {
 	);
 }
 
-function FormActions(p: {
-	canSave: boolean;
-	dirty: boolean;
-	pending: boolean;
-	saved: boolean;
-	onReset: () => void;
-}) {
-	return (
-		<div className="flex items-center gap-2">
-			<Button type="submit" disabled={!p.canSave || p.pending}>
-				{p.pending ? "Saving…" : "Save changes"}
-			</Button>
-			{p.dirty && !p.pending && (
-				<Button type="button" variant="ghost" onClick={p.onReset}>
-					Reset
-				</Button>
-			)}
-			{p.saved && !p.dirty && <span className="text-muted-foreground text-xs">Saved</span>}
-		</div>
-	);
-}
-
 function SettingsForm({ target }: { target: SyncTarget }) {
 	const queryClient = useQueryClient();
 	const storedPath = target.path.join(" / ");
 	const [folder, setFolder] = useState(storedPath);
 	const [keyId, setKeyId] = useState("");
 	const [secret, setSecret] = useState("");
-	useEffect(() => setFolder(storedPath), [storedPath]);
 
 	const save = useMutation({
 		mutationFn: updateSyncTarget,
-		onSuccess: async () => {
-			setSecret("");
-			setKeyId("");
+		onSuccess: async (_, sent) => {
+			// Only what was sent: anything typed while saving stays to be saved next.
+			if (sent.keyId !== undefined) {
+				setKeyId((k) => (k === sent.keyId ? "" : k));
+				setSecret((v) => (v === sent.secret ? "" : v));
+			}
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
 		},
 	});
@@ -117,19 +99,36 @@ function SettingsForm({ target }: { target: SyncTarget }) {
 	const pathChanged = parsePath(folder).join("/") !== target.path.join("/");
 	const credsChanged = r2 && (keyId.trim() !== "" || secret !== "");
 	const credsIncomplete = credsChanged && (keyId.trim() === "" || secret === "");
-	const dirty = pathChanged || credsChanged;
+	const autosave = useAutosave({
+		label: `Settings of ${target.machine}`,
+		value: { folder, keyId, secret },
+		saved: { folder: storedPath, keyId: "", secret: "" },
+		equal: (a, b) =>
+			parsePath(a.folder).join("/") === parsePath(b.folder).join("/") &&
+			a.keyId.trim() === b.keyId.trim() &&
+			a.secret === b.secret,
+		canSave: (v) => {
+			const creds = r2 && (v.keyId.trim() !== "" || v.secret !== "");
+			const partial = creds && (v.keyId.trim() === "" || v.secret === "");
+			return !partial && (r2 || parsePath(v.folder).length > 0);
+		},
+		save: (v) => {
+			const creds = r2 && (v.keyId.trim() !== "" || v.secret !== "");
+			return save.mutateAsync({
+				id,
+				path: parsePath(v.folder),
+				keyId: creds ? v.keyId : undefined,
+				secret: creds ? v.secret : undefined,
+			});
+		},
+	});
 
 	return (
 		<form
 			className="space-y-4"
 			onSubmit={(e) => {
 				e.preventDefault();
-				save.mutate({
-					id,
-					path: parsePath(folder),
-					keyId: credsChanged ? keyId : undefined,
-					secret: credsChanged ? secret : undefined,
-				});
+				void autosave.flush();
 			}}
 		>
 			<Field
@@ -148,18 +147,11 @@ function SettingsForm({ target }: { target: SyncTarget }) {
 					onSecret={setSecret}
 				/>
 			)}
-			<FormActions
-				canSave={dirty && !credsIncomplete}
-				dirty={dirty}
-				pending={save.isPending}
-				saved={save.isSuccess}
-				onReset={() => {
-					setFolder(storedPath);
-					setKeyId("");
-					setSecret("");
-				}}
+			<SaveState
+				status={autosave.status}
+				error={autosave.error}
+				invalid={r2 ? "Enter both credentials to save them" : "Choose a shared folder"}
 			/>
-			{save.isError && <p className="text-destructive text-sm">{String(save.error)}</p>}
 		</form>
 	);
 }

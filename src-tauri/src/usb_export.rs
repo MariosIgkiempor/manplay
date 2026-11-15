@@ -353,6 +353,9 @@ pub(crate) fn back_up(mount: &Path, stamp: &str) -> io::Result<Option<String>> {
     Ok(Some(format!("/{rel}")))
 }
 
+/// The library database, where each song's beat grid and waveform are kept (see [`anlz::load`]).
+pub type Store = std::sync::Mutex<rusqlite::Connection>;
+
 /// A song's analysis for the drive, and a key detected along the way.
 struct Analyzed {
     stored: anlz::Stored,
@@ -361,19 +364,21 @@ struct Analyzed {
 
 /// The analysis manplay already keeps for the song, or a fresh one (then kept too). A kept
 /// analysis without a beat grid is redone when the library has a tempo to lay one out with.
-fn analyzed(source: &Source, store: Option<&Path>) -> Result<Analyzed, String> {
+fn analyzed(source: &Source, store: Option<&Store>) -> Result<Analyzed, String> {
     let kept = store
         .zip(source.fingerprint.as_deref())
-        .and_then(|(dir, fp)| anlz::load(dir, fp))
+        .and_then(|(db, fp)| anlz::load(&*db.lock().ok()?, fp))
         .filter(|s| s.grid_bpm.is_some() || source.bpm.is_none());
     if let Some(stored) = kept {
         return Ok(Analyzed { stored, key: None });
     }
     let d: Detail = analysis::analyze_detail(&source.path, source.bpm)?;
     let stored = anlz::Stored::from_detail(&d);
-    if let (Some(dir), Some(fp)) = (store, source.fingerprint.as_deref()) {
+    if let (Some(db), Some(fp)) = (store, source.fingerprint.as_deref())
+        && let Ok(conn) = db.lock()
+    {
         // Keeping it only saves time next export; failing to is not worth stopping for.
-        let _ = anlz::save(dir, fp, &stored);
+        let _ = anlz::save(&conn, fp, &stored);
     }
     Ok(Analyzed {
         stored,
@@ -384,7 +389,7 @@ fn analyzed(source: &Source, store: Option<&Path>) -> Result<Analyzed, String> {
 /// Beat grid and waveform for each job's source file, on all but one core.
 fn analyze_all(
     jobs: &[(usize, &Source)],
-    store: Option<&Path>,
+    store: Option<&Store>,
     progress: &mut impl FnMut(Progress),
 ) -> Vec<Result<Analyzed, String>> {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -444,7 +449,12 @@ fn write_analysis(
 ) -> Result<(), String> {
     let d = &a.stored;
     let rel = anlz::dat_path(track.id, &track.path);
-    let (dat, ext) = anlz::files(&track.path, d, source.cues.as_deref().unwrap_or_default());
+    let (dat, ext) = anlz::files(
+        &track.path,
+        d,
+        source.cues.as_deref().unwrap_or_default(),
+        anlz::mp3_samples(&source.path),
+    );
     let dat_path = on_drive(mount, &rel);
     write_atomic(&dat_path, &dat).map_err(|e| e.to_string())?;
     write_atomic(&dat_path.with_extension("EXT"), &ext).map_err(|e| e.to_string())?;
@@ -482,7 +492,12 @@ fn refreshed(
     let ext_path = dat_path.with_extension("EXT");
     let cues = source.cues.as_deref();
     if track.analyze_path == anlz::dat_path(track.id, &track.path) {
-        let (dat, ext) = anlz::files(&track.path, stored, cues.unwrap_or_default());
+        let (dat, ext) = anlz::files(
+            &track.path,
+            stored,
+            cues.unwrap_or_default(),
+            anlz::mp3_samples(&source.path),
+        );
         return Some(vec![(dat_path, dat), (ext_path, ext)]);
     }
     let grid = source.grid_edited.then_some(stored);
@@ -506,10 +521,10 @@ fn refresh_grids(
     mount: &Path,
     lib: &mut Library,
     planned: &[Planned],
-    store: Option<&Path>,
+    store: Option<&Store>,
     report: &mut Report,
 ) {
-    let Some(dir) = store else { return };
+    let Some(db) = store else { return };
     for p in planned {
         let Some(id) = p.existing else { continue };
         let Some(track) = lib.tracks.iter_mut().find(|t| t.id == id) else {
@@ -519,7 +534,7 @@ fn refresh_grids(
             .source
             .fingerprint
             .as_deref()
-            .and_then(|fp| anlz::load(dir, fp))
+            .and_then(|fp| anlz::load(&*db.lock().ok()?, fp))
         else {
             continue;
         };
@@ -570,9 +585,9 @@ pub struct Options<'a> {
     /// Names the backup folder, e.g. `2026-11-15-1530`.
     pub stamp: &'a str,
     pub free_bytes: u64,
-    /// Where manplay keeps analyses (its data folder), to reuse and add to; `None` to always
+    /// The library database, whose kept analyses are reused and added to; `None` to always
     /// analyse afresh.
-    pub store: Option<&'a Path>,
+    pub store: Option<&'a Store>,
     /// Show detected keys as Camelot codes (`8A`) rather than `Am`.
     pub camelot: bool,
 }
@@ -838,6 +853,10 @@ mod tests {
         }
     }
 
+    fn test_store() -> Store {
+        std::sync::Mutex::new(crate::db::open(Path::new(":memory:")).expect("db"))
+    }
+
     fn opts(free: u64) -> Options<'static> {
         Options {
             today: "2026-11-15",
@@ -1075,7 +1094,7 @@ mod tests {
     fn uses_the_analysis_the_library_keeps() {
         let lib_dir = dir("lib5");
         let usb = dir("usb5");
-        let store = dir("store5");
+        let store = test_store();
         // The "song" is not real audio, so only the kept analysis can give it a grid.
         let mut song = source(&lib_dir, 1, "A", "B", "a.mp3", 100);
         song.fingerprint = Some("ab12".into());
@@ -1087,7 +1106,7 @@ mod tests {
             duration: 30.0,
             detail: vec![0x5f; 4500],
         };
-        anlz::save(&store, "ab12", &kept).expect("saves");
+        anlz::save(&store.lock().expect("db"), "ab12", &kept).expect("saves");
         let playlists = [SourcePlaylist {
             name: "P".into(),
             track_ids: vec![1],
@@ -1099,14 +1118,14 @@ mod tests {
         let lib = crate::usb::library(&usb).expect("reads");
         let t = &lib.tracks[0];
         let written = fs::read(on_drive(&usb, &t.analyze_path)).expect("dat");
-        assert_eq!(written, anlz::files(&t.path, &kept, &[]).0);
+        assert_eq!(written, anlz::files(&t.path, &kept, &[], None).0);
     }
 
     #[test]
     fn an_edited_grid_reaches_songs_already_on_the_drive() {
         let lib_dir = dir("lib7");
         let usb = dir("usb7");
-        let store = dir("store7");
+        let store = test_store();
         let mut song = source(&lib_dir, 1, "A", "B", "a.mp3", 100);
         song.fingerprint = Some("cd34".into());
         let mut kept = anlz::Stored {
@@ -1116,7 +1135,7 @@ mod tests {
             duration: 30.0,
             detail: vec![0x5f; 4500],
         };
-        anlz::save(&store, "cd34", &kept).expect("saves");
+        anlz::save(&store.lock().expect("db"), "cd34", &kept).expect("saves");
         let playlists = [SourcePlaylist {
             name: "P".into(),
             track_ids: vec![1],
@@ -1131,14 +1150,14 @@ mod tests {
         assert_eq!((again.analyzed, again.regridded), (0, 0));
 
         kept.set_grid(Some(126.0), 0.3, 1);
-        anlz::save(&store, "cd34", &kept).expect("edits");
+        anlz::save(&store.lock().expect("db"), "cd34", &kept).expect("edits");
         let edited = export(&usb, &[song], &playlists, &o, |_| {}).expect("edited");
         assert_eq!(edited.regridded, 1);
         let lib = crate::usb::library(&usb).expect("reads");
         let t = &lib.tracks[0];
         assert_eq!(t.tempo, 12_600);
         let written = fs::read(on_drive(&usb, &t.analyze_path)).expect("dat");
-        assert_eq!(written, anlz::files(&t.path, &kept, &[]).0);
+        assert_eq!(written, anlz::files(&t.path, &kept, &[], None).0);
     }
 
     #[test]

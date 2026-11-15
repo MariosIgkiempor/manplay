@@ -231,6 +231,18 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
     add_column(&conn, "cues", "main", "INTEGER NOT NULL DEFAULT 0")?;
+    // The beat grid (seconds to the first beat, its place in the bar) and the detail waveform
+    // (`analysis::WAVEFORM_RATE` columns per second, each whiteness << 5 | height) that the
+    // library shows and USB drives and rekordbox get. A NULL waveform: not analysed that far.
+    for (column, decl) in [
+        ("grid_bpm", "REAL"),
+        ("first_beat", "REAL"),
+        ("bar_offset", "INTEGER"),
+        ("duration", "REAL"),
+        ("waveform", "BLOB"),
+    ] {
+        add_column(&conn, "analysis", column, decl)?;
+    }
     // Cues were set in manplay (possibly to none): they replace a drive's own on export.
     add_column(
         &conn,
@@ -259,14 +271,16 @@ fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Resul
 pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
     let tx = conn.transaction()?;
     {
-        // Writing tags can change a file's fingerprint (its size changes); its BPM and key
-        // analysis follows it to the new one rather than being lost.
+        // Writing tags can change a file's fingerprint (its size changes); its analysis (BPM,
+        // key, beat grid, waveform) follows it to the new one rather than being lost.
         let mut carry = tx.prepare(
             "INSERT OR IGNORE INTO analysis
                  (fingerprint, bpm, musical_key, error, version, analyzed_at,
-                  bpm_edited, key_edited, grid_edited, cues_edited)
+                  bpm_edited, key_edited, grid_edited, cues_edited,
+                  grid_bpm, first_beat, bar_offset, duration, waveform)
              SELECT ?2, a.bpm, a.musical_key, a.error, a.version, a.analyzed_at,
-                    a.bpm_edited, a.key_edited, a.grid_edited, a.cues_edited
+                    a.bpm_edited, a.key_edited, a.grid_edited, a.cues_edited,
+                    a.grid_bpm, a.first_beat, a.bar_offset, a.duration, a.waveform
              FROM tracks t JOIN analysis a ON a.fingerprint = t.fingerprint
              WHERE t.path = ?1 AND t.fingerprint <> ?2",
         )?;
@@ -327,7 +341,8 @@ const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
      JOIN tags g ON g.id = tt.tag_id WHERE tt.track_id = t.id),
     (SELECT COUNT(*) FROM synced_files sf WHERE sf.track_id = t.id AND sf.size = t.size),
     t.duration_ms, t.bitrate, t.sample_rate,
-    COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key), COALESCE(a.version, 0) >= 2,
+    COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key), (COALESCE(a.version, 0) >= 2
+        AND (a.waveform IS NOT NULL OR a.error IS NOT NULL)),
     t.fields, COALESCE(a.bpm_edited, 0), COALESCE(a.key_edited, 0), COALESCE(a.grid_edited, 0)";
 
 /// Joined wherever [`TRACK_COLS`] is selected.
@@ -1702,8 +1717,6 @@ pub fn put_import_cache(conn: &Connection, folder: &str, data: &str) -> Result<(
 pub struct AnalysisJob {
     pub path: String,
     pub fingerprint: String,
-    /// The beat grid was set by hand: keep it, take only the new waveform.
-    pub keep_grid: bool,
 }
 
 /// Present tracks to analyse: those in `ids` (every track when `None`), one per distinct audio
@@ -1712,11 +1725,11 @@ pub fn analysis_jobs(
     conn: &Connection,
     ids: Option<&[i64]>,
     force: bool,
-    replace_edits: bool,
 ) -> Result<Vec<AnalysisJob>, Error> {
     let wanted: Option<std::collections::HashSet<i64>> = ids.map(|i| i.iter().copied().collect());
     let mut stmt = conn.prepare(
-        "SELECT t.id, t.path, t.fingerprint, a.version, COALESCE(a.grid_edited, 0) FROM tracks t
+        "SELECT t.id, t.path, t.fingerprint, a.version, a.waveform IS NULL AND a.error IS NULL
+         FROM tracks t
          LEFT JOIN analysis a ON a.fingerprint = t.fingerprint
          WHERE t.missing_since IS NULL AND t.fingerprint IS NOT NULL
          ORDER BY t.artist, t.album, t.path",
@@ -1727,55 +1740,30 @@ pub fn analysis_jobs(
             r.get::<_, String>(1)?,
             r.get::<_, String>(2)?,
             r.get::<_, Option<i64>>(3)?,
-            r.get::<_, bool>(4)?,
+            r.get::<_, Option<bool>>(4)?.unwrap_or(true),
         ))
     })?;
     let mut seen = std::collections::HashSet::new();
     let mut jobs = Vec::new();
     for row in rows {
-        let (id, path, fingerprint, version, grid_edited) = row?;
+        let (id, path, fingerprint, version, no_waveform) = row?;
         if wanted.as_ref().is_some_and(|w| !w.contains(&id)) {
             continue;
         }
-        // Up to date, or failed with the current version: nothing new to learn.
-        if !force && version.is_some_and(|v| v >= crate::analysis::VERSION) {
+        // Up to date, or failed with the current version: nothing new to learn. Audio analysed
+        // before the beat grid and waveform were kept (or whose kept files were lost) is done
+        // again for them.
+        if !force && version.is_some_and(|v| v >= crate::analysis::VERSION) && !no_waveform {
             continue;
         }
         if seen.insert(fingerprint.clone()) {
-            jobs.push(AnalysisJob {
-                path,
-                fingerprint,
-                keep_grid: grid_edited && !replace_edits,
-            });
+            jobs.push(AnalysisJob { path, fingerprint });
         }
     }
     Ok(jobs)
 }
 
 /// The audio fingerprint of a track, if it has been read.
-/// `(old, new)` fingerprints of tracks whose file content changed since the last scan, for
-/// carrying their kept analysis over.
-pub fn changed_fingerprints(
-    conn: &Connection,
-    tracks: &[NewTrack],
-) -> Result<Vec<(String, String)>, Error> {
-    let mut stmt = conn.prepare("SELECT fingerprint FROM tracks WHERE path = ?1")?;
-    let mut out = Vec::new();
-    for t in tracks {
-        let Some(new) = &t.fingerprint else { continue };
-        let old: Option<String> = stmt
-            .query_row(params![t.path], |r| r.get(0))
-            .optional()?
-            .flatten();
-        if let Some(old) = old
-            && &old != new
-        {
-            out.push((old, new.clone()));
-        }
-    }
-    Ok(out)
-}
-
 pub fn fingerprint_of(conn: &Connection, track_id: i64) -> Result<Option<String>, Error> {
     Ok(conn
         .query_row(
@@ -1854,17 +1842,18 @@ pub fn analysis_failures(conn: &Connection) -> Result<Vec<crate::audit::FixFailu
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-/// Stores the outcome of analysing the audio with this fingerprint. BPM and key set by hand
-/// stay, unless `replace_edits`, which also forgets that they were set by hand.
+/// Stores the outcome of analysing the audio with this fingerprint: BPM, key, and the beat
+/// grid and waveform in `stored`. BPM, key and grid set by hand stay, unless `replace_edits`,
+/// which also forgets that they were set by hand. A failed analysis keeps any earlier waveform.
 pub fn store_analysis(
     conn: &Connection,
     fingerprint: &str,
-    result: &Result<crate::analysis::Analysis, String>,
+    result: &Result<(crate::analysis::Analysis, crate::anlz::Stored), String>,
     now: i64,
     replace_edits: bool,
 ) -> Result<(), Error> {
     let (bpm, key, error) = match result {
-        Ok(a) => (a.bpm, a.key.as_deref(), None),
+        Ok((a, _)) => (a.bpm, a.key.as_deref(), None),
         Err(e) => (None, None, Some(e.as_str())),
     };
     conn.execute(
@@ -1889,6 +1878,26 @@ pub fn store_analysis(
             replace_edits
         ],
     )?;
+    if let Ok((_, stored)) = result {
+        conn.execute(
+            "UPDATE analysis SET duration = ?2, waveform = ?3,
+                 grid_bpm = CASE WHEN grid_edited AND waveform IS NOT NULL
+                     THEN grid_bpm ELSE ?4 END,
+                 first_beat = CASE WHEN grid_edited AND waveform IS NOT NULL
+                     THEN first_beat ELSE ?5 END,
+                 bar_offset = CASE WHEN grid_edited AND waveform IS NOT NULL
+                     THEN bar_offset ELSE ?6 END
+             WHERE fingerprint = ?1",
+            params![
+                fingerprint,
+                stored.duration,
+                stored.detail,
+                stored.grid_bpm,
+                stored.first_beat,
+                stored.bar_offset
+            ],
+        )?;
+    }
     Ok(())
 }
 
@@ -1956,18 +1965,60 @@ mod tests {
         );
     }
 
+    fn kept(bpm: Option<f64>) -> crate::anlz::Stored {
+        crate::anlz::Stored {
+            grid_bpm: bpm,
+            first_beat: 0.1,
+            bar_offset: 0,
+            duration: 2.0,
+            detail: vec![0x5f; 300],
+        }
+    }
+
+    #[test]
+    fn audio_analysed_without_a_waveform_is_analysed_again() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
+        // BPM and key from before the waveform was kept in the database.
+        conn.execute(
+            "INSERT INTO analysis (fingerprint, bpm, version, analyzed_at) VALUES ('x', 120, ?1, 1)",
+            params![crate::analysis::VERSION],
+        )
+        .expect("row");
+        assert!(!list(&conn).expect("list")[0].analyzed);
+        assert_eq!(analysis_jobs(&conn, None, false).expect("jobs").len(), 1);
+        crate::anlz::save(&conn, "x", &kept(Some(120.0))).expect("save");
+        assert!(list(&conn).expect("list")[0].analyzed);
+        assert!(analysis_jobs(&conn, None, false).expect("jobs").is_empty());
+    }
+
+    #[test]
+    fn analysis_follows_a_tag_edit_to_the_new_fingerprint() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
+        crate::anlz::save(&conn, "x", &kept(Some(124.0))).expect("save");
+        upsert(&mut conn, &[track("/a.mp3", "x2", None)]).expect("retag");
+        assert_eq!(
+            crate::anlz::load(&conn, "x2").expect("carried").grid_bpm,
+            Some(124.0)
+        );
+    }
+
     #[test]
     fn hand_edits_survive_reanalysis_unless_replaced() {
         let mut conn = open(Path::new(":memory:")).expect("db");
         upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
         // Typed before any analysis: kept in a row that still counts as not analysed.
         set_tempo_key(&conn, 1, Some(Some(126.0)), None).expect("edit");
-        let jobs = analysis_jobs(&conn, None, false, false).expect("jobs");
+        let jobs = analysis_jobs(&conn, None, false).expect("jobs");
         assert_eq!(jobs.len(), 1, "still analysed");
-        let found = Ok(Analysis {
-            bpm: Some(128.0),
-            key: Some("Am".into()),
-        });
+        let found = Ok((
+            Analysis {
+                bpm: Some(128.0),
+                key: Some("Am".into()),
+            },
+            kept(Some(128.0)),
+        ));
         store_analysis(&conn, "x", &found, 1, false).expect("store");
         let t = &list(&conn).expect("list")[0];
         assert_eq!((t.bpm, t.key.as_deref()), (Some(126.0), Some("Am")));
@@ -1980,13 +2031,27 @@ mod tests {
             }
         );
 
+        let mut hand = kept(Some(126.0));
+        hand.first_beat = 0.3;
+        hand.detail = vec![1; 10];
+        crate::anlz::save(&conn, "x", &hand).expect("grid");
         mark_grid_edited(&conn, 1).expect("grid");
-        assert!(analysis_jobs(&conn, None, true, false).expect("jobs")[0].keep_grid);
-        assert!(!analysis_jobs(&conn, None, true, true).expect("jobs")[0].keep_grid);
+        store_analysis(&conn, "x", &found, 2, false).expect("again");
+        let now = crate::anlz::load(&conn, "x").expect("kept");
+        assert_eq!(
+            (now.grid_bpm, now.first_beat),
+            (Some(126.0), 0.3),
+            "hand grid stays"
+        );
+        assert_eq!(now.detail, kept(None).detail, "waveform is new");
 
         store_analysis(&conn, "x", &found, 2, true).expect("replace");
         let t = &list(&conn).expect("list")[0];
         assert_eq!(t.bpm, Some(128.0));
+        assert_eq!(
+            crate::anlz::load(&conn, "x").expect("kept").grid_bpm,
+            Some(128.0)
+        );
         assert_eq!(t.edited, Edited::default(), "replacing forgets the edits");
     }
 
@@ -2003,22 +2068,21 @@ mod tests {
         )
         .expect("upsert");
 
-        let jobs = analysis_jobs(&conn, None, false, false).expect("jobs");
+        let jobs = analysis_jobs(&conn, None, false).expect("jobs");
         assert_eq!(jobs.len(), 2, "duplicates are analysed once");
 
-        let found = Ok(Analysis {
-            bpm: Some(128.0),
-            key: Some("Am".into()),
-        });
+        let found = Ok((
+            Analysis {
+                bpm: Some(128.0),
+                key: Some("Am".into()),
+            },
+            kept(Some(128.0)),
+        ));
         store_analysis(&conn, "x", &found, 1, false).expect("store");
         store_analysis(&conn, "y", &Err("bad file".into()), 1, false).expect("store");
 
-        assert!(
-            analysis_jobs(&conn, None, false, false)
-                .expect("jobs")
-                .is_empty()
-        );
-        let by_id = analysis_jobs(&conn, Some(&[1]), true, false).expect("forced");
+        assert!(analysis_jobs(&conn, None, false).expect("jobs").is_empty());
+        let by_id = analysis_jobs(&conn, Some(&[1]), true).expect("forced");
         assert_eq!(by_id.len(), 1);
         assert_eq!(by_id[0].path, "/a.mp3");
 

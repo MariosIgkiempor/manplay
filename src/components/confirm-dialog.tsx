@@ -8,6 +8,7 @@ export function ConfirmDialog({
 	confirmLabel,
 	destructive = false,
 	busy = false,
+	extra,
 	onCancel,
 	onConfirm,
 }: {
@@ -18,6 +19,8 @@ export function ConfirmDialog({
 	busy?: boolean;
 	onCancel: () => void;
 	onConfirm: () => void;
+	/** A further choice, between Cancel and the confirm button. */
+	extra?: ReactNode;
 }) {
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCancel();
@@ -42,6 +45,7 @@ export function ConfirmDialog({
 					<Button variant="ghost" onClick={onCancel}>
 						Cancel
 					</Button>
+					{extra}
 					<Button
 						variant={destructive ? "destructive" : "default"}
 						onClick={onConfirm}

@@ -1,10 +1,20 @@
-import { useQuery } from "@tanstack/react-query";
-import { Check, Minus, TriangleAlert, Usb } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, Eraser, Minus, TriangleAlert, Usb } from "lucide-react";
+import { useId, useState } from "react";
+import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
-import { EmptyState } from "#/components/page.tsx";
+import { EmptyState, Section } from "#/components/page.tsx";
+import { Button } from "#/components/ui/button.tsx";
+import { Input } from "#/components/ui/input.tsx";
 import { UsbBrowser } from "#/components/usb-browser.tsx";
 import { UsbExportButton } from "#/components/usb-export.tsx";
-import { type UsbDrive, type UsbFormats, type UsbLibrarySummary, usbFormats } from "#/lib/api.ts";
+import {
+	type UsbDrive,
+	type UsbFormats,
+	type UsbLibrarySummary,
+	usbFormats,
+	usbReset,
+} from "#/lib/api.ts";
 import { typeScale } from "#/lib/type-scale.ts";
 import { space, useUsbDrives, useUsbLibrary } from "#/lib/use-usb.ts";
 import { cn } from "#/lib/utils.ts";
@@ -56,7 +66,87 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 			{library.data && drive.hasLibrary && (
 				<UsbBrowser mount={drive.mount} library={library.data} editable={drive.writable} />
 			)}
+			{drive.writable && (drive.hasLibrary || drive.hasOneLibrary) && <ResetDrive drive={drive} />}
 		</div>
+	);
+}
+
+/**
+ * Starts the drive afresh. Everything an export puts there (both libraries, analysis files,
+ * artwork, the songs in Contents) goes to the drive's Trash, after typing the drive's name.
+ */
+function ResetDrive({ drive }: { drive: UsbDrive }) {
+	const queryClient = useQueryClient();
+	const [asking, setAsking] = useState(false);
+	const [typed, setTyped] = useState("");
+	const field = useId();
+	const reset = useMutation({
+		mutationFn: () => usbReset(drive.mount),
+		onSuccess: async () => {
+			setAsking(false);
+			setTyped("");
+			for (const key of ["usb-drives", "usb-library", "usb-formats"]) {
+				await queryClient.invalidateQueries({ queryKey: [key] });
+			}
+		},
+	});
+	return (
+		<Section title="Reset drive">
+			<div className="flex items-center justify-between gap-4 rounded-lg border border-destructive/30 p-3">
+				<p className="text-muted-foreground text-xs">
+					Removes the rekordbox library, analysis and exported songs, so the next export starts
+					fresh. Player settings stay.
+				</p>
+				<Button
+					variant="outline"
+					className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10"
+					onClick={() => {
+						reset.reset();
+						setAsking(true);
+					}}
+				>
+					<Eraser /> Reset drive…
+				</Button>
+			</div>
+			{asking && (
+				<ConfirmDialog
+					title={`Reset ${drive.name}?`}
+					confirmLabel={reset.isPending ? "Resetting…" : "Reset drive"}
+					destructive
+					busy={reset.isPending || typed.trim() !== drive.name}
+					onCancel={() => {
+						setAsking(false);
+						setTyped("");
+					}}
+					onConfirm={() => reset.mutate()}
+				>
+					<div className="space-y-3">
+						<p>
+							The rekordbox library (both formats), analysis files, artwork and every song in
+							Contents move to the drive&apos;s Trash. Players will show the drive as empty. The
+							space frees up when you empty the Trash; until then you can put them back from it.
+						</p>
+						<div className="space-y-1.5">
+							<label htmlFor={field} className="block text-foreground text-xs">
+								Type <span className="font-medium">{drive.name}</span> to confirm
+							</label>
+							<Input
+								id={field}
+								value={typed}
+								autoFocus
+								onChange={(e) => setTyped(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter" && typed.trim() === drive.name && !reset.isPending) {
+										reset.mutate();
+									}
+								}}
+							/>
+						</div>
+						{reset.isError && <ErrorText message={String(reset.error)} />}
+					</div>
+				</ConfirmDialog>
+			)}
+		</Section>
 	);
 }
 

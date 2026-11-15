@@ -18,6 +18,7 @@ import { EmptyState } from "#/components/page.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { PanelScopeContext, useDetail, useDetailNav } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
+import { TrackOrderContext } from "#/context/track-order.ts";
 import { albumKey, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
@@ -592,29 +593,31 @@ export function TrackList({ tracks, selection, sort, onSort, empty, rowKey, ...r
 		}
 	};
 	return (
-		<div className="select-none">
-			<HeaderRow layout={layout} sort={sort} onSort={onSort} />
-			<div
-				role="listbox"
-				aria-multiselectable
-				aria-label="Songs"
-				tabIndex={-1}
-				className="space-y-px pt-1 outline-none"
-				onKeyDown={onKeyDown}
-			>
-				{tracks.map((track, i) => (
-					<TrackRow
-						key={rowKey ? rowKey(track, i) : track.id}
-						track={track}
-						index={i}
-						selection={selection}
-						{...rest}
-						layout={layout}
-						menuTracks={menuTracksFor(track)}
-						onPlay={() => player.play(tracks, i)}
-					/>
-				))}
+		<TrackOrderContext.Provider value={tracks.map((t) => t.id)}>
+			<div className="select-none">
+				<HeaderRow layout={layout} sort={sort} onSort={onSort} />
+				<div
+					role="listbox"
+					aria-multiselectable
+					aria-label="Songs"
+					tabIndex={-1}
+					className="space-y-px pt-1 outline-none"
+					onKeyDown={onKeyDown}
+				>
+					{tracks.map((track, i) => (
+						<TrackRow
+							key={rowKey ? rowKey(track, i) : track.id}
+							track={track}
+							index={i}
+							selection={selection}
+							{...rest}
+							layout={layout}
+							menuTracks={menuTracksFor(track)}
+							onPlay={() => player.play(tracks, i)}
+						/>
+					))}
+				</div>
 			</div>
-		</div>
+		</TrackOrderContext.Provider>
 	);
 }

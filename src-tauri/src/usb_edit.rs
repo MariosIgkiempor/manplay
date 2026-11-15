@@ -7,7 +7,7 @@
 //! the databases it started from.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -180,6 +180,38 @@ pub fn edit(mount: &Path, edit: Edit, stamp: &str, today: &str) -> Result<Outcom
     })
 }
 
+/// What a reset clears: everything rekordbox and manplay export (the libraries, the analysis
+/// files, artwork, and the songs copied into `Contents`). Player settings (`*SETTING.DAT`,
+/// `djprofile.nxs`), manplay's backups and anything else on the drive stay.
+pub const RESET_PATHS: [&str; 5] = [
+    "Contents",
+    "PIONEER/rekordbox",
+    "PIONEER/USBANLZ",
+    "PIONEER/Artwork",
+    "PIONEER/extracted",
+];
+
+/// The parts of [`RESET_PATHS`] that exist on the drive at `mount`.
+pub fn reset_targets(mount: &Path) -> Vec<PathBuf> {
+    RESET_PATHS
+        .iter()
+        .map(|rel| mount.join(rel))
+        .filter(|p| p.symlink_metadata().is_ok())
+        .collect()
+}
+
+/// Moves the drive's exported library and songs to its Trash (see [`RESET_PATHS`]), so the drive
+/// reads as empty to players and the next export starts fresh. Returns how many folders moved.
+pub fn reset(mount: &Path) -> Result<usize, String> {
+    let targets = reset_targets(mount);
+    if targets.is_empty() {
+        return Ok(0);
+    }
+    let n = targets.len();
+    trash::delete_all(targets).map_err(|e| format!("could not move to the Trash: {e}"))?;
+    Ok(n)
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)] // tests: panicking is the failure mode
 mod tests {
@@ -336,5 +368,26 @@ mod tests {
         let one = crate::onelib::read(&mount.join(ONE_LIBRARY_PATH)).expect("OneLibrary");
         assert_eq!(one.playlists, []);
         let _ = fs::remove_dir_all(&mount);
+    }
+
+    #[test]
+    fn reset_targets_only_what_an_export_writes() {
+        let mount = std::env::temp_dir().join(format!("manplay-reset-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&mount);
+        for dir in [
+            "Contents/A",
+            "PIONEER/rekordbox",
+            "PIONEER/USBANLZ/P001",
+            "Music",
+        ] {
+            std::fs::create_dir_all(mount.join(dir)).expect("mkdir");
+        }
+        std::fs::write(mount.join("PIONEER/MYSETTING.DAT"), b"x").expect("write");
+        let got = reset_targets(&mount);
+        assert_eq!(
+            got,
+            ["Contents", "PIONEER/rekordbox", "PIONEER/USBANLZ"].map(|p| mount.join(p))
+        );
+        let _ = std::fs::remove_dir_all(mount);
     }
 }

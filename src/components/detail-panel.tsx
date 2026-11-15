@@ -43,7 +43,7 @@ function Content({ view }: { view: DetailView }) {
 		case "usb":
 			return <UsbDrivePanel mount={view.mount} />;
 		case "grid":
-			return <GridEditorPanel trackId={view.trackId} />;
+			return <GridEditorPanel trackId={view.trackId} list={view.list} />;
 		case "add-destination":
 			return <AddDestinationPanel service={view.service} />;
 		case "value":
@@ -75,7 +75,12 @@ export function DetailPanel(): ReactNode {
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape" && view && !isTyping(e.target)) {
+			if (
+				e.key === "Escape" &&
+				view &&
+				!isTyping(e.target) &&
+				!document.querySelector("[role=dialog]")
+			) {
 				close();
 			}
 		};
@@ -123,7 +128,7 @@ export function DetailPanel(): ReactNode {
 				<div className="min-h-0 flex-1 overflow-y-auto px-5 pt-5">
 					<PanelScopeContext.Provider value>
 						<StatusSlotContext.Provider value={statusSlot}>
-							{shown && <Content view={shown} />}
+							<detail.UnsavedScope>{shown && <Content view={shown} />}</detail.UnsavedScope>
 						</StatusSlotContext.Provider>
 					</PanelScopeContext.Provider>
 				</div>

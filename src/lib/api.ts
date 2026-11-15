@@ -614,6 +614,13 @@ export async function rekordboxSelection(): Promise<RekordboxSelection> {
 }
 
 /** Saves the selection and rewrites the rekordbox file with it. */
+/** Saves what goes into the rekordbox file, without writing it. */
+export async function saveRekordboxSelection(
+	selection: RekordboxSelection,
+): Promise<RekordboxSelection> {
+	return rekordboxSelectionSchema.parse(await invoke("rekordbox_save_selection", { selection }));
+}
+
 export async function setRekordboxSelection(
 	selection: RekordboxSelection,
 ): Promise<RekordboxSelection> {
@@ -1078,6 +1085,14 @@ const usbEditOutcomeSchema = z.object({
 });
 
 export type UsbEditOutcome = z.infer<typeof usbEditOutcomeSchema>;
+
+/**
+ * Moves the drive's rekordbox libraries, analysis files, artwork and exported songs to its
+ * Trash. Returns how many folders moved.
+ */
+export async function usbReset(mount: string): Promise<number> {
+	return int.parse(await invoke("usb_reset", { mount }));
+}
 
 /** Edits the drive's rekordbox playlists and returns its library as it is now. */
 export async function usbEditPlaylists(mount: string, edit: UsbEdit): Promise<UsbEditOutcome> {

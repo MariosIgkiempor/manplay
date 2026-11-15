@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useState } from "react";
 import { Button } from "#/components/ui/button.tsx";
+import { useUnsavedGuard } from "#/lib/unsaved.tsx";
 import { cn } from "#/lib/utils.ts";
 
 /** Open drawers, innermost last, so Escape closes only the top one. */
@@ -8,11 +9,12 @@ const openStack: string[] = [];
 
 /**
  * Slide-over stacked inside the nearest positioned ancestor (the details panel or another drawer).
- * Clicking the backdrop or pressing Escape closes it.
+ * Clicking the backdrop or pressing Escape closes it, once its unsaved changes are saved or
+ * confirmed (see `useUnsaved`).
  */
 export function Drawer({
 	open,
-	onClose,
+	onClose: close,
 	title,
 	width = "w-[30rem]",
 	children,
@@ -24,6 +26,8 @@ export function Drawer({
 	children: ReactNode;
 }) {
 	const id = useId();
+	const { guard, dialog, Provider } = useUnsavedGuard();
+	const onClose = useCallback(() => void guard(close), [guard, close]);
 	// Keep the last content mounted while the drawer slides out.
 	const [last, setLast] = useState<ReactNode>(null);
 	useEffect(() => {
@@ -37,7 +41,11 @@ export function Drawer({
 		}
 		openStack.push(id);
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape" && openStack.at(-1) === id) {
+			if (
+				e.key === "Escape" &&
+				openStack.at(-1) === id &&
+				!document.querySelector("[role=dialog]")
+			) {
 				e.stopPropagation();
 				onClose();
 			}
@@ -78,8 +86,11 @@ export function Drawer({
 						<X />
 					</Button>
 				</div>
-				<div className="min-h-0 flex-1 overflow-y-auto p-4">{open ? children : last}</div>
+				<div className="min-h-0 flex-1 overflow-y-auto p-4">
+					<Provider>{open ? children : last}</Provider>
+				</div>
 			</aside>
+			{dialog}
 		</>
 	);
 }

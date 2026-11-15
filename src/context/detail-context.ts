@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext } from "react";
+import { type ComponentType, createContext, type ReactNode, useCallback, useContext } from "react";
 import type { TagTarget } from "#/components/tag-editor.tsx";
 import type { ServiceId } from "#/lib/api.ts";
 
@@ -15,8 +15,8 @@ export type DetailView =
 	| { kind: "target"; id: number }
 	/** A plugged-in CDJ USB drive and the rekordbox library on it. */
 	| { kind: "usb"; mount: string }
-	/** The beat grid editor for one song. */
-	| { kind: "grid"; trackId: number }
+	/** The beat grid editor for one song; `list` is the songs it steps through, in order. */
+	| { kind: "grid"; trackId: number; list?: readonly number[] | undefined }
 	/** Adding an export destination; without `service`, the step that picks one. */
 	| { kind: "add-destination"; service?: DestinationService }
 	/** Songs holding one value of a tag field, e.g. every song in the genre "House". */
@@ -29,8 +29,12 @@ export interface DetailApi {
 	open: (view: DetailView) => void;
 	/** Navigate deeper from inside the panel, keeping back-history. */
 	push: (view: DetailView) => void;
+	/** Swap the current view for another, keeping the history behind it. */
+	replace: (view: DetailView) => void;
 	back: () => void;
 	close: () => void;
+	/** Wraps the panel's content so its unsaved changes are saved or confirmed on leaving. */
+	UnsavedScope: ComponentType<{ children: ReactNode }>;
 }
 
 export const DetailContext = createContext<DetailApi | null>(null);

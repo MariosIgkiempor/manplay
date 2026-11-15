@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { ErrorText } from "#/components/error-text.tsx";
+import { SaveState } from "#/components/save-state.tsx";
 import { type ComboOption, TagCombobox } from "#/components/tag-combobox.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -17,6 +18,7 @@ import { pathArtUrl, type TagValue, type TagView } from "#/lib/api.ts";
 import { useTagsRead, useTagsSetCover, useTagsWrite, useTagValues } from "#/lib/queries.ts";
 import { TAG_GROUPS, type TagField, type TagGroup } from "#/lib/tag-fields.ts";
 import { fillFromPath } from "#/lib/tag-fill.ts";
+import { type SaveStatus, useAutosave, useUnsaved } from "#/lib/unsaved.tsx";
 import type { TagConfirmRequest } from "#/lib/use-tag-confirm.tsx";
 import { cn } from "#/lib/utils.ts";
 
@@ -37,6 +39,26 @@ const where = (t: TagTarget) => t.paths ?? t.path;
 
 type Shared = TagView["fields"][string];
 type Draft = Record<string, string>;
+
+const sameDraft = (a: Draft, b: Draft) => {
+	const ka = Object.keys(a);
+	return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
+};
+
+/** What a tag write did, when worth saying: failures, and for many songs how many were saved. */
+function noticeFor(
+	report: { fixed: number; failed: readonly { error: string }[] },
+	bulk: boolean,
+): { ok: boolean; text: string } | null {
+	const failed = report.failed.length;
+	if (failed > 0) {
+		return {
+			ok: false,
+			text: `${report.fixed} saved, ${failed} failed: ${report.failed[0]?.error ?? ""}`,
+		};
+	}
+	return bulk ? { ok: true, text: `Saved to ${plural(report.fixed, "song", "songs")}.` } : null;
+}
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -82,7 +104,48 @@ export function TagEditor({
 			return rest;
 		});
 
+	// One song saves on its own a second after the last edit. A folder or a group of songs
+	// saves only on Save, after showing what will change, since one slip rewrites many files.
+	const bulk = target.isDir || target.paths !== undefined;
+	const writeNow = async (edits: Draft) => {
+		setNotice(null);
+		const report = await write.mutateAsync({ path: where(target), edits });
+		const failed = report.failed.length;
+		if (failed > 0 && report.fixed === 0) {
+			throw new Error(report.failed[0]?.error ?? "could not write the tags");
+		}
+		// Only what was written: edits typed while saving stay to be saved next.
+		setDraft((d) =>
+			Object.fromEntries(Object.entries(d).filter(([id, value]) => edits[id] !== value)),
+		);
+		setNotice(noticeFor(report, bulk));
+	};
+	const autosave = useAutosave({
+		label: `Metadata of "${target.name}"`,
+		value: bulk ? {} : draft,
+		saved: {},
+		equal: sameDraft,
+		save: writeNow,
+	});
+	useUnsaved({
+		dirty: bulk && edited.length > 0,
+		label: `Metadata of "${target.name}"`,
+		autosave: false,
+		save: async () => {
+			try {
+				await writeNow(draft);
+				return true;
+			} catch {
+				return false;
+			}
+		},
+	});
+
 	const save = async () => {
+		if (!bulk) {
+			await autosave.flush();
+			return;
+		}
 		if (edited.length === 0 || write.isPending) {
 			return;
 		}
@@ -91,27 +154,9 @@ export function TagEditor({
 			subtitle: target.isDir && !target.paths ? "Includes subfolders" : undefined,
 			items: [{ path: where(target), name: target.name, edits: draft }],
 		});
-		if (!ok) {
-			return;
+		if (ok) {
+			await writeNow(draft).catch(() => undefined);
 		}
-		setNotice(null);
-		write.mutate(
-			{ path: where(target), edits: draft },
-			{
-				onSuccess: (report) => {
-					setDraft({});
-					const failed = report.failed.length;
-					setNotice(
-						failed === 0
-							? { ok: true, text: `Saved to ${plural(report.fixed, "song", "songs")}.` }
-							: {
-									ok: false,
-									text: `${report.fixed} saved, ${failed} failed: ${report.failed[0]?.error ?? ""}`,
-								},
-					);
-				},
-			},
-		);
 	};
 
 	const onKeyDown = (ev: KeyboardEvent) => {
@@ -158,20 +203,53 @@ export function TagEditor({
 				)}
 				<Body view={view} target={target} draft={draft} onEdit={edit} onRevert={revert} />
 			</div>
-			<footer className="flex items-center gap-2 border-t bg-background px-3 py-2.5">
-				<Status
-					error={write.isError ? String(write.error) : null}
-					notice={notice}
-					edited={edited.length}
-				/>
-				<Button variant="ghost" onClick={() => setDraft({})} disabled={edited.length === 0}>
-					Discard
-				</Button>
-				<Button onClick={save} disabled={edited.length === 0 || write.isPending}>
-					{write.isPending ? "Saving…" : "Save"}
-				</Button>
-			</footer>
+			<Footer
+				bulk={bulk}
+				edited={edited.length}
+				pending={write.isPending}
+				error={write.isError ? String(write.error) : null}
+				notice={notice}
+				autosave={autosave}
+				onDiscard={() => setDraft({})}
+				onSave={save}
+			/>
 		</div>
+	);
+}
+
+/** Save and Discard for many songs; for one song, whether its edits are saved yet. */
+function Footer(p: {
+	bulk: boolean;
+	edited: number;
+	pending: boolean;
+	error: string | null;
+	notice: { ok: boolean; text: string } | null;
+	autosave: { status: SaveStatus; error: string | null };
+	onDiscard: () => void;
+	onSave: () => void;
+}) {
+	return (
+		<footer className="flex items-center gap-2 border-t bg-background px-3 py-2.5">
+			{p.bulk ? (
+				<>
+					<Status error={p.error} notice={p.notice} edited={p.edited} />
+					<Button variant="ghost" onClick={p.onDiscard} disabled={p.edited === 0}>
+						Discard
+					</Button>
+					<Button onClick={p.onSave} disabled={p.edited === 0 || p.pending}>
+						{p.pending ? "Saving…" : "Save"}
+					</Button>
+				</>
+			) : (
+				<div className="min-w-0 flex-1">
+					{p.notice && !p.notice.ok ? (
+						<span className="text-destructive text-xs">{p.notice.text}</span>
+					) : (
+						<SaveState status={p.autosave.status} error={p.autosave.error} />
+					)}
+				</div>
+			)}
+		</footer>
 	);
 }
 

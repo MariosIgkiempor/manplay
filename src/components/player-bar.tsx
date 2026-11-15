@@ -1,13 +1,30 @@
-import { Grid3x3, Pause, Play, SkipBack, SkipForward, Volume2 } from "lucide-react";
+import {
+	AudioWaveform,
+	Grid3x3,
+	Pause,
+	Play,
+	SkipBack,
+	SkipForward,
+	TextCursorInput,
+	Volume2,
+} from "lucide-react";
+import { useState } from "react";
+import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
+import { ArtistLinks } from "#/components/artist-links.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { WaveformDetail, WaveformSeek } from "#/components/waveform.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
+import { TrackOrderContext } from "#/context/track-order.ts";
+import { albumKey } from "#/lib/albums.ts";
 import type { Track, TrackAnalysis } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
+import { useTracks } from "#/lib/queries.ts";
+import { tagTargetFor } from "#/lib/tag-target.ts";
 import { useTrackAnalysis } from "#/lib/use-track-analysis.ts";
+import { cn } from "#/lib/utils.ts";
 
 /** BPM and key of the playing song, the two figures a DJ checks before mixing it. */
 function TempoKey({ track }: { track: Track }) {
@@ -36,17 +53,118 @@ function TempoKey({ track }: { track: Track }) {
 	);
 }
 
+const WAVEFORM_KEY = "manplay.player-waveform";
+
+/** Whether the big waveform above the player bar is shown; remembered on this computer. */
+function useWaveformShown(): [boolean, (on: boolean) => void] {
+	const [on, setOn] = useState(() => {
+		try {
+			return localStorage.getItem(WAVEFORM_KEY) !== "0";
+		} catch {
+			return true;
+		}
+	});
+	const set = (next: boolean) => {
+		setOn(next);
+		try {
+			localStorage.setItem(WAVEFORM_KEY, next ? "1" : "0");
+		} catch {
+			// Not remembered; the toggle still works for now.
+		}
+	};
+	return [on, set];
+}
+
+/**
+ * Cover, title and artist of the playing song. The title opens its album and the artist the
+ * artist; a right-click offers the same menu as a song in any list, stepping through the queue.
+ */
+function NowPlaying({ track, error }: { track: Track; error: string | null }) {
+	const detail = useDetail();
+	const p = usePlayer();
+	const album = track.album === "" ? null : albumKey(track.artist, track.album);
+	return (
+		<TrackOrderContext.Provider value={p.queue.map((t) => t.id)}>
+			<AddToPlaylistMenu tracks={[track]} label={track.title}>
+				<div className="flex min-w-0 items-center gap-3">
+					<AlbumArt trackId={track.id} className="size-12 shrink-0 rounded-md" />
+					<div className="min-w-0">
+						<button
+							type="button"
+							disabled={album === null}
+							title={album === null ? track.title : `${track.title} · go to ${track.album}`}
+							onClick={() => album && detail.open({ kind: "album", key: album })}
+							className={cn(
+								"block max-w-full truncate text-left font-medium text-sm",
+								album !== null && "hover:underline",
+							)}
+						>
+							{track.title}
+						</button>
+						<div className="flex min-w-0 text-muted-foreground text-xs">
+							{error ?? <ArtistLinks artist={track.artist} />}
+						</div>
+					</div>
+				</div>
+			</AddToPlaylistMenu>
+		</TrackOrderContext.Provider>
+	);
+}
+
+/** Open the playing song in the grid editor (stepping through the queue) or the tag editor. */
+function SongActions({ track }: { track: Track }) {
+	const detail = useDetail();
+	const p = usePlayer();
+	const target = tagTargetFor([track]);
+	return (
+		<>
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				aria-label="Edit grid and cues"
+				title="Edit grid and cues"
+				onClick={() =>
+					detail.open({ kind: "grid", trackId: track.id, list: p.queue.map((t) => t.id) })
+				}
+			>
+				<Grid3x3 />
+			</Button>
+			{target && (
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					aria-label="Edit metadata"
+					title="Edit metadata"
+					onClick={() => detail.open({ kind: "edit", target })}
+				>
+					<TextCursorInput />
+				</Button>
+			)}
+		</>
+	);
+}
+
+/** The playing song as the library has it now, so edits (title, BPM, grid) show at once. */
+function useCurrentTrack(): Track | null {
+	const { current } = usePlayer();
+	const tracks = useTracks();
+	if (!current) {
+		return null;
+	}
+	return tracks.data?.find((t) => t.id === current.id) ?? current;
+}
+
 export function PlayerBar() {
 	const p = usePlayer();
-	const { current } = p;
+	const current = useCurrentTrack();
 	const PlayIcon = p.playing ? Pause : Play;
 	const hasNext = p.index + 1 < p.queue.length;
 	const analysis = useTrackAnalysis(current?.id ?? null).data ?? null;
-	const detail = useDetail();
+	const [waveform, setWaveform] = useWaveformShown();
 
 	return (
 		<footer className="shrink-0 border-t bg-card">
-			{current && analysis && (
+			{waveform && current && analysis && (
 				<WaveformDetail
 					analysis={analysis}
 					position={p.getTime}
@@ -57,15 +175,7 @@ export function PlayerBar() {
 			<div className="grid h-20 grid-cols-[1fr_2fr_1fr] items-center gap-4 px-4">
 				<div className="flex min-w-0 items-center gap-3">
 					{current ? (
-						<>
-							<AlbumArt trackId={current.id} className="size-12 shrink-0 rounded-md" />
-							<div className="min-w-0">
-								<div className="truncate font-medium text-sm">{current.title}</div>
-								<div className="truncate text-muted-foreground text-xs">
-									{p.error ?? current.artist}
-								</div>
-							</div>
-						</>
+						<NowPlaying track={current} error={p.error} />
 					) : (
 						<span className="text-muted-foreground text-sm">Nothing playing</span>
 					)}
@@ -109,17 +219,18 @@ export function PlayerBar() {
 
 				<div className="flex items-center justify-end gap-2">
 					{current && <TempoKey track={current} />}
-					{current && analysis && (
-						<Button
-							variant="ghost"
-							size="icon-sm"
-							aria-label="Edit grid and cues"
-							title="Edit grid and cues"
-							onClick={() => detail.open({ kind: "grid", trackId: current.id })}
-						>
-							<Grid3x3 />
-						</Button>
-					)}
+					{current && <SongActions track={current} />}
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						aria-label="Show the waveform"
+						aria-pressed={waveform}
+						title={waveform ? "Hide the waveform" : "Show the waveform"}
+						className={waveform ? "text-primary" : "text-muted-foreground"}
+						onClick={() => setWaveform(!waveform)}
+					>
+						<AudioWaveform />
+					</Button>
 					<Volume2 className="size-4 text-muted-foreground" />
 					<input
 						type="range"

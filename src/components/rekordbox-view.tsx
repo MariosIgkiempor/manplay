@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { BrandIcon } from "#/components/brand-icon.tsx";
 import { Drawer } from "#/components/drawer.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
+import { SaveState } from "#/components/save-state.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import {
@@ -13,11 +14,13 @@ import {
 	type RekordboxSelection,
 	rekordboxLibrary,
 	rekordboxSelection,
+	saveRekordboxSelection,
 	setRekordboxSelection,
 } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
 import { sameSelection, setTagTree, type TagCheck, tagCheck } from "#/lib/rekordbox-selection.ts";
 import { buildTagTree, type TagNode } from "#/lib/tag-tree.ts";
+import { useAutosave } from "#/lib/unsaved.tsx";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -431,21 +434,22 @@ function InFile() {
 
 function ExportBar({
 	count,
-	dirty,
+	unexported,
+	saveState,
 	exportedAt,
 	pending,
-	onDiscard,
 	onExport,
 }: {
 	count: number;
-	dirty: boolean;
+	/** The choice changed since the file was last written. */
+	unexported: boolean;
+	saveState: ReactNode;
 	exportedAt: number | null;
 	pending: boolean;
-	onDiscard: () => void;
 	onExport: () => void;
 }) {
 	let note = "";
-	if (dirty) {
+	if (unexported) {
 		note = " · changes not exported yet";
 	} else if (exportedAt !== null) {
 		note = ` · exported ${timeAgo(exportedAt)}`;
@@ -456,11 +460,7 @@ function ExportBar({
 				<span className="text-foreground">{plural(count, "playlist")}</span> will be in the file
 				{note}
 			</p>
-			{dirty && (
-				<Button variant="ghost" onClick={onDiscard} disabled={pending}>
-					Discard changes
-				</Button>
-			)}
+			{saveState}
 			<Button onClick={onExport} disabled={pending}>
 				<FileDown /> {pending ? "Exporting…" : "Export to rekordbox"}
 			</Button>
@@ -589,13 +589,26 @@ export function RekordboxExport() {
 	const [draft, setDraft] = useState<RekordboxSelection | null>(null);
 	const [tab, setTab] = useState<Tab>("choose");
 	const selection = draft ?? saved.data ?? EMPTY;
-	const dirty = draft !== null && saved.data !== undefined && !sameSelection(draft, saved.data);
+	// The choice saves on its own; the file is only written by the Export button.
+	const [unexported, setUnexported] = useState(false);
+	const autosave = useAutosave({
+		label: "What goes into the rekordbox file",
+		value: selection,
+		saved: saved.data ?? selection,
+		equal: sameSelection,
+		save: async (v) => {
+			const next = await saveRekordboxSelection(v);
+			queryClient.setQueryData(["rekordbox-selection"], next);
+			setUnexported(true);
+		},
+	});
 
 	const exportNow = useMutation({
 		mutationFn: setRekordboxSelection,
 		onSuccess: (next) => {
 			queryClient.setQueryData(["rekordbox-selection"], next);
 			setDraft(null);
+			setUnexported(false);
 			for (const key of [["rekordbox"], ["rekordbox-library"], ["activity", "rekordbox"]]) {
 				void queryClient.invalidateQueries({ queryKey: key });
 			}
@@ -633,10 +646,10 @@ export function RekordboxExport() {
 			{path !== null && (
 				<ExportBar
 					count={exported}
-					dirty={dirty}
+					unexported={unexported || autosave.dirty}
+					saveState={<SaveState status={autosave.status} error={autosave.error} />}
 					exportedAt={exportedAt}
 					pending={exportNow.isPending}
-					onDiscard={() => setDraft(null)}
 					onExport={() => exportNow.mutate(selection)}
 				/>
 			)}

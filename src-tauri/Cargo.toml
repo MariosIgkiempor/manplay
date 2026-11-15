@@ -56,3 +56,11 @@ panic = "deny"
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["macros", "rt"] }
+
+# Analysis (decoding, FFTs) is ~50x slower unoptimised: dependencies are built fully optimised
+# in dev too (once, then cached), and manplay itself lightly, so `tauri dev` stays usable.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

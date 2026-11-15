@@ -17,6 +17,8 @@
 
 use crate::analysis::{Detail, WAVEFORM_RATE};
 use crate::db::Cue;
+use crate::error::Error;
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 
 /// Columns of the waveform shown across the whole track.
@@ -70,10 +72,11 @@ fn put16(v: &mut Vec<u8>, x: u16) {
     v.extend_from_slice(&x.to_be_bytes());
 }
 
-/// Hot cues (list type 1) or memory cues (type 0) of `cues`, in time order.
+/// Hot cues (list type 1) or memory cues (type 0) of `cues`, in the order rekordbox writes
+/// them: hot cues from the last pad back to A, memory cues in time order.
 fn listed(cues: &[Cue], hot: bool) -> Vec<&Cue> {
     let mut out: Vec<&Cue> = cues.iter().filter(|c| c.slot.is_some() == hot).collect();
-    out.sort_by(|a, b| a.slot.cmp(&b.slot).then(a.start.total_cmp(&b.start)));
+    out.sort_by(|a, b| b.slot.cmp(&a.slot).then(a.start.total_cmp(&b.start)));
     out
 }
 
@@ -102,16 +105,14 @@ fn cue_list(cues: &[Cue], hot: bool) -> Vec<u8> {
         put(&mut e, c.slot.map_or(0, |s| u32::from(s) + 1));
         put(&mut e, 0);
         put(&mut e, 0x0001_0000);
-        // A linked list by position: the first has no previous, the last no next.
-        put16(&mut e, if i == 0 { 0xffff } else { (i - 1) as u16 });
-        put16(
-            &mut e,
-            if i + 1 == list.len() {
-                0xffff
-            } else {
-                (i + 1) as u16
-            },
-        );
+        // Memory cues form a linked list by position (the first has no previous, the last no
+        // next); rekordbox leaves hot cues unlinked.
+        let linked = |j: Option<usize>| match j {
+            Some(j) if !hot && j < list.len() => j as u16,
+            _ => 0xffff,
+        };
+        put16(&mut e, linked(i.checked_sub(1)));
+        put16(&mut e, linked(Some(i + 1)));
         e.push(1); // a cue point, not a loop
         e.push(0);
         put16(&mut e, 1000);
@@ -139,7 +140,8 @@ fn cue_list_ext(cues: &[Cue], hot: bool) -> Vec<u8> {
                 comment.extend_from_slice(&u.to_be_bytes());
             }
         }
-        let len = 48 + comment.len();
+        // rekordbox pads every entry with 40 zero bytes after its colour.
+        let len = 0x2c + comment.len() + 4 + 40;
         let mut e = Vec::with_capacity(len);
         e.extend_from_slice(b"PCP2");
         put(&mut e, 0x10);
@@ -150,13 +152,15 @@ fn cue_list_ext(cues: &[Cue], hot: bool) -> Vec<u8> {
         put(&mut e, ms(c.start));
         put(&mut e, 0xffff_ffff);
         e.push(0); // memory cue colour: none
-        e.extend_from_slice(&[0; 7]);
+        e.push(1); // as rekordbox writes it; meaning unknown
+        e.extend_from_slice(&[0; 6]);
         put16(&mut e, 0);
         put16(&mut e, 0);
         put(&mut e, comment.len() as u32);
         e.extend_from_slice(&comment);
         let [r, g, b] = rgb(&c.color).unwrap_or([0, 0, 0]);
         e.extend_from_slice(&[0, r, g, b]);
+        e.extend_from_slice(&[0; 40]);
         body.extend(e);
     }
     let mut header = Vec::new();
@@ -166,13 +170,90 @@ fn cue_list_ext(cues: &[Cue], hot: bool) -> Vec<u8> {
     section(*b"PCO2", &header, &body)
 }
 
-/// Hot cues then memory cues, as rekordbox orders them.
+/// Hot cues then memory cues, as rekordbox orders them. Memory cues (and the start cue, which
+/// goes out as one) are left out: rekordbox 7 throws away a whole analysis file whose memory
+/// list manplay wrote, grid and hot cues included, and no rekordbox-written example of a
+/// memory cue entry has been seen to copy.
 fn cue_sections(cues: &[Cue]) -> Vec<Vec<u8>> {
-    vec![cue_list(cues, true), cue_list(cues, false)]
+    vec![cue_list(cues, true), cue_list(&[], false)]
+}
+
+/// The `.EXT`'s copies of the original lists, which rekordbox leaves empty there: its cues are
+/// in the `.DAT`'s lists and the `.EXT`'s extended ones.
+fn empty_cue_sections() -> Vec<Vec<u8>> {
+    cue_sections(&[])
+}
+
+/// rekordbox's `PVBR` (seek index) for an MP3 of `samples` samples: a zero word, 400 entries
+/// (zero for the constant-bitrate files it has been seen with) and the length in samples.
+fn vbr_index(samples: u32) -> Vec<u8> {
+    let mut header = Vec::new();
+    put(&mut header, 0);
+    let mut body = vec![0; 400 * 4];
+    put(&mut body, samples);
+    section(*b"PVBR", &header, &body)
+}
+
+/// Samples in an MP3 as rekordbox counts them: every MPEG audio frame after the `ID3v2` tag,
+/// 1152 samples each (576 for MPEG-2 and 2.5). `None` for files that are not MP3 or unreadable.
+pub fn mp3_samples(path: &Path) -> Option<u32> {
+    if !path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("mp3"))
+    {
+        return None;
+    }
+    let data = std::fs::read(path).ok()?;
+    mp3_samples_of(&data)
+}
+
+fn mp3_samples_of(data: &[u8]) -> Option<u32> {
+    const KBPS: [[u32; 16]; 2] = [
+        // MPEG-1 layer III
+        [
+            0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+        ],
+        // MPEG-2 and 2.5 layer III
+        [
+            0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0,
+        ],
+    ];
+    let mut pos = 0usize;
+    if data.get(..3) == Some(b"ID3") {
+        let s = data.get(6..10)?;
+        let size = s
+            .iter()
+            .fold(0usize, |n, b| (n << 7) | usize::from(b & 0x7f));
+        pos = 10 + size;
+    }
+    let mut samples = 0u64;
+    while let Some(h) = data.get(pos..pos + 4) {
+        let h = u32::from_be_bytes(h.try_into().ok()?);
+        let version = (h >> 19) & 3; // 3 = MPEG-1, 2 = MPEG-2, 0 = MPEG-2.5
+        let layer = (h >> 17) & 3; // 1 = layer III
+        let rate_index = ((h >> 10) & 3) as usize;
+        let kbps = KBPS[usize::from(version != 3)][((h >> 12) & 0xf) as usize];
+        if h >> 21 != 0x7ff || version == 1 || layer != 1 || rate_index == 3 || kbps == 0 {
+            pos += 1;
+            continue;
+        }
+        let rate = [44_100, 48_000, 32_000][rate_index]
+            >> match version {
+                3 => 0,
+                2 => 1,
+                _ => 2,
+            };
+        let per_frame = if version == 3 { 1152 } else { 576 };
+        let bytes = (per_frame / 8) * kbps * 1000 / rate + ((h >> 9) & 1);
+        samples += u64::from(per_frame);
+        pos += bytes as usize;
+    }
+    u32::try_from(samples).ok().filter(|n| *n > 0)
 }
 
 fn extended_cue_sections(cues: &[Cue]) -> Vec<Vec<u8>> {
-    vec![cue_list_ext(cues, true), cue_list_ext(cues, false)]
+    vec![cue_list_ext(cues, true), cue_list_ext(&[], false)]
 }
 
 /// Beat grid: every beat from the first to the end, numbered 1–4 within its bar.
@@ -225,6 +306,7 @@ pub fn patch(b: &[u8], grid: Option<&Stored>, cues: Option<&[Cue]>) -> Option<Ve
     let (header, old) = sections(b)?;
     let new_grid = grid.and_then(|d| d.grid_bpm.map(|bpm| beat_grid(d, bpm)));
     let list_kind = |s: &[u8]| s.get(12..16).map(|k| k != [0, 0, 0, 0]);
+    let is_ext = old.iter().any(|s| s.get(..4) == Some(b"PCO2"));
     let mut out: Vec<Vec<u8>> = Vec::with_capacity(old.len() + 1);
     let mut placed = false;
     for s in old {
@@ -234,8 +316,12 @@ pub fn patch(b: &[u8], grid: Option<&Stored>, cues: Option<&[Cue]>) -> Option<Ve
                 placed = true;
             }
             (b"PQT2", Some(_), _) => {}
-            (b"PCOB", _, Some(c)) => out.push(cue_list(c, list_kind(s)?)),
-            (b"PCO2", _, Some(c)) => out.push(cue_list_ext(c, list_kind(s)?)),
+            // Memory cue lists stay as rekordbox wrote them (see `cue_sections`).
+            (b"PCOB" | b"PCO2", _, Some(_)) if list_kind(s) == Some(false) => out.push(s.to_vec()),
+            // The `.EXT` (the file with extended lists) keeps its original lists empty.
+            (b"PCOB", _, Some(_)) if is_ext => out.push(cue_list(&[], true)),
+            (b"PCOB", _, Some(c)) => out.push(cue_list(c, true)),
+            (b"PCO2", _, Some(c)) => out.push(cue_list_ext(c, true)),
             _ => out.push(s.to_vec()),
         }
     }
@@ -346,6 +432,8 @@ impl Stored {
         self.detail.iter().map(|b| (b & 0x1f, b >> 5)).collect()
     }
 
+    /// The file format earlier versions kept; only tests still write it.
+    #[cfg(test)]
     pub fn encode(&self) -> Vec<u8> {
         let mut v = Vec::with_capacity(36 + self.detail.len());
         v.extend_from_slice(MAGIC);
@@ -358,6 +446,7 @@ impl Stored {
         v
     }
 
+    /// Reads the file format earlier versions kept (see [`import_files`]).
     pub fn decode(b: &[u8]) -> Option<Self> {
         let f = |o: usize| -> Option<f64> {
             Some(f64::from_le_bytes(b.get(o..o + 8)?.try_into().ok()?))
@@ -398,44 +487,96 @@ impl Stored {
     }
 }
 
-/// Copies a kept analysis to a new fingerprint (the file's tags changed, not its audio), unless
-/// the new one already has its own.
-pub fn carry(data_dir: &Path, from: &str, to: &str) {
-    let target = store_path(data_dir, to);
-    if target.exists() {
-        return;
-    }
-    if let Some(stored) = load(data_dir, from) {
-        let _ = save(data_dir, to, &stored);
-    }
+/// Where manplay used to keep a track's analysis, one file per fingerprint, before it moved
+/// into the library database. Read once by [`import_files`].
+fn legacy_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("analysis")
 }
 
-/// Where manplay keeps a track's analysis, by audio fingerprint.
-pub fn store_path(data_dir: &Path, fingerprint: &str) -> PathBuf {
-    let shard = fingerprint.get(..2).unwrap_or("00");
-    data_dir
-        .join("analysis")
-        .join(shard)
-        .join(format!("{fingerprint}.mpa"))
+/// The kept beat grid and waveform of the audio with this fingerprint; `None` until it has
+/// been analysed.
+pub fn load(conn: &Connection, fingerprint: &str) -> Option<Stored> {
+    conn.query_row(
+        "SELECT grid_bpm, first_beat, bar_offset, duration, waveform FROM analysis
+         WHERE fingerprint = ?1 AND waveform IS NOT NULL",
+        params![fingerprint],
+        |r| {
+            Ok(Stored {
+                grid_bpm: r.get::<_, Option<f64>>(0)?.filter(|b| *b > 0.0),
+                first_beat: r.get::<_, Option<f64>>(1)?.unwrap_or(0.0),
+                bar_offset: (r.get::<_, Option<i64>>(2)?.unwrap_or(0).rem_euclid(4)) as u8,
+                duration: r.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
+                detail: r.get(4)?,
+            })
+        },
+    )
+    .optional()
+    .ok()
+    .flatten()
 }
 
-pub fn save(data_dir: &Path, fingerprint: &str, stored: &Stored) -> std::io::Result<()> {
-    let path = store_path(data_dir, fingerprint);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+/// Keeps a beat grid and waveform for the audio with this fingerprint. Audio never analysed
+/// gets a row of version 0, so the library analysis still detects its BPM and key later.
+pub fn save(conn: &Connection, fingerprint: &str, stored: &Stored) -> Result<(), Error> {
+    conn.execute(
+        "INSERT OR IGNORE INTO analysis (fingerprint, version, analyzed_at) VALUES (?1, 0, 0)",
+        params![fingerprint],
+    )?;
+    conn.execute(
+        "UPDATE analysis SET grid_bpm = ?2, first_beat = ?3, bar_offset = ?4, duration = ?5,
+             waveform = ?6
+         WHERE fingerprint = ?1",
+        params![
+            fingerprint,
+            stored.grid_bpm,
+            stored.first_beat,
+            stored.bar_offset,
+            stored.duration,
+            stored.detail
+        ],
+    )?;
+    Ok(())
+}
+
+/// Moves analyses kept as files by earlier versions into the database, then renames their
+/// folder to `analysis-imported` so this runs once. Rows that already have a waveform keep it.
+pub fn import_files(conn: &Connection, data_dir: &Path) -> Result<usize, Error> {
+    let dir = legacy_dir(data_dir);
+    let Ok(shards) = std::fs::read_dir(&dir) else {
+        return Ok(0);
+    };
+    let mut count = 0;
+    for shard in shards.flatten() {
+        let Ok(files) = std::fs::read_dir(shard.path()) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("mpa") {
+                continue;
+            }
+            let (Some(fp), Some(stored)) = (
+                path.file_stem().and_then(|s| s.to_str()),
+                std::fs::read(&path).ok().and_then(|b| Stored::decode(&b)),
+            ) else {
+                continue;
+            };
+            if load(conn, fp).is_none() {
+                save(conn, fp, &stored)?;
+                count += 1;
+            }
+        }
     }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, stored.encode())?;
-    std::fs::rename(&tmp, &path)
-}
-
-pub fn load(data_dir: &Path, fingerprint: &str) -> Option<Stored> {
-    Stored::decode(&std::fs::read(store_path(data_dir, fingerprint)).ok()?)
+    std::fs::rename(&dir, data_dir.join("analysis-imported"))
+        .map_err(|e| Error::Msg(format!("analysis folder: {e}")))?;
+    Ok(count)
 }
 
 /// The `.DAT` and `.EXT` files for a track at `path` on the drive. Without a tempo the grid is
 /// left out, as rekordbox does for beatless audio.
-pub fn files(path: &str, d: &Stored, cues: &[Cue]) -> (Vec<u8>, Vec<u8>) {
+/// `samples` is the MP3's length in samples (see [`mp3_samples`]), for rekordbox's `PVBR`;
+/// rekordbox ignores analysis files without one.
+pub fn files(path: &str, d: &Stored, cues: &[Cue], samples: Option<u32>) -> (Vec<u8>, Vec<u8>) {
     let cols = d.cols();
     let preview: Vec<u8> = summary(&cols, PREVIEW).into_iter().map(byte).collect();
     let tiny: Vec<u8> = summary(&cols, TINY)
@@ -444,6 +585,7 @@ pub fn files(path: &str, d: &Stored, cues: &[Cue]) -> (Vec<u8>, Vec<u8>) {
         .collect();
 
     let mut dat = vec![path_section(path)];
+    dat.extend(samples.map(vbr_index));
     if let Some(bpm) = d.grid_bpm {
         dat.push(beat_grid(d, bpm));
     }
@@ -456,7 +598,7 @@ pub fn files(path: &str, d: &Stored, cues: &[Cue]) -> (Vec<u8>, Vec<u8>) {
     put(&mut header, d.detail.len() as u32);
     put(&mut header, (WAVEFORM_RATE as u32) << 16);
     let mut ext = vec![path_section(path), section(*b"PWV3", &header, &d.detail)];
-    ext.extend(cue_sections(cues));
+    ext.extend(empty_cue_sections());
     ext.extend(extended_cue_sections(cues));
     (file(&dat), file(&ext))
 }
@@ -487,7 +629,7 @@ mod tests {
             duration: 3.0,
             detail: vec![0x5f; 450],
         };
-        let (dat, ext) = files("/Contents/a.mp3", &d, &[]);
+        let (dat, ext) = files("/Contents/a.mp3", &d, &[], None);
         // Pretend rekordbox wrote these, with an extended grid in the .EXT.
         let mut theirs_ext = ext.clone();
         let pqt2 = section(*b"PQT2", &[0; 44], &[7; 16]);
@@ -499,7 +641,7 @@ mod tests {
         let new_dat = patch(&dat, Some(&d), None).expect("dat");
         assert_eq!(
             new_dat,
-            files("/Contents/a.mp3", &d, &[]).0,
+            files("/Contents/a.mp3", &d, &[], None).0,
             "only the grid changed"
         );
         let new_ext = patch(&theirs_ext, Some(&d), None).expect("ext");
@@ -522,7 +664,7 @@ mod tests {
                 main: false,
             },
         ];
-        let (with_cues_dat, with_cues_ext) = files("/Contents/a.mp3", &d, &cues);
+        let (with_cues_dat, with_cues_ext) = files("/Contents/a.mp3", &d, &cues, None);
         assert_eq!(
             patch(&new_dat, None, Some(&cues)).expect("cues"),
             with_cues_dat
@@ -556,7 +698,116 @@ mod tests {
         assert_eq!(len, e.len());
         assert_eq!(&e[20..24], &1500u32.to_be_bytes());
         assert_eq!(&e[40..44], &6u32.to_be_bytes(), "Hi and a NUL in UTF-16");
-        assert_eq!(&e[len - 3..], &[0x30, 0x5a, 0xff]);
+        assert_eq!(&e[44 + 6 + 1..44 + 6 + 4], &[0x30, 0x5a, 0xff]);
+    }
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    /// Hot cues A and B as rekordbox 7 exported them for a song on a USB drive (BODYSHOT).
+    fn rekordbox_ab() -> [Cue; 2] {
+        let hot = |slot, ms: u32, color: &str| Cue {
+            slot: Some(slot),
+            start: f64::from(ms) / 1000.0,
+            name: String::new(),
+            color: color.into(),
+            main: false,
+        };
+        [hot(0, 0x129c, "#ff0017"), hot(1, 0x2895, "#00c4ff")]
+    }
+
+    #[test]
+    fn hot_cues_match_rekordbox_byte_for_byte() {
+        let cues = rekordbox_ab();
+        assert_eq!(
+            cue_list(&cues, true),
+            unhex(
+                "50434f4200000018000000880000000100000002ffffffff\
+                 504350540000001c00000038000000020000000000010000ffffffff010003e800002895ffffffff00000000000000000000000000000000\
+                 504350540000001c00000038000000010000000000010000ffffffff010003e80000129cffffffff00000000000000000000000000000000"
+            )
+        );
+        assert_eq!(
+            cue_list_ext(&cues, true),
+            unhex(
+                "50434f3200000014000000c40000000100020000\
+                 50435032000000100000005800000002010003e800002895ffffffff000100000000000000000000000000000000c4ff00000000000000000000000000000000000000000000000000000000000000000000000000000000\
+                 50435032000000100000005800000001010003e80000129cffffffff0001000000000000000000000000000000ff001700000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            )
+        );
+        // The .EXT's original lists stay empty, as rekordbox leaves them.
+        let (_, ext) = files("/x.mp3", &Stored::from_detail(&detail()), &cues, None);
+        let pcob: Vec<u32> = tags(&ext)
+            .into_iter()
+            .filter(|t| t.0 == "PCOB")
+            .map(|t| be(&ext, t.1 + 8))
+            .collect();
+        assert_eq!(pcob, [24, 24]);
+    }
+
+    #[test]
+    fn memory_cues_stay_off_the_drive() {
+        let mut cues = rekordbox_ab().to_vec();
+        cues.push(Cue {
+            slot: None,
+            start: 91.2,
+            name: "Foobarbaz".into(),
+            color: String::new(),
+            main: true,
+        });
+        let (dat, ext) = files("/x.mp3", &Stored::from_detail(&detail()), &cues, None);
+        let (plain_dat, plain_ext) = files(
+            "/x.mp3",
+            &Stored::from_detail(&detail()),
+            &rekordbox_ab(),
+            None,
+        );
+        assert_eq!((dat, ext), (plain_dat, plain_ext.clone()));
+        // A rekordbox file's own memory list is left as it was.
+        let mut theirs = plain_ext.clone();
+        let at = theirs.len() - 20;
+        assert_eq!(&theirs[at..at + 4], b"PCO2");
+        theirs[at + 16..at + 20].copy_from_slice(&[0, 9, 0, 0]);
+        let patched = patch(&theirs, None, Some(&cues)).expect("patch");
+        assert_eq!(&patched[patched.len() - 4..], &[0, 9, 0, 0]);
+    }
+
+    #[test]
+    fn mp3s_get_rekordboxs_vbr_index() {
+        let (dat, _) = files(
+            "/x.mp3",
+            &Stored::from_detail(&detail()),
+            &[],
+            Some(15_979_392),
+        );
+        let found = tags(&dat);
+        let names: Vec<&str> = found.iter().map(|t| t.0.as_str()).collect();
+        assert_eq!(names[..3], ["PPTH", "PVBR", "PQTZ"]);
+        let at = found[1].1;
+        let pvbr = &dat[at..at + 1620];
+        assert_eq!(be(pvbr, 4), 16);
+        assert_eq!(be(pvbr, 8), 1620);
+        assert!(pvbr[12..1616].iter().all(|b| *b == 0));
+        assert_eq!(be(pvbr, 1616), 15_979_392);
+    }
+
+    #[test]
+    fn counts_mp3_frames_like_rekordbox() {
+        // Three 320 kbps 44.1 kHz frames (1044 bytes, then a padded 1045) after a 20-byte ID3 tag.
+        let mut b = b"ID3\x03\x00\x00\x00\x00\x00\x0a".to_vec();
+        b.extend([0; 10]);
+        for padded in [false, true, false] {
+            let header: u32 = 0xfffb_e000 | if padded { 0x200 } else { 0 };
+            b.extend(header.to_be_bytes());
+            b.extend(vec![0; if padded { 1041 } else { 1040 }]);
+        }
+        b.extend(b"TAG");
+        assert_eq!(mp3_samples_of(&b), Some(3 * 1152));
+        assert_eq!(mp3_samples_of(b"not audio"), None);
     }
 
     #[test]
@@ -619,7 +870,12 @@ mod tests {
 
     #[test]
     fn writes_rekordbox_shaped_files() {
-        let (dat, ext) = files("/Contents/A/B/x.mp3", &Stored::from_detail(&detail()), &[]);
+        let (dat, ext) = files(
+            "/Contents/A/B/x.mp3",
+            &Stored::from_detail(&detail()),
+            &[],
+            None,
+        );
         let names: Vec<String> = tags(&dat).into_iter().map(|t| t.0).collect();
         assert_eq!(names, ["PPTH", "PQTZ", "PWAV", "PWV2", "PCOB", "PCOB"]);
         let names: Vec<String> = tags(&ext).into_iter().map(|t| t.0).collect();
@@ -651,7 +907,7 @@ mod tests {
     fn leaves_the_grid_out_without_a_tempo() {
         let mut d = detail();
         d.grid_bpm = None;
-        let (dat, _) = files("/x.mp3", &Stored::from_detail(&d), &[]);
+        let (dat, _) = files("/x.mp3", &Stored::from_detail(&d), &[], None);
         assert!(tags(&dat).iter().all(|t| t.0 != "PQTZ"));
     }
 
@@ -675,11 +931,33 @@ mod tests {
             None
         );
 
+        let conn = crate::db::open(Path::new(":memory:")).expect("db");
+        save(&conn, "abcdef", &none).expect("saves");
+        assert_eq!(load(&conn, "abcdef"), Some(none.clone()));
+        assert_eq!(load(&conn, "missing"), None);
+        // A row with BPM and key only (set by hand) has no waveform to show yet.
+        conn.execute(
+            "INSERT INTO analysis (fingerprint, version, analyzed_at) VALUES ('bare', 0, 0)",
+            [],
+        )
+        .expect("row");
+        assert_eq!(load(&conn, "bare"), None);
+    }
+
+    #[test]
+    fn imports_analysis_files_once() {
         let dir = std::env::temp_dir().join(format!("manplay-anlz-{}", std::process::id()));
-        save(&dir, "abcdef", &none).expect("saves");
-        assert_eq!(load(&dir, "abcdef"), Some(none));
-        assert!(store_path(&dir, "abcdef").ends_with("analysis/ab/abcdef.mpa"));
-        assert_eq!(load(&dir, "missing"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let stored = Stored::from_detail(&detail());
+        let shard = legacy_dir(&dir).join("ab");
+        std::fs::create_dir_all(&shard).expect("dir");
+        std::fs::write(shard.join("abcdef.mpa"), stored.encode()).expect("write");
+        std::fs::write(shard.join("junk.mpa"), b"nope").expect("write");
+        let conn = crate::db::open(Path::new(":memory:")).expect("db");
+        assert_eq!(import_files(&conn, &dir).expect("imports"), 1);
+        assert_eq!(load(&conn, "abcdef"), Some(stored));
+        assert!(!legacy_dir(&dir).exists());
+        assert_eq!(import_files(&conn, &dir).expect("again"), 0);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

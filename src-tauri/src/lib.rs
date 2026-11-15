@@ -64,10 +64,6 @@ async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error>
         .map_err(|e| Error::Msg(e.to_string()))?;
     let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
     detect_moves(&mut conn, &state.data_dir, &root, &result)?;
-    // A tag write changes the file's fingerprint; its beat grid and waveform follow it.
-    for (from, to) in db::changed_fingerprints(&conn, &result.tracks)? {
-        anlz::carry(&state.data_dir, &from, &to);
-    }
     db::upsert(&mut conn, &result.tracks)?;
     db::replace_tag_values(&mut conn, &result.values)?;
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
@@ -599,21 +595,10 @@ fn run_analysis(
                     // A file that cannot be opened (no permission, unplugged drive) says nothing
                     // about its audio, so it is not remembered as failed and is tried next time.
                     let readable = std::fs::File::open(path).is_ok();
-                    // The full analysis is kept so the library and USB exports share it.
-                    let result = analysis::analyze_detail(path, None).map(|d| {
-                        let mut stored = anlz::Stored::from_detail(&d);
-                        // A grid set by hand stays; only the waveform is new.
-                        if job.keep_grid
-                            && let Some(old) = anlz::load(&state.data_dir, &job.fingerprint)
-                        {
-                            stored.grid_bpm = old.grid_bpm;
-                            stored.first_beat = old.first_beat;
-                            stored.bar_offset = old.bar_offset;
-                        }
-                        // Losing the waveform only costs a re-analysis at export.
-                        let _ = anlz::save(&state.data_dir, &job.fingerprint, &stored);
-                        d.analysis
-                    });
+                    // The full analysis (beat grid and waveform too) is kept in the database, so
+                    // the library, USB drives and rekordbox share it.
+                    let result = analysis::analyze_detail(path, None)
+                        .map(|d| (d.analysis.clone(), anlz::Stored::from_detail(&d)));
                     if tx.send((i, result, readable)).is_err() {
                         break;
                     }
@@ -673,7 +658,7 @@ async fn analyze_tracks(
     let (jobs, ids, replace_edits) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let replace_edits = replace_edits.unwrap_or(analysis_settings_of(&conn)?.replace_edits);
-        let jobs = db::analysis_jobs(&conn, track_ids.as_deref(), force, replace_edits)?;
+        let jobs = db::analysis_jobs(&conn, track_ids.as_deref(), force)?;
         let ids = db::track_ids_with_fingerprints(
             &conn,
             &jobs
@@ -1195,8 +1180,8 @@ async fn export_to_usb(
     if playlists.is_empty() {
         return Err(Error::Msg("Choose at least one playlist.".into()));
     }
-    let data_dir = state.data_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
         let drive = usb::list()
             .into_iter()
             .find(|d| d.mount == mount)
@@ -1217,7 +1202,7 @@ async fn export_to_usb(
             today: &today,
             stamp: &stamp,
             free_bytes: drive.free_bytes,
-            store: Some(&data_dir),
+            store: Some(&state.db),
             camelot,
         };
         usb_export::export(&mount, &sources, &playlists, &opts, |p| {
@@ -1253,6 +1238,28 @@ async fn usb_edit_playlists(
     .map_err(Error::Msg)
 }
 
+/// Starts a drive afresh: moves its rekordbox libraries, analysis files, artwork and the songs
+/// exported to it into the drive's Trash. Player settings and other files stay.
+#[tauri::command]
+async fn usb_reset(state: State<'_, AppState>, mount: PathBuf) -> Result<usize, Error> {
+    if state.usb_exporting.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg(
+            "Songs are being exported to a USB drive. Try again when that finishes.".into(),
+        ));
+    }
+    let _guard = SyncGuard(&state.usb_exporting);
+    tauri::async_runtime::spawn_blocking(move || {
+        usb::check_mount(&mount)?;
+        if !usb::list().iter().any(|d| d.mount == mount && d.writable) {
+            return Err(format!("{} is read-only.", mount.display()));
+        }
+        usb_edit::reset(&mount)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)
+}
+
 /// Whether songs are being copied onto a USB drive right now.
 #[tauri::command]
 fn is_exporting_to_usb(state: State<'_, AppState>) -> bool {
@@ -1279,14 +1286,9 @@ async fn track_analysis(
     state: State<'_, AppState>,
     track_id: i64,
 ) -> Result<Option<TrackAnalysisView>, Error> {
-    let fingerprint = with_db!(state, |c| db::fingerprint_of(c, track_id))?;
-    let Some(fp) = fingerprint else {
-        return Ok(None);
-    };
-    let dir = state.data_dir.clone();
-    let stored = tauri::async_runtime::spawn_blocking(move || anlz::load(&dir, &fp))
-        .await
-        .map_err(|e| Error::Msg(e.to_string()))?;
+    let stored = with_db!(state, |c| {
+        db::fingerprint_of(c, track_id).map(|fp| fp.and_then(|fp| anlz::load(c, &fp)))
+    })?;
     Ok(stored.map(|s| TrackAnalysisView {
         grid_bpm: s.grid_bpm,
         first_beat: s.first_beat,
@@ -1312,18 +1314,14 @@ async fn set_beat_grid(
             "This song has no audio to keep a grid for.".into(),
         ));
     };
-    let dir = state.data_dir.clone();
-    let key = fp.clone();
-    let stored = tauri::async_runtime::spawn_blocking(move || {
-        let mut s = anlz::load(&dir, &key)
-            .ok_or_else(|| "Analyze the song first; there is no grid to edit yet.".to_owned())?;
+    let stored = with_db!(state, |c| {
+        let mut s = anlz::load(c, &fp).ok_or_else(|| {
+            Error::Msg("Analyze the song first; there is no grid to edit yet.".into())
+        })?;
         s.set_grid(grid_bpm, first_beat, bar_offset);
-        anlz::save(&dir, &key, &s).map_err(|e| e.to_string())?;
-        Ok::<_, String>(s)
-    })
-    .await
-    .map_err(|e| Error::Msg(e.to_string()))?
-    .map_err(Error::Msg)?;
+        anlz::save(c, &fp, &s)?;
+        Ok::<_, Error>(s)
+    })?;
     with_db!(state, |c| {
         if let Some(bpm) = stored.grid_bpm {
             db::set_tempo_key(c, track_id, Some(Some(bpm)), None)?;
@@ -2182,7 +2180,7 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
             t.grid = t
                 .fingerprint
                 .as_deref()
-                .and_then(|fp| anlz::load(&state.data_dir, fp))
+                .and_then(|fp| anlz::load(&conn, fp))
                 .and_then(|s| {
                     s.grid_bpm.map(|bpm| rekordbox::Grid {
                         bpm,
@@ -2305,6 +2303,18 @@ fn rekordbox_library(state: State<'_, AppState>) -> Result<Option<rekordbox::Lib
 fn rekordbox_selection(state: State<'_, AppState>) -> Result<RekordboxSelection, Error> {
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     rekordbox_selection_of(&conn)
+}
+
+/// Saves what to export, without writing the file.
+#[tauri::command]
+fn rekordbox_save_selection(
+    state: State<'_, AppState>,
+    selection: RekordboxSelection,
+) -> Result<RekordboxSelection, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    let raw = serde_json::to_string(&selection).map_err(|e| Error::Msg(e.to_string()))?;
+    db::set_setting(&conn, SETTING_RB_SELECTION, Some(&raw))?;
+    Ok(selection)
 }
 
 /// Saves what to export and writes the file (recorded in the history).
@@ -2544,6 +2554,10 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let conn = db::open(&dir.join("library.db"))?;
+            // Beat grids and waveforms used to be kept as files; they live in the database now.
+            if let Err(e) = anlz::import_files(&conn, &dir) {
+                log::warn!("importing kept analyses: {e}");
+            }
             let http = reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .build()
@@ -2581,6 +2595,7 @@ pub fn run() {
             usb_formats,
             export_to_usb,
             usb_edit_playlists,
+            usb_reset,
             set_beat_grid,
             track_cues,
             set_track_cues,
@@ -2625,6 +2640,7 @@ pub fn run() {
             rekordbox_library,
             rekordbox_selection,
             rekordbox_set_selection,
+            rekordbox_save_selection,
             itunes_status,
             itunes_set_path,
             itunes_import,

@@ -10,12 +10,13 @@ import {
 	Undo2,
 	UserRound,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useContext } from "react";
 import { type MenuEntry, MenuItems, MenuLabel, MenuSeparator } from "#/components/menu.tsx";
 import { PlaylistSubmenu } from "#/components/playlist-submenu.tsx";
 import { TagSubmenu } from "#/components/tag-submenu.tsx";
 import { useDetailNav } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
+import { TrackOrderContext } from "#/context/track-order.ts";
 import { albumKey } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { popup } from "#/lib/menu-styles.ts";
@@ -66,6 +67,7 @@ export function AddToPlaylistMenu({
 	children,
 }: Props) {
 	const go = useDetailNav();
+	const order = useContext(TrackOrderContext);
 	const player = usePlayer();
 	const analyze = useAnalyze();
 	const redetect = useRedetect();
@@ -85,12 +87,11 @@ export function AddToPlaylistMenu({
 			icon: <TextCursorInput />,
 			onSelect: () => go({ kind: "edit", target }),
 		},
-		tracks.length === 1 &&
-			tracks[0]?.analyzed && {
-				label: "Edit grid & cues…",
-				icon: <Grid3x3 />,
-				onSelect: () => go({ kind: "grid", trackId: tracks[0]?.id ?? 0 }),
-			},
+		tracks.length === 1 && {
+			label: "Edit grid & cues…",
+			icon: <Grid3x3 />,
+			onSelect: () => go({ kind: "grid", trackId: tracks[0]?.id ?? 0, list: order ?? undefined }),
+		},
 		{
 			label: "Analyze BPM & key",
 			icon: <AudioWaveform />,
