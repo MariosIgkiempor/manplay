@@ -205,6 +205,10 @@ pub struct Action {
     pub track_id: Option<i64>,
     #[serde(skip)]
     pub local: Option<PathBuf>,
+    /// Replace, move and delete: [`remote_signature`] of the destination file as reviewed. The
+    /// action is refused if the file no longer matches it (or it could not be read).
+    #[serde(skip)]
+    pub seen: Option<String>,
 }
 
 /// A destination file that is left alone on purpose.
@@ -381,14 +385,13 @@ pub async fn plan_target(
     };
     plan.remote_total = remote.len();
     let d = diff(items, &remote);
-    // Same path and size can still differ in tags: files edited since their last sync have their
-    // first and last 64 KiB compared with the destination's copy.
-    let retag = changed_metadata(app, client, target, &d.in_sync, synced_at).await;
+    // Same path and size can still differ in tags or audio: every such file is compared.
+    let (retag, unreadable) = changed_content(app, client, target, &d.in_sync, synced_at).await;
     plan.in_sync = d.in_sync.len() - retag.len();
     plan.present = d
         .in_sync
         .iter()
-        .filter(|i| !retag.contains(&i.track_id))
+        .filter(|i| !retag.contains_key(&i.track_id))
         .map(|i| (i.track_id, i64::try_from(i.size).unwrap_or(i64::MAX)))
         .collect();
 
@@ -438,7 +441,7 @@ pub async fn plan_target(
     for r in known_audio {
         by_rel.insert(r.rel.as_slice(), cached.get(&cache_key(r)).cloned());
     }
-    plan.unchecked = by_rel.values().filter(|p| p.is_none()).count();
+    plan.unchecked = by_rel.values().filter(|p| p.is_none()).count() + unreadable;
     let extras: Vec<(&Remote, Option<String>)> = candidates
         .iter()
         .map(|r| (*r, by_rel.get(r.rel.as_slice()).cloned().flatten()))
@@ -449,7 +452,9 @@ pub async fn plan_target(
         |kind, rel: &[String], from, size, remote_size, note, track_id: Option<i64>, local| {
             let optional = kind == Kind::Delete
                 || (kind == Kind::Upload
-                    && track_id.is_some_and(|t| matched.duplicates.contains_key(&t)));
+                    && track_id.is_some_and(|t| matched.duplicates.contains_key(&t)))
+                || (kind == Kind::Replace
+                    && track_id.is_some_and(|t| retag.get(&t).is_some_and(|c| !c.edited_here)));
             let id = *next_id;
             *next_id += 1;
             plan.actions.push(Action {
@@ -464,6 +469,7 @@ pub async fn plan_target(
                 optional,
                 track_id,
                 local,
+                seen: None,
             });
         };
     for (file, item) in &matched.moves {
@@ -516,14 +522,23 @@ pub async fn plan_target(
             Some(item.local.clone()),
         );
     }
-    for item in d.in_sync.iter().filter(|i| retag.contains(&i.track_id)) {
+    for item in &d.in_sync {
+        let Some(change) = retag.get(&item.track_id) else {
+            continue;
+        };
+        let note = if change.edited_here {
+            "Tags or metadata changed here since the last sync (same file size)"
+        } else {
+            "Tags or audio differ on the destination but were not changed here: probably \
+             edited by someone else. Ticking overwrites their version."
+        };
         push(
             Kind::Replace,
             &item.rel,
             None,
             item.size,
             Some(item.size),
-            Some("Tags or metadata changed since the last sync (same file size)".to_owned()),
+            Some(note.to_owned()),
             Some(item.track_id),
             Some(item.local.clone()),
         );
@@ -540,35 +555,33 @@ pub async fn plan_target(
             None,
         );
     }
+    // Retagged files were read just now; applying checks the destination still matches that.
+    for a in plan.actions.iter_mut().filter(|a| a.kind == Kind::Replace) {
+        if let Some(change) = a.track_id.and_then(|t| retag.get(&t)) {
+            a.seen = Some(change.remote.clone());
+        }
+    }
+    record_seen(app, client, target, &mut plan.actions).await;
     plan
 }
 
-/// A size difference this small between a library file and its destination copy is most likely
-/// a tag edit rather than different audio.
-const TAG_SIZED_DELTA: u64 = 512 * 1024;
-const EDGE: u64 = 64 * 1024;
-
-/// Ids of in-sync files modified since their last sync whose head or tail bytes differ from the
-/// destination's copy. A file that cannot be compared counts as unchanged.
-async fn changed_metadata(
-    app: &AppHandle,
-    client: &Client,
-    target: &SyncTarget,
-    in_sync: &[&Item],
-    synced_at: &HashMap<i64, i64>,
-) -> HashSet<i64> {
-    let candidates: Vec<&&Item> = in_sync
-        .iter()
-        .filter(|i| synced_at.get(&i.track_id).is_some_and(|t| i.modified > *t))
-        .collect();
-    let mut out = HashSet::new();
+/// Reads the tags region and audio samples of every destination file an action would overwrite,
+/// rename or remove, so applying can refuse if someone changed it after this review.
+async fn record_seen(app: &AppHandle, client: &Client, target: &SyncTarget, actions: &mut [Action]) {
     let Ok(backend) = Backend::for_target(client, target) else {
-        return out;
+        return;
     };
     let base = base_of(target);
-    let total = candidates.len();
-    for (n, item) in candidates.into_iter().enumerate() {
-        let label = item.rel.join("/");
+    let touched: Vec<&mut Action> = actions
+        .iter_mut()
+        .filter(|a| {
+            a.seen.is_none() && matches!(a.kind, Kind::Replace | Kind::Move | Kind::Delete)
+        })
+        .collect();
+    let total = touched.len();
+    for (n, a) in touched.into_iter().enumerate() {
+        let rel = a.from.clone().unwrap_or_else(|| a.rel.clone());
+        let label = rel.join("/");
         let _ = app.emit(
             "pull-progress",
             PullProgress {
@@ -577,39 +590,174 @@ async fn changed_metadata(
                 current: &label,
             },
         );
-        if edges_differ(&backend, &base, item).await.unwrap_or(false) {
-            out.insert(item.track_id);
+        let size = a.remote_size.unwrap_or(a.size);
+        a.seen = if safe_rel(&rel) {
+            remote_signature(&backend, &dest_of(&base, &rel), size)
+                .await
+                .ok()
+        } else {
+            None
+        };
+        if a.seen.is_none() {
+            let warn = "Could not be read for comparison: will not be applied";
+            a.note = Some(a.note.take().map_or(warn.to_owned(), |n| format!("{n}. {warn}")));
         }
     }
-    out
 }
 
-fn read_edges(path: &Path, size: u64, len: u64) -> Result<(Vec<u8>, Vec<u8>), Error> {
-    use std::io::{Read, Seek, SeekFrom};
-    let n = usize::try_from(len).map_err(|e| Error::Msg(e.to_string()))?;
-    let mut file = std::fs::File::open(path)?;
-    let mut head = vec![0_u8; n];
-    file.read_exact(&mut head)?;
-    file.seek(SeekFrom::Start(size - len))?;
-    let mut tail = vec![0_u8; n];
-    file.read_exact(&mut tail)?;
-    Ok((head, tail))
+/// Byte ranges compared to tell whether a file changed: the first and last 64 KiB (where tags
+/// and metadata live) and the two inner audio samples. Small files are read whole.
+fn signature_ranges(size: u64) -> Vec<(u64, u64)> {
+    if size <= EDGE * 4 {
+        return vec![(0, size)];
+    }
+    vec![
+        (0, EDGE),
+        (size / 3, EDGE),
+        (size / 3 * 2, EDGE),
+        (size - EDGE, EDGE),
+    ]
 }
 
-async fn edges_differ(backend: &Backend<'_>, base: &[String], item: &Item) -> Result<bool, Error> {
-    let len = item.size.min(EDGE);
-    if len == 0 {
-        return Ok(false);
+/// Hash of the size, tags region and audio samples of a destination file.
+async fn remote_signature(backend: &Backend<'_>, dest: &[String], size: u64) -> Result<String, Error> {
+    let mut parts = Vec::new();
+    for (start, len) in signature_ranges(size) {
+        parts.push(if len == 0 {
+            Vec::new()
+        } else {
+            backend.get_range(dest, start, len).await?
+        });
     }
-    let dest = dest_of(base, &item.rel);
-    let (path, size) = (item.local.clone(), item.size);
-    let (head, tail) = tauri::async_runtime::spawn_blocking(move || read_edges(&path, size, len))
-        .await
-        .map_err(|e| Error::Msg(e.to_string()))??;
-    if backend.get_range(&dest, 0, len).await? != head {
-        return Ok(true);
+    Ok(crate::scan::fingerprint_from_samples(size, &parts))
+}
+
+/// Same as [`remote_signature`] for a local file.
+async fn local_signature(path: &Path, size: u64) -> Result<String, Error> {
+    let path = path.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(&path)?;
+        let mut parts = Vec::new();
+        for (start, len) in signature_ranges(size) {
+            let mut buf = vec![0_u8; usize::try_from(len).map_err(|e| Error::Msg(e.to_string()))?];
+            file.seek(SeekFrom::Start(start))?;
+            file.read_exact(&mut buf)?;
+            parts.push(buf);
+        }
+        Ok(crate::scan::fingerprint_from_samples(size, &parts))
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+/// Fails unless the destination file still has the tags and audio seen during review.
+async fn ensure_unchanged(
+    backend: &Backend<'_>,
+    dest: &[String],
+    size: u64,
+    seen: Option<&str>,
+) -> Result<(), Error> {
+    let Some(seen) = seen else {
+        return Err(Error::Msg(
+            "could not be read during review: review again".to_owned(),
+        ));
+    };
+    if remote_signature(backend, dest, size).await? == seen {
+        Ok(())
+    } else {
+        Err(Error::Msg(
+            "tags or audio changed on the destination since review".to_owned(),
+        ))
     }
-    Ok(backend.get_range(&dest, item.size - len, len).await? != tail)
+}
+
+/// A size difference this small between a library file and its destination copy is most likely
+/// a tag edit rather than different audio.
+const TAG_SIZED_DELTA: u64 = 512 * 1024;
+const EDGE: u64 = 64 * 1024;
+
+/// Destination files compared at once while reviewing.
+const COMPARE_AT_ONCE: usize = 8;
+
+/// An in-sync file (same path and size) whose destination copy has other tags or audio.
+struct Changed {
+    /// [`remote_signature`] of the destination copy as read during this review.
+    remote: String,
+    /// The library file was modified since its last sync, so the difference is our own edit.
+    /// Otherwise someone else most likely changed the destination copy.
+    edited_here: bool,
+}
+
+/// Compares the tags region and audio samples of every in-sync file with its destination copy.
+/// Returns the files that differ, and how many could not be compared.
+async fn changed_content(
+    app: &AppHandle,
+    client: &Client,
+    target: &SyncTarget,
+    in_sync: &[&Item],
+    synced_at: &HashMap<i64, i64>,
+) -> (HashMap<i64, Changed>, usize) {
+    use futures_util::stream::{FuturesUnordered, StreamExt};
+    let mut out = HashMap::new();
+    let Ok(backend) = Backend::for_target(client, target) else {
+        return (out, in_sync.len());
+    };
+    let base = base_of(target);
+    let total = in_sync.len();
+    let mut queue = in_sync.iter().copied();
+    let mut running = FuturesUnordered::new();
+    for item in queue.by_ref().take(COMPARE_AT_ONCE) {
+        running.push(compare_one(&backend, &base, item));
+    }
+    let (mut done, mut unreadable) = (0, 0);
+    while let Some((item, result)) = running.next().await {
+        if let Some(next) = queue.next() {
+            running.push(compare_one(&backend, &base, next));
+        }
+        done += 1;
+        let label = item.rel.join("/");
+        let _ = app.emit(
+            "pull-progress",
+            PullProgress {
+                done,
+                total,
+                current: &label,
+            },
+        );
+        match result {
+            Ok(Some(remote)) => {
+                let edited_here = synced_at
+                    .get(&item.track_id)
+                    .is_some_and(|t| item.modified > *t);
+                out.insert(
+                    item.track_id,
+                    Changed {
+                        remote,
+                        edited_here,
+                    },
+                );
+            }
+            Ok(None) => {}
+            Err(_) => unreadable += 1,
+        }
+    }
+    (out, unreadable)
+}
+
+/// The destination copy's [`remote_signature`] if it differs from the library file.
+async fn compare_one<'i>(
+    backend: &Backend<'_>,
+    base: &[String],
+    item: &'i Item,
+) -> (&'i Item, Result<Option<String>, Error>) {
+    let result = async {
+        let remote = remote_signature(backend, &dest_of(base, &item.rel), item.size).await?;
+        let differs = local_signature(&item.local, item.size).await? != remote;
+        Ok(differs.then_some(remote))
+    }
+    .await;
+    (item, result)
 }
 
 // ---- applying a confirmed plan -------------------------------------------------
@@ -719,7 +867,7 @@ pub async fn apply_target(
         let label = a.rel.join("/");
         emit(app, target.id, done, total, &format!("Backing up {label}"));
         let expected = a.remote_size.unwrap_or(a.size);
-        match backup_one(&backend, &base, &a.rel, expected, &target_backup).await {
+        match backup_one(&backend, &base, &a.rel, expected, a.seen.as_deref(), &target_backup).await {
             Ok(()) => {
                 backed_up.insert(a.id);
                 out.summary.backup_dir = Some(backup_dir.to_string_lossy().into_owned());
@@ -793,15 +941,27 @@ async fn run_action(
                 .ok_or_else(|| Error::Msg("no local file".to_owned()))?;
             let current = backend.remote_size(&dest).await?;
             // The destination must still look as it did when it was reviewed.
-            if a.kind == Kind::Upload && current.is_some() && current != Some(a.size) {
-                return Err(Error::Msg(
-                    "appeared on the destination since review".to_owned(),
-                ));
+            if let (Kind::Upload, Some(size)) = (a.kind, current) {
+                // Only an identical copy (same tags and audio) counts as already uploaded.
+                let same = size == a.size
+                    && remote_signature(backend, &dest, size).await?
+                        == local_signature(local, a.size).await?;
+                return if same {
+                    Ok(())
+                } else {
+                    Err(Error::Msg(
+                        "appeared on the destination since review".to_owned(),
+                    ))
+                };
             }
-            if a.kind == Kind::Replace && current != a.remote_size {
-                return Err(Error::Msg(
-                    "changed on the destination since review".to_owned(),
-                ));
+            if a.kind == Kind::Replace {
+                if current != a.remote_size {
+                    return Err(Error::Msg(
+                        "changed on the destination since review".to_owned(),
+                    ));
+                }
+                let size = a.remote_size.unwrap_or(a.size);
+                ensure_unchanged(backend, &dest, size, a.seen.as_deref()).await?;
             }
             ensure_dirs(backend, base, &dest, made).await?;
             backend.put(&dest, local).await
@@ -811,6 +971,7 @@ async fn run_action(
             if backend.remote_size(&from).await? != Some(a.size) {
                 return Err(Error::Msg("source changed since review".to_owned()));
             }
+            ensure_unchanged(backend, &from, a.size, a.seen.as_deref()).await?;
             if backend.remote_size(&dest).await?.is_some() {
                 return Err(Error::Msg("destination path already exists".to_owned()));
             }
@@ -819,7 +980,10 @@ async fn run_action(
         }
         Kind::Delete => match backend.remote_size(&dest).await? {
             None => Ok(()),
-            Some(size) if size == a.size => backend.delete(&dest).await,
+            Some(size) if size == a.size => {
+                ensure_unchanged(backend, &dest, size, a.seen.as_deref()).await?;
+                backend.delete(&dest).await
+            }
             Some(_) => Err(Error::Msg(
                 "changed on the destination since review".to_owned(),
             )),
@@ -850,6 +1014,7 @@ async fn backup_one(
     base: &[String],
     rel: &[String],
     expected: u64,
+    seen: Option<&str>,
     dir: &Path,
 ) -> Result<(), Error> {
     if !safe_rel(rel) {
@@ -870,6 +1035,12 @@ async fn backup_one(
             return Err(Error::Msg(format!(
                 "size differs from review ({got} of {expected} bytes)"
             )));
+        }
+        let copied = local_signature(&tmp, got).await.ok();
+        if seen.is_none() || copied.as_deref() != seen {
+            return Err(Error::Msg(
+                "tags or audio differ from review".to_owned(),
+            ));
         }
         tokio::fs::rename(&tmp, &dest).await?;
         Ok(())
@@ -1194,17 +1365,6 @@ mod tests {
     }
 
     #[test]
-    fn edges_are_the_first_and_last_bytes() {
-        let path = std::env::temp_dir().join(format!("manplay-edges-{}.bin", std::process::id()));
-        let data: Vec<u8> = (0..=9).collect();
-        std::fs::write(&path, &data).expect("write");
-        let (head, tail) = read_edges(&path, 10, 3).expect("edges");
-        assert_eq!(head, vec![0, 1, 2]);
-        assert_eq!(tail, vec![7, 8, 9]);
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
     fn old_backups_are_pruned_by_name() {
         let dir = std::env::temp_dir().join(format!("manplay-prune-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("000000000100")).expect("old");
@@ -1213,5 +1373,30 @@ mod tests {
         assert!(!dir.join("000000000100").exists());
         assert!(dir.join("000000009000").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn signature_covers_tags_and_audio_and_stays_in_bounds() {
+        let size = 1_000_000_u64;
+        let ranges = signature_ranges(size);
+        assert_eq!(ranges.first(), Some(&(0, EDGE)));
+        assert_eq!(ranges.last(), Some(&(size - EDGE, EDGE)));
+        assert!(ranges.iter().all(|(o, l)| o + l <= size));
+        for size in [0, 1, EDGE * 4, EDGE * 4 + 1] {
+            assert!(signature_ranges(size).iter().all(|(o, l)| o + l <= size));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_same_size_tag_edit_changes_the_signature() {
+        let path = std::env::temp_dir().join(format!("manplay-sig-{}.bin", std::process::id()));
+        let mut data = vec![7_u8; 600_000];
+        std::fs::write(&path, &data).expect("write");
+        let before = local_signature(&path, 600_000).await.expect("sig");
+        data[10] = 8; // a tag byte at the start, size unchanged
+        std::fs::write(&path, &data).expect("write");
+        let after = local_signature(&path, 600_000).await.expect("sig");
+        assert_ne!(before, after);
+        let _ = std::fs::remove_file(&path);
     }
 }
