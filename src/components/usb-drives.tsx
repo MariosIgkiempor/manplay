@@ -7,6 +7,7 @@ import { SourceCard } from "#/components/source-card.tsx";
 import { SectionTitle, SourcePanel } from "#/components/source-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
+import { UsbExportButton } from "#/components/usb-export.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { type UsbDrive, type UsbLibrary, type UsbTrack, usbDrives, usbLibrary } from "#/lib/api.ts";
 import { clock, formatBytes } from "#/lib/format.ts";
@@ -162,24 +163,29 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 
 	return (
 		<div className="space-y-4 pb-6">
-			<div className="space-y-1">
-				<h2 className="font-semibold text-xl tracking-tight">{drive.name}</h2>
-				<p className="text-muted-foreground text-sm">
-					{drive.mount} · {space(drive)}
-					{drive.filesystem && ` · ${drive.filesystem.toUpperCase()}`}
-					{!drive.writable && " · read-only"}
-				</p>
+			<div className="flex items-start justify-between gap-4">
+				<div className="min-w-0 space-y-1">
+					<h2 className="font-semibold text-xl tracking-tight">{drive.name}</h2>
+					<p className="text-muted-foreground text-sm">
+						{drive.mount} · {space(drive)}
+						{drive.filesystem && ` · ${drive.filesystem.toUpperCase()}`}
+						{!drive.writable && " · read-only"}
+					</p>
+				</div>
+				<UsbExportButton drive={drive} library={library.data} />
 			</div>
 			{drive.hasOneLibrary && (
 				<p className="flex gap-2 rounded-lg border p-3 text-muted-foreground text-xs">
 					<TriangleAlert className="size-4 shrink-0" />
 					Rekordbox also wrote a OneLibrary database here, which the CDJ-3000X, Opus Quad, XDJ-AZ
-					and Omnis Duo read. This view shows the Device Library that other players read.
+					and Omnis Duo read. This view shows the Device Library that other players read. Exporting
+					from manplay moves the OneLibrary files into a backup folder on the drive, so every player
+					reads the same library.
 				</p>
 			)}
 			{!drive.hasLibrary && (
 				<p className="py-10 text-center text-muted-foreground text-sm">
-					This drive has no rekordbox library yet.
+					This drive has no rekordbox library yet. Export playlists to create one.
 				</p>
 			)}
 			{library.isError && <ErrorText message={String(library.error)} />}

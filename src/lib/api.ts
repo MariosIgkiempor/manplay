@@ -1032,3 +1032,39 @@ export async function usbDrives(): Promise<UsbDrive[]> {
 export async function usbLibrary(mount: string): Promise<UsbLibrary> {
 	return usbLibrarySchema.parse(await invoke("usb_library", { mount }));
 }
+
+const usbExportProgressSchema = z.object({
+	phase: z.enum(["copying", "writing"]),
+	done: int,
+	total: int,
+	current: z.string(),
+});
+
+export type UsbExportProgress = z.infer<typeof usbExportProgressSchema>;
+
+const usbExportReportSchema = z.object({
+	copied: int,
+	alreadyThere: int,
+	bytesCopied: int,
+	playlists: int,
+	libraryTracks: int,
+	/** Folder on the drive with the previous database and rekordbox's OneLibrary files. */
+	backup: z.string().nullable(),
+	failed: z.array(fileFailureSchema),
+});
+
+export type UsbExportReport = z.infer<typeof usbExportReportSchema>;
+
+/** Copies playlists and their songs onto a drive and rewrites its rekordbox library. */
+export async function exportToUsb(mount: string, playlistIds: number[]): Promise<UsbExportReport> {
+	return usbExportReportSchema.parse(await invoke("export_to_usb", { mount, playlistIds }));
+}
+
+export function onUsbExportProgress(handler: (p: UsbExportProgress) => void): Promise<() => void> {
+	return listen("usb-export-progress", (e) => {
+		const parsed = usbExportProgressSchema.safeParse(e.payload);
+		if (parsed.success) {
+			handler(parsed.data);
+		}
+	});
+}

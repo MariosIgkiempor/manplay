@@ -16,6 +16,7 @@ mod sync;
 mod tags;
 mod tailscale;
 mod usb;
+mod usb_export;
 mod webdav;
 
 use std::collections::{HashMap, HashSet};
@@ -36,6 +37,8 @@ struct AppState {
     syncing: AtomicBool,
     fixing: AtomicBool,
     analyzing: AtomicBool,
+    /// Held while songs are being copied onto a USB drive.
+    usb_exporting: AtomicBool,
     /// Set to stop the running analysis after the files in progress.
     cancel_analysis: AtomicBool,
     /// The last sync review, awaiting the user's confirmation.
@@ -1018,6 +1021,90 @@ async fn usb_library(mount: PathBuf) -> Result<pdb::Library, Error> {
     .await
     .map_err(|e| Error::Msg(e.to_string()))?
     .map_err(Error::Msg)
+}
+
+/// Copies the given playlists and their songs onto a USB drive and rewrites its rekordbox
+/// library, keeping what rekordbox put there. Emits `usb-export-progress`.
+#[tauri::command]
+async fn export_to_usb(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mount: PathBuf,
+    playlist_ids: Vec<i64>,
+) -> Result<usb_export::Report, Error> {
+    if state.usb_exporting.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("An export to a USB drive is already running.".into()));
+    }
+    let _guard = SyncGuard(&state.usb_exporting);
+    let (sources, playlists) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let camelot = analysis_settings_of(&conn)?.key_format == KeyFormat::Camelot;
+        let (tracks, lists) = db::export_data(&conn)?;
+        let sources: Vec<usb_export::Source> = tracks
+            .into_iter()
+            .map(|t| usb_export::Source {
+                id: t.id,
+                path: PathBuf::from(&t.path),
+                artist: t.artist,
+                album: t.album,
+                title: t.title,
+                size: u64::try_from(t.size).unwrap_or(0),
+                duration_ms: t.duration_ms,
+                bitrate: t.bitrate,
+                sample_rate: t.sample_rate,
+                bpm: t.bpm,
+                key: t.key.map(|k| {
+                    if camelot {
+                        analysis::camelot(&k).unwrap_or(k)
+                    } else {
+                        k
+                    }
+                }),
+            })
+            .collect();
+        let playlists: Vec<usb_export::SourcePlaylist> = playlist_ids
+            .iter()
+            .filter_map(|id| lists.iter().find(|p| p.id == Some(*id)))
+            .map(|p| usb_export::SourcePlaylist {
+                name: p.name.clone(),
+                track_ids: p.track_ids.clone(),
+            })
+            .collect();
+        (sources, playlists)
+    };
+    if playlists.is_empty() {
+        return Err(Error::Msg("Choose at least one playlist.".into()));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let drive = usb::list()
+            .into_iter()
+            .find(|d| d.mount == mount)
+            .ok_or_else(|| format!("{} is not a connected USB drive", mount.display()))?;
+        if !drive.writable {
+            return Err(format!("{} is read-only.", drive.name));
+        }
+        let now = unix_now();
+        let today = usb_export::date(now);
+        let secs = now.rem_euclid(86_400);
+        let stamp = format!("{today}-{:02}{:02}{:02}", secs / 3600, secs / 60 % 60, secs % 60);
+        let opts = usb_export::Options {
+            today: &today,
+            stamp: &stamp,
+            free_bytes: drive.free_bytes,
+        };
+        usb_export::export(&mount, &sources, &playlists, &opts, |p| {
+            let _ = app.emit("usb-export-progress", p);
+        })
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)
+}
+
+/// Whether songs are being copied onto a USB drive right now.
+#[tauri::command]
+fn is_exporting_to_usb(state: State<'_, AppState>) -> bool {
+    state.usb_exporting.load(Ordering::SeqCst)
 }
 
 #[tauri::command]
@@ -2193,6 +2280,7 @@ pub fn run() {
                 syncing: AtomicBool::new(false),
                 fixing: AtomicBool::new(false),
                 analyzing: AtomicBool::new(false),
+                usb_exporting: AtomicBool::new(false),
                 cancel_analysis: AtomicBool::new(false),
                 plan: Mutex::new(None),
             });
@@ -2215,6 +2303,8 @@ pub fn run() {
             analysis_failures,
             usb_drives,
             usb_library,
+            export_to_usb,
+            is_exporting_to_usb,
             save_analysis_to_files,
             list_playlists,
             create_playlist,
@@ -2693,6 +2783,7 @@ mod tests {
             syncing: AtomicBool::new(false),
             fixing: AtomicBool::new(false),
             analyzing: AtomicBool::new(false),
+            usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
         };
@@ -2795,6 +2886,7 @@ mod tests {
             syncing: AtomicBool::new(false),
             fixing: AtomicBool::new(false),
             analyzing: AtomicBool::new(false),
+            usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
         };
