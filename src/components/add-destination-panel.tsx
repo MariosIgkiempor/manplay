@@ -1,16 +1,15 @@
-import { ChevronRight, FolderOpen } from "lucide-react";
+import { ChevronRight, FolderOpen, Plus, Upload } from "lucide-react";
 import { useState } from "react";
 import { AddR2, AddTailscale } from "#/components/add-destination.tsx";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { Drawer } from "#/components/drawer.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
+import { PageHeader } from "#/components/page-header.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { type DestinationService, useDetail } from "#/context/detail-context.ts";
-import { typeScale } from "#/lib/type-scale.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { space, useUsbDrives } from "#/lib/use-usb.ts";
-import { cn } from "#/lib/utils.ts";
 
 const SERVICES: { id: DestinationService; brand: Brand; title: string; what: string }[] = [
 	{
@@ -31,13 +30,24 @@ const SERVICES: { id: DestinationService; brand: Brand; title: string; what: str
 
 function Heading({ brand, title }: { brand?: Brand | undefined; title: string }) {
 	return (
-		<div className="flex items-center gap-3">
-			{brand && <BrandIcon brand={brand} className="size-10" />}
-			<div className="min-w-0">
-				<div className="text-muted-foreground text-xs">Add destination</div>
-				<h2 className={cn("truncate", typeScale.panelTitle)}>{title}</h2>
-			</div>
-		</div>
+		<PageHeader
+			variant="panel"
+			art={
+				brand ? (
+					<BrandIcon brand={brand} className="size-24 shrink-0 rounded-xl" />
+				) : (
+					<div className="grid size-24 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground [&_svg]:size-9">
+						<Plus />
+					</div>
+				)
+			}
+			kind={
+				<>
+					<Upload /> Add destination
+				</>
+			}
+			title={title}
+		/>
 	);
 }
 

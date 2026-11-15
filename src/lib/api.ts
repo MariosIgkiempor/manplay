@@ -951,7 +951,23 @@ const importTrackSchema = z.object({
 	title: z.string(),
 	artist: z.string(),
 	size: z.number(),
-	status: z.enum(["new", "inLibrary", "duplicate"]),
+	status: z.enum(["new", "inLibrary", "duplicate", "sameAudio"]),
+	/** For "sameAudio": the library song whose audio this file holds. */
+	sameAs: z.string().nullish(),
+	album: z.string().nullish(),
+	track: int.nullish(),
+	disc: int.nullish(),
+	year: z.string().nullish(),
+	genre: z.string().nullish(),
+	label: z.string().nullish(),
+	bpm: z.string().nullish(),
+	key: z.string().nullish(),
+	durationMs: int.nullish(),
+	/** kbps. */
+	bitrate: int.nullish(),
+	sampleRate: int.nullish(),
+	/** The file carries its own cover picture. */
+	hasArt: z.boolean().default(false),
 });
 
 const importGroupSchema = z.object({
@@ -991,6 +1007,11 @@ export interface ImportRequest {
 	images: SourceRef[];
 }
 
+/** Moves files, zips or folders inside the Downloads folder to the Trash. */
+export async function importTrash(paths: string[]): Promise<void> {
+	await invoke("import_trash", { paths });
+}
+
 export async function importGetFolder(): Promise<string | null> {
 	return z
 		.string()
@@ -1026,7 +1047,7 @@ export async function importPreview(folder: string, src: SourceRef): Promise<str
 }
 
 const importProgressSchema = z.object({
-	phase: z.enum(["listing", "checking", "tags"]),
+	phase: z.enum(["listing", "library", "checking", "tags"]),
 	done: int,
 	total: int,
 });

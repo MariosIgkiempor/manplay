@@ -59,28 +59,82 @@ export function mergeEdits(
 export const editOf = (edits: Record<string, Edit>, g: ImportGroup): Edit =>
 	edits[groupKey(g)] ?? { artist: g.artist, album: g.album, touched: false };
 
-/** One request per group (limited to `only` when given) that still has a selected new track. */
+/** One request per group holding a chosen new track, with that group's artist and album. */
 export function buildRequests(
 	scan: ImportScan | null,
 	edits: Record<string, Edit>,
-	unchecked: Set<string>,
-	only: string | null,
+	chosen: ReadonlySet<string>,
 ): ImportRequest[] {
 	return (scan?.groups ?? []).flatMap((g) => {
 		const edit = editOf(edits, g);
-		const chosen = g.tracks.filter((t) => t.status === "new" && !unchecked.has(trackKey(t)));
-		if (chosen.length === 0 || (only !== null && only !== groupKey(g))) {
+		const tracks = g.tracks.filter((t) => t.status === "new" && chosen.has(trackKey(t)));
+		if (tracks.length === 0) {
 			return [];
 		}
 		return [
 			{
 				artist: edit.artist.trim() || "Unknown",
 				album: edit.album.trim() || "Unknown",
-				tracks: chosen.map((t) => t.src),
+				tracks: tracks.map((t) => t.src),
 				images: g.images,
 			},
 		];
 	});
+}
+
+/** Keys of a group's tracks that can still be imported. */
+export const newKeys = (g: ImportGroup): string[] =>
+	g.tracks.filter((t) => t.status === "new").map(trackKey);
+
+/** Keys of every track of a group, importable or not (all can be moved to the Trash). */
+export const allKeys = (g: ImportGroup): string[] => g.tracks.map(trackKey);
+
+const parentOf = (path: string) => path.replace(/[\\/][^\\/]*$/, "");
+
+/**
+ * What moving the picked tracks to the Trash removes: a whole release's folder or zip when every
+ * track of it is picked (a folder only when it is not the Downloads folder itself), otherwise the
+ * picked files one by one. Tracks inside a zip can only go with the whole zip; those are counted
+ * in `kept`.
+ */
+export function trashTargets(
+	scan: ImportScan | null,
+	keys: ReadonlySet<string>,
+	root: string | null,
+): { paths: string[]; kept: number } {
+	const paths = new Set<string>();
+	let kept = 0;
+	for (const g of scan?.groups ?? []) {
+		const picked = g.tracks.filter((t) => keys.has(trackKey(t)));
+		if (picked.length > 0) {
+			const out = releaseTrash(g, picked, root);
+			kept += out.kept;
+			for (const p of out.paths) {
+				paths.add(p);
+			}
+		}
+	}
+	return { paths: [...paths], kept };
+}
+
+/** What trashing `picked` of one release removes. */
+function releaseTrash(
+	g: ImportGroup,
+	picked: readonly ImportTrack[],
+	root: string | null,
+): { paths: string[]; kept: number } {
+	const whole = picked.length === g.tracks.length;
+	if (g.fromZip) {
+		const zip = g.tracks[0]?.src.path;
+		return whole && zip ? { paths: [zip], kept: 0 } : { paths: [], kept: picked.length };
+	}
+	const dirs = new Set(g.tracks.map((t) => parentOf(t.src.path)));
+	const [dir] = dirs;
+	if (whole && g.kind === "album" && dirs.size === 1 && dir && dir !== root) {
+		return { paths: [dir], kept: 0 };
+	}
+	const files = picked.map((t) => t.src.path);
+	return { paths: whole ? [...files, ...g.images.map((i) => i.path)] : files, kept: 0 };
 }
 
 /** Marks imported tracks as in the library and drops groups with nothing new left. */
@@ -97,26 +151,6 @@ export function applyAdded(scan: ImportScan, added: Set<string>): ImportScan {
 		return tracks.some((t) => t.status === "new") ? [{ ...g, tracks }] : [];
 	});
 	return { ...scan, groups, alreadyInLibrary: scan.alreadyInLibrary + count };
-}
-
-export function withToggled(set: Set<string>, key: string): Set<string> {
-	const next = new Set(set);
-	if (!next.delete(key)) {
-		next.add(key);
-	}
-	return next;
-}
-
-export function withAll(set: Set<string>, g: ImportGroup, on: boolean): Set<string> {
-	const next = new Set(set);
-	for (const t of g.tracks) {
-		if (on) {
-			next.delete(trackKey(t));
-		} else {
-			next.add(trackKey(t));
-		}
-	}
-	return next;
 }
 
 export function placementOf(edit: Edit, artists: string[], existing: Set<string>): Placement {

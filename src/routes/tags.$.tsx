@@ -4,7 +4,7 @@ import { ChevronRight, Tag } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
-import { PageHeader } from "#/components/page-header.tsx";
+import { CollectionHeader } from "#/components/page-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { listTags, migrateLibraryTags } from "#/lib/api.ts";
 import { useTracks } from "#/lib/queries.ts";
@@ -87,7 +87,7 @@ function TagPage() {
 
 	return (
 		<main>
-			<PageHeader
+			<CollectionHeader
 				kind={
 					<>
 						<Tag className="size-3.5" /> Tag
@@ -127,7 +127,7 @@ function TagPage() {
 						))}
 					</div>
 				)}
-			</PageHeader>
+			</CollectionHeader>
 			<div className="space-y-3 p-6">
 				{migrate.isError && <ErrorLine>{String(migrate.error)}</ErrorLine>}
 				{tagged.length === 0 && !tracks.isPending ? (

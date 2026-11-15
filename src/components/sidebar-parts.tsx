@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
+import { cn } from "#/lib/utils.ts";
 
 /** Right-aligned song count. */
-export function RowCount({ n }: { n: number }) {
-	return <span className="ml-auto pl-2 text-xs tabular-nums">{n}</span>;
+export function RowCount({ n, className }: { n: number; className?: string }) {
+	return <span className={cn("ml-auto pl-2 text-xs tabular-nums", className)}>{n}</span>;
 }
 
 /** A sidebar section's heading, with an optional action (e.g. +) lined up with the row ends. */

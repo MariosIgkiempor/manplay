@@ -29,7 +29,6 @@ import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
 import { usePanelTabs, useSyncTargets, useTracks } from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
 import { useTagConfirm } from "#/lib/use-tag-confirm.tsx";
-import { cn } from "#/lib/utils.ts";
 
 /**
  * One song in the left split, with its beat grid and cues on one tab and its metadata on the
@@ -106,20 +105,24 @@ export function SongPanel({
 				}
 				tracks={[track]}
 				facts={facts}
+				// The tabs' rule is the header's bottom edge, under the song stepper too.
+				tabs={
+					<div className="flex items-end justify-between gap-3">
+						<Segmented
+							className="border-b-0"
+							value={tab}
+							onChange={setTab}
+							label="Song view"
+							items={[
+								{ value: "grid", label: "Grid & cues", icon: <AudioWaveform /> },
+								{ value: "metadata", label: "Metadata", icon: <TextCursorInput /> },
+							]}
+						/>
+						<TrackNav trackId={trackId} list={list} tracks={tracks.data ?? []} />
+					</div>
+				}
 				badge={<SyncBadge state={syncState([track], targets.data?.length ?? 0)} showLabel />}
 			/>
-			<div className="flex flex-wrap items-center justify-between gap-3">
-				<Segmented
-					value={tab}
-					onChange={setTab}
-					label="Song view"
-					items={[
-						{ value: "grid", label: "Grid & cues", icon: <AudioWaveform /> },
-						{ value: "metadata", label: "Metadata", icon: <TextCursorInput /> },
-					]}
-				/>
-				<TrackNav trackId={trackId} list={list} tracks={tracks.data ?? []} />
-			</div>
 			{tab === "grid" ? <GridEditor trackId={trackId} /> : <SongMetadata track={track} />}
 		</div>
 	);
@@ -133,13 +136,7 @@ function SongMetadata({ track }: { track: Track }) {
 	}
 	return (
 		<>
-			<TagEditor
-				key={track.path}
-				target={target}
-				onClose={() => undefined}
-				confirm={tagConfirm.ask}
-				embedded
-			/>
+			<TagEditor key={track.path} target={target} confirm={tagConfirm.ask} embedded />
 			{tagConfirm.dialog}
 		</>
 	);
@@ -200,7 +197,7 @@ function TrackNav({
 	const prev = byId.get(ids[at - 1] ?? -1);
 	const next = byId.get(ids[at + 1] ?? -1);
 	return (
-		<div className={cn("flex items-center gap-1 text-muted-foreground text-xs")}>
+		<div className="flex items-center gap-1 pb-1 text-muted-foreground text-xs">
 			<Button
 				size="icon-sm"
 				variant="ghost"

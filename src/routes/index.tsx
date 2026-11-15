@@ -1,13 +1,15 @@
 import { useIsMutating, useQueries } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { Library as LibraryIcon } from "lucide-react";
 import { useMemo, useState } from "react";
-import { LibraryHeader } from "#/components/library-header.tsx";
+import { FolderFigure } from "#/components/destination-header.tsx";
 import {
 	AnalyzeButton,
 	LibraryList,
 	LibrarySortMenu,
 	ScanButtons,
 } from "#/components/library-parts.tsx";
+import { PageHeader, PageIcon } from "#/components/page-header.tsx";
 import { SearchPalette } from "#/components/search-palette.tsx";
 import { ViewToggle } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
@@ -26,6 +28,8 @@ import { filterTracks, type Pill, type PlaylistMembers } from "#/lib/search.ts";
 import { sortAlbums } from "#/lib/sorting.ts";
 
 export const Route = createFileRoute("/")({ component: Library });
+
+const plural = (n: number, one: string) => `${n.toLocaleString()} ${n === 1 ? one : `${one}s`}`;
 
 /** Track ids of each playlist that is picked as a pill, for filtering. */
 function usePlaylistMembers(pills: readonly Pill[]): PlaylistMembers {
@@ -68,6 +72,7 @@ function Library() {
 		[tracks.data, pills, search, members],
 	);
 	const sorts = useLibrarySorts();
+	const albumCount = useMemo(() => groupAlbums(tracks.data ?? []).length, [tracks.data]);
 	const albums = useMemo(
 		() => sortAlbums(groupAlbums(visible), sorts.albums),
 		[visible, sorts.albums],
@@ -75,25 +80,42 @@ function Library() {
 
 	return (
 		<main>
-			<LibraryHeader
+			<PageHeader
+				art={
+					<PageIcon>
+						<LibraryIcon />
+					</PageIcon>
+				}
 				title="Library"
-				subtitle={root.data ?? undefined}
-				controls={
+				meta={
 					<>
-						<LibrarySortMenu view={view} sorts={sorts} />
-						<ViewToggle view={view} onChange={setView} />
-						{root.data && <AnalyzeButton tracks={tracks.data ?? []} />}
+						<span>{plural(tracks.data?.length ?? 0, "song")}</span>
+						<span>{plural(albumCount, "album")}</span>
+						{root.data && <FolderFigure path={root.data} />}
+					</>
+				}
+				actions={
+					<>
 						<ScanButtons
 							hasRoot={!!root.data}
 							scanning={scanning}
 							onScan={(mode) => scan.mutate(mode)}
 						/>
+						{root.data && <AnalyzeButton tracks={tracks.data ?? []} />}
 					</>
 				}
-				filters={
-					<SearchPalette pills={pills} onPills={setPills} text={search} onText={setSearch} />
-				}
+				tabs={<ViewToggle view={view} onChange={setView} />}
 			/>
+			{/* Search stays at hand while the list scrolls. */}
+			<div className="sticky top-0 z-10 border-b bg-background/90 px-6 py-3 backdrop-blur-md">
+				<SearchPalette
+					pills={pills}
+					onPills={setPills}
+					text={search}
+					onText={setSearch}
+					trailing={<LibrarySortMenu view={view} sorts={sorts} segment />}
+				/>
+			</div>
 
 			<div className="space-y-5 px-6 pt-5 pb-6">
 				<LibraryList

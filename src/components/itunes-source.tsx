@@ -1,9 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, FolderOpen, RefreshCw } from "lucide-react";
-import { MutationErrors, PathSetting } from "#/components/path-setting.tsx";
+import { CheckCircle2, FileAudio, FolderOpen, Music, RefreshCw, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
+import { DestinationHeader, FolderFigure, SettingLabel } from "#/components/destination-header.tsx";
+import { ErrorText } from "#/components/error-text.tsx";
+import { HistoryList } from "#/components/history-list.tsx";
+import { MutationErrors } from "#/components/path-setting.tsx";
+import { PlacePage } from "#/components/place-page.tsx";
+import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { SourceCard } from "#/components/source-card.tsx";
-import { SourcePanel } from "#/components/source-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Switch } from "#/components/ui/switch.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { type ItunesStatus, itunesStatus, pickItunesFolder, setItunesPath } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
@@ -93,50 +99,133 @@ export function ItunesCard() {
 	);
 }
 
+/** The iTunes source, laid out like an export destination: header, then History and Settings. */
 export function ItunesPanel() {
 	const { status, choose, stop, run, root, enabled, setEnabled } = useItunes();
 	const history = useActivity("itunes");
 	const path = status.data?.path ?? null;
+	const chooseButton = (
+		<Button
+			size="sm"
+			variant={path === null ? "default" : "outline"}
+			onClick={() => choose.mutate()}
+			disabled={choose.isPending}
+		>
+			<FolderOpen /> {path === null ? "Choose folder…" : "Change…"}
+		</Button>
+	);
 	return (
-		<SourcePanel
-			brand="itunes"
-			title="iTunes"
-			subtitle="Converted to 320 kbps MP3, filed by artist and album"
+		<PlacePage
 			enabled={enabled}
-			onToggle={setEnabled}
-			empty="Nothing imported yet."
-			entries={activityEntries(history.data ?? [], "itunes")}
-			settings={
+			header={(tabs) => (
 				<>
-					{root.data === null && (
-						<p className="text-destructive text-sm">
-							Choose your library folder first (Library page).
-						</p>
-					)}
-					<PathSetting path={path} emptyHint={EMPTY_HINT}>
-						<Button
-							variant={path === null ? "default" : "outline"}
-							onClick={() => choose.mutate()}
-							disabled={choose.isPending}
-						>
-							<FolderOpen /> {path === null ? "Choose folder…" : "Change folder…"}
-						</Button>
-						{path !== null && (
+					<DestinationHeader
+						tabs={tabs}
+						brand="itunes"
+						kind={
 							<>
-								<Button onClick={() => run.mutate()} disabled={run.isPending || root.data === null}>
+								<Music /> Purchased music
+							</>
+						}
+						title="iTunes"
+						titleHint={path ?? undefined}
+						meta={
+							<>
+								<span>{lastLine(status.data)}</span>
+								<FolderFigure path={path} />
+							</>
+						}
+						toggle={<Switch checked={enabled} onChange={setEnabled} label="Enable iTunes" />}
+						actions={
+							path === null ? (
+								chooseButton
+							) : (
+								<Button
+									size="sm"
+									onClick={() => run.mutate()}
+									disabled={!enabled || run.isPending || root.data === null}
+								>
 									<RefreshCw className={run.isPending ? "animate-spin" : undefined} />
 									{run.isPending ? "Converting…" : "Import now"}
 								</Button>
-								<Button variant="ghost" onClick={() => stop.mutate()} disabled={stop.isPending}>
-									Stop importing
-								</Button>
-							</>
-						)}
-					</PathSetting>
+							)
+						}
+					/>
+					{root.data === null && (
+						<ErrorText message="Choose your library folder first (Library page)." />
+					)}
 					<MutationErrors mutations={[choose, stop, run]} />
 				</>
+			)}
+			history={
+				<HistoryList
+					entries={activityEntries(history.data ?? [], "itunes")}
+					empty="Nothing imported yet."
+				/>
+			}
+			settings={
+				<ItunesSettings
+					path={path}
+					chooseButton={chooseButton}
+					onStop={() => stop.mutate()}
+					stopping={stop.isPending}
+				/>
 			}
 		/>
+	);
+}
+
+function ItunesSettings({
+	path,
+	chooseButton,
+	onStop,
+	stopping,
+}: {
+	path: string | null;
+	chooseButton: ReactNode;
+	onStop: () => void;
+	stopping: boolean;
+}) {
+	return (
+		<SettingRows>
+			<SettingRow
+				label={<SettingLabel icon={<FolderOpen />} title="Folder" hint={path ?? EMPTY_HINT} />}
+			>
+				{chooseButton}
+			</SettingRow>
+			<SettingRow
+				label={
+					<SettingLabel
+						icon={<FileAudio />}
+						title="Conversion"
+						hint="Converted to 320 kbps MP3, filed by artist and album in your library."
+					/>
+				}
+			>
+				<span className="text-muted-foreground text-xs">MP3, 320 kbps</span>
+			</SettingRow>
+			{path !== null && (
+				<SettingRow
+					label={
+						<SettingLabel
+							icon={<Trash2 className="text-destructive" />}
+							title="Stop importing"
+							hint="manplay forgets this folder. Songs already imported stay in your library."
+						/>
+					}
+				>
+					<Button
+						size="sm"
+						variant="outline"
+						className="border-destructive/40 text-destructive hover:bg-destructive/10"
+						onClick={onStop}
+						disabled={stopping}
+					>
+						Stop
+					</Button>
+				</SettingRow>
+			)}
+		</SettingRows>
 	);
 }
 

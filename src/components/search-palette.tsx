@@ -3,6 +3,7 @@ import { ListMusic, Music, Search, Tag, User, X } from "lucide-react";
 import {
 	type ComponentType,
 	type KeyboardEvent,
+	type ReactNode,
 	useEffect,
 	useId,
 	useMemo,
@@ -56,10 +57,12 @@ interface Props {
 	onPills: (pills: Pill[]) => void;
 	text: string;
 	onText: (text: string) => void;
+	/** A segment at the bar's right end, e.g. how the results are sorted. */
+	trailing?: ReactNode;
 }
 
 /** Command-palette search: type to filter, or pick artists, songs, playlists and tags as pills. */
-export function SearchPalette({ pills, onPills, text, onText }: Props) {
+export function SearchPalette({ pills, onPills, text, onText, trailing }: Props) {
 	const tracks = useTracks();
 	const playlists = useQuery({ queryKey: ["playlists"], queryFn: listPlaylists });
 	const tags = useQuery({ queryKey: ["tags"], queryFn: listTags });
@@ -148,60 +151,65 @@ export function SearchPalette({ pills, onPills, text, onText }: Props) {
 	const hasAny = text !== "" || pills.length > 0;
 	return (
 		<div className="relative min-w-40 flex-1">
-			<label
+			<div
 				className={cn(
-					"flex h-8 items-center gap-1.5 rounded-lg border border-input bg-transparent px-2 dark:bg-input/30",
+					"flex h-8 items-stretch rounded-lg border border-input bg-transparent dark:bg-input/30",
 					open && "border-ring ring-3 ring-ring/50",
 				)}
 			>
-				<Search className="size-4 shrink-0 text-muted-foreground" />
-				<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
-					{pills.map((p) => (
-						<PillChip
-							key={pillKey(p)}
-							pill={p}
-							onRemove={() => onPills(pills.filter((x) => pillKey(x) !== pillKey(p)))}
+				<label className="flex min-w-0 flex-1 items-center gap-1.5 px-2">
+					<Search className="size-4 shrink-0 text-muted-foreground" />
+					<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
+						{pills.map((p) => (
+							<PillChip
+								key={pillKey(p)}
+								pill={p}
+								onRemove={() => onPills(pills.filter((x) => pillKey(x) !== pillKey(p)))}
+							/>
+						))}
+						<input
+							ref={input}
+							value={text}
+							onChange={(e) => {
+								onText(e.target.value);
+								setActive(0);
+								setOpen(true);
+							}}
+							onFocus={() => setOpen(true)}
+							onBlur={() => setOpen(false)}
+							onKeyDown={onKeyDown}
+							placeholder={pills.length === 0 ? "Search songs, artists, playlists, tags…" : ""}
+							aria-label="Search"
+							role="combobox"
+							aria-expanded={open}
+							aria-controls={listId}
+							className="h-full min-w-24 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
 						/>
-					))}
-					<input
-						ref={input}
-						value={text}
-						onChange={(e) => {
-							onText(e.target.value);
-							setActive(0);
-							setOpen(true);
-						}}
-						onFocus={() => setOpen(true)}
-						onBlur={() => setOpen(false)}
-						onKeyDown={onKeyDown}
-						placeholder={pills.length === 0 ? "Search songs, artists, playlists, tags…" : ""}
-						aria-label="Search"
-						role="combobox"
-						aria-expanded={open}
-						aria-controls={listId}
-						className="h-full min-w-24 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-					/>
-				</div>
-				{!hasAny && !open && (
-					<kbd
-						title="Jump to search from anywhere"
-						className="shrink-0 rounded border bg-muted px-1.5 font-sans text-[11px] text-muted-foreground"
-					>
-						⌘K
-					</kbd>
+					</div>
+					{!hasAny && !open && (
+						<kbd
+							title="Jump to search from anywhere"
+							className="shrink-0 rounded border bg-muted px-1.5 font-sans text-[11px] text-muted-foreground"
+						>
+							⌘K
+						</kbd>
+					)}
+					{hasAny && (
+						<button
+							type="button"
+							aria-label="Clear search"
+							className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+							onMouseDown={(e) => e.preventDefault()}
+							onClick={clear}
+						>
+							<X className="size-4" />
+						</button>
+					)}
+				</label>
+				{trailing && (
+					<div className="flex shrink-0 items-stretch border-input border-l">{trailing}</div>
 				)}
-				{hasAny && (
-					<button
-						type="button"
-						aria-label="Clear search"
-						className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-						onMouseDown={(e) => e.preventDefault()}
-						onClick={clear}
-					>
-						<X className="size-4" />
-					</button>
-				)}
-			</label>
+			</div>
 			{open && groups.length > 0 && (
 				<SuggestionList
 					id={listId}

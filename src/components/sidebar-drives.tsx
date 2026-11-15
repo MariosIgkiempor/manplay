@@ -29,7 +29,9 @@ export function SidebarDrives() {
 						>
 							<Usb className="size-4 shrink-0" />
 							<span className="truncate">{d.name}</span>
-							<span className="ml-auto pl-2 text-xs tabular-nums">{formatBytes(d.freeBytes)}</span>
+							<span className="ml-auto shrink-0 pl-2 text-xs tabular-nums">
+								{formatBytes(d.freeBytes)}
+							</span>
 						</Link>
 						<span className="size-5 shrink-0" />
 					</div>

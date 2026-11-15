@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Upload } from "lucide-react";
 import { useEffect } from "react";
 import { Destinations } from "#/components/destinations.tsx";
 import { Page } from "#/components/page.tsx";
@@ -42,6 +43,17 @@ function ExportPage() {
 	return (
 		<Page
 			title="Export"
+			icon={<Upload />}
+			meta={
+				<>
+					<span>
+						{targetCount} {targetCount === 1 ? "destination" : "destinations"}
+					</span>
+					<span>
+						{pending === 0 ? "Everything synced" : `${pending.toLocaleString()} songs to sync`}
+					</span>
+				</>
+			}
 			actions={
 				<>
 					<PullButton disabled={busy || targetCount === 0} />

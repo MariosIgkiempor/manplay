@@ -17,14 +17,47 @@ import { ANALYSIS_KEY } from "#/lib/queries.ts";
 import { ALBUM_SORTS, ARTIST_SORTS, SONG_SORTS, sortArtists } from "#/lib/sorting.ts";
 
 /** The sort menu for whichever view the library shows. */
-export function LibrarySortMenu({ view, sorts }: { view: View; sorts: LibrarySorts }) {
+export function LibrarySortMenu({
+	view,
+	sorts,
+	segment = false,
+}: {
+	view: View;
+	sorts: LibrarySorts;
+	/** Shown as the search bar's right-hand segment. */
+	segment?: boolean;
+}) {
+	const className = segment
+		? "h-full rounded-none rounded-r-[calc(var(--radius-lg)-1px)] px-2.5 text-sm"
+		: undefined;
 	if (view === "albums") {
-		return <SortMenu options={ALBUM_SORTS} value={sorts.albums} onChange={sorts.setAlbums} />;
+		return (
+			<SortMenu
+				options={ALBUM_SORTS}
+				value={sorts.albums}
+				onChange={sorts.setAlbums}
+				className={className}
+			/>
+		);
 	}
 	if (view === "artists") {
-		return <SortMenu options={ARTIST_SORTS} value={sorts.artists} onChange={sorts.setArtists} />;
+		return (
+			<SortMenu
+				options={ARTIST_SORTS}
+				value={sorts.artists}
+				onChange={sorts.setArtists}
+				className={className}
+			/>
+		);
 	}
-	return <SortMenu options={SONG_SORTS} value={sorts.songs} onChange={sorts.setSongs} />;
+	return (
+		<SortMenu
+			options={SONG_SORTS}
+			value={sorts.songs}
+			onChange={sorts.setSongs}
+			className={className}
+		/>
+	);
 }
 
 export function LibraryList({
@@ -90,15 +123,13 @@ export function ScanButtons({
 		<>
 			{hasRoot && (
 				<Button
-					variant="ghost"
-					size="icon"
-					aria-label={scanning ? "Scanning…" : "Rescan library"}
-					title={scanning ? "Scanning…" : "Rescan library"}
-					className="text-primary hover:bg-primary/15 hover:text-primary"
+					variant="outline"
+					title="Look for added, changed and removed files"
 					onClick={() => onScan("saved")}
 					disabled={scanning}
 				>
 					<RefreshCw className={scanning ? "animate-spin" : ""} />
+					{scanning ? "Scanning…" : "Rescan"}
 				</Button>
 			)}
 			{!hasRoot && (
@@ -121,15 +152,14 @@ export function AnalyzeButton({ tracks }: { tracks: readonly Track[] }) {
 			? "BPM & key analysis"
 			: `BPM & key analysis (${pending} ${pending === 1 ? "song" : "songs"} not analyzed yet)`;
 	return (
-		<Button
-			variant="ghost"
-			size="icon"
-			aria-label={title}
-			title={title}
-			className="text-primary hover:bg-primary/15 hover:text-primary"
-			onClick={openAnalysisDrawer}
-		>
+		<Button variant="outline" title={title} onClick={openAnalysisDrawer}>
 			<AudioWaveform className={running ? "animate-pulse" : ""} />
+			BPM & key
+			{pending > 0 && !running && (
+				<span className="rounded-full bg-primary/15 px-1.5 text-primary text-xs tabular-nums">
+					{pending}
+				</span>
+			)}
 		</Button>
 	);
 }

@@ -1,9 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, RefreshCw } from "lucide-react";
-import { MutationErrors, PathSetting } from "#/components/path-setting.tsx";
+import { Download, FolderOpen, RefreshCw } from "lucide-react";
+import { DestinationHeader, FolderFigure, SettingLabel } from "#/components/destination-header.tsx";
+import { HistoryList } from "#/components/history-list.tsx";
+import { MutationErrors } from "#/components/path-setting.tsx";
+import { PlacePage } from "#/components/place-page.tsx";
+import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { SourceCard } from "#/components/source-card.tsx";
-import { SourcePanel } from "#/components/source-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Switch } from "#/components/ui/switch.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { importGetFolder } from "#/lib/api.ts";
 import { activityEntries } from "#/lib/history.ts";
@@ -60,34 +64,72 @@ export function DownloadsCard({ s }: { s: ReturnType<typeof useImport> }) {
 	);
 }
 
+const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
+/** The Downloads source, laid out like an export destination: header, then History and Settings. */
 export function DownloadsPanel() {
 	const folder = useQuery({ queryKey: ["import-folder"], queryFn: importGetFolder });
 	const choose = useChooseImportFolder();
 	const history = useActivity("downloads");
 	const path = folder.data ?? null;
 	const { enabled, setEnabled } = useDownloadsEnabled();
+	const chooseButton = (
+		<Button
+			size="sm"
+			variant={path === null ? "default" : "outline"}
+			onClick={() => choose.mutate()}
+			disabled={choose.isPending}
+		>
+			<FolderOpen /> {path === null ? "Choose folder…" : "Change…"}
+		</Button>
+	);
 	return (
-		<SourcePanel
-			brand="downloads"
-			title="Downloads"
-			subtitle="New music in this folder, zips included, newest first"
+		<PlacePage
 			enabled={enabled}
-			onToggle={setEnabled}
-			empty="Nothing imported yet."
-			entries={activityEntries(history.data ?? [], "downloads")}
-			settings={
+			header={(tabs) => (
 				<>
-					<PathSetting path={path} emptyHint="Choose a folder to look for new music.">
-						<Button
-							variant={path === null ? "default" : "outline"}
-							onClick={() => choose.mutate()}
-							disabled={choose.isPending}
-						>
-							<FolderOpen /> {path === null ? "Choose folder…" : "Change folder…"}
-						</Button>
-					</PathSetting>
+					<DestinationHeader
+						tabs={tabs}
+						brand="downloads"
+						kind={
+							<>
+								<Download /> Import folder
+							</>
+						}
+						title={path === null ? "Downloads" : folderName(path)}
+						titleHint={path ?? undefined}
+						meta={
+							<>
+								<span>{path === null ? "No folder chosen" : "Zips included, newest first"}</span>
+								<FolderFigure path={path} />
+							</>
+						}
+						toggle={<Switch checked={enabled} onChange={setEnabled} label="Enable Downloads" />}
+						actions={path === null ? chooseButton : null}
+					/>
 					<MutationErrors mutations={[choose]} />
 				</>
+			)}
+			history={
+				<HistoryList
+					entries={activityEntries(history.data ?? [], "downloads")}
+					empty="Nothing imported yet."
+				/>
+			}
+			settings={
+				<SettingRows>
+					<SettingRow
+						label={
+							<SettingLabel
+								icon={<FolderOpen />}
+								title="Folder"
+								hint={path ?? "Choose a folder to look for new music."}
+							/>
+						}
+					>
+						{chooseButton}
+					</SettingRow>
+				</SettingRows>
 			}
 		/>
 	);

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePlayer } from "#/context/player-context.ts";
 import {
 	type ImportProgress,
@@ -11,10 +11,12 @@ import {
 	importPreview,
 	importRun,
 	importScan,
+	importTrash,
 	onImportProgress,
 	pickImportFolder,
 } from "#/lib/api.ts";
 import {
+	allKeys,
 	applyAdded,
 	buildRequests,
 	type Edit,
@@ -24,10 +26,10 @@ import {
 	previewTrack,
 	srcKey,
 	trackKey,
-	withAll,
-	withToggled,
+	trashTargets,
 } from "#/lib/import-state.ts";
 import { useLibraryRoot } from "#/lib/queries.ts";
+import { applyClick, EMPTY_SELECTION, type Modifiers, type Selection } from "#/lib/selection.ts";
 
 /** Live progress of the running scan, or null when idle. */
 export function useImportProgress(active: boolean): ImportProgress | null {
@@ -109,7 +111,8 @@ export function useImport(enabled = true) {
 	const [scan, setScan] = useState<ImportScan | null>(null);
 	const [fromCache, setFromCache] = useState(false);
 	const [edits, setEdits] = useState<Record<string, Edit>>({});
-	const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
+	// Nothing is picked until you pick it, as in a file browser.
+	const [selection, setSelection] = useState<Selection<string>>(EMPTY_SELECTION);
 	const [report, setReport] = useState<ImportReport | null>(null);
 
 	const show = useCallback((next: ImportScan, cached: boolean) => {
@@ -150,13 +153,13 @@ export function useImport(enabled = true) {
 
 	const choose = useChooseImportFolder();
 
-	/** Adds one group (by key) or all of them (null). Imported tracks flip to "in library". */
+	/** Imports the given tracks (by key). Imported tracks flip to "in library" and leave the selection. */
 	const add = useMutation({
-		mutationFn: async (only: string | null) => {
+		mutationFn: async (keys: ReadonlySet<string>) => {
 			if (folder === null) {
 				throw new Error("no folder chosen");
 			}
-			const requests = buildRequests(scan, edits, unchecked, only);
+			const requests = buildRequests(scan, edits, keys);
 			const done = await importRun(folder, requests);
 			return { done, sent: requests.flatMap((r) => r.tracks) };
 		},
@@ -165,6 +168,10 @@ export function useImport(enabled = true) {
 			const failed = new Set(done.failed.map((f) => f.file));
 			const ok = new Set(sent.filter((s) => !failed.has(s.entry ?? s.path)).map(srcKey));
 			setScan((prev) => prev && applyAdded(prev, ok));
+			setSelection((prev) => ({
+				selected: new Set([...prev.selected].filter((k) => !ok.has(k))),
+				anchor: null,
+			}));
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
 			await queryClient.invalidateQueries({ queryKey: ["library-status"] });
 		},
@@ -179,12 +186,48 @@ export function useImport(enabled = true) {
 		return hit && editOf(edits, hit.g);
 	});
 
+	// Every track in list order, for shift-click ranges. Any track can be picked (to move it to
+	// the Trash); only new ones are imported.
+	const order = useMemo(() => (scan?.groups ?? []).flatMap(allKeys), [scan]);
+	const selected = useMemo(() => {
+		const present = new Set(order);
+		return new Set([...selection.selected].filter((k) => present.has(k)));
+	}, [order, selection.selected]);
+
+	const importable = useMemo(() => {
+		const fresh = new Set(
+			(scan?.groups ?? []).flatMap((g) => g.tracks.filter((t) => t.status === "new").map(trackKey)),
+		);
+		return new Set([...selected].filter((k) => fresh.has(k)));
+	}, [scan, selected]);
+
+	/** Moves the given tracks' files (or whole folders and zips) to the Trash, then rescans. */
+	const trash = useMutation({
+		mutationFn: async (keys: ReadonlySet<string>) => {
+			const { paths, kept } = trashTargets(scan, keys, folder);
+			if (paths.length === 0) {
+				return { moved: 0, kept };
+			}
+			await importTrash(paths);
+			return { moved: paths.length, kept };
+		},
+		onSuccess: ({ moved }) => {
+			setSelection(EMPTY_SELECTION);
+			if (moved > 0 && folder !== null) {
+				startScan({ dir: folder, fresh: false });
+			}
+		},
+	});
+
 	return {
 		folder,
 		scan,
 		fromCache,
 		edits,
-		unchecked,
+		selected,
+		/** Picked tracks that can be imported. */
+		importable,
+		trash,
 		report,
 		find,
 		choose,
@@ -195,8 +238,26 @@ export function useImport(enabled = true) {
 		rescan: (fresh: boolean) => enabled && folder !== null && startScan({ dir: folder, fresh }),
 		edit: (key: string, next: { artist: string; album: string }) =>
 			setEdits((prev) => ({ ...prev, [key]: { ...next, touched: true } })),
-		toggle: (key: string) => setUnchecked((prev) => withToggled(prev, key)),
-		toggleAll: (g: Parameters<typeof withAll>[1], on: boolean) =>
-			setUnchecked((prev) => withAll(prev, g, on)),
+		/** Finder-style click: one, ⌘ to add or remove, ⇧ for a range. */
+		click: (key: string, mods: Modifiers) =>
+			setSelection((prev) => applyClick(prev, order, key, mods)),
+		/** A checkbox: adds or removes one without touching the rest. */
+		toggle: (key: string) =>
+			setSelection((prev) => applyClick(prev, order, key, { shift: false, toggle: true })),
+		/** Picks or drops every new track of these keys (a release's checkbox). */
+		setMany: (keys: readonly string[], on: boolean) =>
+			setSelection((prev) => {
+				const next = new Set(prev.selected);
+				for (const k of keys) {
+					if (on) {
+						next.add(k);
+					} else {
+						next.delete(k);
+					}
+				}
+				return { selected: next, anchor: prev.anchor };
+			}),
+		selectAll: () => setSelection({ selected: new Set(order), anchor: null }),
+		clearSelection: () => setSelection(EMPTY_SELECTION),
 	};
 }

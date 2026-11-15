@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Settings } from "lucide-react";
 import { AppUpdate } from "#/components/app-update.tsx";
 import { LibrarySettings } from "#/components/library-settings.tsx";
 import { Page } from "#/components/page.tsx";
@@ -10,7 +11,7 @@ export const Route = createFileRoute("/settings")({ component: SettingsPage });
 function SettingsPage() {
 	const tracks = useTracks();
 	return (
-		<Page title="Settings">
+		<Page title="Settings" icon={<Settings />}>
 			<LibrarySettings />
 			<AppUpdate />
 			<StatusBar>

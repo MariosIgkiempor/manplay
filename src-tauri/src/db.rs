@@ -151,6 +151,8 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     // Unix seconds the song first came into the library; NULL for songs from before this column
     // (they sort by id, which follows the order they were added).
     add_column(&conn, "tracks", "added_at", "INTEGER")?;
+    // Fingerprint of the audio alone (see `audioprint`), filled in as imports need it.
+    add_column(&conn, "tracks", "audio_fp", "TEXT")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
          CREATE TABLE IF NOT EXISTS import_cache (
@@ -1699,6 +1701,37 @@ pub fn content_index(conn: &Connection) -> Result<crate::import::ContentIndex, E
         }
     }
     Ok(index)
+}
+
+/// Library songs by the fingerprint of their audio alone, to their paths.
+pub fn audio_index(conn: &Connection) -> Result<std::collections::HashMap<String, String>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT audio_fp, path FROM tracks WHERE missing_since IS NULL AND audio_fp IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Present library songs whose audio has not been fingerprinted yet.
+pub fn tracks_without_audio_fp(conn: &Connection) -> Result<Vec<(i64, String)>, Error> {
+    let mut stmt = conn
+        .prepare("SELECT id, path FROM tracks WHERE missing_since IS NULL AND audio_fp IS NULL")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Stores audio fingerprints; an empty string marks a file that could not be fingerprinted, so
+/// it is not read again every scan.
+pub fn set_audio_fps(conn: &mut Connection, fps: &[(i64, String)]) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare("UPDATE tracks SET audio_fp = ?2 WHERE id = ?1")?;
+        for (id, fp) in fps {
+            stmt.execute(params![id, fp])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 /// The saved import-scan cache for `folder`, as written by `put_import_cache`.

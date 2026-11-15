@@ -5,6 +5,7 @@ import { CheckList, CheckRow, Filter, LinkButton, TagTree } from "#/components/c
 import { Drawer } from "#/components/drawer.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Segmented } from "#/components/view-toggle.tsx";
 import {
 	exportToUsb,
 	listPlaylists,
@@ -166,48 +167,6 @@ function Swatch({ className, children }: { className: string; children: ReactNod
 }
 
 type Tab = "playlists" | "tags";
-
-function Tabs({
-	tab,
-	onChange,
-	counts,
-}: {
-	tab: Tab;
-	onChange: (t: Tab) => void;
-	counts: Record<Tab, number>;
-}) {
-	const items: [Tab, string, ReactNode][] = [
-		["playlists", "Playlists", <ListMusic key="p" className="size-4" />],
-		["tags", "Tags", <TagIcon key="t" className="size-4" />],
-	];
-	return (
-		<div role="tablist" className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
-			{items.map(([id, label, icon]) => (
-				<button
-					key={id}
-					type="button"
-					role="tab"
-					aria-selected={tab === id}
-					onClick={() => onChange(id)}
-					className={cn(
-						"flex items-center justify-center gap-2 rounded-md px-3 py-1.5 font-medium text-sm transition-colors focus-visible:outline-2",
-						tab === id
-							? "bg-background text-foreground shadow-sm"
-							: "text-muted-foreground hover:text-foreground",
-					)}
-				>
-					{icon}
-					{label}
-					{counts[id] > 0 && (
-						<span className="min-w-5 rounded-full bg-primary/15 px-1.5 text-primary text-xs tabular-nums">
-							{counts[id]}
-						</span>
-					)}
-				</button>
-			))}
-		</div>
-	);
-}
 
 function PickerHeader({
 	hint,
@@ -518,10 +477,14 @@ function Chooser({ x }: { x: ExportState }) {
 	const chosenNames = new Set(list.filter((p) => x.chosen.has(p.id)).map((p) => p.name));
 	return (
 		<div className="space-y-3">
-			<Tabs
-				tab={x.tab}
+			<Segmented
+				value={x.tab}
 				onChange={x.setTab}
-				counts={{ playlists: x.chosen.size, tags: x.chosenTags.length }}
+				label="What to export"
+				items={[
+					{ value: "playlists", label: "Playlists", icon: <ListMusic />, count: x.chosen.size },
+					{ value: "tags", label: "Tags", icon: <TagIcon />, count: x.chosenTags.length },
+				]}
 			/>
 			{x.playlists.isError && <ErrorText message={String(x.playlists.error)} />}
 			{x.tags.isError && <ErrorText message={String(x.tags.error)} />}

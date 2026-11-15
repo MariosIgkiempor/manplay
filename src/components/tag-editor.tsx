@@ -10,6 +10,7 @@ import {
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { CoverPicker } from "#/components/cover-picker.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
+import { PageHeader } from "#/components/page-header.tsx";
 import { PropertyRow } from "#/components/property-row.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { type ComboOption, TagCombobox } from "#/components/tag-combobox.tsx";
@@ -85,7 +86,8 @@ export function TagEditor({
 	embedded = false,
 }: {
 	target: TagTarget;
-	onClose: () => void;
+	/** Shows a close button in the header, where nothing around the editor closes it. */
+	onClose?: (() => void) | undefined;
 	confirm: (req: TagConfirmRequest) => Promise<boolean>;
 	/** Sits inside a page that scrolls and names the song: no header or own scrolling. */
 	embedded?: boolean;
@@ -282,6 +284,7 @@ function Status({
 	return <div className="min-w-0 flex-1 text-xs">{body}</div>;
 }
 
+/** The shared header for the editor in the drawer: cover (click to replace), name, what it holds. */
 function Header({
 	target,
 	count,
@@ -289,44 +292,63 @@ function Header({
 }: {
 	target: TagTarget;
 	count: number | null;
-	onClose: () => void;
+	onClose: (() => void) | undefined;
 }) {
 	const [artFailed, setArtFailed] = useState(false);
 	const artVersion = useArtVersion();
 	const Icon = target.isDir ? Folder : FileIcon;
-	let subtitle = target.isDir ? "Folder" : "Song";
+	let what = target.isDir ? "Folder" : "Song";
 	if (target.paths) {
-		subtitle = `${target.kind ?? "Selection"}${count === null ? "" : ` · ${plural(count, "song", "songs")}`}`;
+		what = `${target.kind ?? "Selection"}${count === null ? "" : `, ${plural(count, "song", "songs")}`}`;
 	} else if (target.isDir && count !== null) {
-		subtitle = `Folder · ${plural(count, "song", "songs")}, subfolders included`;
+		what = `Folder, ${plural(count, "song", "songs")}, subfolders included`;
 	}
 	return (
-		<div className="flex items-center gap-3 border-b px-3 py-2.5">
-			<CoverPicker paths={where(target)} name={target.name} className="size-11 shrink-0 rounded-md">
-				{artFailed ? (
-					<span className="flex size-11 items-center justify-center rounded-md bg-muted text-muted-foreground">
-						<Icon className="size-5" />
-					</span>
-				) : (
-					<img
-						key={`${target.path}:${artVersion}`}
-						src={`${pathArtUrl(target.path)}?v=${artVersion}`}
-						alt=""
-						draggable={false}
-						onError={() => setArtFailed(true)}
-						className="size-11 rounded-md bg-muted object-cover"
-					/>
-				)}
-			</CoverPicker>
-			<div className="min-w-0 flex-1">
-				<div className="truncate font-medium text-sm" title={target.name}>
-					{target.name}
-				</div>
-				<div className="truncate text-muted-foreground text-xs">{subtitle}</div>
-			</div>
-			<Button variant="ghost" size="icon" aria-label="Close metadata editor" onClick={onClose}>
-				<X />
-			</Button>
+		<div className="border-b bg-card/40 px-5 pt-6 pb-5">
+			<PageHeader
+				variant="plain"
+				art={
+					<CoverPicker paths={where(target)} name={target.name} className="size-24 shrink-0">
+						{artFailed ? (
+							<span className="grid size-24 place-items-center rounded-lg bg-muted text-muted-foreground">
+								<Icon className="size-8" />
+							</span>
+						) : (
+							<img
+								key={`${target.path}:${artVersion}`}
+								src={`${pathArtUrl(target.path)}?v=${artVersion}`}
+								alt=""
+								draggable={false}
+								onError={() => setArtFailed(true)}
+								className="size-24 rounded-lg bg-muted object-cover shadow-lg ring-1 ring-foreground/10"
+							/>
+						)}
+					</CoverPicker>
+				}
+				kind={
+					<>
+						<TextCursorInput /> Edit metadata
+					</>
+				}
+				badge={
+					onClose && (
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							aria-label="Close metadata editor"
+							onClick={onClose}
+						>
+							<X />
+						</Button>
+					)
+				}
+				title={
+					<h1 className="truncate font-semibold text-2xl tracking-tight" title={target.name}>
+						{target.name}
+					</h1>
+				}
+				meta={<span>{what}</span>}
+			/>
 		</div>
 	);
 }

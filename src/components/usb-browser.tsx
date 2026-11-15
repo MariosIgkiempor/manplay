@@ -427,6 +427,7 @@ function SongsView({
 	return (
 		<div className="min-w-0 space-y-5">
 			<PanelHeader
+				plain
 				kind={
 					<>
 						{isPlaylist ? <ListMusic /> : <Music />}{" "}

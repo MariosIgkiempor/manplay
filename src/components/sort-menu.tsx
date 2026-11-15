@@ -1,10 +1,41 @@
 import { Menu } from "@base-ui/react/menu";
-import { ArrowDownWideNarrow, ArrowUpNarrowWide, Check } from "lucide-react";
-import { menuItem, popup } from "#/lib/menu-styles.ts";
+import {
+	Activity,
+	ArrowDownWideNarrow,
+	ArrowUpNarrowWide,
+	CalendarDays,
+	CalendarPlus,
+	Check,
+	Clock,
+	Disc3,
+	KeyRound,
+	ListMusic,
+	ListOrdered,
+	Mic2,
+	Type,
+} from "lucide-react";
+import type { ReactNode } from "react";
 import type { ListSort, SortOption } from "#/lib/sorting.ts";
 import { cn } from "#/lib/utils.ts";
 
-const groupLabel = "px-2 pt-1.5 pb-1 text-muted-foreground text-xs";
+/** An icon for each way of sorting, matching the icons the values have elsewhere. */
+const ICONS: Record<string, ReactNode> = {
+	list: <ListOrdered />,
+	title: <Type />,
+	name: <Mic2 />,
+	artist: <Mic2 />,
+	album: <Disc3 />,
+	added: <CalendarPlus />,
+	year: <CalendarDays />,
+	bpm: <Activity />,
+	key: <KeyRound />,
+	duration: <Clock />,
+	songs: <ListMusic />,
+	albums: <Disc3 />,
+};
+
+const item =
+	"flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-muted [&_svg]:size-4 [&_svg]:shrink-0";
 
 /** What a list is sorted by, as a button that opens the choices and the direction. */
 export function SortMenu<K extends string>({
@@ -16,7 +47,7 @@ export function SortMenu<K extends string>({
 	options: readonly SortOption<K>[];
 	value: ListSort<K>;
 	onChange: (sort: ListSort<K>) => void;
-	className?: string;
+	className?: string | undefined;
 }) {
 	const current = options.find((o) => o.key === value.key) ?? options[0];
 	if (!current) {
@@ -38,51 +69,53 @@ export function SortMenu<K extends string>({
 			</Menu.Trigger>
 			<Menu.Portal>
 				<Menu.Positioner sideOffset={4} align="end" className="z-50">
-					<Menu.Popup className={popup}>
-						<Menu.Group>
-							<Menu.GroupLabel className={groupLabel}>Sort by</Menu.GroupLabel>
-							<Menu.RadioGroup
-								value={value.key}
-								onValueChange={(key: K) => {
-									const option = options.find((o) => o.key === key);
-									onChange({ key, desc: option?.desc ?? false });
-								}}
-							>
-								{options.map((o) => (
-									<Menu.RadioItem key={o.key} value={o.key} className={menuItem} closeOnClick>
-										<Indicator />
-										{o.label}
-									</Menu.RadioItem>
-								))}
-							</Menu.RadioGroup>
-						</Menu.Group>
-						<Menu.Separator className="-mx-1 my-1 h-px bg-border" />
+					<Menu.Popup className="w-60 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
+						<Menu.RadioGroup
+							value={value.key}
+							onValueChange={(key: K) => {
+								const option = options.find((o) => o.key === key);
+								onChange({ key, desc: option?.desc ?? false });
+							}}
+						>
+							{options.map((o) => (
+								<Menu.RadioItem key={o.key} value={o.key} className={item} closeOnClick>
+									<span className="text-muted-foreground">{ICONS[o.key]}</span>
+									<span className="flex-1">{o.label}</span>
+									<Menu.RadioItemIndicator className="text-primary">
+										<Check />
+									</Menu.RadioItemIndicator>
+								</Menu.RadioItem>
+							))}
+						</Menu.RadioGroup>
+						{/* Direction, worded for the chosen sort; stays open so both can be set at once. */}
 						<Menu.RadioGroup
 							value={value.desc ? "desc" : "asc"}
 							onValueChange={(d: string) => onChange({ key: value.key, desc: d === "desc" })}
+							className="mt-1 grid grid-cols-2 gap-1 border-t px-1 pt-2 pb-1"
 						>
-							<Menu.RadioItem value="asc" className={menuItem} closeOnClick>
-								<Indicator />
-								{current.directions[0]}
-							</Menu.RadioItem>
-							<Menu.RadioItem value="desc" className={menuItem} closeOnClick>
-								<Indicator />
-								{current.directions[1]}
-							</Menu.RadioItem>
+							{(["asc", "desc"] as const).map((d, i) => {
+								const Icon = d === "desc" ? ArrowDownWideNarrow : ArrowUpNarrowWide;
+								return (
+									<Menu.RadioItem
+										key={d}
+										value={d}
+										closeOnClick={false}
+										className={cn(
+											"flex cursor-default items-center justify-center gap-1.5 rounded-md border px-2 py-1 text-xs outline-none data-[highlighted]:bg-muted [&_svg]:size-3.5 [&_svg]:shrink-0",
+											(d === "desc") === value.desc
+												? "border-primary/40 bg-primary/10 text-foreground"
+												: "border-transparent text-muted-foreground",
+										)}
+									>
+										<Icon />
+										<span className="truncate">{current.directions[i]}</span>
+									</Menu.RadioItem>
+								);
+							})}
 						</Menu.RadioGroup>
 					</Menu.Popup>
 				</Menu.Positioner>
 			</Menu.Portal>
 		</Menu.Root>
-	);
-}
-
-function Indicator() {
-	return (
-		<span className="flex size-4 items-center justify-center">
-			<Menu.RadioItemIndicator>
-				<Check />
-			</Menu.RadioItemIndicator>
-		</span>
 	);
 }

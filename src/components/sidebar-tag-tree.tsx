@@ -185,7 +185,7 @@ export function SidebarTagTree() {
 							},
 						]}
 					>
-						<div className={cn("group/row", rowClass(active))}>
+						<div className={cn("group/row relative", rowClass(active))}>
 							{renaming === key ? (
 								<div
 									className="flex min-w-0 flex-1 items-center gap-2 py-0.5"
@@ -210,13 +210,17 @@ export function SidebarTagTree() {
 								>
 									<Tag className="size-4 shrink-0" />
 									<span className="truncate">{n.label}</span>
-									<RowCount n={n.trackCount} />
+									{/* On hover the count gives way to + (new subtag), so every row's count lines up. */}
+									<RowCount
+										n={n.trackCount}
+										className="group-focus-within/row:invisible group-hover/row:invisible"
+									/>
 								</Link>
 							)}
 							<AddButton
 								label={`New tag in ${n.label}`}
 								onClick={() => startTag(n)}
-								className="opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100"
+								className="absolute top-1/2 right-6 -translate-y-1/2 opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100"
 							/>
 							<ExpandButton node={n} open={isOpen} onToggle={() => toggle(key)} />
 						</div>

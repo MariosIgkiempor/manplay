@@ -9,7 +9,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
 
-use lofty::file::{FileType, TaggedFile, TaggedFileExt};
+use lofty::file::{AudioFile, FileType, TaggedFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::{Accessor, ItemKey};
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,16 @@ use crate::scan::{fingerprint, fingerprint_reader, is_audio};
 
 /// File size → fingerprints of every present library track of that size.
 pub type ContentIndex = HashMap<u64, HashSet<String>>;
+
+/// Library songs by the fingerprint of their audio alone (see `audioprint`), to their paths.
+pub type AudioIndex = HashMap<String, String>;
+
+/// An empty [`AudioIndex`], for scans that do not compare audio.
+#[cfg(test)]
+pub fn no_audio() -> &'static AudioIndex {
+    static NONE: std::sync::OnceLock<AudioIndex> = std::sync::OnceLock::new();
+    NONE.get_or_init(AudioIndex::new)
+}
 
 /// One file: on disk (`entry` is `None`) or inside the zip at `path`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -39,6 +49,8 @@ pub enum Status {
     InLibrary,
     /// Same content as another file found earlier in this scan.
     Duplicate,
+    /// Different file, same audio as a library song (retagged, renamed or moved).
+    SameAudio,
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,11 +64,27 @@ pub enum GroupKind {
 #[serde(rename_all = "camelCase")]
 pub struct ImportTrack {
     pub src: SourceRef,
+    /// For [`Status::SameAudio`]: the library song with the same audio.
+    pub same_as: Option<String>,
     pub file: String,
     pub title: String,
     pub artist: String,
     pub size: u64,
     pub status: Status,
+    pub album: Option<String>,
+    pub track: Option<u32>,
+    pub disc: Option<u32>,
+    pub year: Option<String>,
+    pub genre: Option<String>,
+    pub label: Option<String>,
+    pub bpm: Option<String>,
+    pub key: Option<String>,
+    pub duration_ms: Option<u64>,
+    /// kbps.
+    pub bitrate: Option<u32>,
+    pub sample_rate: Option<u32>,
+    /// The file carries its own cover picture.
+    pub has_art: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -166,6 +194,9 @@ struct CachedFile {
     modified: i64,
     fingerprint: Option<String>,
     meta: Option<Meta>,
+    /// Fingerprint of the audio alone; `Some("")` when the file could not be fingerprinted.
+    #[serde(default)]
+    audio_fp: Option<String>,
 }
 
 /// One file inside a zip, as listed in its central directory.
@@ -428,6 +459,15 @@ impl Opener {
         fingerprint_reader(&mut Cursor::new(bytes), len)
     }
 
+    fn audio_print(&mut self, src: &SourceRef) -> Option<String> {
+        if src.entry.is_none() {
+            return crate::audioprint::audio_print_path(Path::new(&src.path));
+        }
+        let bytes = self.bytes(src)?;
+        let len = u64::try_from(bytes.len()).ok()?;
+        crate::audioprint::audio_print(&mut Cursor::new(bytes), len)
+    }
+
     fn copy_to(&mut self, src: &SourceRef, out: &mut File) -> io::Result<()> {
         match &src.entry {
             None => io::copy(&mut File::open(&src.path)?, out).map(drop),
@@ -442,12 +482,36 @@ impl Opener {
     }
 }
 
+/// Bumped when [`Meta`] learns new fields, so files cached by older scans are read again.
+const META_VERSION: u32 = 1;
+
 #[derive(Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
 struct Meta {
+    version: u32,
     title: Option<String>,
     artist: Option<String>,
     album_artist: Option<String>,
     album: Option<String>,
+    track: Option<u32>,
+    disc: Option<u32>,
+    year: Option<String>,
+    genre: Option<String>,
+    label: Option<String>,
+    bpm: Option<String>,
+    key: Option<String>,
+    duration_ms: Option<u64>,
+    /// Audio bitrate in kbps.
+    bitrate: Option<u32>,
+    sample_rate: Option<u32>,
+    /// The file carries its own cover picture.
+    has_art: bool,
+}
+
+impl Meta {
+    fn current(&self) -> bool {
+        self.version >= META_VERSION
+    }
 }
 
 fn text(s: Option<impl AsRef<str>>) -> Option<String> {
@@ -456,14 +520,35 @@ fn text(s: Option<impl AsRef<str>>) -> Option<String> {
 }
 
 fn meta_from(tagged: &TaggedFile) -> Meta {
+    let props = tagged.properties();
+    let duration = props.duration().as_millis();
+    let audio = Meta {
+        version: META_VERSION,
+        duration_ms: (duration > 0).then(|| u64::try_from(duration).unwrap_or(u64::MAX)),
+        bitrate: props.audio_bitrate().filter(|&b| b > 0),
+        sample_rate: props.sample_rate().filter(|&r| r > 0),
+        ..Meta::default()
+    };
     let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else {
-        return Meta::default();
+        return audio;
     };
     Meta {
         title: text(tag.title()),
         artist: text(tag.artist()),
         album_artist: text(tag.get_string(ItemKey::AlbumArtist)),
         album: text(tag.album()),
+        track: tag.track(),
+        disc: tag.disk(),
+        year: text(tag.get_string(ItemKey::RecordingDate)).map(|y| y.chars().take(4).collect()),
+        genre: text(tag.genre()),
+        label: text(tag.get_string(ItemKey::Label)),
+        bpm: text(
+            tag.get_string(ItemKey::IntegerBpm)
+                .or_else(|| tag.get_string(ItemKey::Bpm)),
+        ),
+        key: text(tag.get_string(ItemKey::InitialKey)),
+        has_art: tagged.tags().iter().any(|t| !t.pictures().is_empty()),
+        ..audio
     }
 }
 
@@ -483,7 +568,13 @@ fn read_meta(opener: &mut Opener, e: &Entry) -> Meta {
             probe.read().ok()
         })
     };
-    tagged.as_ref().map(meta_from).unwrap_or_default()
+    tagged.as_ref().map_or(
+        Meta {
+            version: META_VERSION,
+            ..Meta::default()
+        },
+        meta_from,
+    )
 }
 
 // ---- grouping ----------------------------------------------------------------
@@ -708,6 +799,7 @@ fn group_of(
     metas: &HashMap<usize, Meta>,
     entries: &[Entry],
     status: &HashMap<usize, Status>,
+    matches: &HashMap<usize, String>,
 ) -> ImportGroup {
     let (artist, album) = match d.kind {
         GroupKind::Album => {
@@ -734,6 +826,7 @@ fn group_of(
                 .unwrap_or(&e.name);
             ImportTrack {
                 src: e.src.clone(),
+                same_as: matches.get(&i).cloned(),
                 file: e.name.clone(),
                 title: m
                     .and_then(|m| m.title.clone())
@@ -741,6 +834,18 @@ fn group_of(
                 artist: m.and_then(|m| m.artist.clone()).unwrap_or_default(),
                 size: e.size,
                 status: status[&i],
+                album: m.and_then(|m| m.album.clone()),
+                track: m.and_then(|m| m.track),
+                disc: m.and_then(|m| m.disc),
+                year: m.and_then(|m| m.year.clone()),
+                genre: m.and_then(|m| m.genre.clone()),
+                label: m.and_then(|m| m.label.clone()),
+                bpm: m.and_then(|m| m.bpm.clone()),
+                key: m.and_then(|m| m.key.clone()),
+                duration_ms: m.and_then(|m| m.duration_ms),
+                bitrate: m.and_then(|m| m.bitrate),
+                sample_rate: m.and_then(|m| m.sample_rate),
+                has_art: m.is_some_and(|m| m.has_art),
             }
         })
         .collect();
@@ -776,6 +881,8 @@ pub struct Options<'a> {
     /// Build the result only from the cache, reading no files. Instant, but may be incomplete.
     pub cached_only: bool,
     pub report: &'a dyn Fn(&Progress),
+    /// Library audio to compare new files with, so retagged or renamed copies are recognised.
+    pub same_audio: &'a AudioIndex,
 }
 
 /// Whether each music file is new, already in the library, or a repeat within this scan.
@@ -787,7 +894,7 @@ fn statuses(
     opener: &mut Opener,
     cached: &mut HashMap<usize, CachedFile>,
     opts: &Options<'_>,
-) -> (HashMap<usize, Status>, usize) {
+) -> (HashMap<usize, Status>, HashMap<usize, String>, usize) {
     // Same size as something in the library or elsewhere in this scan is the only case where
     // content has to be compared, so most files are never read.
     let mut sizes: HashMap<u64, usize> = HashMap::new();
@@ -795,7 +902,9 @@ fn statuses(
         *sizes.entry(e.size).or_default() += 1;
     }
     let mut seen: HashSet<(u64, String)> = HashSet::new();
+    let mut seen_audio: HashSet<String> = HashSet::new();
     let mut status: HashMap<usize, Status> = HashMap::new();
+    let mut matches: HashMap<usize, String> = HashMap::new();
     let mut already = 0;
     let total = sizes.values().sum();
     let mut checked = 0;
@@ -819,13 +928,13 @@ fn statuses(
             modified: e.modified,
             fingerprint: None,
             meta: None,
+            audio_fp: None,
         });
         if contested && !opts.cached_only && record.fingerprint.is_none() {
             record.fingerprint = opener.fingerprint(&e.src, e.size);
         }
         let fp = contested.then(|| record.fingerprint.clone()).flatten();
-        cached.insert(i, record);
-        let s = match fp {
+        let mut s = match fp {
             None => Status::New,
             Some(f) if known.get(&e.size).is_some_and(|set| set.contains(&f)) => {
                 already += 1;
@@ -839,9 +948,48 @@ fn statuses(
                 }
             }
         };
+        if s == Status::New {
+            s = by_audio(
+                e,
+                &mut record,
+                opener,
+                opts,
+                &mut seen_audio,
+                &mut matches,
+                i,
+            );
+        }
+        cached.insert(i, record);
         status.insert(i, s);
     }
-    (status, already)
+    (status, matches, already)
+}
+
+/// A file that is new by its bytes may still hold audio the library (or this scan) already has.
+fn by_audio(
+    e: &Entry,
+    record: &mut CachedFile,
+    opener: &mut Opener,
+    opts: &Options<'_>,
+    seen: &mut HashSet<String>,
+    matches: &mut HashMap<usize, String>,
+    i: usize,
+) -> Status {
+    if record.audio_fp.is_none() && !opts.cached_only {
+        record.audio_fp = Some(opener.audio_print(&e.src).unwrap_or_default());
+    }
+    let Some(fp) = record.audio_fp.as_deref().filter(|f| !f.is_empty()) else {
+        return Status::New;
+    };
+    if let Some(path) = opts.same_audio.get(fp) {
+        matches.insert(i, path.clone());
+        return Status::SameAudio;
+    }
+    if seen.insert(fp.to_owned()) {
+        Status::New
+    } else {
+        Status::Duplicate
+    }
 }
 
 /// Counts how many files still needing their tags read have been handled.
@@ -859,7 +1007,9 @@ fn meta_of(
     cached: &mut HashMap<usize, CachedFile>,
     tags: &mut TagProgress<'_>,
 ) -> Meta {
-    if let Some(m) = cached.get(&i).and_then(|c| c.meta.clone()) {
+    if let Some(m) = cached.get(&i).and_then(|c| c.meta.clone())
+        && (m.current() || tags.opts.cached_only)
+    {
         return m;
     }
     if tags.opts.cached_only {
@@ -904,11 +1054,11 @@ pub fn scan(
     let mut opener = Opener::default();
     let mut cached: HashMap<usize, CachedFile> = HashMap::new();
 
-    let (status, already) = statuses(&entries, known, old, &mut opener, &mut cached, opts);
+    let (status, matches, already) = statuses(&entries, known, old, &mut opener, &mut cached, opts);
 
     let missing_tags = status
         .iter()
-        .filter(|&(i, s)| *s == Status::New && cached[i].meta.is_none())
+        .filter(|&(i, s)| *s == Status::New && !cached[i].meta.as_ref().is_some_and(Meta::current))
         .count();
     let mut tags = TagProgress {
         opts,
@@ -930,7 +1080,7 @@ pub fn scan(
             .iter()
             .map(|&i| (i, meta_of(i, &entries, &mut opener, &mut cached, &mut tags)))
             .collect();
-        groups.push(group_of(d, &new, &metas, &entries, &status));
+        groups.push(group_of(d, &new, &metas, &entries, &status, &matches));
     }
     groups.sort_by(|a, b| {
         b.modified
@@ -1178,6 +1328,7 @@ mod tests {
         Options {
             cached_only: false,
             report: &|_| {},
+            same_audio: no_audio(),
         }
     }
 
@@ -1406,6 +1557,7 @@ mod tests {
         let mut cache = Cache::from_json(&cache.to_json());
         for f in cache.files.values_mut() {
             f.meta = Some(Meta {
+                version: META_VERSION,
                 title: Some("FROM CACHE".to_owned()),
                 ..Meta::default()
             });
@@ -1442,6 +1594,7 @@ mod tests {
         let opts = Options {
             cached_only: true,
             report: &|_| {},
+            same_audio: no_audio(),
         };
         let (quick, _) = super::scan(&root, &known, &cache, &opts);
         assert_eq!(names(&quick), vec![(GroupKind::Album, "Old".to_owned(), 1)]);
@@ -1459,6 +1612,7 @@ mod tests {
         let opts = Options {
             cached_only: false,
             report: &report,
+            same_audio: no_audio(),
         };
         super::scan(&root, &ContentIndex::new(), &Cache::default(), &opts);
         let seen = seen.into_inner();

@@ -98,3 +98,49 @@
 		accent-color: var(--primary);
 	}
 }
+
+/* The import toolbar's progress bar while the total is not known yet. */
+@keyframes import-sweep {
+	from {
+		translate: -100% 0;
+	}
+	to {
+		translate: 300% 0;
+	}
+}
+
+/*
+ * Segmented buttons (ButtonGroup). Unlayered so they win over the buttons' own utilities; they
+ * reach only buttons at the group's top level or one wrapper down, never into drawers it opens.
+ */
+:is(
+		[data-slot="button-group"] > [data-slot="button"],
+		[data-slot="button-group"] > :not(aside) > [data-slot="button"]
+	) {
+	height: 2rem;
+	padding-inline: 0.75rem;
+	border-width: 0;
+	border-radius: 0;
+	box-shadow: -1px 0 0 0 var(--color-input);
+	translate: none;
+}
+:is(
+		[data-slot="button-group"][data-size="sm"] > [data-slot="button"],
+		[data-slot="button-group"][data-size="sm"] > :not(aside) > [data-slot="button"]
+	) {
+	height: 1.75rem;
+	padding-inline: 0.625rem;
+	font-size: var(--text-xs);
+}
+:is(
+		[data-slot="button-group"] > [data-slot="button"],
+		[data-slot="button-group"] > :not(aside) > [data-slot="button"]
+	):not([data-variant="default"]) {
+	background-color: transparent;
+}
+:is(
+		[data-slot="button-group"] > [data-slot="button"],
+		[data-slot="button-group"] > :not(aside) > [data-slot="button"]
+	):not([data-variant="default"]):hover {
+	background-color: var(--color-muted);
+}

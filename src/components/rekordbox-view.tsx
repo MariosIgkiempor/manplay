@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, FileDown, FolderOpen, ListMusic } from "lucide-react";
+import { ChevronRight, FileDown, FolderOpen, ListMusic, Tag as TagIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import { BrandIcon } from "#/components/brand-icon.tsx";
 import { CheckList, CheckRow, Filter, LinkButton, TagTree } from "#/components/check-list.tsx";
 import { Drawer } from "#/components/drawer.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Segmented } from "#/components/view-toggle.tsx";
 import {
 	listPlaylists,
 	listTags,
@@ -19,6 +19,7 @@ import {
 } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
 import { sameSelection } from "#/lib/rekordbox-selection.ts";
+import { typeScale } from "#/lib/type-scale.ts";
 import { useAutosave } from "#/lib/unsaved.tsx";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { cn } from "#/lib/utils.ts";
@@ -43,7 +44,7 @@ function Group({
 	children: ReactNode;
 }) {
 	return (
-		<section className="space-y-3 rounded-lg border bg-card p-4">
+		<section className="space-y-3">
 			<div className="space-y-1">
 				<div className="flex items-center justify-between gap-2">
 					<h2 className="flex items-baseline gap-2 font-semibold text-sm">
@@ -238,114 +239,62 @@ function ExportBar({
 	count,
 	unexported,
 	saveState,
-	exportedAt,
 	pending,
 	onExport,
+	onClose,
 }: {
 	count: number;
 	/** The choice changed since the file was last written. */
 	unexported: boolean;
 	saveState: ReactNode;
-	exportedAt: number | null;
 	pending: boolean;
 	onExport: () => void;
+	onClose: () => void;
 }) {
 	let note = "";
 	if (unexported) {
-		note = " · changes not exported yet";
-	} else if (exportedAt !== null) {
-		note = ` · exported ${timeAgo(exportedAt)}`;
+		note = ", changes not exported yet";
 	}
 	return (
-		<div className="sticky bottom-0 z-10 -mx-4 -mb-4 mt-6 flex flex-wrap items-center gap-3 border-t bg-background/85 px-4 py-3 backdrop-blur-md">
-			<p className="min-w-0 flex-1 text-muted-foreground text-sm">
-				<span className="text-foreground">{plural(count, "playlist")}</span> will be in the file
-				{note}
+		<div className="-mx-4 -mb-4 sticky bottom-0 z-10 flex items-center gap-3 border-t bg-background/85 px-4 py-3 backdrop-blur-md">
+			<p className="min-w-0 flex-1 truncate text-muted-foreground text-sm tabular-nums">
+				{plural(count, "playlist")} in the file{note}
 			</p>
 			{saveState}
+			<Button variant="ghost" onClick={onClose} disabled={pending}>
+				Cancel
+			</Button>
 			<Button onClick={onExport} disabled={pending}>
-				<FileDown /> {pending ? "Exporting…" : "Export to rekordbox"}
+				{pending ? "Exporting…" : "Export"}
 			</Button>
 		</div>
 	);
 }
 
-type Tab = "choose" | "file";
+type Tab = "playlists" | "tags" | "file";
 
-function Tabs({
-	tab,
-	onChange,
-	fileCount,
-}: {
-	tab: Tab;
-	onChange: (t: Tab) => void;
-	fileCount: number | null;
-}) {
-	const items: [Tab, string][] = [
-		["choose", "What to export"],
-		["file", fileCount === null ? "In rekordbox" : `In rekordbox · ${fileCount}`],
-	];
-	return (
-		<div role="tablist" className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
-			{items.map(([id, label]) => (
-				<button
-					key={id}
-					type="button"
-					role="tab"
-					aria-selected={tab === id}
-					onClick={() => onChange(id)}
-					className={cn(
-						"rounded-md px-3 py-1.5 font-medium text-sm transition-colors",
-						tab === id
-							? "bg-background text-foreground shadow-sm"
-							: "text-muted-foreground hover:text-foreground",
-					)}
-				>
-					{label}
-				</button>
-			))}
-		</div>
-	);
-}
-
-function Figure({ value, label }: { value: string | number; label: string }) {
-	return (
-		<div className="min-w-0 rounded-lg bg-background/70 px-3 py-2 ring-1 ring-foreground/5">
-			<p className="truncate font-semibold text-xl tabular-nums leading-tight">{value}</p>
-			<p className="truncate text-muted-foreground text-xs">{label}</p>
-		</div>
-	);
-}
-
-function Hero({
+/** The file's name and what it holds, as the USB export drawer shows the drive and its space. */
+function FileTitle({
 	path,
 	tracks,
-	exported,
+	playlists,
 	exportedAt,
 }: {
 	path: string | null;
 	tracks: number | null;
-	exported: number;
+	playlists: number | null;
 	exportedAt: number | null;
 }) {
 	return (
-		<div className="space-y-3 rounded-lg border bg-muted/40 p-4">
-			<div className="flex items-center gap-3">
-				<BrandIcon brand="rekordbox" className="size-11" />
-				<div className="min-w-0">
-					<h2 className="font-semibold text-xl tracking-tight">Export to rekordbox</h2>
-					{path && (
-						<p className="truncate font-mono text-muted-foreground text-xs" title={path}>
-							{path}
-						</p>
-					)}
-				</div>
-			</div>
-			<div className="grid grid-cols-3 gap-2">
-				<Figure value={tracks ?? "–"} label="tracks in file" />
-				<Figure value={exported} label="playlists chosen" />
-				<Figure value={exportedAt === null ? "Never" : timeAgo(exportedAt)} label="last export" />
-			</div>
+		<div className="space-y-1">
+			<h2 className={cn("truncate", typeScale.panelTitle)} title={path ?? undefined}>
+				{path === null ? "rekordbox" : (path.split(/[\\/]/).pop() ?? path)}
+			</h2>
+			<p className="flex flex-wrap gap-x-3 text-muted-foreground text-xs tabular-nums">
+				{tracks !== null && <span>{plural(tracks, "track")} in the file</span>}
+				{playlists !== null && <span>{plural(playlists, "playlist")}</span>}
+				<span>{exportedAt === null ? "Never exported" : `Exported ${timeAgo(exportedAt)}`}</span>
+			</p>
 		</div>
 	);
 }
@@ -362,11 +311,10 @@ function TabBody({
 	if (tab === "file") {
 		return <InFile />;
 	}
-	return (
-		<div className="space-y-4">
-			<Playlists selection={selection} onChange={onChange} />
-			<Tags selection={selection} onChange={onChange} />
-		</div>
+	return tab === "playlists" ? (
+		<Playlists selection={selection} onChange={onChange} />
+	) : (
+		<Tags selection={selection} onChange={onChange} />
 	);
 }
 
@@ -382,14 +330,14 @@ function NoFile({ onChoose, pending }: { onChoose: () => void; pending: boolean 
 }
 
 /** Choose what goes into the rekordbox file, see what is in it now, and write it. */
-export function RekordboxExport() {
+export function RekordboxExport({ onClose }: { onClose: () => void }) {
 	const queryClient = useQueryClient();
 	const { status, choose } = useRekordbox();
 	const saved = useQuery({ queryKey: ["rekordbox-selection"], queryFn: rekordboxSelection });
 	const playlists = useQuery({ queryKey: ["playlists"], queryFn: listPlaylists });
 	const library = useQuery({ queryKey: ["rekordbox-library"], queryFn: rekordboxLibrary });
 	const [draft, setDraft] = useState<RekordboxSelection | null>(null);
-	const [tab, setTab] = useState<Tab>("choose");
+	const [tab, setTab] = useState<Tab>("playlists");
 	const selection = draft ?? saved.data ?? EMPTY;
 	// The choice saves on its own; the file is only written by the Export button.
 	const [unexported, setUnexported] = useState(false);
@@ -419,30 +367,41 @@ export function RekordboxExport() {
 	});
 
 	const path = status.data?.path ?? null;
-	const exported =
-		(playlists.data ?? []).filter((p) => !selection.excludedPlaylists.includes(p.id)).length +
-		selection.tags.length;
+	const playlistsOn = (playlists.data ?? []).filter(
+		(p) => !selection.excludedPlaylists.includes(p.id),
+	).length;
+	const exported = playlistsOn + selection.tags.length;
 	const exportedAt = status.data?.exportedAt ?? null;
 
 	return (
-		<div className="space-y-4">
-			<Hero
+		<div className="flex min-h-full flex-col gap-5">
+			<FileTitle
 				path={path}
 				tracks={library.data?.tracks ?? null}
-				exported={exported}
+				playlists={library.data?.playlists.length ?? null}
 				exportedAt={exportedAt}
 			/>
 			{status.isSuccess && path === null ? (
 				<NoFile onChoose={() => choose.mutate()} pending={choose.isPending} />
 			) : (
-				<>
-					<Tabs
-						tab={tab}
+				<div className="flex-1 space-y-4">
+					<Segmented
+						value={tab}
 						onChange={setTab}
-						fileCount={library.data ? library.data.playlists.length : null}
+						label="rekordbox export"
+						items={[
+							{
+								value: "playlists",
+								label: "Playlists",
+								icon: <ListMusic />,
+								count: playlistsOn,
+							},
+							{ value: "tags", label: "Tags", icon: <TagIcon />, count: selection.tags.length },
+							{ value: "file", label: "In rekordbox", icon: <FileDown /> },
+						]}
 					/>
 					<TabBody tab={tab} selection={selection} onChange={setDraft} />
-				</>
+				</div>
 			)}
 			<MutationErrors mutations={[exportNow, choose]} />
 			{path !== null && (
@@ -450,9 +409,9 @@ export function RekordboxExport() {
 					count={exported}
 					unexported={unexported || autosave.dirty}
 					saveState={<SaveState status={autosave.status} error={autosave.error} />}
-					exportedAt={exportedAt}
 					pending={exportNow.isPending}
 					onExport={() => exportNow.mutate(selection)}
+					onClose={onClose}
 				/>
 			)}
 		</div>
@@ -481,7 +440,7 @@ export function RekordboxExportButton({
 				title="Export to rekordbox"
 				width="w-[44rem]"
 			>
-				{open && <RekordboxExport />}
+				{open && <RekordboxExport onClose={() => setOpen(false)} />}
 			</Drawer>
 		</>
 	);

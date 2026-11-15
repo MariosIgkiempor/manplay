@@ -3,6 +3,7 @@
 mod analysis;
 mod anlz;
 mod art;
+mod audioprint;
 mod audit;
 mod db;
 mod error;
@@ -2081,7 +2082,7 @@ async fn import_scan(
         return Err(Error::Msg(format!("not a folder: {}", folder.display())));
     }
     let key = folder.to_string_lossy().into_owned();
-    let (known, cache) = {
+    let (known, cache, mut audio, unprinted) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         db::set_setting(&conn, SETTING_IMPORT_FOLDER, folder.to_str())?;
         let saved = if fresh {
@@ -2094,24 +2095,59 @@ async fn import_scan(
             saved
                 .map(|j| import::Cache::from_json(&j))
                 .unwrap_or_default(),
+            db::audio_index(&conn)?,
+            db::tracks_without_audio_fp(&conn)?,
         )
     };
-    let (found, json) = tauri::async_runtime::spawn_blocking(move || {
+    let (found, json, printed) = tauri::async_runtime::spawn_blocking(move || {
         let report = |p: &import::Progress| {
             let _ = app.emit("import-progress", p);
         };
+        // Library songs not fingerprinted yet, once each, so retagged copies can be recognised.
+        let mut printed = Vec::with_capacity(unprinted.len());
+        for (n, (id, path)) in unprinted.into_iter().enumerate() {
+            if n % 16 == 0 {
+                report(&import::Progress {
+                    phase: "library",
+                    done: n,
+                    total: printed.capacity(),
+                });
+            }
+            let fp = audioprint::audio_print_path(Path::new(&path)).unwrap_or_default();
+            if !fp.is_empty() {
+                audio.insert(fp.clone(), path);
+            }
+            printed.push((id, fp));
+        }
+        audio.remove("");
         let opts = import::Options {
             cached_only: false,
             report: &report,
+            same_audio: &audio,
         };
         let (found, next) = import::scan(&folder, &known, &cache, &opts);
-        (found, next.to_json())
+        (found, next.to_json(), printed)
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))?;
-    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::set_audio_fps(&mut conn, &printed)?;
     db::put_import_cache(&conn, &key, &json)?;
     Ok(found)
+}
+
+/// Moves files, zips or folders from the Downloads folder to the Trash. Only paths inside the
+/// saved Downloads folder are accepted, and never the folder itself.
+#[tauri::command]
+async fn import_trash(state: State<'_, AppState>, paths: Vec<PathBuf>) -> Result<(), Error> {
+    let folder = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::get_setting(&conn, SETTING_IMPORT_FOLDER)?
+    }
+    .ok_or_else(|| Error::Msg("no Downloads folder chosen".to_owned()))?;
+    tauri::async_runtime::spawn_blocking(move || fsops::trash(Path::new(&folder), &paths))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?
 }
 
 /// What the last scan of `folder` found, rebuilt from the cache without reading any file.
@@ -2122,11 +2158,12 @@ async fn import_cached(
     folder: PathBuf,
 ) -> Result<Option<import::ImportScan>, Error> {
     let key = folder.to_string_lossy().into_owned();
-    let (known, saved) = {
+    let (known, saved, audio) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         (
             db::content_index(&conn)?,
             db::get_import_cache(&conn, &key)?,
+            db::audio_index(&conn)?,
         )
     };
     let Some(json) = saved else {
@@ -2136,6 +2173,7 @@ async fn import_cached(
         let opts = import::Options {
             cached_only: true,
             report: &|_| {},
+            same_audio: &audio,
         };
         let cache = import::Cache::from_json(&json);
         Some(import::scan(&folder, &known, &cache, &opts).0)
@@ -2768,6 +2806,7 @@ pub fn run() {
             get_panel_tabs,
             set_panel_tabs,
             get_ui_setting,
+            import_trash,
             set_ui_setting,
             get_tag_clipboard,
             set_tag_clipboard,

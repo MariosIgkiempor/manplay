@@ -1,30 +1,43 @@
 import type { ReactNode } from "react";
+import { PageHeader, PageIcon } from "#/components/page-header.tsx";
 import { typeScale } from "#/lib/type-scale.ts";
 import { cn } from "#/lib/utils.ts";
 
 /**
- * A settings-style screen (Import, Export, Metadata, Settings): title, actions on the right, then
- * its sections. No intro prose: what a control does belongs on the control.
+ * A page with the shared header (icon, title, figures, buttons, optional tabs) and its sections
+ * below. No intro prose: what a control does belongs on the control.
  */
 export function Page({
 	title,
+	icon,
+	meta,
 	actions,
+	tabs,
 	children,
 	wide = false,
 }: {
 	title: string;
+	/** The page's icon, as in the sidebar. */
+	icon: ReactNode;
+	meta?: ReactNode;
 	actions?: ReactNode;
+	tabs?: ReactNode;
 	children: ReactNode;
 	/** Use the full width, for screens built around one big list. */
 	wide?: boolean;
 }) {
 	return (
-		<main className={cn("mx-auto w-full space-y-8 px-6 pt-6 pb-10", !wide && "max-w-5xl")}>
-			<header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-				<h1 className={typeScale.pageTitle}>{title}</h1>
-				{actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-			</header>
-			{children}
+		<main>
+			<PageHeader
+				art={<PageIcon>{icon}</PageIcon>}
+				title={title}
+				meta={meta}
+				actions={actions}
+				tabs={tabs}
+			/>
+			<div className={cn("mx-auto w-full space-y-8 px-6 pt-6 pb-10", !wide && "max-w-5xl")}>
+				{children}
+			</div>
 		</main>
 	);
 }

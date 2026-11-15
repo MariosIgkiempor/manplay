@@ -11,8 +11,8 @@ import {
 	Usb,
 } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
-import { BrandIcon } from "#/components/brand-icon.tsx";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { DestinationHeader, SettingLabel, UsageBar } from "#/components/destination-header.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
@@ -20,6 +20,7 @@ import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { UsbBrowser } from "#/components/usb-browser.tsx";
 import { UsbExportButton } from "#/components/usb-export.tsx";
+import { Segmented } from "#/components/view-toggle.tsx";
 import {
 	type UsbDrive,
 	type UsbFormats,
@@ -65,8 +66,19 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 			<DriveHeader
 				drive={drive}
 				actions={<UsbExportButton drive={drive} library={library.data} />}
+				tabs={
+					<Segmented
+						className="border-b-0"
+						value={tab}
+						onChange={setTab}
+						label="Drive view"
+						items={[
+							{ value: "contents", label: "Contents", icon: <LibraryBig /> },
+							{ value: "settings", label: "Settings", icon: <Settings2 /> },
+						]}
+					/>
+				}
 			/>
-			<Tabs tab={tab} onChange={setTab} />
 			<div
 				className={cn(
 					"min-h-0 flex-1",
@@ -94,24 +106,23 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 	);
 }
 
-/** Thin bar of how full the drive is, beside the numbers it stands for. */
 function SpaceBar({ drive }: { drive: UsbDrive }) {
-	const used = drive.totalBytes - drive.freeBytes;
-	const pct = drive.totalBytes > 0 ? Math.min(100, (used / drive.totalBytes) * 100) : 0;
 	return (
-		<span className="flex items-center gap-2">
-			<span aria-hidden="true" className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
-				<span
-					className={cn("block h-full", pct > 90 ? "bg-warning" : "bg-muted-foreground/60")}
-					style={{ width: `${pct}%` }}
-				/>
-			</span>
+		<UsageBar value={drive.totalBytes - drive.freeBytes} total={drive.totalBytes} warnAbove={0.9}>
 			{formatBytes(drive.freeBytes)} free of {formatBytes(drive.totalBytes)}
-		</span>
+		</UsageBar>
 	);
 }
 
-function DriveHeader({ drive, actions }: { drive: UsbDrive; actions: ReactNode }) {
+function DriveHeader({
+	drive,
+	actions,
+	tabs,
+}: {
+	drive: UsbDrive;
+	actions: ReactNode;
+	tabs: ReactNode;
+}) {
 	const queryClient = useQueryClient();
 	const reveal = useMutation({ mutationFn: () => usbReveal(drive.mount) });
 	const eject = useMutation({
@@ -119,69 +130,44 @@ function DriveHeader({ drive, actions }: { drive: UsbDrive; actions: ReactNode }
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["usb-drives"] }),
 	});
 	return (
-		<div className="shrink-0 space-y-4">
-			<div className="flex items-start gap-4">
-				<BrandIcon brand="usb" className="size-14 rounded-xl" />
-				<div className="min-w-0 flex-1 space-y-1.5">
-					<div className="flex items-center gap-1.5 text-muted-foreground text-xs">
-						<Usb className="size-3.5" /> CDJ USB
-					</div>
-					<h2 className={cn("truncate", typeScale.panelTitle)} title={drive.mount}>
-						{drive.name}
-					</h2>
-					<p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground text-xs tabular-nums">
+		<div className="shrink-0 space-y-2">
+			<DestinationHeader
+				brand="usb"
+				kind={
+					<>
+						<Usb /> CDJ USB
+					</>
+				}
+				title={drive.name}
+				titleHint={drive.mount}
+				meta={
+					<>
 						<SpaceBar drive={drive} />
 						{drive.filesystem && <span>{drive.filesystem.toUpperCase()}</span>}
 						{!drive.writable && <span className="text-warning">Read-only</span>}
-					</p>
-					{(drive.hasLibrary || drive.hasOneLibrary) && <FormatPills mount={drive.mount} />}
-				</div>
-			</div>
-			<div className="flex flex-wrap items-center gap-2">
-				{actions}
-				<Button size="sm" variant="outline" onClick={() => reveal.mutate()}>
-					<FolderOpen /> Show in Finder
-				</Button>
-				<Button
-					size="sm"
-					variant="outline"
-					onClick={() => eject.mutate()}
-					disabled={eject.isPending}
-				>
-					<Eject /> {eject.isPending ? "Ejecting…" : "Eject"}
-				</Button>
-			</div>
+					</>
+				}
+				extra={(drive.hasLibrary || drive.hasOneLibrary) && <FormatPills mount={drive.mount} />}
+				actions={
+					<>
+						{actions}
+						<Button size="sm" variant="outline" onClick={() => reveal.mutate()}>
+							<FolderOpen /> Show in Finder
+						</Button>
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => eject.mutate()}
+							disabled={eject.isPending}
+						>
+							<Eject /> {eject.isPending ? "Ejecting…" : "Eject"}
+						</Button>
+					</>
+				}
+				tabs={tabs}
+			/>
 			{reveal.isError && <ErrorText message={String(reveal.error)} />}
 			{eject.isError && <ErrorText message={String(eject.error)} />}
-		</div>
-	);
-}
-
-function Tabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
-	const items: [Tab, string, ReactNode][] = [
-		["contents", "Contents", <LibraryBig key="c" />],
-		["settings", "Settings", <Settings2 key="s" />],
-	];
-	return (
-		<div role="tablist" className="flex shrink-0 gap-1 border-b">
-			{items.map(([id, label, icon]) => (
-				<button
-					key={id}
-					type="button"
-					role="tab"
-					aria-selected={tab === id}
-					onClick={() => onChange(id)}
-					className={cn(
-						"-mb-px flex items-center gap-2 border-b-2 px-3 py-2 font-medium text-sm transition-colors focus-visible:outline-2 [&_svg]:size-4",
-						tab === id
-							? "border-primary text-foreground"
-							: "border-transparent text-muted-foreground hover:text-foreground",
-					)}
-				>
-					{icon}
-					{label}
-				</button>
-			))}
 		</div>
 	);
 }
@@ -340,18 +326,6 @@ function DriveSettings({ drive }: { drive: UsbDrive }) {
 	);
 }
 
-function RowLabel({ icon, title, hint }: { icon: ReactNode; title: string; hint: ReactNode }) {
-	return (
-		<span className="flex items-start gap-3">
-			<span className="mt-0.5 text-muted-foreground [&_svg]:size-4">{icon}</span>
-			<span className="space-y-0.5">
-				<span className="block">{title}</span>
-				<span className="block max-w-sm text-muted-foreground text-xs">{hint}</span>
-			</span>
-		</span>
-	);
-}
-
 /** The copies of earlier libraries each export keeps, and a way to clear out all but the newest. */
 function BackupsRow({ drive }: { drive: UsbDrive }) {
 	const queryClient = useQueryClient();
@@ -376,7 +350,7 @@ function BackupsRow({ drive }: { drive: UsbDrive }) {
 	}
 	const older = (b?.count ?? 0) - 1;
 	return (
-		<SettingRow label={<RowLabel icon={<Archive />} title="Library backups" hint={hint} />}>
+		<SettingRow label={<SettingLabel icon={<Archive />} title="Library backups" hint={hint} />}>
 			<Button
 				size="sm"
 				variant="outline"
@@ -432,7 +406,7 @@ function ResetRow({ drive }: { drive: UsbDrive }) {
 	return (
 		<SettingRow
 			label={
-				<RowLabel
+				<SettingLabel
 					icon={<Eraser className="text-destructive" />}
 					title="Reset drive"
 					hint="Removes the rekordbox library, analysis and exported songs, so the next export starts fresh. Player settings stay."

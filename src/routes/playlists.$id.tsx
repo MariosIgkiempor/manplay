@@ -4,7 +4,7 @@ import { ListMusic, ListX } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
-import { PageHeader } from "#/components/page-header.tsx";
+import { CollectionHeader } from "#/components/page-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useUndo } from "#/context/undo-context.ts";
@@ -65,7 +65,7 @@ function PlaylistPage() {
 
 	return (
 		<main>
-			<PageHeader
+			<CollectionHeader
 				kind={
 					<>
 						<ListMusic className="size-3.5" /> Playlist

@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { Download } from "lucide-react";
 import { DownloadsCard, useDownloadsEnabled } from "#/components/downloads-source.tsx";
 import { ImportView } from "#/components/import-view.tsx";
 import { ItunesCard, ItunesPending, useItunesOn } from "#/components/itunes-source.tsx";
@@ -13,7 +14,7 @@ function ImportPage() {
 	const s = useImport(enabled);
 	const itunesOn = useItunesOn();
 	return (
-		<Page title="Import">
+		<Page title="Import" icon={<Download />} wide>
 			<Section title="Sources">
 				<div className="grid gap-4 lg:grid-cols-2">
 					<DownloadsCard s={s} />

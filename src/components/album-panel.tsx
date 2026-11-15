@@ -68,15 +68,18 @@ export function AlbumPanel({ albumKey: key }: { albumKey: string }) {
 					</CoverPicker>
 				}
 				tracks={album.tracks}
-			/>
-			<Segmented
-				value={tabs.album}
-				onChange={(v) => setTab("album", v)}
-				label="Album view"
-				items={[
-					{ value: "songs", label: "Songs", icon: <ListMusic /> },
-					{ value: "metadata", label: "Metadata", icon: <TextCursorInput /> },
-				]}
+				tabs={
+					<Segmented
+						className="border-b-0"
+						value={tabs.album}
+						onChange={(v) => setTab("album", v)}
+						label="Album view"
+						items={[
+							{ value: "songs", label: "Songs", icon: <ListMusic /> },
+							{ value: "metadata", label: "Metadata", icon: <TextCursorInput /> },
+						]}
+					/>
+				}
 			/>
 			{tabs.album === "songs" ? (
 				<SelectableTrackList
@@ -89,13 +92,7 @@ export function AlbumPanel({ albumKey: key }: { albumKey: string }) {
 			) : (
 				target && (
 					<>
-						<TagEditor
-							key={paths.join("\n")}
-							target={target}
-							onClose={() => undefined}
-							confirm={tagConfirm.ask}
-							embedded
-						/>
+						<TagEditor key={paths.join("\n")} target={target} confirm={tagConfirm.ask} embedded />
 						{tagConfirm.dialog}
 					</>
 				)
