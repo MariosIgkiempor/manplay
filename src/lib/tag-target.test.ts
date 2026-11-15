@@ -14,6 +14,9 @@ const track = (id: number, album: string, artist = "A"): Track => ({
 	durationMs: null,
 	bitrate: null,
 	sampleRate: null,
+	bpm: null,
+	key: null,
+	analyzed: false,
 });
 
 describe("tagTargetFor", () => {

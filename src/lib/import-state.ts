@@ -147,5 +147,8 @@ export function previewTrack(path: string, t: ImportTrack, edit: Edit): Track {
 		durationMs: null,
 		bitrate: null,
 		sampleRate: null,
+		bpm: null,
+		key: null,
+		analyzed: false,
 	};
 }

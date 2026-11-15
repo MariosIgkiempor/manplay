@@ -2,6 +2,7 @@ import { useMutationState } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
 import { type ReactNode, useContext } from "react";
 import { createPortal } from "react-dom";
+import { AnalysisStatusPill } from "#/components/analysis-status-pill.tsx";
 import { SyncStatusPill } from "#/components/sync-status-pill.tsx";
 import { PanelScopeContext, StatusSlotContext } from "#/context/detail-context.ts";
 import { SCAN_KEY, SYNC_KEY } from "#/lib/queries.ts";
@@ -72,7 +73,7 @@ function StatusErrors() {
 }
 
 /**
- * The app's status bar. Left: errors and notices. Middle: sync progress. Right: the current
+ * The app's status bar. Left: errors and notices. Middle: sync and analysis progress. Right: the current
  * view's figures.
  */
 export function StatusBarHost({
@@ -88,8 +89,9 @@ export function StatusBarHost({
 				<StatusErrors />
 				{notices}
 			</div>
-			<div className="flex justify-center">
+			<div className="flex items-center justify-center gap-4">
 				<SyncStatusPill />
+				<AnalysisStatusPill />
 			</div>
 			<div ref={setSlot} className="flex items-center justify-end gap-4" />
 		</footer>

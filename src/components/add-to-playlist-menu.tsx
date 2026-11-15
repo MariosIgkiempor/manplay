@@ -1,10 +1,12 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { TextCursorInput } from "lucide-react";
+import { useIsMutating } from "@tanstack/react-query";
+import { AudioWaveform, TextCursorInput } from "lucide-react";
 import type { ReactNode } from "react";
 import { PlaylistSubmenu } from "#/components/playlist-submenu.tsx";
 import { TagSubmenu } from "#/components/tag-submenu.tsx";
 import { useDetailNav } from "#/context/detail-context.ts";
 import type { Track } from "#/lib/api.ts";
+import { ANALYSIS_KEY, useAnalyze } from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
 
 const menuItem =
@@ -20,9 +22,14 @@ interface Props {
 	children: ReactNode;
 }
 
-/** Wraps `children` so a right-click offers "Add to playlist", "Tag" and "Edit tags" for `tracks`. */
+/**
+ * Wraps `children` so a right-click offers "Add to playlist", "Tag", "Edit metadata" and
+ * "Analyze BPM & key" for `tracks`.
+ */
 export function AddToPlaylistMenu({ tracks, label, children }: Props) {
 	const go = useDetailNav();
+	const analyze = useAnalyze();
+	const analyzing = useIsMutating({ mutationKey: ANALYSIS_KEY }) > 0;
 	return (
 		<ContextMenu.Root>
 			<ContextMenu.Trigger>{children}</ContextMenu.Trigger>
@@ -42,6 +49,13 @@ export function AddToPlaylistMenu({ tracks, label, children }: Props) {
 							}}
 						>
 							<TextCursorInput className="size-4" /> Edit metadata…
+						</ContextMenu.Item>
+						<ContextMenu.Item
+							className={`${menuItem} data-[disabled]:opacity-50`}
+							disabled={analyzing}
+							onClick={() => analyze.mutate(tracks.map((t) => t.id))}
+						>
+							<AudioWaveform className="size-4" /> Analyze BPM &amp; key
 						</ContextMenu.Item>
 					</ContextMenu.Popup>
 				</ContextMenu.Positioner>

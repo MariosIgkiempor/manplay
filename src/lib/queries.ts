@@ -3,6 +3,9 @@ import { useUndo } from "#/context/undo-context.ts";
 import {
 	type ActivitySource,
 	activityHistory,
+	analysisFailures,
+	analysisSettings,
+	analyzeTracks,
 	auditFix,
 	auditLibrary,
 	auditPlace,
@@ -26,7 +29,9 @@ import {
 	rescanLibrary,
 	resetLibrary,
 	type ServiceId,
+	saveAnalysisToFiles,
 	serviceFlags,
+	setAnalysisSettings,
 	setLibraryView,
 	setServiceEnabled,
 	setTagClipboard,
@@ -129,6 +134,55 @@ export function useResetLibrary() {
 			}
 		},
 	});
+}
+
+export const ANALYSIS_KEY = ["analysis"] as const;
+
+/**
+ * Detects BPM and key. `trackIds` omitted analyzes every track not analyzed yet; with ids,
+ * those tracks are analyzed again.
+ */
+export function useAnalyze() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationKey: ANALYSIS_KEY,
+		mutationFn: (trackIds?: number[]) => analyzeTracks(trackIds, trackIds !== undefined),
+		onSettled: () => refreshAfterAnalysis(queryClient),
+	});
+}
+
+async function refreshAfterAnalysis(queryClient: ReturnType<typeof useQueryClient>) {
+	for (const key of ["tracks", "playlist-tracks", "analysis-failures", "tag-values"]) {
+		await queryClient.invalidateQueries({ queryKey: [key] });
+	}
+}
+
+/** Writes every saved BPM and key result into the files' tags. */
+export function useSaveAnalysisToFiles() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationKey: ANALYSIS_KEY,
+		mutationFn: saveAnalysisToFiles,
+		onSettled: () => refreshAfterAnalysis(queryClient),
+	});
+}
+
+export function useAnalysisSettings() {
+	return useQuery({ queryKey: ["analysis-settings"], queryFn: analysisSettings });
+}
+
+export function useSetAnalysisSettings() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: setAnalysisSettings,
+		onMutate: (next) => queryClient.setQueryData(["analysis-settings"], next),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: ["analysis-settings"] }),
+	});
+}
+
+/** Songs whose analysis failed; only fetched while `enabled`. */
+export function useAnalysisFailures(enabled: boolean) {
+	return useQuery({ queryKey: ["analysis-failures"], queryFn: analysisFailures, enabled });
 }
 
 export const SCAN_KEY = ["scan"] as const;

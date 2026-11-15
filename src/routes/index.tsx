@@ -2,7 +2,7 @@ import { useIsMutating, useQueries } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { LibraryHeader } from "#/components/library-header.tsx";
-import { LibraryList, ScanButtons } from "#/components/library-parts.tsx";
+import { AnalyzeButton, LibraryList, ScanButtons } from "#/components/library-parts.tsx";
 import { SearchPalette } from "#/components/search-palette.tsx";
 import { ViewToggle } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
@@ -70,6 +70,7 @@ function Library() {
 				controls={
 					<>
 						<ViewToggle view={view} onChange={setView} />
+						{root.data && <AnalyzeButton tracks={tracks.data ?? []} />}
 						<ScanButtons
 							hasRoot={!!root.data}
 							scanning={scanning}

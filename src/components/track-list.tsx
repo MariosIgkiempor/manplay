@@ -10,6 +10,7 @@ import { usePlayer } from "#/context/player-context.ts";
 import { albumKey, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
+import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
 import type { TrackSelection } from "#/lib/use-track-selection.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -37,6 +38,8 @@ function columns(opts: { action: boolean; album: boolean; duration: boolean }): 
 		"minmax(0,2.4fr)",
 		opts.album && "minmax(0,1.5fr)",
 		"minmax(0,1.5fr)",
+		"3rem",
+		"2.25rem",
 		opts.duration && "3rem",
 		"2rem",
 		opts.action && "6rem",
@@ -172,6 +175,28 @@ function AlbumCell({ track }: { track: Track }) {
 	);
 }
 
+/** Tempo and key, as DJs read them: "128" and Camelot "8A" (full key name on hover). */
+function BpmKeyCells({ track }: { track: Track }) {
+	const missing = track.analyzed ? "Not detected" : "Not analyzed yet";
+	const code = track.key === null ? null : camelot(track.key);
+	return (
+		<>
+			<div
+				className="text-right text-muted-foreground text-xs tabular-nums"
+				title={track.bpm === null ? `BPM: ${missing}` : `${formatBpm(track.bpm)} BPM`}
+			>
+				{track.bpm === null ? "–" : formatBpm(track.bpm)}
+			</div>
+			<div
+				className="text-muted-foreground text-xs tabular-nums"
+				title={track.key === null ? `Key: ${missing}` : (keyName(track.key) ?? track.key)}
+			>
+				{track.key === null ? "–" : (code ?? track.key)}
+			</div>
+		</>
+	);
+}
+
 function DurationCell({ ms }: { ms: number | null }) {
 	return (
 		<div className="text-right text-muted-foreground text-xs tabular-nums">
@@ -256,6 +281,7 @@ function TrackRow({
 				<TitleCell track={track} isCurrent={isCurrent} hideArt={hideArt} hideArtist={hideArtist} />
 				{!hideAlbum && <AlbumCell track={track} />}
 				<TagChips track={track} onRemoveTag={onRemoveTag} />
+				<BpmKeyCells track={track} />
 				{showDuration && <DurationCell ms={track.durationMs} />}
 				<SyncBadge state={syncState([track], targetCount)} />
 				{renderAction?.(track)}

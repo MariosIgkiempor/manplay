@@ -1,5 +1,6 @@
 #![allow(clippy::needless_pass_by_value)] // Tauri command args are taken by value
 
+mod analysis;
 mod art;
 mod audit;
 mod db;
@@ -32,6 +33,9 @@ struct AppState {
     http: reqwest::Client,
     syncing: AtomicBool,
     fixing: AtomicBool,
+    analyzing: AtomicBool,
+    /// Set to stop the running analysis after the files in progress.
+    cancel_analysis: AtomicBool,
     /// The last sync review, awaiting the user's confirmation.
     plan: Mutex<Option<sync::Plan>>,
 }
@@ -284,6 +288,330 @@ async fn reset_library(state: State<'_, AppState>) -> Result<Option<usize>, Erro
 fn list_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Error> {
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     db::list(&conn)
+}
+
+#[derive(serde::Serialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+struct AnalysisProgress {
+    /// `analyzing` while detecting, `saving` while writing results into file tags.
+    phase: &'static str,
+    done: usize,
+    total: usize,
+}
+
+const SETTING_ANALYSIS: &str = "analysis";
+
+/// How analysis results are kept, beyond manplay's own database.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct AnalysisSettings {
+    /// Write detected BPM and key into the files' tags after each analysis.
+    write_tags: bool,
+    /// Key notation in the tags: `musical` (`Am`) or `camelot` (`8A`).
+    key_format: KeyFormat,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum KeyFormat {
+    #[default]
+    Musical,
+    Camelot,
+}
+
+fn analysis_settings_of(conn: &Connection) -> Result<AnalysisSettings, Error> {
+    Ok(db::get_setting(conn, SETTING_ANALYSIS)?
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+fn analysis_settings(state: State<'_, AppState>) -> Result<AnalysisSettings, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    analysis_settings_of(&conn)
+}
+
+#[tauri::command]
+fn set_analysis_settings(
+    state: State<'_, AppState>,
+    settings: AnalysisSettings,
+) -> Result<(), Error> {
+    let raw = serde_json::to_string(&settings).map_err(|e| Error::Msg(e.to_string()))?;
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::set_setting(&conn, SETTING_ANALYSIS, Some(&raw))
+}
+
+/// Songs whose analysis failed, and why.
+#[tauri::command]
+fn analysis_failures(state: State<'_, AppState>) -> Result<Vec<audit::FixFailure>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::analysis_failures(&conn)
+}
+
+/// Tag edits that store a detection result: BPM as a whole number (what ID3 allows and DJ
+/// players read), key in the chosen notation.
+fn analysis_edits(
+    result: &db::AnalysisResult,
+    format: KeyFormat,
+) -> std::collections::BTreeMap<String, String> {
+    let mut edits = std::collections::BTreeMap::new();
+    if let Some(bpm) = result.bpm {
+        #[allow(clippy::cast_possible_truncation)]
+        edits.insert("bpm".to_owned(), (bpm.round() as i64).to_string());
+    }
+    if let Some(key) = &result.key {
+        let text = match format {
+            KeyFormat::Musical => Some(key.clone()),
+            KeyFormat::Camelot => analysis::camelot(key),
+        };
+        if let Some(text) = text {
+            edits.insert("key".to_owned(), text);
+        }
+    }
+    edits
+}
+
+#[derive(serde::Serialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+struct TagWriteReport {
+    written: usize,
+    /// Files whose tags already held these values.
+    unchanged: usize,
+    failed: Vec<audit::FixFailure>,
+}
+
+/// Writes detection results into the files' BPM and key tags, skipping files that already
+/// hold them. Each file is rewritten beside itself and checked before it replaces the original.
+fn write_analysis_tags(
+    root: &Path,
+    results: &[db::AnalysisResult],
+    format: KeyFormat,
+    report: &dyn Fn(AnalysisProgress),
+) -> TagWriteReport {
+    let mut out = TagWriteReport::default();
+    let total = results.len();
+    for (i, result) in results.iter().enumerate() {
+        report(AnalysisProgress {
+            phase: "saving",
+            done: i,
+            total,
+        });
+        let edits = analysis_edits(result, format);
+        let paths = [PathBuf::from(&result.path)];
+        let outcome = tags::preview(root, &paths, &edits).and_then(|p| {
+            if p.files.is_empty() {
+                Ok(None)
+            } else {
+                tags::write(root, &paths, &edits).map(Some)
+            }
+        });
+        match outcome {
+            Ok(None) => out.unchanged += 1,
+            Ok(Some(r)) => {
+                out.written += r.fixed;
+                out.failed.extend(r.failed);
+            }
+            Err(e) => out.failed.push(audit::FixFailure {
+                path: result.path.clone(),
+                error: e.to_string(),
+            }),
+        }
+    }
+    report(AnalysisProgress {
+        phase: "saving",
+        done: total,
+        total,
+    });
+    out
+}
+
+/// Writes saved results for `track_ids` (every analyzed track when `None`) into file tags.
+async fn save_analysis_tags(
+    app: &AppHandle,
+    state: &AppState,
+    track_ids: Option<&[i64]>,
+) -> Result<TagWriteReport, Error> {
+    let root = library_root(state)?;
+    let (results, settings) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        (
+            db::analysis_results(&conn, track_ids)?,
+            analysis_settings_of(&conn)?,
+        )
+    };
+    if results.is_empty() {
+        return Ok(TagWriteReport::default());
+    }
+    if state.fixing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg(
+            "another metadata change is running; try again when it finishes".to_owned(),
+        ));
+    }
+    let _guard = SyncGuard(&state.fixing);
+    let handle = app.clone();
+    let r = root.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        let report = |p: AnalysisProgress| {
+            let _ = handle.emit("analysis-progress", p);
+        };
+        write_analysis_tags(&r, &results, settings.key_format, &report)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?;
+    if out.written > 0 {
+        refresh_after_fs_change(state, root).await;
+    }
+    Ok(out)
+}
+
+/// Writes every saved analysis result into the files' tags now.
+#[tauri::command]
+async fn save_analysis_to_files(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<TagWriteReport, Error> {
+    if state.analyzing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("an analysis is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.analyzing);
+    save_analysis_tags(&app, &state, None).await
+}
+
+#[derive(serde::Serialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+struct AnalysisReport {
+    analyzed: usize,
+    failed: usize,
+    /// Files left unanalysed because the run was cancelled.
+    cancelled: usize,
+    /// Set when the results were also written into file tags.
+    tags: Option<TagWriteReport>,
+}
+
+/// Detects BPM and key for `jobs` on several threads, storing each result as it arrives.
+fn run_analysis(
+    state: &AppState,
+    jobs: &[db::AnalysisJob],
+    report: &(dyn Fn(AnalysisProgress) + Sync),
+) -> Result<AnalysisReport, Error> {
+    use std::sync::atomic::AtomicUsize;
+    let total = jobs.len();
+    let workers = std::thread::available_parallelism()
+        .map_or(2, std::num::NonZero::get)
+        .saturating_sub(1)
+        .clamp(1, 8)
+        .min(total.max(1));
+    let next = AtomicUsize::new(0);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut out = AnalysisReport::default();
+    std::thread::scope(|scope| -> Result<(), Error> {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let next = &next;
+            scope.spawn(move || {
+                while !state.cancel_analysis.load(Ordering::SeqCst) {
+                    let i = next.fetch_add(1, Ordering::SeqCst);
+                    let Some(job) = jobs.get(i) else { break };
+                    let path = Path::new(&job.path);
+                    // A file that cannot be opened (no permission, unplugged drive) says nothing
+                    // about its audio, so it is not remembered as failed and is tried next time.
+                    let readable = std::fs::File::open(path).is_ok();
+                    let result = analysis::analyze(path);
+                    if tx.send((i, result, readable)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        report(AnalysisProgress {
+            phase: "analyzing",
+            done: 0,
+            total,
+        });
+        for (i, result, readable) in rx {
+            if readable {
+                let conn = state.db.lock().map_err(|_| Error::Lock)?;
+                db::store_analysis(&conn, &jobs[i].fingerprint, &result, unix_now())?;
+            }
+            if result.is_ok() {
+                out.analyzed += 1;
+            } else {
+                out.failed += 1;
+            }
+            report(AnalysisProgress {
+                phase: "analyzing",
+                done: out.analyzed + out.failed,
+                total,
+            });
+        }
+        Ok(())
+    })?;
+    out.cancelled = total - out.analyzed - out.failed;
+    Ok(out)
+}
+
+/// Detects BPM and key for the tracks in `track_ids` (every track when `None`). Unless
+/// `force`, audio that was analysed before is skipped. Emits `analysis-progress` events.
+#[tauri::command]
+async fn analyze_tracks(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_ids: Option<Vec<i64>>,
+    force: bool,
+) -> Result<AnalysisReport, Error> {
+    if state.analyzing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("an analysis is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.analyzing);
+    state.cancel_analysis.store(false, Ordering::SeqCst);
+    let (jobs, ids) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let jobs = db::analysis_jobs(&conn, track_ids.as_deref(), force)?;
+        let ids = db::track_ids_with_fingerprints(
+            &conn,
+            &jobs
+                .iter()
+                .map(|j| j.fingerprint.as_str())
+                .collect::<Vec<_>>(),
+        )?;
+        (jobs, ids)
+    };
+    if jobs.is_empty() {
+        return Ok(AnalysisReport::default());
+    }
+    let handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<AppState>();
+        let report = |p: AnalysisProgress| {
+            let _ = handle.emit("analysis-progress", p);
+        };
+        run_analysis(&state, &jobs, &report)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))??;
+    let mut result = result;
+    let write = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        analysis_settings_of(&conn)?.write_tags
+    };
+    if write && !state.cancel_analysis.load(Ordering::SeqCst) {
+        // Only the songs this run looked at; older results are saved from the drawer.
+        result.tags = Some(save_analysis_tags(&app, &state, Some(&ids)).await?);
+    }
+    auto_export(&state);
+    Ok(result)
+}
+
+/// Stops the running analysis once the files being read now are done.
+#[tauri::command]
+fn cancel_analysis(state: State<'_, AppState>) {
+    state.cancel_analysis.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn is_analyzing(state: State<'_, AppState>) -> bool {
+    state.analyzing.load(Ordering::SeqCst)
 }
 
 macro_rules! with_db {
@@ -1842,6 +2170,8 @@ pub fn run() {
                 http,
                 syncing: AtomicBool::new(false),
                 fixing: AtomicBool::new(false),
+                analyzing: AtomicBool::new(false),
+                cancel_analysis: AtomicBool::new(false),
                 plan: Mutex::new(None),
             });
             Ok(())
@@ -1855,6 +2185,13 @@ pub fn run() {
             rescan_library,
             reset_library,
             list_tracks,
+            analyze_tracks,
+            cancel_analysis,
+            is_analyzing,
+            analysis_settings,
+            set_analysis_settings,
+            analysis_failures,
+            save_analysis_to_files,
             list_playlists,
             create_playlist,
             rename_playlist,
@@ -1932,6 +2269,37 @@ pub fn run() {
 #[allow(clippy::expect_used, clippy::unused_self)] // test fixtures: panicking is the failure mode
 mod tests {
     use super::*;
+
+    #[test]
+    fn analysis_edits_round_bpm_and_pick_key_notation() {
+        let result = db::AnalysisResult {
+            path: "/a.mp3".into(),
+            bpm: Some(127.6),
+            key: Some("Am".into()),
+        };
+        let musical = analysis_edits(&result, KeyFormat::Musical);
+        assert_eq!(musical.get("bpm").map(String::as_str), Some("128"));
+        assert_eq!(musical.get("key").map(String::as_str), Some("Am"));
+        let camelot = analysis_edits(&result, KeyFormat::Camelot);
+        assert_eq!(camelot.get("key").map(String::as_str), Some("8A"));
+
+        let only_key = db::AnalysisResult {
+            bpm: None,
+            ..result
+        };
+        assert!(!analysis_edits(&only_key, KeyFormat::Musical).contains_key("bpm"));
+    }
+
+    #[test]
+    fn analysis_settings_default_to_not_writing_files() {
+        let parsed: AnalysisSettings = serde_json::from_str("{}").expect("json");
+        assert!(!parsed.write_tags);
+        assert_eq!(parsed.key_format, KeyFormat::Musical);
+        let parsed: AnalysisSettings =
+            serde_json::from_str(r#"{"writeTags":true,"keyFormat":"camelot"}"#).expect("json");
+        assert!(parsed.write_tags);
+        assert_eq!(parsed.key_format, KeyFormat::Camelot);
+    }
     use crate::db::NewTrack;
     use crate::scan::ScanResult;
 
@@ -2300,6 +2668,8 @@ mod tests {
             http: reqwest::Client::new(),
             syncing: AtomicBool::new(false),
             fixing: AtomicBool::new(false),
+            analyzing: AtomicBool::new(false),
+            cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
         };
         assert!(export_inner(&state, false).expect("export"));
@@ -2400,6 +2770,8 @@ mod tests {
             http: reqwest::Client::new(),
             syncing: AtomicBool::new(false),
             fixing: AtomicBool::new(false),
+            analyzing: AtomicBool::new(false),
+            cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
         };
         assert!(!export_inner(&state, false).expect("no-op"));

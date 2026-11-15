@@ -155,6 +155,11 @@ fn read_track(
         duration_ms: millis.filter(|m| *m > 0),
         bitrate: props.and_then(FileProperties::audio_bitrate).map(i64::from),
         sample_rate: props.and_then(FileProperties::sample_rate).map(i64::from),
+        tag_bpm: crate::tags::read_field(tag, "bpm")
+            .and_then(|b| b.trim().replace(',', ".").parse::<f64>().ok())
+            .filter(|b| b.is_finite() && *b > 0.0),
+        tag_key: crate::tags::read_field(tag, "key")
+            .and_then(|k| crate::analysis::normalize_key(&k)),
     })
 }
 

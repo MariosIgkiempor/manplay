@@ -14,6 +14,9 @@ const track = (id: number, artist: string, title: string, tags: string[] = []): 
 	durationMs: null,
 	bitrate: null,
 	sampleRate: null,
+	bpm: null,
+	key: null,
+	analyzed: false,
 });
 
 const tracks = [

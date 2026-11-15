@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
+import { AnalysisDrawer } from "#/components/analysis-drawer.tsx";
 import { AutoRefresh } from "#/components/auto-refresh.tsx";
 import { DetailPanel } from "#/components/detail-panel.tsx";
 import { IssuesDrawer, IssuesIndicator } from "#/components/issues-drawer.tsx";
@@ -56,6 +57,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 													<DetailPanel />
 													<MissingDrawer open={missingOpen} onClose={() => setMissingOpen(false)} />
 													<IssuesDrawer open={issuesOpen} onClose={() => setIssuesOpen(false)} />
+													<AnalysisDrawer />
 												</div>
 												<StatusBarHost
 													setSlot={setStatusSlot}

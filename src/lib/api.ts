@@ -19,12 +19,103 @@ const trackSchema = z.object({
 	durationMs: int.nullable(),
 	bitrate: int.nullable(),
 	sampleRate: int.nullable(),
+	/** Detected tempo, else the one in the file's tags. */
+	bpm: z.number().nullable(),
+	/** Detected key in rekordbox spelling ("Am", "F#"), else the one in the file's tags. */
+	key: z.string().nullable(),
+	/** BPM and key detection has run on this audio (whether or not it found them). */
+	analyzed: z.boolean(),
 });
 
 export type Track = z.infer<typeof trackSchema>;
 
 export async function listTracks(): Promise<Track[]> {
 	return z.array(trackSchema).parse(await invoke("list_tracks"));
+}
+
+// ---- BPM and key analysis ------------------------------------------------
+
+const fileFailureSchema = z.object({ path: z.string(), error: z.string() });
+
+export type FileFailure = z.infer<typeof fileFailureSchema>;
+
+const tagWriteReportSchema = z.object({
+	written: int,
+	/** Files whose tags already held these values. */
+	unchanged: int,
+	failed: z.array(fileFailureSchema),
+});
+
+export type TagWriteReport = z.infer<typeof tagWriteReportSchema>;
+
+const analysisReportSchema = z.object({
+	analyzed: int,
+	failed: int,
+	cancelled: int,
+	/** Set when the results were also written into file tags. */
+	tags: tagWriteReportSchema.nullable(),
+});
+
+export type AnalysisReport = z.infer<typeof analysisReportSchema>;
+
+const analysisSettingsSchema = z.object({
+	/** Write detected BPM and key into the files' tags after each analysis. */
+	writeTags: z.boolean(),
+	/** Key notation in the tags. */
+	keyFormat: z.enum(["musical", "camelot"]),
+});
+
+export type AnalysisSettings = z.infer<typeof analysisSettingsSchema>;
+
+export async function analysisSettings(): Promise<AnalysisSettings> {
+	return analysisSettingsSchema.parse(await invoke("analysis_settings"));
+}
+
+export async function setAnalysisSettings(settings: AnalysisSettings): Promise<void> {
+	await invoke("set_analysis_settings", { settings });
+}
+
+/** Songs whose analysis failed, and why. */
+export async function analysisFailures(): Promise<FileFailure[]> {
+	return z.array(fileFailureSchema).parse(await invoke("analysis_failures"));
+}
+
+/** Writes every saved BPM and key result into the files' tags now. */
+export async function saveAnalysisToFiles(): Promise<TagWriteReport> {
+	return tagWriteReportSchema.parse(await invoke("save_analysis_to_files"));
+}
+
+/**
+ * Detects BPM and key for `trackIds` (every track when omitted). Without `force`, audio that
+ * was analyzed before is skipped.
+ */
+export async function analyzeTracks(trackIds?: number[], force = false): Promise<AnalysisReport> {
+	return analysisReportSchema.parse(
+		await invoke("analyze_tracks", { trackIds: trackIds ?? null, force }),
+	);
+}
+
+/** Stops the running analysis after the files being read now. */
+export async function cancelAnalysis(): Promise<void> {
+	await invoke("cancel_analysis");
+}
+
+const analysisProgressSchema = z.object({
+	phase: z.enum(["analyzing", "saving"]),
+	done: int,
+	total: int,
+});
+
+export type AnalysisProgress = z.infer<typeof analysisProgressSchema>;
+
+/** Subscribes to analysis progress; returns an unsubscribe function. */
+export function onAnalysisProgress(handler: (p: AnalysisProgress) => void): Promise<() => void> {
+	return listen("analysis-progress", (e) => {
+		const parsed = analysisProgressSchema.safeParse(e.payload);
+		if (parsed.success) {
+			handler(parsed.data);
+		}
+	});
 }
 
 /** Prompts for a folder and scans it. Returns the number of tracks found, or null if cancelled. */

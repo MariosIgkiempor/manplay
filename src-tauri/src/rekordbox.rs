@@ -76,6 +76,12 @@ fn write_track(out: &mut String, t: &ExportTrack) {
     if let Some(hz) = t.sample_rate {
         let _ = write!(out, " SampleRate=\"{hz}\"");
     }
+    if let Some(bpm) = t.bpm {
+        let _ = write!(out, " AverageBpm=\"{bpm:.2}\"");
+    }
+    if let Some(key) = &t.key {
+        let _ = write!(out, " Tonality=\"{}\"", esc(key));
+    }
     let _ = writeln!(out, " Location=\"{}\"/>", esc(&location(&t.path)));
 }
 
@@ -266,6 +272,8 @@ mod tests {
             duration_ms: Some(215_600),
             bitrate: Some(320),
             sample_rate: Some(44100),
+            bpm: (id == 1).then_some(128.0),
+            key: (id == 1).then(|| "Am".to_owned()),
         }
     }
 
@@ -329,6 +337,19 @@ mod tests {
             first.attribute("Location"),
             Some("file://localhost/m/a/one.mp3")
         );
+        assert_eq!(first.attribute("AverageBpm"), Some("128.00"));
+        assert_eq!(first.attribute("Tonality"), Some("Am"));
+        let second = collection
+            .children()
+            .filter(|n| n.has_tag_name("TRACK"))
+            .nth(1)
+            .expect("second track");
+        assert_eq!(
+            second.attribute("AverageBpm"),
+            None,
+            "unknown BPM is left out"
+        );
+        assert_eq!(second.attribute("Tonality"), None);
 
         let kinds: Vec<_> = collection
             .children()

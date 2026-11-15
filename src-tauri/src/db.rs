@@ -20,6 +20,12 @@ pub struct Track {
     pub duration_ms: Option<i64>,
     pub bitrate: Option<i64>,
     pub sample_rate: Option<i64>,
+    /// Detected tempo, else the one in the file's tags.
+    pub bpm: Option<f64>,
+    /// Detected key in rekordbox spelling (`Am`, `F#`), else the one in the file's tags.
+    pub key: Option<String>,
+    /// The audio has been through BPM and key detection (whether or not it found them).
+    pub analyzed: bool,
 }
 
 #[derive(Default)]
@@ -34,6 +40,9 @@ pub struct NewTrack {
     pub duration_ms: Option<i64>,
     pub bitrate: Option<i64>,
     pub sample_rate: Option<i64>,
+    /// BPM and key as written in the file's tags.
+    pub tag_bpm: Option<f64>,
+    pub tag_key: Option<String>,
 }
 
 /// Remembered tag values (artists, genres, ...), rebuilt on every scan.
@@ -128,6 +137,8 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "tracks", "duration_ms", "INTEGER")?;
     add_column(&conn, "tracks", "bitrate", "INTEGER")?;
     add_column(&conn, "tracks", "sample_rate", "INTEGER")?;
+    add_column(&conn, "tracks", "tag_bpm", "REAL")?;
+    add_column(&conn, "tracks", "tag_key", "TEXT")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
          CREATE TABLE IF NOT EXISTS import_cache (
@@ -158,6 +169,16 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              size INTEGER NOT NULL,
              fingerprint TEXT NOT NULL,
              PRIMARY KEY (target_id, path)
+         );
+         -- BPM and key detection results, by audio content: they follow a file through renames,
+         -- moves, tag edits and library resets, and duplicates share them.
+         CREATE TABLE IF NOT EXISTS analysis (
+             fingerprint TEXT PRIMARY KEY,
+             bpm         REAL,
+             musical_key TEXT,
+             error       TEXT,
+             version     INTEGER NOT NULL,
+             analyzed_at INTEGER NOT NULL
          );
          CREATE TABLE IF NOT EXISTS stale_remote (
              target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
@@ -190,10 +211,24 @@ fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Resul
 pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
     let tx = conn.transaction()?;
     {
+        // Writing tags can change a file's fingerprint (its size changes); its BPM and key
+        // analysis follows it to the new one rather than being lost.
+        let mut carry = tx.prepare(
+            "INSERT OR IGNORE INTO analysis
+                 (fingerprint, bpm, musical_key, error, version, analyzed_at)
+             SELECT ?2, a.bpm, a.musical_key, a.error, a.version, a.analyzed_at
+             FROM tracks t JOIN analysis a ON a.fingerprint = t.fingerprint
+             WHERE t.path = ?1 AND t.fingerprint <> ?2",
+        )?;
+        for t in tracks {
+            if let Some(fp) = &t.fingerprint {
+                carry.execute(params![t.path, fp])?;
+            }
+        }
         let mut stmt = tx.prepare(
             "INSERT INTO tracks (path, artist, album, title, size, fingerprint,
-                                 duration_ms, bitrate, sample_rate)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                                 duration_ms, bitrate, sample_rate, tag_bpm, tag_key)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(path) DO UPDATE SET
                  artist = excluded.artist,
                  album = excluded.album,
@@ -203,6 +238,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                  duration_ms = COALESCE(excluded.duration_ms, duration_ms),
                  bitrate = COALESCE(excluded.bitrate, bitrate),
                  sample_rate = COALESCE(excluded.sample_rate, sample_rate),
+                 tag_bpm = excluded.tag_bpm,
+                 tag_key = excluded.tag_key,
                  missing_since = NULL",
         )?;
         for t in tracks {
@@ -215,7 +252,9 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                 t.fingerprint,
                 t.duration_ms,
                 t.bitrate,
-                t.sample_rate
+                t.sample_rate,
+                t.tag_bpm,
+                t.tag_key
             ])?;
         }
     }
@@ -227,7 +266,11 @@ const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
     (SELECT group_concat(g.name, char(31)) FROM track_tags tt
      JOIN tags g ON g.id = tt.tag_id WHERE tt.track_id = t.id),
     (SELECT COUNT(*) FROM synced_files sf WHERE sf.track_id = t.id AND sf.size = t.size),
-    t.duration_ms, t.bitrate, t.sample_rate";
+    t.duration_ms, t.bitrate, t.sample_rate,
+    COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key), a.fingerprint IS NOT NULL";
+
+/// Joined wherever [`TRACK_COLS`] is selected.
+const ANALYSIS_JOIN: &str = "LEFT JOIN analysis a ON a.fingerprint = t.fingerprint";
 
 fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
     let tags: Option<String> = r.get(6)?;
@@ -245,6 +288,9 @@ fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         duration_ms: r.get(8)?,
         bitrate: r.get(9)?,
         sample_rate: r.get(10)?,
+        bpm: r.get(11)?,
+        key: r.get(12)?,
+        analyzed: r.get(13)?,
     })
 }
 
@@ -329,7 +375,7 @@ pub fn clear_tracks(conn: &Connection) -> Result<(), Error> {
 
 pub fn list(conn: &Connection) -> Result<Vec<Track>, Error> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {TRACK_COLS} FROM tracks t WHERE t.missing_since IS NULL
+        "SELECT {TRACK_COLS} FROM tracks t {ANALYSIS_JOIN} WHERE t.missing_since IS NULL
          ORDER BY t.artist, t.album, t.path"
     ))?;
     let rows = stmt.query_map([], track_from_row)?;
@@ -415,7 +461,7 @@ pub fn remove_from_playlist(
 pub fn playlist_tracks(conn: &Connection, playlist_id: i64) -> Result<Vec<Track>, Error> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {TRACK_COLS} FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
-         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL ORDER BY pt.position"
+         {ANALYSIS_JOIN} WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL ORDER BY pt.position"
     ))?;
     let rows = stmt.query_map(params![playlist_id], track_from_row)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1290,6 +1336,8 @@ pub struct ExportTrack {
     pub duration_ms: Option<i64>,
     pub bitrate: Option<i64>,
     pub sample_rate: Option<i64>,
+    pub bpm: Option<f64>,
+    pub key: Option<String>,
 }
 
 pub struct ExportPlaylist {
@@ -1302,8 +1350,10 @@ pub struct ExportPlaylist {
 /// Everything the rekordbox export needs: present tracks and playlists in their saved order.
 pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPlaylist>), Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, path, artist, album, title, size, duration_ms, bitrate, sample_rate
-         FROM tracks WHERE missing_since IS NULL ORDER BY artist, album, path",
+        "SELECT t.id, t.path, t.artist, t.album, t.title, t.size, t.duration_ms, t.bitrate,
+                t.sample_rate, COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key)
+         FROM tracks t LEFT JOIN analysis a ON a.fingerprint = t.fingerprint
+         WHERE t.missing_since IS NULL ORDER BY t.artist, t.album, t.path",
     )?;
     let tracks = stmt
         .query_map([], |r| {
@@ -1317,6 +1367,8 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
                 duration_ms: r.get(6)?,
                 bitrate: r.get(7)?,
                 sample_rate: r.get(8)?,
+                bpm: r.get(9)?,
+                key: r.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1415,4 +1467,213 @@ pub fn put_import_cache(conn: &Connection, folder: &str, data: &str) -> Result<(
         (folder, data),
     )?;
     Ok(())
+}
+
+/// A file waiting for BPM and key detection.
+pub struct AnalysisJob {
+    pub path: String,
+    pub fingerprint: String,
+}
+
+/// Present tracks to analyse: those in `ids` (every track when `None`), one per distinct audio
+/// content. Unless `force`, content that was already analysed is left out.
+pub fn analysis_jobs(
+    conn: &Connection,
+    ids: Option<&[i64]>,
+    force: bool,
+) -> Result<Vec<AnalysisJob>, Error> {
+    let wanted: Option<std::collections::HashSet<i64>> = ids.map(|i| i.iter().copied().collect());
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.path, t.fingerprint, a.version FROM tracks t
+         LEFT JOIN analysis a ON a.fingerprint = t.fingerprint
+         WHERE t.missing_since IS NULL AND t.fingerprint IS NOT NULL
+         ORDER BY t.artist, t.album, t.path",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, Option<i64>>(3)?,
+        ))
+    })?;
+    let mut seen = std::collections::HashSet::new();
+    let mut jobs = Vec::new();
+    for row in rows {
+        let (id, path, fingerprint, version) = row?;
+        if wanted.as_ref().is_some_and(|w| !w.contains(&id)) {
+            continue;
+        }
+        if !force && version.is_some() {
+            continue;
+        }
+        if seen.insert(fingerprint.clone()) {
+            jobs.push(AnalysisJob { path, fingerprint });
+        }
+    }
+    Ok(jobs)
+}
+
+/// A present track with a detected BPM and/or key.
+pub struct AnalysisResult {
+    pub path: String,
+    pub bpm: Option<f64>,
+    pub key: Option<String>,
+}
+
+/// Detection results for present tracks (only those in `ids` when given).
+pub fn analysis_results(
+    conn: &Connection,
+    ids: Option<&[i64]>,
+) -> Result<Vec<AnalysisResult>, Error> {
+    let wanted: Option<std::collections::HashSet<i64>> = ids.map(|i| i.iter().copied().collect());
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.path, a.bpm, a.musical_key FROM tracks t
+         JOIN analysis a ON a.fingerprint = t.fingerprint
+         WHERE t.missing_since IS NULL AND (a.bpm IS NOT NULL OR a.musical_key IS NOT NULL)
+         ORDER BY t.path",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            AnalysisResult {
+                path: r.get(1)?,
+                bpm: r.get(2)?,
+                key: r.get(3)?,
+            },
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, result) = row?;
+        if wanted.as_ref().is_none_or(|w| w.contains(&id)) {
+            out.push(result);
+        }
+    }
+    Ok(out)
+}
+
+/// Ids of present tracks holding any of these audio fingerprints (duplicates included).
+pub fn track_ids_with_fingerprints(conn: &Connection, prints: &[&str]) -> Result<Vec<i64>, Error> {
+    let mut stmt =
+        conn.prepare("SELECT id FROM tracks WHERE fingerprint = ?1 AND missing_since IS NULL")?;
+    let mut ids = Vec::new();
+    for fp in prints {
+        for id in stmt.query_map(params![fp], |r| r.get(0))? {
+            ids.push(id?);
+        }
+    }
+    Ok(ids)
+}
+
+/// Present tracks whose last analysis failed, with the reason.
+pub fn analysis_failures(conn: &Connection) -> Result<Vec<crate::audit::FixFailure>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT t.path, a.error FROM tracks t JOIN analysis a ON a.fingerprint = t.fingerprint
+         WHERE t.missing_since IS NULL AND a.error IS NOT NULL ORDER BY t.path",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(crate::audit::FixFailure {
+            path: r.get(0)?,
+            error: r.get(1)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Stores the outcome of analysing the audio with this fingerprint.
+pub fn store_analysis(
+    conn: &Connection,
+    fingerprint: &str,
+    result: &Result<crate::analysis::Analysis, String>,
+    now: i64,
+) -> Result<(), Error> {
+    let (bpm, key, error) = match result {
+        Ok(a) => (a.bpm, a.key.as_deref(), None),
+        Err(e) => (None, None, Some(e.as_str())),
+    };
+    conn.execute(
+        "INSERT INTO analysis (fingerprint, bpm, musical_key, error, version, analyzed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(fingerprint) DO UPDATE SET bpm = excluded.bpm,
+             musical_key = excluded.musical_key, error = excluded.error,
+             version = excluded.version, analyzed_at = excluded.analyzed_at",
+        params![fingerprint, bpm, key, error, crate::analysis::VERSION, now],
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)] // tests: panicking is the failure mode
+mod tests {
+    use super::*;
+    use crate::analysis::Analysis;
+
+    fn track(path: &str, fp: &str, tag_bpm: Option<f64>) -> NewTrack {
+        NewTrack {
+            path: path.into(),
+            artist: "A".into(),
+            album: "B".into(),
+            title: path.into(),
+            size: 1,
+            fingerprint: Some(fp.into()),
+            tag_bpm,
+            tag_key: tag_bpm.map(|_| "Fm".to_owned()),
+            ..NewTrack::default()
+        }
+    }
+
+    #[test]
+    fn analysis_follows_content_and_falls_back_to_tags() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(
+            &mut conn,
+            &[
+                track("/a.mp3", "x", Some(120.0)),
+                track("/copy-of-a.mp3", "x", None),
+                track("/b.mp3", "y", Some(99.5)),
+            ],
+        )
+        .expect("upsert");
+
+        let jobs = analysis_jobs(&conn, None, false).expect("jobs");
+        assert_eq!(jobs.len(), 2, "duplicates are analysed once");
+
+        let found = Ok(Analysis {
+            bpm: Some(128.0),
+            key: Some("Am".into()),
+        });
+        store_analysis(&conn, "x", &found, 1).expect("store");
+        store_analysis(&conn, "y", &Err("bad file".into()), 1).expect("store");
+
+        assert!(analysis_jobs(&conn, None, false).expect("jobs").is_empty());
+        let by_id = analysis_jobs(&conn, Some(&[1]), true).expect("forced");
+        assert_eq!(by_id.len(), 1);
+        assert_eq!(by_id[0].path, "/a.mp3");
+
+        let tracks = list(&conn).expect("list");
+        let get = |p: &str| tracks.iter().find(|t| t.path == p).expect("track");
+        assert_eq!(get("/a.mp3").bpm, Some(128.0), "detection beats the tag");
+        assert_eq!(get("/copy-of-a.mp3").key.as_deref(), Some("Am"));
+        assert!(get("/copy-of-a.mp3").analyzed);
+        assert_eq!(
+            get("/b.mp3").bpm,
+            Some(99.5),
+            "failed detection keeps the tag"
+        );
+        assert_eq!(get("/b.mp3").key.as_deref(), Some("Fm"));
+
+        assert_eq!(analysis_results(&conn, None).expect("results").len(), 2);
+        assert_eq!(
+            analysis_failures(&conn).expect("failures")[0].path,
+            "/b.mp3"
+        );
+
+        // Tags written into /a.mp3 changed its size and so its fingerprint.
+        upsert(&mut conn, &[track("/a.mp3", "x2", Some(128.0))]).expect("rescan");
+        let tracks = list(&conn).expect("list");
+        let a = tracks.iter().find(|t| t.path == "/a.mp3").expect("a");
+        assert!(a.analyzed, "analysis follows the new fingerprint");
+        assert_eq!(a.key.as_deref(), Some("Am"));
+    }
 }
