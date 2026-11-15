@@ -1,5 +1,6 @@
 import { Play } from "lucide-react";
 import { AlbumArt } from "#/components/album-art.tsx";
+import { EmptyState } from "#/components/page.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import type { Artist } from "#/lib/artists.ts";
 
@@ -55,7 +56,11 @@ export function ArtistGrid({
 	onOpen: (artist: Artist) => void;
 }) {
 	if (artists.length === 0) {
-		return <p className="py-8 text-center text-muted-foreground text-sm">No artists.</p>;
+		return (
+			<EmptyState title="No artists">
+				Nothing matches. Clear the search, or rescan the library folder.
+			</EmptyState>
+		);
 	}
 	return (
 		<div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-x-4 gap-y-6">

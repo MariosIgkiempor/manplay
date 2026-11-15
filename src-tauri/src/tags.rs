@@ -75,6 +75,21 @@ pub const SUGGEST: &[&str] = &[
     "language",
 ];
 
+/// Fields copied into the library database on every scan, so lists can show and filter them.
+/// BPM and key are kept apart (`tag_bpm`, `tag_key`) because detection can override them.
+pub const LISTED: &[&str] = &[
+    "year",
+    "genre",
+    "artist",
+    "albumArtist",
+    "label",
+    "grouping",
+    "composer",
+    "remixer",
+    "mood",
+    "language",
+];
+
 /// Names in a list field: split on `;`, trimmed, empty ones dropped.
 pub fn split_names(value: &str) -> Vec<String> {
     value

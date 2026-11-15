@@ -173,7 +173,7 @@ function TargetSection({
 	return (
 		<section className="space-y-3 border-t pt-6 first:border-t-0 first:pt-0">
 			<div className="space-y-1.5">
-				<h3 className="break-words font-semibold text-base tracking-tight">{plan.name}</h3>
+				<h3 className="break-words font-semibold text-sm">{plan.name}</h3>
 				<Tally counts={countKinds(plan.actions)} />
 				<p className="text-muted-foreground text-xs">
 					{plan.inSync.toLocaleString()} already match
@@ -410,7 +410,7 @@ function Result({ results, onDone }: { results: ApplySummary[]; onDone: () => vo
 		<div className="space-y-6">
 			<div className="flex items-center gap-2">
 				<CheckCircle2 className={`size-5 ${failed > 0 ? "text-warning" : "text-success"}`} />
-				<h3 className="font-semibold text-lg tracking-tight">
+				<h3 className="font-semibold text-xl tracking-tight">
 					{failed > 0 ? `Pushed with ${failed.toLocaleString()} errors` : "Push complete"}
 				</h3>
 			</div>

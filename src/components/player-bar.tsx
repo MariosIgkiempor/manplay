@@ -3,9 +3,37 @@ import { AlbumArt } from "#/components/album-art.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { WaveformDetail, WaveformSeek } from "#/components/waveform.tsx";
 import { usePlayer } from "#/context/player-context.ts";
-import type { TrackAnalysis } from "#/lib/api.ts";
+import type { Track, TrackAnalysis } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
+import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
 import { useTrackAnalysis } from "#/lib/use-track-analysis.ts";
+
+/** BPM and key of the playing song, the two figures a DJ checks before mixing it. */
+function TempoKey({ track }: { track: Track }) {
+	const bpm = track.bpm === null ? "" : formatBpm(track.bpm);
+	const key = track.key === null ? "" : (camelot(track.key) ?? track.key);
+	if (bpm === "" && key === "") {
+		return null;
+	}
+	return (
+		<div className="mr-3 flex items-baseline gap-3 text-xs tabular-nums">
+			{bpm !== "" && (
+				<span title="Tempo">
+					<span className="font-semibold text-foreground text-sm">{bpm}</span>{" "}
+					<span className="text-muted-foreground">BPM</span>
+				</span>
+			)}
+			{key !== "" && (
+				<span
+					title={keyName(track.key ?? "") ?? "Key"}
+					className="font-semibold text-primary text-sm"
+				>
+					{key}
+				</span>
+			)}
+		</div>
+	);
+}
 
 export function PlayerBar() {
 	const p = usePlayer();
@@ -73,6 +101,7 @@ export function PlayerBar() {
 				</div>
 
 				<div className="flex items-center justify-end gap-2">
+					{current && <TempoKey track={current} />}
 					<Volume2 className="size-4 text-muted-foreground" />
 					<input
 						type="range"

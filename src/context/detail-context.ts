@@ -7,7 +7,9 @@ export type DetailView =
 	| { kind: "artist"; name: string }
 	/** Tag editor for library songs. `fromAlbum` reopens that album (by its new name) on close. */
 	| { kind: "edit"; target: TagTarget; fromAlbum?: boolean }
-	| { kind: "service"; service: ServiceId };
+	| { kind: "service"; service: ServiceId }
+	/** Songs holding one value of a tag field, e.g. every song in the genre "House". */
+	| { kind: "value"; field: string; value: string };
 
 export interface DetailApi {
 	view: DetailView | null;

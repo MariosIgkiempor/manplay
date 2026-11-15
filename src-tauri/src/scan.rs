@@ -97,6 +97,15 @@ fn collect_values(
     }
 }
 
+/// The `tags::LISTED` values of one file's tag, as a JSON object.
+fn listed_fields(tag: &lofty::tag::Tag) -> Option<String> {
+    let map: std::collections::BTreeMap<&str, String> = crate::tags::LISTED
+        .iter()
+        .filter_map(|f| crate::tags::read_field(Some(tag), f).map(|v| (*f, v)))
+        .collect();
+    serde_json::to_string(&map).ok()
+}
+
 /// Artist and album as named by the folders: the two folders directly above the file
 /// (`…/Artist/Album/track.ext`), so wrappers like `Media.localized/Music/` are ignored.
 /// A file directly inside an artist folder gets the album "Unknown". `None` only for files
@@ -160,6 +169,7 @@ fn read_track(
             .filter(|b| b.is_finite() && *b > 0.0),
         tag_key: crate::tags::read_field(tag, "key")
             .and_then(|k| crate::analysis::normalize_key(&k)),
+        fields: tag.and_then(listed_fields),
     })
 }
 

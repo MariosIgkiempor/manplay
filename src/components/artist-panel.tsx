@@ -1,5 +1,8 @@
+import { Mic2 } from "lucide-react";
 import { useMemo } from "react";
 import { AlbumGrid } from "#/components/album-grid.tsx";
+import { EmptyState, Section } from "#/components/page.tsx";
+import { Cover } from "#/components/page-header.tsx";
 import { PanelHeader } from "#/components/panel-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { useDetail } from "#/context/detail-context.ts";
@@ -18,27 +21,44 @@ export function ArtistPanel({ name }: { name: string }) {
 	const albums = useMemo(() => groupAlbums(artistTracks), [artistTracks]);
 
 	if (artistTracks.length === 0) {
-		return <p className="text-muted-foreground text-sm">No tracks for this artist.</p>;
+		return (
+			<EmptyState title="No songs by this artist">
+				The artist may have been renamed. Close this panel and open it again from the library.
+			</EmptyState>
+		);
 	}
 	return (
 		<div className="space-y-6">
 			<PanelHeader
+				kind={
+					<>
+						<Mic2 /> Artist
+					</>
+				}
 				title={name === "" ? "Unknown artist" : name}
-				meta={`${albums.length} albums · ${artistTracks.length} tracks`}
+				meta={
+					<>
+						<span>
+							{albums.length} {albums.length === 1 ? "album" : "albums"}
+						</span>
+						<span>
+							{artistTracks.length} {artistTracks.length === 1 ? "song" : "songs"}
+						</span>
+					</>
+				}
+				art={<Cover tracks={artistTracks} fallback={<Mic2 className="size-8" />} />}
 				tracks={artistTracks}
 			/>
-			<section className="space-y-3">
-				<h3 className="font-semibold">Albums</h3>
+			<Section title="Albums" count={albums.length}>
 				<AlbumGrid
 					albums={albums}
 					targetCount={targets.data?.length ?? 0}
 					onOpen={(a) => push({ kind: "album", key: a.key })}
 				/>
-			</section>
-			<section className="space-y-3">
-				<h3 className="font-semibold">Tracks</h3>
+			</Section>
+			<Section title="Songs" count={artistTracks.length}>
 				<SelectableTrackList tracks={artistTracks} hideArtist showDuration />
-			</section>
+			</Section>
 		</div>
 	);
 }

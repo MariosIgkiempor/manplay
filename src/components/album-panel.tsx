@@ -1,7 +1,8 @@
-import { TextCursorInput } from "lucide-react";
+import { Disc3, TextCursorInput } from "lucide-react";
 import { useMemo } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
+import { EmptyState } from "#/components/page.tsx";
 import { PanelHeader } from "#/components/panel-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
@@ -21,39 +22,52 @@ export function AlbumPanel({ albumKey }: { albumKey: string }) {
 	);
 
 	if (!album) {
-		return <p className="text-muted-foreground text-sm">Album not found.</p>;
+		return (
+			<EmptyState title="Album not found">
+				It may have been renamed or removed. Close this panel and open it again from the library.
+			</EmptyState>
+		);
 	}
 	return (
 		<div className="space-y-6">
 			<PanelHeader
+				kind={
+					<>
+						<Disc3 /> Album
+					</>
+				}
 				title={album.album}
 				subtitle={<ArtistLinks artist={album.artist} />}
 				meta={
 					<>
-						{album.tracks.length} tracks
+						<span>
+							{album.tracks.length} {album.tracks.length === 1 ? "song" : "songs"}
+						</span>
 						<SyncBadge state={syncState(album.tracks, targets.data?.length ?? 0)} showLabel />
 					</>
 				}
 				art={
 					<AlbumArt
 						trackId={album.coverTrackId}
-						className="size-40 shrink-0 rounded-lg shadow-lg"
+						className="size-36 shrink-0 rounded-lg shadow-lg ring-1 ring-foreground/10"
 					/>
 				}
 				tracks={album.tracks}
+				actions={
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={() => {
+							const target = tagTargetFor(album.tracks);
+							if (target) {
+								push({ kind: "edit", target: { ...target, kind: "Album" }, fromAlbum: true });
+							}
+						}}
+					>
+						<TextCursorInput /> Edit metadata
+					</Button>
+				}
 			/>
-			<Button
-				variant="outline"
-				size="sm"
-				onClick={() => {
-					const target = tagTargetFor(album.tracks);
-					if (target) {
-						push({ kind: "edit", target: { ...target, kind: "Album" }, fromAlbum: true });
-					}
-				}}
-			>
-				<TextCursorInput /> Edit album metadata
-			</Button>
 			<SelectableTrackList tracks={album.tracks} hideArt hideArtist hideAlbum showDuration />
 		</div>
 	);

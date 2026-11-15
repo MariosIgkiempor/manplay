@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, CircleAlert, CircleCheck, CircleX, Clock, X } from "lucide-react";
 import { useState } from "react";
 import { Drawer } from "#/components/drawer.tsx";
+import { EmptyState } from "#/components/page.tsx";
 import { Badge } from "#/components/ui/badge.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { dismissActivity, dismissSyncRuns } from "#/lib/api.ts";
@@ -205,7 +206,7 @@ export function HistoryList({
 	return (
 		<>
 			{entries.length === 0 ? (
-				<p className="py-6 text-center text-muted-foreground text-sm">{empty}</p>
+				<EmptyState title={empty} className="py-8" />
 			) : (
 				<ul className="-mx-2 divide-y">
 					{visible.map((e) => (

@@ -1,6 +1,6 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { useIsMutating } from "@tanstack/react-query";
-import { AudioWaveform, TextCursorInput } from "lucide-react";
+import { AudioWaveform, PencilLine, TextCursorInput } from "lucide-react";
 import type { ReactNode } from "react";
 import { PlaylistSubmenu } from "#/components/playlist-submenu.tsx";
 import { TagSubmenu } from "#/components/tag-submenu.tsx";
@@ -19,14 +19,16 @@ interface Props {
 	tracks: readonly Track[];
 	/** Menu heading, e.g. "3 songs" or the album name. */
 	label: string;
+	/** Offers "Rename" (one song, renamed in place in the list). */
+	onRename?: (() => void) | undefined;
 	children: ReactNode;
 }
 
 /**
- * Wraps `children` so a right-click offers "Add to playlist", "Tag", "Edit metadata" and
- * "Analyze BPM & key" for `tracks`.
+ * Wraps `children` so a right-click offers "Add to playlist", "Tag", "Rename", "Edit metadata"
+ * and "Analyze BPM & key" for `tracks`.
  */
-export function AddToPlaylistMenu({ tracks, label, children }: Props) {
+export function AddToPlaylistMenu({ tracks, label, onRename, children }: Props) {
 	const go = useDetailNav();
 	const analyze = useAnalyze();
 	const analyzing = useIsMutating({ mutationKey: ANALYSIS_KEY }) > 0;
@@ -39,6 +41,12 @@ export function AddToPlaylistMenu({ tracks, label, children }: Props) {
 						<div className="max-w-64 truncate px-2 py-1 text-muted-foreground text-xs">{label}</div>
 						<PlaylistSubmenu tracks={tracks} />
 						<TagSubmenu tracks={tracks} />
+						{onRename && (
+							<ContextMenu.Item className={menuItem} onClick={onRename}>
+								<PencilLine className="size-4" /> Rename
+								<span className="ml-auto pl-4 text-muted-foreground text-xs">F2</span>
+							</ContextMenu.Item>
+						)}
 						<ContextMenu.Item
 							className={menuItem}
 							onClick={() => {

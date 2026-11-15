@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ListMusic } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -84,17 +85,12 @@ function PlaylistPage() {
 			/>
 			<div className="space-y-3 p-6">
 				{[remove, rename, destroy].map(
-					(m) =>
-						m.isError && (
-							<p key={m.submittedAt} className="text-destructive text-sm">
-								{String(m.error)}
-							</p>
-						),
+					(m) => m.isError && <ErrorLine key={m.submittedAt}>{String(m.error)}</ErrorLine>,
 				)}
 				{list.length === 0 && !tracks.isPending ? (
-					<p className="text-muted-foreground text-sm">
-						This playlist is empty. Add songs from a song’s right-click menu in the library.
-					</p>
+					<EmptyState icon={<ListMusic />} title="This playlist is empty">
+						Right-click songs in the library and choose Add to playlist.
+					</EmptyState>
 				) : (
 					<SelectableTrackList
 						tracks={list}

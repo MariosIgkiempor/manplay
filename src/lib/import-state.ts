@@ -144,6 +144,7 @@ export function previewTrack(path: string, t: ImportTrack, edit: Edit): Track {
 		size: t.size,
 		tags: [],
 		syncedCount: 0,
+		fields: {},
 		durationMs: null,
 		bitrate: null,
 		sampleRate: null,

@@ -26,6 +26,8 @@ pub struct Track {
     pub key: Option<String>,
     /// The audio has been through BPM and key detection (whether or not it found them).
     pub analyzed: bool,
+    /// Tag values shown in lists (BPM, key, genre, label, ...), as stored in the file.
+    pub fields: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Default)]
@@ -43,6 +45,8 @@ pub struct NewTrack {
     /// BPM and key as written in the file's tags.
     pub tag_bpm: Option<f64>,
     pub tag_key: Option<String>,
+    /// JSON object of the list fields (see `tags::LISTED`); `None` when the tag was unreadable.
+    pub fields: Option<String>,
 }
 
 /// Remembered tag values (artists, genres, ...), rebuilt on every scan.
@@ -139,6 +143,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "tracks", "sample_rate", "INTEGER")?;
     add_column(&conn, "tracks", "tag_bpm", "REAL")?;
     add_column(&conn, "tracks", "tag_key", "TEXT")?;
+    add_column(&conn, "tracks", "fields", "TEXT")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
          CREATE TABLE IF NOT EXISTS import_cache (
@@ -227,8 +232,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
         }
         let mut stmt = tx.prepare(
             "INSERT INTO tracks (path, artist, album, title, size, fingerprint,
-                                 duration_ms, bitrate, sample_rate, tag_bpm, tag_key)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                                 duration_ms, bitrate, sample_rate, tag_bpm, tag_key, fields)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(path) DO UPDATE SET
                  artist = excluded.artist,
                  album = excluded.album,
@@ -240,6 +245,7 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                  sample_rate = COALESCE(excluded.sample_rate, sample_rate),
                  tag_bpm = excluded.tag_bpm,
                  tag_key = excluded.tag_key,
+                 fields = COALESCE(excluded.fields, fields),
                  missing_since = NULL",
         )?;
         for t in tracks {
@@ -254,7 +260,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                 t.bitrate,
                 t.sample_rate,
                 t.tag_bpm,
-                t.tag_key
+                t.tag_key,
+                t.fields
             ])?;
         }
     }
@@ -267,7 +274,8 @@ const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
      JOIN tags g ON g.id = tt.tag_id WHERE tt.track_id = t.id),
     (SELECT COUNT(*) FROM synced_files sf WHERE sf.track_id = t.id AND sf.size = t.size),
     t.duration_ms, t.bitrate, t.sample_rate,
-    COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key), COALESCE(a.version, 0) >= 2";
+    COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key), COALESCE(a.version, 0) >= 2,
+    t.fields";
 
 /// Joined wherever [`TRACK_COLS`] is selected.
 const ANALYSIS_JOIN: &str = "LEFT JOIN analysis a ON a.fingerprint = t.fingerprint";
@@ -291,6 +299,10 @@ fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         bpm: r.get(11)?,
         key: r.get(12)?,
         analyzed: r.get(13)?,
+        fields: r
+            .get::<_, Option<String>>(14)?
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -758,6 +770,32 @@ pub fn store_remote_prints(
             i64::try_from(*size).unwrap_or(i64::MAX),
             fp
         ])?;
+    }
+    Ok(())
+}
+
+/// A hand-set BPM and/or key for one track: replaces the detection result of its audio, so the
+/// lists show it. `Some(None)` clears a value; `None` leaves it as it is.
+#[allow(clippy::option_option)]
+pub fn set_tempo_key(
+    conn: &Connection,
+    id: i64,
+    bpm: Option<Option<f64>>,
+    key: Option<Option<&str>>,
+) -> Result<(), Error> {
+    if let Some(bpm) = bpm {
+        conn.execute(
+            "UPDATE analysis SET bpm = ?2, error = NULL
+             WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
+            params![id, bpm],
+        )?;
+    }
+    if let Some(key) = key {
+        conn.execute(
+            "UPDATE analysis SET musical_key = ?2, error = NULL
+             WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
+            params![id, key],
+        )?;
     }
     Ok(())
 }
@@ -1280,7 +1318,7 @@ pub fn apply_move(
         "UPDATE tracks SET path = ?2, artist = ?3, album = ?4, title = ?5, size = ?6,
                 fingerprint = ?7, missing_since = NULL,
                 duration_ms = COALESCE(?8, duration_ms), bitrate = COALESCE(?9, bitrate),
-                sample_rate = COALESCE(?10, sample_rate)
+                sample_rate = COALESCE(?10, sample_rate), fields = COALESCE(?11, fields)
          WHERE id = ?1",
         params![
             id,
@@ -1292,7 +1330,8 @@ pub fn apply_move(
             new.fingerprint,
             new.duration_ms,
             new.bitrate,
-            new.sample_rate
+            new.sample_rate,
+            new.fields
         ],
     )?;
     tx.commit()?;

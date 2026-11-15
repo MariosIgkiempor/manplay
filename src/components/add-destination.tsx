@@ -125,7 +125,7 @@ export function AddTailscale({ onAdded }: { onAdded: (id: number) => void }) {
 	return (
 		<div className="space-y-4">
 			<div className="flex items-center justify-between">
-				<h3 className="font-medium">Choose a machine {tailnet && `on ${tailnet}`}</h3>
+				<h3 className="font-semibold text-sm">Choose a machine {tailnet && `on ${tailnet}`}</h3>
 				<button
 					type="button"
 					className="text-muted-foreground text-xs hover:underline"

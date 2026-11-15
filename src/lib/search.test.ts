@@ -11,6 +11,7 @@ const track = (id: number, artist: string, title: string, tags: string[] = []): 
 	size: 1,
 	tags,
 	syncedCount: 0,
+	fields: {},
 	durationMs: null,
 	bitrate: null,
 	sampleRate: null,

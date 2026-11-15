@@ -1,4 +1,5 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef } from "react";
+import { typeScale } from "#/lib/type-scale.ts";
 
 // Geometry of the collapsing header, in px. The header is as tall as FULL; once it has scrolled
 // COLLAPSE px it sticks and only its bottom ROW px (controls + search) stay visible.
@@ -87,7 +88,7 @@ export function LibraryHeader({ title, subtitle, controls, filters }: Props) {
 function Heading({ title, subtitle }: { title: string; subtitle?: string | undefined }) {
 	return (
 		<div className="min-w-0">
-			<h1 className="font-semibold text-2xl">{title}</h1>
+			<h1 className={typeScale.pageTitle}>{title}</h1>
 			{subtitle && (
 				<p className="truncate text-muted-foreground text-xs" title={subtitle}>
 					{subtitle}

@@ -90,7 +90,7 @@ function PullResult({ outcome: r, onDone }: { outcome: PullOutcome; onDone: () =
 		<div className="space-y-5">
 			<div className="flex items-center gap-2">
 				<CheckCircle2 className={`size-5 ${r.failedTotal > 0 ? "text-warning" : "text-success"}`} />
-				<h3 className="font-semibold text-lg tracking-tight">
+				<h3 className="font-semibold text-xl tracking-tight">
 					{r.failedTotal > 0 ? `Pulled with ${r.failedTotal} errors` : "Pull complete"}
 				</h3>
 			</div>

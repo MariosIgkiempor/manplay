@@ -25,6 +25,8 @@ const trackSchema = z.object({
 	key: z.string().nullable(),
 	/** BPM and key detection has run on this audio (whether or not it found them). */
 	analyzed: z.boolean(),
+	/** BPM, key, genre, label, ... as stored in the file (see `LISTED` in `src-tauri/src/tags.rs`). */
+	fields: z.record(z.string(), z.string()).default({}),
 });
 
 export type Track = z.infer<typeof trackSchema>;
@@ -92,6 +94,19 @@ export async function saveAnalysisToFiles(): Promise<TagWriteReport> {
 export async function analyzeTracks(trackIds?: number[], force = false): Promise<AnalysisReport> {
 	return analysisReportSchema.parse(
 		await invoke("analyze_tracks", { trackIds: trackIds ?? null, force }),
+	);
+}
+
+/**
+ * Sets one song's BPM and/or key by hand ("" clears): kept over the detected value and written
+ * into the file's tags. The key may be typed as Camelot, Open Key or a note name.
+ */
+export async function setTempoKey(
+	trackId: number,
+	edit: { bpm?: string; key?: string },
+): Promise<FixReport> {
+	return fixReportSchema.parse(
+		await invoke("set_tempo_key", { trackId, bpm: edit.bpm ?? null, key: edit.key ?? null }),
 	);
 }
 

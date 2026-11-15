@@ -27,27 +27,34 @@
 	--ring: oklch(0.708 0 0);
 }
 
+/*
+ * Dark is the app's only theme. Graphite with a faint blue cast (the colour of a booth in low
+ * light), and one accent, "cue": the cyan of a player's jog display. Cue marks what is playing,
+ * selected or focused, and the one main action on a screen. Nothing else is coloured, so it
+ * always means something.
+ */
 .dark {
-	--background: oklch(0.145 0 0);
-	--foreground: oklch(0.985 0 0);
-	--card: oklch(0.205 0 0);
-	--card-foreground: oklch(0.985 0 0);
-	--popover: oklch(0.205 0 0);
-	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.922 0 0);
-	--primary-foreground: oklch(0.205 0 0);
-	--secondary: oklch(0.269 0 0);
-	--secondary-foreground: oklch(0.985 0 0);
-	--muted: oklch(0.269 0 0);
-	--muted-foreground: oklch(0.708 0 0);
-	--accent: oklch(0.269 0 0);
-	--accent-foreground: oklch(0.985 0 0);
-	--destructive: oklch(0.704 0.191 22.216);
-	--success: oklch(0.696 0.17 162);
-	--warning: oklch(0.769 0.188 70);
-	--border: oklch(1 0 0 / 10%);
-	--input: oklch(1 0 0 / 15%);
-	--ring: oklch(0.556 0 0);
+	color-scheme: dark;
+	--background: oklch(0.17 0.006 255);
+	--foreground: oklch(0.96 0.004 255);
+	--card: oklch(0.2 0.007 255);
+	--card-foreground: oklch(0.96 0.004 255);
+	--popover: oklch(0.22 0.008 255);
+	--popover-foreground: oklch(0.96 0.004 255);
+	--primary: oklch(0.8 0.115 205);
+	--primary-foreground: oklch(0.2 0.035 215);
+	--secondary: oklch(0.255 0.008 255);
+	--secondary-foreground: oklch(0.96 0.004 255);
+	--muted: oklch(0.255 0.008 255);
+	--muted-foreground: oklch(0.7 0.012 255);
+	--accent: oklch(0.255 0.008 255);
+	--accent-foreground: oklch(0.96 0.004 255);
+	--destructive: oklch(0.7 0.18 22);
+	--success: oklch(0.74 0.15 158);
+	--warning: oklch(0.8 0.15 75);
+	--border: oklch(1 0 0 / 8%);
+	--input: oklch(1 0 0 / 13%);
+	--ring: oklch(0.72 0.1 205);
 }
 
 @theme inline {
@@ -81,6 +88,13 @@
 		@apply border-border outline-ring/50;
 	}
 	body {
-		@apply bg-background text-foreground;
+		@apply bg-background text-foreground antialiased;
+	}
+	::selection {
+		@apply bg-primary/30;
+	}
+	input[type="checkbox"],
+	input[type="range"] {
+		accent-color: var(--primary);
 	}
 }

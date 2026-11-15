@@ -9,6 +9,7 @@ import { ItunesPanel } from "#/components/itunes-source.tsx";
 import { RekordboxPanel } from "#/components/rekordbox-source.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { UsbPanel } from "#/components/usb-drives.tsx";
+import { ValuePanel } from "#/components/value-panel.tsx";
 import {
 	type DetailView,
 	PanelScopeContext,
@@ -36,6 +37,8 @@ function Content({ view }: { view: DetailView }) {
 			const Panel = SERVICE_PANELS[view.service];
 			return <Panel />;
 		}
+		case "value":
+			return <ValuePanel field={view.field} value={view.value} />;
 		case "edit":
 			return <EditTagsPanel target={view.target} fromAlbum={view.fromAlbum ?? false} />;
 		default:

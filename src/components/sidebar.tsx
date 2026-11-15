@@ -120,7 +120,13 @@ export function Sidebar() {
 			</div>
 			<form onSubmit={onSubmit} className="flex gap-2">
 				<Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New playlist" />
-				<Button type="submit" size="icon" aria-label="Create playlist" disabled={create.isPending}>
+				<Button
+					type="submit"
+					size="icon"
+					variant="outline"
+					aria-label="Create playlist"
+					disabled={create.isPending || name.trim() === ""}
+				>
 					<Plus />
 				</Button>
 			</form>

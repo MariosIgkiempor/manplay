@@ -9,9 +9,20 @@ import type { Track } from "#/lib/api.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** Four album covers in a grid, one cover when fewer albums exist, or `fallback` for none. */
-function Cover({ tracks, fallback }: { tracks: readonly Track[]; fallback: ReactNode }) {
+export function Cover({
+	tracks,
+	fallback,
+	className = "size-36",
+}: {
+	tracks: readonly Track[];
+	fallback: ReactNode;
+	className?: string;
+}) {
 	const covers = useMemo(() => groupAlbums(tracks).map((a) => a.coverTrackId), [tracks]);
-	const frame = "size-36 shrink-0 overflow-hidden rounded-xl shadow-lg ring-1 ring-foreground/10";
+	const frame = cn(
+		"shrink-0 overflow-hidden rounded-lg shadow-lg ring-1 ring-foreground/10",
+		className,
+	);
 	if (covers.length >= 4) {
 		return (
 			<div className={cn(frame, "grid grid-cols-2 grid-rows-2")}>

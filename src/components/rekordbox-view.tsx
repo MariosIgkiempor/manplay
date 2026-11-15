@@ -91,15 +91,13 @@ function Group({
 	children: ReactNode;
 }) {
 	return (
-		<section className="space-y-3 rounded-xl border bg-card p-4 shadow-xs">
+		<section className="space-y-3 rounded-lg border bg-card p-4">
 			<div className="space-y-1">
 				<div className="flex items-center justify-between gap-2">
-					<h2 className="flex items-center gap-2 font-semibold text-sm">
+					<h2 className="flex items-baseline gap-2 font-semibold text-sm">
 						{title}
 						{count && (
-							<span className="rounded-full bg-muted px-2 py-0.5 font-normal text-muted-foreground text-xs tabular-nums">
-								{count}
-							</span>
+							<span className="font-normal text-muted-foreground tabular-nums">{count}</span>
 						)}
 					</h2>
 					{actions && <div className="flex gap-3 text-xs">{actions}</div>}
@@ -539,13 +537,11 @@ function Hero({
 	exportedAt: number | null;
 }) {
 	return (
-		<div className="space-y-3 rounded-xl border bg-gradient-to-br from-muted/70 to-muted/20 p-4">
+		<div className="space-y-3 rounded-lg border bg-muted/40 p-4">
 			<div className="flex items-center gap-3">
 				<BrandIcon brand="rekordbox" className="size-11" />
 				<div className="min-w-0">
-					<h2 className="font-semibold text-lg leading-tight tracking-tight">
-						Export to rekordbox
-					</h2>
+					<h2 className="font-semibold text-xl tracking-tight">Export to rekordbox</h2>
 					{path && (
 						<p className="truncate font-mono text-muted-foreground text-xs" title={path}>
 							{path}
@@ -584,7 +580,7 @@ function TabBody({
 
 function NoFile({ onChoose, pending }: { onChoose: () => void; pending: boolean }) {
 	return (
-		<div className="space-y-3 rounded-xl border border-dashed p-5 text-center">
+		<div className="space-y-3 rounded-lg border border-dashed p-5 text-center">
 			<p className="text-sm">Choose where manplay should save the rekordbox file.</p>
 			<Button onClick={onChoose} disabled={pending}>
 				<FolderOpen /> Choose location…

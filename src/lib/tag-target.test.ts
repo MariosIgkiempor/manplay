@@ -11,6 +11,7 @@ const track = (id: number, album: string, artist = "A"): Track => ({
 	size: 1,
 	tags: [],
 	syncedCount: 0,
+	fields: {},
 	durationMs: null,
 	bitrate: null,
 	sampleRate: null,

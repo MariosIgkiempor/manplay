@@ -470,6 +470,74 @@ async fn save_analysis_tags(
     Ok(out)
 }
 
+/// Sets one song's BPM and/or key by hand (`""` clears): stored over the detected value and
+/// written into the file's tags, BPM as a whole number and the key in the chosen notation.
+#[tauri::command]
+async fn set_tempo_key(
+    state: State<'_, AppState>,
+    track_id: i64,
+    bpm: Option<String>,
+    key: Option<String>,
+) -> Result<audit::FixReport, Error> {
+    let root = library_root(&state)?;
+    let bpm = bpm
+        .map(|b| {
+            let t = b.trim().replace(',', ".");
+            if t.is_empty() {
+                return Ok(None);
+            }
+            t.parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite() && (1.0..1000.0).contains(n))
+                .map(Some)
+                .ok_or_else(|| Error::Msg(format!("not a tempo: {b}")))
+        })
+        .transpose()?;
+    let key = key
+        .map(|k| {
+            if k.trim().is_empty() {
+                return Ok(None);
+            }
+            analysis::normalize_key(&k)
+                .map(Some)
+                .ok_or_else(|| Error::Msg(format!("not a key: {k}")))
+        })
+        .transpose()?;
+    let (path, format) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let path = db::track_path(&conn, track_id)?
+            .ok_or_else(|| Error::Msg("song not found".to_owned()))?;
+        db::set_tempo_key(&conn, track_id, bpm, key.as_ref().map(Option::as_deref))?;
+        (path, analysis_settings_of(&conn)?.key_format)
+    };
+    let mut edits = std::collections::BTreeMap::new();
+    if let Some(bpm) = bpm {
+        #[allow(clippy::cast_possible_truncation)]
+        edits.insert(
+            "bpm".to_owned(),
+            bpm.map_or_else(String::new, |b| (b.round() as i64).to_string()),
+        );
+    }
+    if let Some(key) = &key {
+        let text = key.as_ref().and_then(|k| match format {
+            KeyFormat::Musical => Some(k.clone()),
+            KeyFormat::Camelot => analysis::camelot(k),
+        });
+        edits.insert("key".to_owned(), text.unwrap_or_default());
+    }
+    if state.fixing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a fix is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.fixing);
+    let r = root.clone();
+    let paths = [PathBuf::from(path)];
+    let report = tauri::async_runtime::spawn_blocking(move || tags::write(&r, &paths, &edits))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    refresh_after_fs_change(&state, root).await;
+    Ok(report)
+}
+
 /// Writes every saved analysis result into the files' tags now.
 #[tauri::command]
 async fn save_analysis_to_files(
@@ -2355,6 +2423,7 @@ pub fn run() {
             track_analysis,
             is_exporting_to_usb,
             save_analysis_to_files,
+            set_tempo_key,
             list_playlists,
             create_playlist,
             rename_playlist,

@@ -8,7 +8,7 @@ import { cn } from "#/lib/utils.ts";
 export function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
 	return (
 		<div className="flex items-center justify-between gap-2">
-			<h3 className="font-medium text-muted-foreground text-xs">{children}</h3>
+			<h3 className="font-semibold text-sm">{children}</h3>
 			{action}
 		</div>
 	);
@@ -44,7 +44,7 @@ export function SourcePanel({
 			<div className="flex items-start gap-3">
 				<BrandIcon brand={brand} className="size-10" />
 				<div className="min-w-0 flex-1">
-					<h2 className="truncate font-semibold text-2xl tracking-tight">{title}</h2>
+					<h2 className="truncate font-semibold text-xl tracking-tight">{title}</h2>
 					<p className="text-muted-foreground text-sm">{subtitle}</p>
 				</div>
 				<Switch checked={enabled} onChange={onToggle} label={`Enable ${title}`} />

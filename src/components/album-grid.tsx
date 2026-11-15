@@ -2,6 +2,7 @@ import { Play } from "lucide-react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
+import { EmptyState } from "#/components/page.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import { type Album, syncState } from "#/lib/albums.ts";
@@ -72,7 +73,11 @@ function AlbumTile({
 
 export function AlbumGrid({ albums, targetCount, onOpen }: Props) {
 	if (albums.length === 0) {
-		return <p className="py-8 text-center text-muted-foreground text-sm">No albums.</p>;
+		return (
+			<EmptyState title="No albums">
+				Nothing matches. Clear the search, or rescan the library folder.
+			</EmptyState>
+		);
 	}
 	return (
 		<div className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-x-4 gap-y-6">

@@ -15,6 +15,7 @@ import {
 	useLibraryRoot,
 	useServices,
 } from "#/lib/queries.ts";
+import { typeScale } from "#/lib/type-scale.ts";
 
 const EMPTY_HINT =
 	"Pick the folder that holds your purchased songs, usually “iTunes Media” or “Music” inside your iTunes/Music folder.";
@@ -148,7 +149,7 @@ export function ItunesPending() {
 	return (
 		<div className="space-y-3">
 			<div className="flex items-center justify-between gap-2">
-				<h3 className="font-medium text-sm">iTunes</h3>
+				<h3 className={typeScale.label}>iTunes</h3>
 				<Button
 					size="sm"
 					onClick={() => run.mutate()}
@@ -159,12 +160,12 @@ export function ItunesPending() {
 				</Button>
 			</div>
 			{songs.length === 0 ? (
-				<div className="flex items-center gap-2 rounded-xl border border-dashed p-4 text-muted-foreground text-sm">
+				<div className="flex items-center gap-2 rounded-lg border border-dashed p-4 text-muted-foreground text-sm">
 					<CheckCircle2 className="size-4" />
 					{pending.isPending ? "Checking iTunes…" : "All caught up. Nothing new in iTunes."}
 				</div>
 			) : (
-				<ul className="divide-y rounded-xl border text-sm">
+				<ul className="divide-y rounded-lg border text-sm">
 					{songs.slice(0, 50).map((c) => (
 						<li key={c.dest} className="px-3 py-2">
 							<span className="font-medium">{c.title}</span>

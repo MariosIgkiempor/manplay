@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
+import { camelot, formatBpm, keyName, normalizeKey } from "#/lib/musical-key.ts";
 
 describe("camelot", () => {
 	it("maps the wheel's anchors", () => {
@@ -34,5 +34,31 @@ describe("formatBpm", () => {
 		expect(formatBpm(128)).toBe("128");
 		expect(formatBpm(126.43)).toBe("126.4");
 		expect(formatBpm(127.98)).toBe("128");
+	});
+});
+
+describe("normalizeKey", () => {
+	it("reads Camelot, Open Key and note names", () => {
+		expect(normalizeKey("8A")).toBe("Am");
+		expect(normalizeKey("8b")).toBe("C");
+		expect(normalizeKey("1A")).toBe("G#m");
+		expect(normalizeKey("12B")).toBe("E");
+		expect(normalizeKey("1d")).toBe("C");
+		expect(normalizeKey("1m")).toBe("Am");
+		expect(normalizeKey("A minor")).toBe("Am");
+		expect(normalizeKey("F♯")).toBe("F#");
+		expect(normalizeKey("Bbm")).toBe("Bbm");
+	});
+	it("round-trips with camelot", () => {
+		for (let n = 1; n <= 12; n += 1) {
+			for (const l of ["A", "B"]) {
+				expect(camelot(normalizeKey(`${n}${l}`) ?? "")).toBe(`${n}${l}`);
+			}
+		}
+	});
+	it("rejects nonsense", () => {
+		expect(normalizeKey("13A")).toBeNull();
+		expect(normalizeKey("H")).toBeNull();
+		expect(normalizeKey("")).toBeNull();
 	});
 });

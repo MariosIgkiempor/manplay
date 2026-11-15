@@ -3,6 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, Tag } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { listTags, migrateLibraryTags } from "#/lib/api.ts";
@@ -128,11 +129,11 @@ function TagPage() {
 				)}
 			</PageHeader>
 			<div className="space-y-3 p-6">
-				{migrate.isError && <p className="text-destructive text-sm">{String(migrate.error)}</p>}
+				{migrate.isError && <ErrorLine>{String(migrate.error)}</ErrorLine>}
 				{tagged.length === 0 && !tracks.isPending ? (
-					<p className="text-muted-foreground text-sm">
-						No songs have this tag. Add it from a song’s right-click menu.
-					</p>
+					<EmptyState icon={<Tag />} title="No songs have this tag">
+						Right-click songs in the library and choose Tag to add it.
+					</EmptyState>
 				) : (
 					<SelectableTrackList tracks={tagged} />
 				)}

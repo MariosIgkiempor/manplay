@@ -42,7 +42,7 @@ interface ToolbarProps {
 
 function Toolbar(p: ToolbarProps) {
 	return (
-		<div className="sticky top-0 z-10 flex items-center justify-end gap-2 rounded-xl border bg-card/95 p-2 backdrop-blur">
+		<div className="sticky top-0 z-10 flex items-center justify-end gap-2 rounded-lg border bg-card/95 p-2 backdrop-blur">
 			<Button
 				variant="ghost"
 				size="icon"
@@ -97,21 +97,21 @@ function Placeholder({ scanning, hasScan }: { scanning: boolean; hasScan: boolea
 		return (
 			<div className="space-y-3">
 				{[0, 1, 2].map((i) => (
-					<div key={i} className="h-40 animate-pulse rounded-xl border bg-card/60" />
+					<div key={i} className="h-40 animate-pulse rounded-lg border bg-card/60" />
 				))}
 			</div>
 		);
 	}
 	if (hasScan) {
 		return (
-			<div className="grid place-items-center gap-2 rounded-xl border border-dashed py-16 text-muted-foreground">
+			<div className="grid place-items-center gap-2 rounded-lg border border-dashed py-16 text-muted-foreground">
 				<CheckCircle2 className="size-8" />
 				<p className="text-sm">All caught up. Nothing new to import.</p>
 			</div>
 		);
 	}
 	return (
-		<div className="grid place-items-center gap-2 rounded-xl border border-dashed py-16 text-muted-foreground">
+		<div className="grid place-items-center gap-2 rounded-lg border border-dashed py-16 text-muted-foreground">
 			<FolderOpen className="size-8" />
 			<p className="text-sm">Choose a folder to look for new music.</p>
 		</div>

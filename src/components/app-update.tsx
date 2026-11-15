@@ -1,4 +1,5 @@
 import { Download, RefreshCw } from "lucide-react";
+import { ErrorLine, Panel, Section } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useAppVersion, useInstallUpdate, useUpdateCheck } from "#/lib/updater.ts";
 
@@ -9,25 +10,28 @@ export function AppUpdate() {
 	const install = useInstallUpdate();
 	const available = update.data;
 
-	let status = "Up to date.";
-	if (update.isFetching) {
+	let status = "Up to date";
+	if (install.isPending) {
+		status = "Installing…";
+	} else if (update.isFetching) {
 		status = "Checking for updates…";
 	} else if (update.isError) {
 		status = `Could not check for updates: ${String(update.error)}`;
 	} else if (available) {
-		status = `Version ${available.version} is available.`;
+		status = `Version ${available.version} is available`;
 	}
 
 	return (
-		<section className="space-y-3 rounded-xl border bg-card p-4">
-			<h2 className="font-medium">About</h2>
-			<p className="text-muted-foreground text-sm">manplay {version.data ?? ""}</p>
-			<div className="flex flex-wrap items-center gap-2">
-				<span className="min-w-0 flex-1 text-sm">{install.isPending ? "Installing…" : status}</span>
+		<Section title="About">
+			<Panel className="flex flex-wrap items-center justify-between gap-3">
+				<div className="min-w-0 space-y-0.5">
+					<p className="font-medium text-sm tabular-nums">manplay {version.data ?? ""}</p>
+					<p className="text-muted-foreground text-xs">{status}</p>
+				</div>
 				{available ? (
 					<Button onClick={() => install.mutate()} disabled={install.isPending}>
 						<Download />
-						Install &amp; restart
+						Install and restart
 					</Button>
 				) : (
 					<Button variant="outline" onClick={() => update.refetch()} disabled={update.isFetching}>
@@ -35,8 +39,8 @@ export function AppUpdate() {
 						Check for updates
 					</Button>
 				)}
-			</div>
-			{install.isError && <p className="text-destructive text-xs">{String(install.error)}</p>}
-		</section>
+				{install.isError && <ErrorLine>{String(install.error)}</ErrorLine>}
+			</Panel>
+		</Section>
 	);
 }
