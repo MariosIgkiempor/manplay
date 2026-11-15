@@ -56,16 +56,34 @@ pub struct Status {
 }
 
 fn run_status() -> Result<Vec<u8>, Error> {
-    let attempt = |bin: &str| Command::new(bin).args(["status", "--json"]).output();
-    let out = attempt("tailscale").or_else(|_| attempt(APP_BINARY))?;
-    if out.status.success() {
-        Ok(out.stdout)
-    } else {
-        Err(Error::Msg(format!(
-            "tailscale status failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )))
+    // The macOS app's CLI can print a plain-text error on stdout with exit 0
+    // (e.g. "The Tailscale GUI failed to start") when launched from a GUI app
+    // environment, so only accept output that is actually JSON. Fall back to a
+    // login shell, which restores the environment the CLI expects.
+    let json = |o: &std::process::Output| {
+        o.status.success() && o.stdout.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')
+    };
+    let args = ["status", "--json"];
+    let attempts: Vec<std::io::Result<std::process::Output>> = vec![
+        Command::new("tailscale").args(args).output(),
+        Command::new(APP_BINARY).args(args).output(),
+        Command::new("/bin/zsh")
+            .args(["-lc", &format!("exec '{APP_BINARY}' status --json")])
+            .output(),
+    ];
+    let mut last = String::from("tailscale is not installed");
+    for out in attempts.into_iter().flatten() {
+        if json(&out) {
+            return Ok(out.stdout);
+        }
+        let text = [&out.stdout, &out.stderr]
+            .map(|b| String::from_utf8_lossy(b).trim().to_owned())
+            .join(" ");
+        if !text.trim().is_empty() {
+            last = text;
+        }
     }
+    Err(Error::Msg(format!("tailscale status failed: {last}")))
 }
 
 fn to_machine(p: &RawPeer, is_self: bool) -> Option<Machine> {
