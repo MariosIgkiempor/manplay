@@ -88,7 +88,13 @@ function SyncSteps({ ids, onClose }: { ids: number[]; onClose: () => void }) {
 }
 
 /** Sync = pull and push, each with its own review. */
-export function SyncButton({ ids, size, variant, disabled }: Props) {
+export function SyncButton({
+	ids,
+	size,
+	variant,
+	disabled,
+	label = "Sync",
+}: Props & { label?: string }) {
 	const all = useIds(ids);
 	const [open, setOpen] = useState(false);
 	const [session, setSession] = useState(0);
@@ -104,7 +110,7 @@ export function SyncButton({ ids, size, variant, disabled }: Props) {
 					setOpen(true);
 				}}
 			>
-				<RefreshCw /> Sync
+				<RefreshCw /> {label}
 			</Button>
 			<Drawer open={open} onClose={() => setOpen(false)} title="Review sync" width="w-[44rem]">
 				{open && <SyncSteps key={session} ids={all} onClose={() => setOpen(false)} />}

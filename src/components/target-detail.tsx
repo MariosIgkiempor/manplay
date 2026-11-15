@@ -2,17 +2,21 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { BrandIcon } from "#/components/brand-icon.tsx";
+import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
+import { Section } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
-import { SectionTitle } from "#/components/source-panel.tsx";
 import { PullButton, SyncButton } from "#/components/sync-flow.tsx";
 import { SyncReviewButton } from "#/components/sync-review.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
+import { useDetail } from "#/context/detail-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { isR2, removeSyncTarget, type SyncTarget, updateSyncTarget } from "#/lib/api.ts";
 import { syncEntries } from "#/lib/history.ts";
-import { useSyncHistory, useSyncTargets } from "#/lib/queries.ts";
+import { useSyncHistory, useSyncTargets, useTracks } from "#/lib/queries.ts";
+import { typeScale } from "#/lib/type-scale.ts";
+import { cn } from "#/lib/utils.ts";
 
 function Field({
 	label,
@@ -163,6 +167,7 @@ function SettingsForm({ target }: { target: SyncTarget }) {
 function Actions({ target, onRemoved }: { target: SyncTarget; onRemoved: () => void }) {
 	const queryClient = useQueryClient();
 	const progress = useSyncProgress();
+	const [confirming, setConfirming] = useState(false);
 	const remove = useMutation({
 		mutationFn: removeSyncTarget,
 		onSuccess: async () => {
@@ -179,47 +184,93 @@ function Actions({ target, onRemoved }: { target: SyncTarget; onRemoved: () => v
 				<SyncButton ids={[target.id]} disabled={busy} />
 				<PullButton ids={[target.id]} disabled={busy} />
 				<SyncReviewButton ids={[target.id]} variant="outline" disabled={busy} />
-				<Button variant="ghost" onClick={() => remove.mutate(target.id)} disabled={busy}>
+				<Button
+					variant="ghost"
+					className="ml-auto hover:text-destructive"
+					onClick={() => setConfirming(true)}
+					disabled={busy}
+				>
 					<Trash2 /> Remove
 				</Button>
 			</div>
 			<MutationErrors mutations={[remove]} />
+			{confirming && (
+				<ConfirmDialog
+					title={`Remove ${target.machine}?`}
+					confirmLabel="Remove destination"
+					destructive
+					busy={remove.isPending}
+					onCancel={() => setConfirming(false)}
+					onConfirm={() => {
+						setConfirming(false);
+						remove.mutate(target.id);
+					}}
+				>
+					manplay stops syncing there. Files already in {target.path.join(" / ") || "the bucket"}{" "}
+					stay.
+				</ConfirmDialog>
+			)}
 		</div>
 	);
 }
 
-/** One machine/folder or bucket/folder: its settings and its own sync history. */
+/** One machine/folder or bucket/folder: what it holds, its settings and its own sync history. */
 export function TargetDetail({ id, onRemoved }: { id: number; onRemoved: () => void }) {
 	const targets = useSyncTargets();
 	const history = useSyncHistory();
+	const tracks = useTracks();
 	const target = targets.data?.find((t) => t.id === id);
 	if (!target) {
 		return null;
 	}
+	const r2 = isR2(target);
+	const total = tracks.data?.length ?? 0;
 	return (
 		<div className="space-y-8 pb-6">
-			<div className="flex items-center gap-3">
-				<BrandIcon brand={isR2(target) ? "cloudflare" : "tailscale"} className="size-10" />
-				<div className="min-w-0">
-					<h2 className="truncate font-semibold text-xl tracking-tight">{target.machine}</h2>
-					<p className="truncate text-muted-foreground text-sm">
-						{target.path.join(" / ") || "(bucket root)"} · {target.syncedTracks.toLocaleString()}{" "}
-						tracks synced
-					</p>
+			<div className="space-y-5">
+				<div className="flex items-center gap-3">
+					<BrandIcon brand={r2 ? "cloudflare" : "tailscale"} className="size-10" />
+					<div className="min-w-0">
+						<div className="text-muted-foreground text-xs">
+							{r2 ? "Cloudflare R2 bucket" : "Tailscale folder"}
+						</div>
+						<h2 className={cn("truncate", typeScale.panelTitle)}>{target.machine}</h2>
+						<p className="truncate text-muted-foreground text-sm">
+							{target.path.join(" / ") || "Bucket root"}
+						</p>
+					</div>
 				</div>
+				<div className="space-y-1.5">
+					<p className="text-sm tabular-nums">
+						<span className="font-medium">{target.syncedTracks.toLocaleString()}</span>
+						<span className="text-muted-foreground"> of {total.toLocaleString()} songs synced</span>
+					</p>
+					<div className="h-1 overflow-hidden rounded-full bg-muted">
+						<div
+							className="h-full rounded-full bg-primary"
+							style={{
+								width: `${total === 0 ? 0 : Math.min(100, (target.syncedTracks / total) * 100)}%`,
+							}}
+						/>
+					</div>
+				</div>
+				<Actions target={target} onRemoved={onRemoved} />
 			</div>
-			<Actions target={target} onRemoved={onRemoved} />
-			<section className="space-y-4">
-				<SectionTitle>Settings</SectionTitle>
+			<Section title="Settings">
 				<SettingsForm key={id} target={target} />
-			</section>
-			<section className="space-y-2">
-				<SectionTitle>History</SectionTitle>
+			</Section>
+			<Section title="History">
 				<HistoryList
 					entries={syncEntries((history.data ?? []).filter((r) => r.targetId === id))}
 					empty="Never synced."
 				/>
-			</section>
+			</Section>
 		</div>
 	);
+}
+
+/** A destination in the details panel; removing it closes the panel. */
+export function TargetPanel({ id }: { id: number }) {
+	const { close } = useDetail();
+	return <TargetDetail id={id} onRemoved={close} />;
 }

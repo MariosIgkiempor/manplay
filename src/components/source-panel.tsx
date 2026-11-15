@@ -22,7 +22,7 @@ export function SourcePanel({
 	brand,
 	title,
 	subtitle,
-	enabled,
+	enabled = true,
 	onToggle,
 	settings,
 	entries,
@@ -32,8 +32,9 @@ export function SourcePanel({
 	brand: Brand;
 	title: string;
 	subtitle: string;
-	enabled: boolean;
-	onToggle: (on: boolean) => void;
+	/** With `onToggle`, a switch turns the service on and off. Export destinations have none. */
+	enabled?: boolean;
+	onToggle?: (on: boolean) => void;
 	settings?: ReactNode;
 	entries?: readonly HistoryEntry[];
 	empty?: string;
@@ -47,7 +48,7 @@ export function SourcePanel({
 					<h2 className="truncate font-semibold text-xl tracking-tight">{title}</h2>
 					<p className="text-muted-foreground text-sm">{subtitle}</p>
 				</div>
-				<Switch checked={enabled} onChange={onToggle} label={`Enable ${title}`} />
+				{onToggle && <Switch checked={enabled} onChange={onToggle} label={`Enable ${title}`} />}
 			</div>
 			<div className={cn("space-y-8", !enabled && "opacity-50")} inert={!enabled}>
 				{settings && (

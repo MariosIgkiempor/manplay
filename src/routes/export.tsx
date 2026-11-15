@@ -1,11 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { DestinationServiceCard } from "#/components/destination-service.tsx";
-import { Page, Section } from "#/components/page.tsx";
-import { RekordboxCard } from "#/components/rekordbox-source.tsx";
+import { Destinations } from "#/components/destinations.tsx";
+import { Page } from "#/components/page.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { PullButton, SyncButton } from "#/components/sync-flow.tsx";
 import { SyncReviewButton } from "#/components/sync-review.tsx";
-import { UsbCard } from "#/components/usb-drives.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { useSyncTargets, useTracks } from "#/lib/queries.ts";
 
@@ -27,18 +25,11 @@ function ExportPage() {
 				<>
 					<PullButton disabled={busy || targetCount === 0} />
 					<SyncReviewButton variant="outline" disabled={busy || targetCount === 0} />
-					<SyncButton disabled={busy || targetCount === 0} />
+					<SyncButton disabled={busy || targetCount === 0} label="Sync all" />
 				</>
 			}
 		>
-			<Section title="Destinations">
-				<div className="grid gap-4 lg:grid-cols-2">
-					<DestinationServiceCard kind="tailscale" />
-					<DestinationServiceCard kind="r2" />
-					<RekordboxCard />
-					<UsbCard />
-				</div>
-			</Section>
+			<Destinations />
 			<StatusBar>
 				<Stat label="Destinations" value={targetCount} />
 				<Stat label="Songs to sync" value={pending} />

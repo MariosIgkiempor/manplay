@@ -1,14 +1,15 @@
 import { ArrowLeft, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
+import { AddDestinationPanel } from "#/components/add-destination-panel.tsx";
 import { AlbumPanel } from "#/components/album-panel.tsx";
 import { ArtistPanel } from "#/components/artist-panel.tsx";
-import { DestinationServicePanel } from "#/components/destination-service.tsx";
 import { DownloadsPanel } from "#/components/downloads-source.tsx";
 import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
 import { ItunesPanel } from "#/components/itunes-source.tsx";
 import { RekordboxPanel } from "#/components/rekordbox-source.tsx";
+import { TargetPanel } from "#/components/target-detail.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { UsbPanel } from "#/components/usb-drives.tsx";
+import { UsbDrivePanel } from "#/components/usb-drives.tsx";
 import { ValuePanel } from "#/components/value-panel.tsx";
 import {
 	type DetailView,
@@ -16,16 +17,15 @@ import {
 	StatusSlotContext,
 	useDetail,
 } from "#/context/detail-context.ts";
+import type { ServiceId } from "#/lib/api.ts";
 import { cn } from "#/lib/utils.ts";
 
-const SERVICE_PANELS = {
+/** Services with a panel of their own; export folders, buckets and drives open one each. */
+const SERVICE_PANELS: Partial<Record<ServiceId, () => ReactNode>> = {
 	downloads: DownloadsPanel,
 	itunes: ItunesPanel,
 	rekordbox: RekordboxPanel,
-	tailscale: () => <DestinationServicePanel kind="tailscale" />,
-	r2: () => <DestinationServicePanel kind="r2" />,
-	usb: UsbPanel,
-} as const;
+};
 
 function Content({ view }: { view: DetailView }) {
 	switch (view.kind) {
@@ -35,8 +35,14 @@ function Content({ view }: { view: DetailView }) {
 			return <ArtistPanel name={view.name} />;
 		case "service": {
 			const Panel = SERVICE_PANELS[view.service];
-			return <Panel />;
+			return Panel ? <Panel /> : null;
 		}
+		case "target":
+			return <TargetPanel id={view.id} />;
+		case "usb":
+			return <UsbDrivePanel mount={view.mount} />;
+		case "add-destination":
+			return <AddDestinationPanel service={view.service} />;
 		case "value":
 			return <ValuePanel field={view.field} value={view.value} />;
 		case "edit":
@@ -91,7 +97,9 @@ export function DetailPanel(): ReactNode {
 				aria-label="Details"
 				inert={!open}
 				className={cn(
-					"absolute inset-y-0 right-0 z-20 flex w-[36rem] max-w-full flex-col border-l bg-background shadow-2xl transition-transform duration-200",
+					"absolute inset-y-0 right-0 z-20 flex max-w-full flex-col border-l bg-background shadow-2xl transition-[translate,width] duration-200",
+					// A drive's library browser needs room for its playlists beside their songs.
+					shown?.kind === "usb" ? "w-[60rem]" : "w-[36rem]",
 					open ? "translate-x-0" : "translate-x-full",
 				)}
 			>

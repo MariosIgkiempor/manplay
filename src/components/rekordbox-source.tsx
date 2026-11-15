@@ -1,13 +1,10 @@
-import { Copy, FolderOpen } from "lucide-react";
+import { Copy, FolderOpen, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { MutationErrors, PathSetting } from "#/components/path-setting.tsx";
 import { RekordboxExportButton } from "#/components/rekordbox-view.tsx";
-import { SourceCard } from "#/components/source-card.tsx";
 import { SourcePanel } from "#/components/source-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useDetail } from "#/context/detail-context.ts";
-import type { RekordboxStatus } from "#/lib/api.ts";
-import { timeAgo } from "#/lib/format.ts";
 import { activityEntries } from "#/lib/history.ts";
 import { useActivity } from "#/lib/queries.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
@@ -17,45 +14,6 @@ const STEPS = [
 	"In Settings → View → Layout, tick “rekordbox xml” so it appears in the left-hand tree.",
 	"Open “rekordbox xml” → “manplay” in the tree, right-click a playlist and choose Import Playlist.",
 ] as const;
-
-function lastLine(s: RekordboxStatus | undefined) {
-	if (!s) {
-		return "";
-	}
-	if (s.error) {
-		return <span className="text-destructive">{s.error}</span>;
-	}
-	if (s.exportedAt === null) {
-		return "Not exported yet";
-	}
-	return `Updated ${timeAgo(s.exportedAt)} · ${s.playlists} ${s.playlists === 1 ? "playlist" : "playlists"} · ${s.tracks} tracks`;
-}
-
-export function RekordboxCard() {
-	const detail = useDetail();
-	const { status, choose, enabled, setEnabled } = useRekordbox();
-	const path = status.data?.path ?? null;
-	return (
-		<SourceCard
-			brand="rekordbox"
-			title="Rekordbox"
-			subtitle={path ?? "No file chosen"}
-			enabled={enabled}
-			onToggle={setEnabled}
-			status={lastLine(status.data)}
-			onOpen={() => detail.open({ kind: "service", service: "rekordbox" })}
-			action={
-				path === null ? (
-					<Button size="sm" onClick={() => choose.mutate()} disabled={choose.isPending}>
-						<FolderOpen /> Choose location…
-					</Button>
-				) : (
-					<RekordboxExportButton size="sm" />
-				)
-			}
-		/>
-	);
-}
 
 function Setup() {
 	return (
@@ -74,7 +32,8 @@ function Setup() {
 }
 
 export function RekordboxPanel() {
-	const { status, choose, stop, enabled, setEnabled } = useRekordbox();
+	const { status, choose, stop } = useRekordbox();
+	const { close } = useDetail();
 	const history = useActivity("rekordbox");
 	const [copied, setCopied] = useState(false);
 	const path = status.data?.path ?? null;
@@ -97,8 +56,6 @@ export function RekordboxPanel() {
 			brand="rekordbox"
 			title="Rekordbox"
 			subtitle="Your library and chosen playlists as a rekordbox XML file"
-			enabled={enabled}
-			onToggle={setEnabled}
 			empty="Not exported yet."
 			entries={activityEntries(history.data ?? [], "rekordbox")}
 			settings={
@@ -117,8 +74,14 @@ export function RekordboxPanel() {
 								<Button variant="outline" onClick={() => void copy()}>
 									<Copy /> {copied ? "Copied" : "Copy path"}
 								</Button>
-								<Button variant="ghost" onClick={() => stop.mutate()} disabled={stop.isPending}>
-									Stop exporting
+								<Button
+									variant="ghost"
+									className="ml-auto hover:text-destructive"
+									title="Stop exporting. The file stays where it is."
+									onClick={() => stop.mutate(undefined, { onSuccess: close })}
+									disabled={stop.isPending}
+								>
+									<Trash2 /> Remove
 								</Button>
 							</>
 						)}

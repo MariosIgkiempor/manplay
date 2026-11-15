@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Monitor, Smartphone } from "lucide-react";
+import { Monitor, RefreshCw, Smartphone } from "lucide-react";
 import { useState } from "react";
 import { FolderBrowser } from "#/components/folder-browser.tsx";
+import { ErrorLine, SectionHeading } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { addR2Target, addSyncTarget, type Machine, tailscaleStatus } from "#/lib/api.ts";
+import { typeScale } from "#/lib/type-scale.ts";
 import { cn } from "#/lib/utils.ts";
 
 function MachineButton({
@@ -34,7 +36,7 @@ function MachineButton({
 					{machine.isSelf && " (this machine)"}
 				</span>
 				<span className="block text-muted-foreground text-xs">
-					{machine.online ? "online" : "offline"} · {machine.os}
+					{machine.online ? machine.os : `Offline, ${machine.os}`}
 				</span>
 			</span>
 		</button>
@@ -42,11 +44,11 @@ function MachineButton({
 }
 
 const R2_FIELDS = [
-	["account", "Account ID", "text"],
-	["bucket", "Bucket", "text"],
-	["prefix", "Folder in bucket (optional)", "text"],
-	["keyId", "Access Key ID", "text"],
-	["secret", "Secret Access Key", "password"],
+	["account", "Account ID", "text", "In the Cloudflare dashboard, under R2"],
+	["bucket", "Bucket", "text", ""],
+	["prefix", "Folder in bucket", "text", "Optional. Leave empty for the bucket root"],
+	["keyId", "Access key ID", "text", ""],
+	["secret", "Secret access key", "password", "Kept in your system keychain"],
 ] as const;
 
 /** Credentials for a Cloudflare R2 bucket. The secret is stored in the OS keychain. */
@@ -75,9 +77,9 @@ export function AddR2({ onAdded }: { onAdded: (id: number) => void }) {
 			}}
 		>
 			<div className="space-y-4">
-				{R2_FIELDS.map(([key, label, type]) => (
+				{R2_FIELDS.map(([key, label, type, hint]) => (
 					<div key={key} className="space-y-1.5 text-sm">
-						<label htmlFor={`r2-${key}`} className="font-medium text-xs">
+						<label htmlFor={`r2-${key}`} className={typeScale.label}>
 							{label}
 						</label>
 						<Input
@@ -89,13 +91,24 @@ export function AddR2({ onAdded }: { onAdded: (id: number) => void }) {
 							spellCheck={false}
 							className="h-9"
 						/>
+						{hint && <p className="text-muted-foreground text-xs">{hint}</p>}
 					</div>
 				))}
 			</div>
-			<Button type="submit" className="w-full" disabled={add.isPending}>
-				{add.isPending ? "Checking…" : "Add bucket"}
+			{add.isError && <ErrorLine>{String(add.error)}</ErrorLine>}
+			<Button
+				type="submit"
+				className="w-full"
+				disabled={
+					add.isPending ||
+					form.account === "" ||
+					form.bucket === "" ||
+					form.keyId === "" ||
+					form.secret === ""
+				}
+			>
+				{add.isPending ? "Checking the bucket…" : "Add bucket"}
 			</Button>
-			{add.isError && <p className="text-destructive text-sm">{String(add.error)}</p>}
 		</form>
 	);
 }
@@ -124,18 +137,21 @@ export function AddTailscale({ onAdded }: { onAdded: (id: number) => void }) {
 
 	return (
 		<div className="space-y-4">
-			<div className="flex items-center justify-between">
-				<h3 className="font-semibold text-sm">Choose a machine {tailnet && `on ${tailnet}`}</h3>
-				<button
-					type="button"
-					className="text-muted-foreground text-xs hover:underline"
-					onClick={() => void status.refetch()}
-				>
-					Refresh
-				</button>
-			</div>
-			{status.isError && <p className="text-destructive text-sm">{String(status.error)}</p>}
-			<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+			<SectionHeading
+				title={tailnet ? `Machines on ${tailnet}` : "Machines"}
+				action={
+					<Button
+						size="xs"
+						variant="ghost"
+						disabled={status.isFetching}
+						onClick={() => void status.refetch()}
+					>
+						<RefreshCw /> Refresh
+					</Button>
+				}
+			/>
+			{status.isError && <ErrorLine>{String(status.error)}</ErrorLine>}
+			<div className="grid grid-cols-2 gap-2">
 				{status.data?.machines.map((m) => (
 					<MachineButton
 						key={m.name}
@@ -158,7 +174,7 @@ export function AddTailscale({ onAdded }: { onAdded: (id: number) => void }) {
 					picking={add.isPending}
 				/>
 			)}
-			{add.isError && <p className="text-destructive text-sm">{String(add.error)}</p>}
+			{add.isError && <ErrorLine>{String(add.error)}</ErrorLine>}
 		</div>
 	);
 }
