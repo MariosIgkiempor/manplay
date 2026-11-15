@@ -13,6 +13,7 @@ import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
 import { InlineEdit, InlineInput } from "#/components/inline-edit.tsx";
+import type { MenuEntry } from "#/components/menu.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { PanelScopeContext, useDetail, useDetailNav } from "#/context/detail-context.ts";
@@ -37,6 +38,8 @@ interface Props {
 	/** Makes the column headers sort the list. */
 	onSort?: (key: SortKey) => void;
 	renderAction?: (track: Track) => ReactNode;
+	/** Right-click items for where the list is, e.g. "Remove from playlist", for the songs it acts on. */
+	menuExtra?: (tracks: readonly Track[]) => readonly MenuEntry[];
 	/** Hide the artwork column (e.g. inside an album view). */
 	hideArt?: boolean;
 	/** Hide the artist name under each title (e.g. inside an artist view). */
@@ -362,6 +365,7 @@ function TrackRow({
 	hideArtist,
 	layout,
 	menuTracks,
+	menuExtra,
 	onPlay,
 }: RowProps) {
 	const player = usePlayer();
@@ -387,6 +391,9 @@ function TrackRow({
 			tracks={menuTracks}
 			label={menuTracks.length === 1 ? track.title : `${menuTracks.length} songs`}
 			onRename={canRename && menuTracks.length === 1 ? rename.start : undefined}
+			onPlay={menuTracks.length === 1 ? onPlay : undefined}
+			extra={menuExtra?.(menuTracks)}
+			noGoTo={hideArt ?? false}
 		>
 			<div
 				role="option"

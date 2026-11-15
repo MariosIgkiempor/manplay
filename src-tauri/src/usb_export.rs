@@ -311,8 +311,9 @@ fn new_track(s: &Source, id: u32, dest: &str, today: &str) -> pdb::Track {
     }
 }
 
-/// Moves rekordbox's `OneLibrary` files aside and keeps a copy of the current database.
-fn back_up(mount: &Path, stamp: &str) -> io::Result<Option<String>> {
+/// Moves rekordbox's `OneLibrary` files aside and keeps a copy of the current database in
+/// `PIONEER/manplay-backup/<stamp>`.
+pub(crate) fn back_up(mount: &Path, stamp: &str) -> io::Result<Option<String>> {
     let rekordbox = mount.join("PIONEER/rekordbox");
     let pdb = rekordbox.join("export.pdb");
     let one: Vec<PathBuf> = ONE_LIBRARY
@@ -326,8 +327,10 @@ fn back_up(mount: &Path, stamp: &str) -> io::Result<Option<String>> {
     let rel = format!("PIONEER/manplay-backup/{stamp}");
     let dir = mount.join(&rel);
     fs::create_dir_all(&dir)?;
-    if pdb.exists() {
-        copy_file(&pdb, &dir.join("export.pdb"))?;
+    // A folder already holding a copy keeps it: that copy is the older, the one worth keeping.
+    let copy = dir.join("export.pdb");
+    if pdb.exists() && !copy.exists() {
+        copy_file(&pdb, &copy)?;
     }
     for p in one {
         if let Some(name) = p.file_name() {
@@ -450,7 +453,7 @@ fn write_analysis(
 }
 
 /// Writes under a temporary name and renames, so a pulled drive never holds half a file.
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }

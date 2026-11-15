@@ -1,24 +1,22 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
 	Database,
 	Download,
 	FolderTree,
 	Library,
-	ListMusic,
 	Music,
 	Plus,
 	Settings,
 	Upload,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
-import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
-import { rowBase, rowClass } from "#/components/sidebar-row.ts";
+import { SidebarPlaylists } from "#/components/sidebar-playlists.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
-import { createPlaylist, listPlaylists } from "#/lib/api.ts";
+import { createPlaylist } from "#/lib/api.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
 
 const linkClass =
@@ -50,12 +48,6 @@ export function Sidebar() {
 	const syncing = useSyncProgress().size > 0;
 	const updateAvailable = useUpdateCheck().data != null;
 	const [name, setName] = useState("");
-	const matchRoute = useMatchRoute();
-	const activePlaylist = (() => {
-		const m = matchRoute({ to: "/playlists/$id" });
-		return m ? Number(m.id) : null;
-	})();
-	const playlists = useQuery({ queryKey: ["playlists"], queryFn: listPlaylists });
 	const create = useMutation({
 		mutationFn: createPlaylist,
 		onSuccess: async (id) => {
@@ -103,19 +95,7 @@ export function Sidebar() {
 				</NavLink>
 			</nav>
 			<div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
-				<section className="space-y-0.5">
-					<SectionLabel>Playlists</SectionLabel>
-					{playlists.data?.map((p) => (
-						<div key={p.id} className={rowClass(activePlaylist === p.id)}>
-							<Link to="/playlists/$id" params={{ id: String(p.id) }} className={rowBase}>
-								<ListMusic className="size-4 shrink-0" />
-								<span className="truncate">{p.name}</span>
-								<RowCount n={p.trackCount} />
-							</Link>
-							<span className="size-5 shrink-0" />
-						</div>
-					))}
-				</section>
+				<SidebarPlaylists />
 				<SidebarTagTree />
 			</div>
 			<form onSubmit={onSubmit} className="flex gap-2">

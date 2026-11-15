@@ -1048,6 +1048,27 @@ export async function usbLibrary(mount: string): Promise<UsbLibrary> {
 	return usbLibrarySchema.parse(await invoke("usb_library", { mount }));
 }
 
+/** A change to the playlists on a drive. Positions are 0-based places in the playlist. */
+export type UsbEdit =
+	| { kind: "rename"; id: number; name: string }
+	| { kind: "delete"; id: number }
+	| { kind: "create"; parentId: number; name: string; folder: boolean }
+	| { kind: "move"; id: number; parentId: number }
+	| { kind: "removeTracks"; playlistId: number; positions: number[] };
+
+const usbEditOutcomeSchema = z.object({
+	library: usbLibrarySchema,
+	/** The new playlist or folder, for a "create". */
+	created: int.nullable(),
+});
+
+export type UsbEditOutcome = z.infer<typeof usbEditOutcomeSchema>;
+
+/** Edits the drive's rekordbox playlists and returns its library as it is now. */
+export async function usbEditPlaylists(mount: string, edit: UsbEdit): Promise<UsbEditOutcome> {
+	return usbEditOutcomeSchema.parse(await invoke("usb_edit_playlists", { mount, edit }));
+}
+
 const usbExportProgressSchema = z.object({
 	phase: z.enum(["copying", "analyzing", "writing"]),
 	done: int,

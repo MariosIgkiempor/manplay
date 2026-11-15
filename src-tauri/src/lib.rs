@@ -17,6 +17,7 @@ mod sync;
 mod tags;
 mod tailscale;
 mod usb;
+mod usb_edit;
 mod usb_export;
 mod webdav;
 
@@ -1107,7 +1108,9 @@ async fn export_to_usb(
     playlist_ids: Vec<i64>,
 ) -> Result<usb_export::Report, Error> {
     if state.usb_exporting.swap(true, Ordering::SeqCst) {
-        return Err(Error::Msg("An export to a USB drive is already running.".into()));
+        return Err(Error::Msg(
+            "An export to a USB drive is already running.".into(),
+        ));
     }
     let _guard = SyncGuard(&state.usb_exporting);
     let (sources, playlists, camelot) = {
@@ -1162,7 +1165,12 @@ async fn export_to_usb(
         let now = unix_now();
         let today = usb_export::date(now);
         let secs = now.rem_euclid(86_400);
-        let stamp = format!("{today}-{:02}{:02}{:02}", secs / 3600, secs / 60 % 60, secs % 60);
+        let stamp = format!(
+            "{today}-{:02}{:02}{:02}",
+            secs / 3600,
+            secs / 60 % 60,
+            secs % 60
+        );
         let opts = usb_export::Options {
             today: &today,
             stamp: &stamp,
@@ -1173,6 +1181,29 @@ async fn export_to_usb(
         usb_export::export(&mount, &sources, &playlists, &opts, |p| {
             let _ = app.emit("usb-export-progress", p);
         })
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)
+}
+
+/// Renames, deletes, creates or moves a playlist on a USB drive, or takes songs out of one.
+/// Returns the drive's library as it is now.
+#[tauri::command]
+async fn usb_edit_playlists(
+    state: State<'_, AppState>,
+    mount: PathBuf,
+    edit: usb_edit::Edit,
+) -> Result<usb_edit::Outcome, Error> {
+    if state.usb_exporting.load(Ordering::SeqCst) {
+        return Err(Error::Msg(
+            "Songs are being exported to a USB drive. Try again when that finishes.".into(),
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        usb::check_mount(&mount)?;
+        let stamp = format!("{}-edits", usb_export::date(unix_now()));
+        usb_edit::edit(&mount, edit, &stamp)
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))?
@@ -2420,6 +2451,7 @@ pub fn run() {
             usb_drives,
             usb_library,
             export_to_usb,
+            usb_edit_playlists,
             track_analysis,
             is_exporting_to_usb,
             save_analysis_to_files,

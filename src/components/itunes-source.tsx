@@ -101,7 +101,7 @@ export function ItunesPanel() {
 		<SourcePanel
 			brand="itunes"
 			title="iTunes"
-			subtitle="Converted to 320 kbps MP3 and filed under artist/album. The iTunes folder is never changed. Also runs each time manplay starts."
+			subtitle="Converted to 320 kbps MP3, filed by artist and album"
 			enabled={enabled}
 			onToggle={setEnabled}
 			empty="Nothing imported yet."

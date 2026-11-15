@@ -67,9 +67,7 @@ function Setup() {
 				))}
 			</ol>
 			<p className="mt-3 text-muted-foreground text-xs">
-				Menu names can differ slightly between rekordbox versions. manplay only rewrites the file
-				when you export, and rekordbox only reads it when you import. After changing a playlist,
-				export again and re-import it.
+				After changing a playlist, export again and re-import it in rekordbox.
 			</p>
 		</details>
 	);
@@ -98,17 +96,14 @@ export function RekordboxPanel() {
 		<SourcePanel
 			brand="rekordbox"
 			title="Rekordbox"
-			subtitle="Your whole library, plus the playlists and tags you pick, as a rekordbox library file. They appear in a “manplay” folder."
+			subtitle="Your library and chosen playlists as a rekordbox XML file"
 			enabled={enabled}
 			onToggle={setEnabled}
 			empty="Not exported yet."
 			entries={activityEntries(history.data ?? [], "rekordbox")}
 			settings={
 				<>
-					<PathSetting
-						path={path}
-						emptyHint="Choose where manplay should save a rekordbox library file. Nothing is written until you export."
-					>
+					<PathSetting path={path} emptyHint="Nothing is written until you export.">
 						<Button
 							variant={path === null ? "default" : "outline"}
 							onClick={() => choose.mutate()}

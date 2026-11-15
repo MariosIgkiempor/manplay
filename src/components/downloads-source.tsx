@@ -70,7 +70,7 @@ export function DownloadsPanel() {
 		<SourcePanel
 			brand="downloads"
 			title="Downloads"
-			subtitle="New music in this folder, newest first. Zips are searched too. Nothing is moved or deleted."
+			subtitle="New music in this folder, zips included, newest first"
 			enabled={enabled}
 			onToggle={setEnabled}
 			empty="Nothing imported yet."

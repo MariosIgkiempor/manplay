@@ -1,12 +1,52 @@
-import { useQuery } from "@tanstack/react-query";
-import { Link, useMatchRoute } from "@tanstack/react-router";
-import { ChevronRight, Tag } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
+import { ChevronRight, PencilLine, Play, Tag, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { InlineInput } from "#/components/inline-edit.tsx";
+import { RowMenu } from "#/components/menu.tsx";
 import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
 import { rowBase, rowClass } from "#/components/sidebar-row.ts";
-import { listTags } from "#/lib/api.ts";
-import { buildTagTree, type TagNode } from "#/lib/tag-tree.ts";
+import { usePlayer } from "#/context/player-context.ts";
+import { listTags, migrateLibraryTags } from "#/lib/api.ts";
+import { useTracks } from "#/lib/queries.ts";
+import { buildTagTree, TAG_SEP, type TagNode, tagWithin, trackHasTag } from "#/lib/tag-tree.ts";
 import { cn } from "#/lib/utils.ts";
+
+/** A rename or delete waiting for a yes: `to` is the new full name, `null` deletes. */
+type Ask = { from: string; to: string | null; count: number };
+
+const nonBlank = (v: string) => {
+	const t = v.trim();
+	return t === "" || t.includes(TAG_SEP) ? null : t;
+};
+
+/** Rename, merge and delete library tags from the sidebar, following the open tag page along. */
+function useTagMove() {
+	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+	const matchRoute = useMatchRoute();
+	return useMutation({
+		mutationFn: ({ from, to }: { from: string; to: string | null }) =>
+			migrateLibraryTags([from], to),
+		onSuccess: async (_, { from, to }) => {
+			await queryClient.invalidateQueries({ queryKey: ["tags"] });
+			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
+			await queryClient.invalidateQueries({ queryKey: ["playlist-tracks"] });
+			const open = matchRoute({ to: "/tags/$", fuzzy: true });
+			const current = open ? (open._splat ?? "") : null;
+			if (current !== null && tagWithin(current, from)) {
+				await (to === null
+					? navigate({ to: "/" })
+					: navigate({
+							to: "/tags/$",
+							params: { _splat: to + current.slice(from.length) },
+							replace: true,
+						}));
+			}
+		},
+	});
+}
 
 const OPEN_KEY = "manplay.sidebar.openTags";
 
@@ -33,6 +73,26 @@ export function SidebarTagTree() {
 	const tree = useMemo(() => buildTagTree(tags.data ?? []), [tags.data]);
 	const [open, setOpen] = useState(loadOpen);
 	const matchRoute = useMatchRoute();
+	const player = usePlayer();
+	const tracks = useTracks();
+	const move = useTagMove();
+	const [renaming, setRenaming] = useState<string | null>(null);
+	const [ask, setAsk] = useState<Ask | null>(null);
+	const songsWith = (name: string) => (tracks.data ?? []).filter((t) => trackHasTag(t, name));
+	const rename = (n: TagNode, leaf: string) => {
+		setRenaming(null);
+		const cut = n.name.lastIndexOf(TAG_SEP);
+		const to = cut < 0 ? leaf : `${n.name.slice(0, cut + 1)}${leaf}`;
+		const taken = (tags.data ?? []).some(
+			(t) =>
+				t.name.toLowerCase() === to.toLowerCase() && t.name.toLowerCase() !== n.name.toLowerCase(),
+		);
+		if (taken) {
+			setAsk({ from: n.name, to, count: n.trackCount });
+		} else if (to !== n.name) {
+			move.mutate({ from: n.name, to });
+		}
+	};
 
 	const toggle = (key: string) =>
 		setOpen((s) => {
@@ -51,34 +111,70 @@ export function SidebarTagTree() {
 			const active = !!matchRoute({ to: "/tags/$", params: { _splat: n.name } });
 			return (
 				<div key={key}>
-					<div className={rowClass(active)}>
-						<Link
-							to="/tags/$"
-							params={{ _splat: n.name }}
-							title={n.name}
-							className={rowBase}
-							style={{ paddingLeft: `${8 + depth * 14}px` }}
-						>
-							<Tag className="size-4 shrink-0" />
-							<span className="truncate">{n.label}</span>
-							<RowCount n={n.trackCount} />
-						</Link>
-						{n.children.length > 0 ? (
-							<button
-								type="button"
-								aria-label={isOpen ? `Collapse ${n.label}` : `Expand ${n.label}`}
-								aria-expanded={isOpen}
-								className="grid size-5 shrink-0 place-items-center rounded hover:bg-background/60"
-								onClick={() => toggle(key)}
-							>
-								<ChevronRight
-									className={cn("size-3.5 transition-transform", isOpen && "rotate-90")}
-								/>
-							</button>
-						) : (
-							<span className="size-5 shrink-0" />
-						)}
-					</div>
+					<RowMenu
+						label={n.name}
+						items={[
+							{
+								label: "Play",
+								icon: <Play />,
+								disabled: n.trackCount === 0,
+								onSelect: () => player.play(songsWith(n.name), 0),
+							},
+							"separator",
+							{ label: "Rename", icon: <PencilLine />, onSelect: () => setRenaming(key) },
+							{
+								label: "Delete…",
+								icon: <Trash2 />,
+								destructive: true,
+								onSelect: () => setAsk({ from: n.name, to: null, count: n.trackCount }),
+							},
+						]}
+					>
+						<div className={rowClass(active)}>
+							{renaming === key ? (
+								<div
+									className="flex min-w-0 flex-1 items-center gap-2 py-0.5"
+									style={{ paddingLeft: `${8 + depth * 14}px` }}
+								>
+									<Tag className="size-4 shrink-0 text-muted-foreground" />
+									<InlineInput
+										initial={n.label}
+										label={`Rename ${n.name}`}
+										parse={nonBlank}
+										onCancel={() => setRenaming(null)}
+										onCommit={(leaf) => rename(n, leaf)}
+									/>
+								</div>
+							) : (
+								<Link
+									to="/tags/$"
+									params={{ _splat: n.name }}
+									title={n.name}
+									className={rowBase}
+									style={{ paddingLeft: `${8 + depth * 14}px` }}
+								>
+									<Tag className="size-4 shrink-0" />
+									<span className="truncate">{n.label}</span>
+									<RowCount n={n.trackCount} />
+								</Link>
+							)}
+							{n.children.length > 0 ? (
+								<button
+									type="button"
+									aria-label={isOpen ? `Collapse ${n.label}` : `Expand ${n.label}`}
+									aria-expanded={isOpen}
+									className="grid size-5 shrink-0 place-items-center rounded hover:bg-background/60"
+									onClick={() => toggle(key)}
+								>
+									<ChevronRight
+										className={cn("size-3.5 transition-transform", isOpen && "rotate-90")}
+									/>
+								</button>
+							) : (
+								<span className="size-5 shrink-0" />
+							)}
+						</div>
+					</RowMenu>
 					{isOpen && rows(n.children, depth + 1)}
 				</div>
 			);
@@ -91,6 +187,26 @@ export function SidebarTagTree() {
 		<section className="mt-4 space-y-0.5">
 			<SectionLabel>Tags</SectionLabel>
 			{rows(tree, 0)}
+			{move.isError && <p className="px-2 text-destructive text-xs">{String(move.error)}</p>}
+			{ask && (
+				<ConfirmDialog
+					title={
+						ask.to === null ? `Delete tag “${ask.from}”?` : `Merge “${ask.from}” into “${ask.to}”?`
+					}
+					confirmLabel={ask.to === null ? "Delete tag" : "Merge"}
+					destructive={ask.to === null}
+					busy={move.isPending}
+					onCancel={() => setAsk(null)}
+					onConfirm={() => {
+						move.mutate({ from: ask.from, to: ask.to });
+						setAsk(null);
+					}}
+				>
+					{ask.to === null
+						? `${ask.count} ${ask.count === 1 ? "song loses" : "songs lose"} it, subtags too. The songs stay in your library.`
+						: `“${ask.to}” already exists, so its songs and these become one tag.`}
+				</ConfirmDialog>
+			)}
 		</section>
 	);
 }

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ListMusic } from "lucide-react";
+import { ListMusic, ListX } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
@@ -39,9 +39,11 @@ function PlaylistPage() {
 		await queryClient.invalidateQueries({ queryKey: ["playlist-tracks", playlistId] });
 	};
 	const remove = useMutation({
-		mutationFn: async (trackId: number) => {
-			await removeFromPlaylist(playlistId, trackId);
-			record(undoRemoveFromPlaylist(playlistId, playlist?.name ?? "playlist", trackId));
+		mutationFn: async (trackIds: readonly number[]) => {
+			for (const trackId of trackIds) {
+				await removeFromPlaylist(playlistId, trackId);
+				record(undoRemoveFromPlaylist(playlistId, playlist?.name ?? "playlist", trackId));
+			}
 		},
 		onSuccess: refresh,
 	});
@@ -94,13 +96,22 @@ function PlaylistPage() {
 				) : (
 					<SelectableTrackList
 						tracks={list}
+						menuExtra={(ts) => [
+							{
+								label:
+									ts.length === 1 ? "Remove from playlist" : `Remove ${ts.length} from playlist`,
+								icon: <ListX />,
+								destructive: true,
+								onSelect: () => remove.mutate(ts.map((t) => t.id)),
+							},
+						]}
 						renderAction={(t) => (
 							<Button
 								variant="ghost"
 								size="sm"
 								onClick={(e) => {
 									e.stopPropagation();
-									remove.mutate(t.id);
+									remove.mutate([t.id]);
 								}}
 							>
 								Remove

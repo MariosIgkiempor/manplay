@@ -31,3 +31,50 @@ export function playlistTree(playlists: readonly UsbPlaylist[]): TreeRow[] {
 	walk(0, 0);
 	return rows;
 }
+
+/** `id` and every playlist and folder inside it. */
+export function within(playlists: readonly UsbPlaylist[], id: number): Set<number> {
+	const out = new Set([id]);
+	let grew = true;
+	while (grew) {
+		grew = false;
+		for (const p of playlists) {
+			if (out.has(p.parentId) && !out.has(p.id)) {
+				out.add(p.id);
+				grew = true;
+			}
+		}
+	}
+	return out;
+}
+
+/** Where `id` can move: the top level (0) and every folder outside it, minus where it is now. */
+export function moveTargets(
+	playlists: readonly UsbPlaylist[],
+	id: number,
+): { id: number; name: string; depth: number }[] {
+	const self = playlists.find((p) => p.id === id);
+	const inside = within(playlists, id);
+	const folders = playlistTree(playlists)
+		.filter(({ playlist: p }) => p.isFolder && !inside.has(p.id))
+		.map(({ playlist: p, depth }) => ({ id: p.id, name: p.name, depth }));
+	return [{ id: 0, name: "Top level", depth: 0 }, ...folders].filter(
+		(t) => t.id !== self?.parentId,
+	);
+}
+
+/** `base`, or `base 2`, `base 3`… whichever no sibling in `parentId` uses yet. */
+export function freeName(
+	playlists: readonly UsbPlaylist[],
+	parentId: number,
+	base: string,
+): string {
+	const taken = new Set(
+		playlists.filter((p) => p.parentId === parentId).map((p) => p.name.toLowerCase()),
+	);
+	let name = base;
+	for (let n = 2; taken.has(name.toLowerCase()); n++) {
+		name = `${base} ${n}`;
+	}
+	return name;
+}

@@ -196,9 +196,7 @@ function Playlists({
 			}
 		>
 			{all.length === 0 ? (
-				<p className="text-muted-foreground text-sm">
-					No playlists yet. Make one from the sidebar and it shows up here.
-				</p>
+				<p className="text-muted-foreground text-sm">No playlists yet.</p>
 			) : (
 				<>
 					{all.length > 8 && (
@@ -345,9 +343,7 @@ function Tags({
 			}
 		>
 			{all.length === 0 ? (
-				<p className="text-muted-foreground text-sm">
-					No tags yet. Tag songs in the library and they show up here.
-				</p>
+				<p className="text-muted-foreground text-sm">No tags yet.</p>
 			) : (
 				<>
 					{all.length > 8 && <Filter value={filter} onChange={setFilter} label="Filter tags" />}
@@ -427,11 +423,7 @@ function InFile() {
 		>
 			{library.isError && <p className="text-destructive text-sm">{String(library.error)}</p>}
 			{library.isPending && <p className="text-muted-foreground text-sm">Reading the file…</p>}
-			{data === null && (
-				<p className="text-muted-foreground text-sm">
-					Nothing yet. Export to write the file for the first time.
-				</p>
-			)}
+			{data === null && <p className="text-muted-foreground text-sm">Not exported yet.</p>}
 			{data && <Contents library={data} />}
 		</Group>
 	);

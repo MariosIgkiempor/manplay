@@ -1,11 +1,7 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Check, ChevronRight, Plus } from "lucide-react";
 import { type ComponentType, useRef, useState } from "react";
-
-const popup =
-	"z-50 min-w-48 rounded-lg border bg-popover p-1 text-popover-foreground text-sm shadow-lg outline-none";
-const menuItem =
-	"flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-muted";
+import { menuItem, popup } from "#/lib/menu-styles.ts";
 
 export interface SearchItem {
 	name: string;

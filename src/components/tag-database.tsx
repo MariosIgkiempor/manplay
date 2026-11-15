@@ -1,17 +1,29 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Merge, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import {
+	ArrowDown,
+	ArrowUp,
+	ListMusic,
+	Merge,
+	Pencil,
+	Play,
+	Plus,
+	Search,
+	Trash2,
+} from "lucide-react";
 import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
+import { RowMenu } from "#/components/menu.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { useDetail } from "#/context/detail-context.ts";
+import { usePlayer } from "#/context/player-context.ts";
 import { type FixReport, listTags, tagValues } from "#/lib/api.ts";
-import { useTagDatabaseOps } from "#/lib/queries.ts";
-import { VALUE_FIELDS, type ValueField } from "#/lib/track-fields.ts";
+import { useTagDatabaseOps, useTracks } from "#/lib/queries.ts";
+import { trackHasValue, VALUE_FIELDS, type ValueField } from "#/lib/track-fields.ts";
 import { cn } from "#/lib/utils.ts";
 
 interface Item {
@@ -78,6 +90,8 @@ function sorted(items: Item[], order: Order): Item[] {
 /** Browse, create, rename, merge and delete the values used across the library. */
 export function TagDatabase() {
 	const detail = useDetail();
+	const player = usePlayer();
+	const tracks = useTracks();
 	const all = useAllItems();
 	const [source, setSource] = useState<ValueField>("artist");
 	const { items, loading } = all[source];
@@ -92,6 +106,8 @@ export function TagDatabase() {
 	const isLibrary = source === "library";
 	const unit = isLibrary ? "songs tagged" : "songs";
 	const field = VALUE_FIELDS.find((f) => f.id === source);
+	const songsWith = (value: string) =>
+		(tracks.data ?? []).filter((t) => trackHasValue(t, source, value));
 
 	// A different list starts clean.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the source changes
@@ -242,21 +258,53 @@ export function TagDatabase() {
 					)}
 					<div className="divide-y">
 						{shown.map((item) => (
-							<Row
+							<RowMenu
 								key={item.value}
-								item={item}
-								unit={unit}
-								checked={selected.has(item.value)}
-								open={openValue?.field === source && same(openValue.value, item.value)}
-								editing={editing === item.value}
-								busy={busy}
-								onOpen={() => detail.open({ kind: "value", field: source, value: item.value })}
-								onToggle={() => toggle(item.value)}
-								onEdit={() => setEditing(item.value)}
-								onCancel={() => setEditing(null)}
-								onRename={(to) => rename(item, to)}
-								onDelete={() => setPending({ from: [item.value], to: null })}
-							/>
+								label={item.value}
+								items={[
+									{
+										label: "Show songs",
+										icon: <ListMusic />,
+										onSelect: () =>
+											detail.open({ kind: "value", field: source, value: item.value }),
+									},
+									{
+										label: "Play",
+										icon: <Play />,
+										disabled: item.count === 0,
+										onSelect: () => player.play(songsWith(item.value), 0),
+									},
+									"separator",
+									{
+										label: "Rename",
+										icon: <Pencil />,
+										disabled: busy,
+										onSelect: () => setEditing(item.value),
+									},
+									{
+										label: "Delete…",
+										icon: <Trash2 />,
+										destructive: true,
+										disabled: busy,
+										onSelect: () => setPending({ from: [item.value], to: null }),
+									},
+								]}
+							>
+								<Row
+									item={item}
+									unit={unit}
+									checked={selected.has(item.value)}
+									open={openValue?.field === source && same(openValue.value, item.value)}
+									editing={editing === item.value}
+									busy={busy}
+									onOpen={() => detail.open({ kind: "value", field: source, value: item.value })}
+									onToggle={() => toggle(item.value)}
+									onEdit={() => setEditing(item.value)}
+									onCancel={() => setEditing(null)}
+									onRename={(to) => rename(item, to)}
+									onDelete={() => setPending({ from: [item.value], to: null })}
+								/>
+							</RowMenu>
 						))}
 					</div>
 				</div>

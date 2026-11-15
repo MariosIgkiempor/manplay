@@ -1,19 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, HardDriveUpload } from "lucide-react";
+import { Check, HardDriveUpload, ListMusic } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Drawer } from "#/components/drawer.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
+import { EmptyState, SectionHeading } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	exportToUsb,
 	listPlaylists,
 	onUsbExportProgress,
+	type Playlist,
 	type UsbDrive,
 	type UsbExportProgress,
 	type UsbExportReport,
 	type UsbLibrary,
 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
+import { typeScale } from "#/lib/type-scale.ts";
 import { cn } from "#/lib/utils.ts";
 
 const plural = (n: number, one: string, many: string) =>
@@ -110,6 +113,81 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 	);
 }
 
+function PlaylistPicker({
+	list,
+	chosen,
+	onDrive,
+	onChange,
+}: {
+	list: readonly Playlist[];
+	chosen: ReadonlySet<number>;
+	/** Names of the drive's top-level playlists, which an export of the same name replaces. */
+	onDrive: ReadonlySet<string>;
+	onChange: (next: ReadonlySet<number>) => void;
+}) {
+	if (list.length === 0) {
+		return null;
+	}
+	const all = chosen.size === list.length;
+	const toggle = (id: number) => {
+		const next = new Set(chosen);
+		if (!next.delete(id)) {
+			next.add(id);
+		}
+		onChange(next);
+	};
+	return (
+		<div className="space-y-2">
+			<SectionHeading
+				title="Playlists"
+				count={list.length}
+				action={
+					<Button
+						size="xs"
+						variant="ghost"
+						onClick={() => onChange(all ? new Set() : new Set(list.map((p) => p.id)))}
+					>
+						{all ? "Clear" : "Select all"}
+					</Button>
+				}
+			/>
+			<ul className="space-y-1">
+				{list.map((p) => (
+					<li key={p.id}>
+						<label
+							className={cn(
+								"flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50",
+								chosen.has(p.id) && "bg-muted/60",
+							)}
+						>
+							<input
+								type="checkbox"
+								checked={chosen.has(p.id)}
+								onChange={() => toggle(p.id)}
+								className="size-4 accent-primary"
+							/>
+							<span className="min-w-0 flex-1">
+								<span className="block truncate text-sm">{p.name}</span>
+								{onDrive.has(p.name) && (
+									<span
+										className="block text-muted-foreground text-xs"
+										title="The drive has a playlist with this name; exporting replaces its songs."
+									>
+										Replaces the one on the drive
+									</span>
+								)}
+							</span>
+							<span className="shrink-0 text-muted-foreground text-xs tabular-nums">
+								{p.trackCount}
+							</span>
+						</label>
+					</li>
+				))}
+			</ul>
+		</div>
+	);
+}
+
 /** Picks library playlists and copies them onto the drive. */
 export function UsbExportButton({
 	drive,
@@ -136,15 +214,6 @@ export function UsbExportButton({
 	const list = (playlists.data ?? []).filter((p) => p.trackCount > 0);
 	const songs = list.filter((p) => chosen.has(p.id)).reduce((n, p) => n + p.trackCount, 0);
 
-	const toggle = (id: number) => {
-		const next = new Set(chosen);
-		if (next.has(id)) {
-			next.delete(id);
-		} else {
-			next.add(id);
-		}
-		setChosen(next);
-	};
 	const close = () => {
 		if (!run.isPending) {
 			setOpen(false);
@@ -160,11 +229,12 @@ export function UsbExportButton({
 			<Drawer open={open} onClose={close} title={`Export to ${drive.name}`} width="w-[30rem]">
 				<div className="space-y-5 pb-6">
 					<div className="space-y-1">
-						<h2 className="font-semibold text-xl tracking-tight">Export to {drive.name}</h2>
-						<p className="text-muted-foreground text-sm">
-							Copies the songs into <code className="text-xs">/Contents</code>, works out their beat
-							grids and waveforms, and adds the playlists to the drive's rekordbox library. Songs
-							already on the drive are not copied again, and everything else on it stays.
+						<div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+							<HardDriveUpload className="size-3.5" /> Export to CDJ USB
+						</div>
+						<h2 className={cn("truncate", typeScale.panelTitle)}>{drive.name}</h2>
+						<p className="text-muted-foreground text-xs tabular-nums">
+							{formatBytes(drive.freeBytes)} free
 						</p>
 					</div>
 
@@ -176,40 +246,9 @@ export function UsbExportButton({
 						<>
 							{playlists.isError && <ErrorText message={String(playlists.error)} />}
 							{list.length === 0 && playlists.isSuccess && (
-								<p className="py-6 text-center text-muted-foreground text-sm">
-									No playlists with songs in your library.
-								</p>
+								<EmptyState icon={<ListMusic />} title="No playlists with songs" />
 							)}
-							<ul className="space-y-1">
-								{list.map((p) => (
-									<li key={p.id}>
-										<label
-											className={cn(
-												"flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50",
-												chosen.has(p.id) && "bg-muted/60",
-											)}
-										>
-											<input
-												type="checkbox"
-												checked={chosen.has(p.id)}
-												onChange={() => toggle(p.id)}
-												className="size-4 accent-primary"
-											/>
-											<span className="min-w-0 flex-1">
-												<span className="block truncate text-sm">{p.name}</span>
-												{onDrive.has(p.name) && (
-													<span className="block text-muted-foreground text-xs">
-														Replaces the playlist with this name on the drive
-													</span>
-												)}
-											</span>
-											<span className="shrink-0 text-muted-foreground text-xs tabular-nums">
-												{p.trackCount}
-											</span>
-										</label>
-									</li>
-								))}
-							</ul>
+							<PlaylistPicker list={list} chosen={chosen} onDrive={onDrive} onChange={setChosen} />
 						</>
 					)}
 
@@ -223,7 +262,11 @@ export function UsbExportButton({
 								<Button variant="ghost" onClick={close} disabled={run.isPending}>
 									Cancel
 								</Button>
-								<Button onClick={() => run.mutate()} disabled={chosen.size === 0 || run.isPending}>
+								<Button
+									onClick={() => run.mutate()}
+									disabled={chosen.size === 0 || run.isPending}
+									title="Copies new songs into /Contents, adds beat grids and waveforms, and adds the playlists. Songs already on the drive are not copied again."
+								>
 									{chosen.size === 0
 										? "Export"
 										: `Export ${plural(chosen.size, "playlist", "playlists")} · ${plural(songs, "song", "songs")}`}

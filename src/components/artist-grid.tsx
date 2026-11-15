@@ -1,4 +1,5 @@
 import { Play } from "lucide-react";
+import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { usePlayer } from "#/context/player-context.ts";
@@ -10,41 +11,46 @@ function ArtistTile({ artist, onOpen }: { artist: Artist; onOpen: () => void }) 
 	const player = usePlayer();
 	const label = artist.name === "" ? "Unknown artist" : artist.name;
 	return (
-		<div className="group min-w-0 text-center">
-			<div className="relative mx-auto w-full max-w-40">
+		<AddToPlaylistMenu
+			tracks={artist.tracks}
+			label={`${label} · ${plural(artist.tracks.length, "song", "songs")}`}
+		>
+			<div className="group min-w-0 text-center">
+				<div className="relative mx-auto w-full max-w-40">
+					<button
+						type="button"
+						className="block w-full overflow-hidden rounded-full border"
+						onClick={onOpen}
+						aria-label={`Open ${label}`}
+					>
+						<AlbumArt
+							trackId={artist.coverTrackId}
+							className="w-full transition group-hover:scale-[1.03]"
+						/>
+					</button>
+					<button
+						type="button"
+						aria-label={`Play ${label}`}
+						className="absolute right-1 bottom-1 flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 shadow-lg transition focus-visible:opacity-100 group-hover:opacity-100"
+						onClick={() => player.play(artist.tracks, 0)}
+					>
+						<Play className="size-5" />
+					</button>
+				</div>
 				<button
 					type="button"
-					className="block w-full overflow-hidden rounded-full border"
+					className="mx-auto mt-2 block max-w-full truncate text-center font-medium text-sm hover:underline"
+					title={label}
 					onClick={onOpen}
-					aria-label={`Open ${label}`}
 				>
-					<AlbumArt
-						trackId={artist.coverTrackId}
-						className="w-full transition group-hover:scale-[1.03]"
-					/>
+					{label}
 				</button>
-				<button
-					type="button"
-					aria-label={`Play ${label}`}
-					className="absolute right-1 bottom-1 flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 shadow-lg transition focus-visible:opacity-100 group-hover:opacity-100"
-					onClick={() => player.play(artist.tracks, 0)}
-				>
-					<Play className="size-5" />
-				</button>
+				<div className="truncate text-muted-foreground text-xs">
+					{plural(artist.albumCount, "album", "albums")},{" "}
+					{plural(artist.tracks.length, "song", "songs")}
+				</div>
 			</div>
-			<button
-				type="button"
-				className="mx-auto mt-2 block max-w-full truncate text-center font-medium text-sm hover:underline"
-				title={label}
-				onClick={onOpen}
-			>
-				{label}
-			</button>
-			<div className="truncate text-muted-foreground text-xs">
-				{plural(artist.albumCount, "album", "albums")},{" "}
-				{plural(artist.tracks.length, "song", "songs")}
-			</div>
-		</div>
+		</AddToPlaylistMenu>
 	);
 }
 

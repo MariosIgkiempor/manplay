@@ -22,16 +22,14 @@ const COPY = {
 	tailscale: {
 		brand: "tailscale" as Brand,
 		title: "Tailscale",
-		blurb:
-			"Back up to folders shared from your other machines over Tailscale. Nothing is sent until you review and confirm it. Files that no longer match your library are deleted from the folder only after a backup copy is saved on this computer.",
+		blurb: "Folders shared from your other machines",
 		list: "Machines & folders",
 		add: "Add folder",
 	},
 	r2: {
 		brand: "cloudflare" as Brand,
 		title: "Cloudflare R2",
-		blurb:
-			"Back up to a Cloudflare R2 bucket. Nothing is sent until you review and confirm it. Files that no longer match your library are deleted from the folder only after a backup copy is saved on this computer.",
+		blurb: "Folders in a Cloudflare R2 bucket",
 		list: "Buckets & folders",
 		add: "Add bucket",
 	},
