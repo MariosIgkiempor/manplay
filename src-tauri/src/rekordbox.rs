@@ -301,6 +301,7 @@ mod tests {
             key: (id == 1).then(|| "Am".to_owned()),
             fingerprint: None,
             grid: None,
+            grid_edited: false,
         }
     }
 

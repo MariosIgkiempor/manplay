@@ -1162,6 +1162,7 @@ async fn export_to_usb(
                     }
                 }),
                 fingerprint: t.fingerprint,
+                grid_edited: t.grid_edited,
             })
             .collect();
         let playlists: Vec<usb_export::SourcePlaylist> = playlist_ids

@@ -1433,6 +1433,8 @@ pub struct ExportTrack {
     pub fingerprint: Option<String>,
     /// The kept beat grid, written as a rekordbox `TEMPO` marker; filled in by the caller.
     pub grid: Option<crate::rekordbox::Grid>,
+    /// The beat grid was set by hand in manplay.
+    pub grid_edited: bool,
 }
 
 pub struct ExportPlaylist {
@@ -1447,7 +1449,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
     let mut stmt = conn.prepare(
         "SELECT t.id, t.path, t.artist, t.album, t.title, t.size, t.duration_ms, t.bitrate,
                 t.sample_rate, COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key),
-                t.fingerprint
+                t.fingerprint, COALESCE(a.grid_edited, 0)
          FROM tracks t LEFT JOIN analysis a ON a.fingerprint = t.fingerprint
          WHERE t.missing_since IS NULL ORDER BY t.artist, t.album, t.path",
     )?;
@@ -1467,6 +1469,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
                 key: r.get(10)?,
                 fingerprint: r.get(11)?,
                 grid: None,
+                grid_edited: r.get(12)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

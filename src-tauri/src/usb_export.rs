@@ -34,6 +34,8 @@ pub struct Source {
     pub key: Option<String>,
     /// Audio fingerprint, under which manplay keeps the song's analysis.
     pub fingerprint: Option<String>,
+    /// The beat grid was set by hand: it replaces the grid in analysis files rekordbox wrote.
+    pub grid_edited: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -455,9 +457,40 @@ fn write_analysis(
     Ok(())
 }
 
-/// Songs already on the drive whose analysis files manplay wrote get them rewritten from the
-/// kept analysis when it changed since, so grid edits reach the drive. Files rekordbox wrote
-/// stay as they are: they hold its cue points.
+/// New contents for a song's analysis files on the drive, from the kept analysis: the whole files
+/// when manplay wrote them, or just the beat grid swapped into rekordbox's (keeping its cues and
+/// waveforms) when the grid was set by hand in manplay. `None` to leave the song alone.
+fn refreshed(
+    mount: &Path,
+    track: &pdb::Track,
+    stored: &anlz::Stored,
+    grid_edited: bool,
+) -> Option<Vec<(PathBuf, Vec<u8>)>> {
+    if track.analyze_path.is_empty() {
+        return None;
+    }
+    let dat_path = on_drive(mount, &track.analyze_path);
+    let ext_path = dat_path.with_extension("EXT");
+    if track.analyze_path == anlz::dat_path(track.id, &track.path) {
+        let (dat, ext) = anlz::files(&track.path, stored);
+        return Some(vec![(dat_path, dat), (ext_path, ext)]);
+    }
+    if !grid_edited {
+        return None;
+    }
+    let mut out = Vec::new();
+    for path in [dat_path, ext_path] {
+        if let Ok(old) = fs::read(&path)
+            && let Some(new) = anlz::with_grid(&old, stored)
+        {
+            out.push((path, new));
+        }
+    }
+    Some(out)
+}
+
+/// Songs already on the drive get their beat grid and waveform rewritten from the kept analysis
+/// when it changed since, so grid edits reach the drive (see [`refreshed`]).
 fn refresh_grids(
     mount: &Path,
     lib: &mut Library,
@@ -471,9 +504,6 @@ fn refresh_grids(
         let Some(track) = lib.tracks.iter_mut().find(|t| t.id == id) else {
             continue;
         };
-        if track.analyze_path != anlz::dat_path(track.id, &track.path) {
-            continue;
-        }
         let Some(stored) = p
             .source
             .fingerprint
@@ -482,21 +512,25 @@ fn refresh_grids(
         else {
             continue;
         };
-        let (dat, ext) = anlz::files(&track.path, &stored);
-        let dat_path = on_drive(mount, &track.analyze_path);
-        let ext_path = dat_path.with_extension("EXT");
-        if fs::read(&dat_path).ok().as_deref() == Some(dat.as_slice())
-            && fs::read(&ext_path).ok().as_deref() == Some(ext.as_slice())
-        {
+        let Some(files) = refreshed(mount, track, &stored, p.source.grid_edited) else {
+            continue;
+        };
+        let changed: Vec<_> = files
+            .into_iter()
+            .filter(|(path, bytes)| fs::read(path).ok().as_deref() != Some(bytes.as_slice()))
+            .collect();
+        // The tempo the player lists goes with the grid it draws.
+        if let Some(bpm) = stored.grid_bpm {
+            track.tempo = (bpm * 100.0).round() as u32;
+        }
+        if changed.is_empty() {
             continue;
         }
-        match write_atomic(&dat_path, &dat).and_then(|()| write_atomic(&ext_path, &ext)) {
-            Ok(()) => {
-                if let Some(bpm) = stored.grid_bpm {
-                    track.tempo = (bpm * 100.0).round() as u32;
-                }
-                report.regridded += 1;
-            }
+        match changed
+            .iter()
+            .try_for_each(|(path, bytes)| write_atomic(path, bytes))
+        {
+            Ok(()) => report.regridded += 1,
             Err(e) => report.failed.push(Failure {
                 path: p.source.path.display().to_string(),
                 error: format!("beat grid: {e}"),
@@ -726,6 +760,7 @@ mod tests {
             bpm: Some(140.0),
             key: Some("8A".into()),
             fingerprint: None,
+            grid_edited: false,
         }
     }
 
@@ -1016,6 +1051,7 @@ mod tests {
             bpm: Some(128.0),
             key: Some("8A".into()),
             fingerprint: None,
+            grid_edited: false,
         };
         let playlists = [SourcePlaylist {
             name: "manplay dry run".into(),

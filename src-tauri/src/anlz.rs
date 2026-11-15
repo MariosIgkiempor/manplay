@@ -113,6 +113,66 @@ fn beat_grid(d: &Stored, bpm: f64) -> Vec<u8> {
     section(*b"PQTZ", &header, &body)
 }
 
+/// The sections of an analysis file, after its `PMAI` header.
+fn sections(b: &[u8]) -> Option<(&[u8], Vec<&[u8]>)> {
+    let u32_at = |o: usize| Some(u32::from_be_bytes(b.get(o..o + 4)?.try_into().ok()?) as usize);
+    if b.get(..4)? != b"PMAI" {
+        return None;
+    }
+    let header_len = u32_at(4)?;
+    let mut out = Vec::new();
+    let mut o = header_len;
+    while o < b.len() {
+        let len = u32_at(o + 8)?;
+        if len < 12 {
+            return None;
+        }
+        out.push(b.get(o..o + len)?);
+        o += len;
+    }
+    Some((b.get(..header_len)?, out))
+}
+
+/// An analysis file written by someone else (rekordbox) with its beat grid replaced by `d`'s,
+/// and everything else (cues, waveforms) as it was. The extended grid (`PQT2`) newer players
+/// prefer is dropped, so they read the replaced one. `None` when `b` is not an analysis file.
+pub fn with_grid(b: &[u8], d: &Stored) -> Option<Vec<u8>> {
+    let (header, old) = sections(b)?;
+    let grid = d.grid_bpm.map(|bpm| beat_grid(d, bpm));
+    let mut out: Vec<Vec<u8>> = Vec::with_capacity(old.len() + 1);
+    let mut placed = false;
+    for s in old {
+        match s.get(..4)? {
+            b"PQTZ" => {
+                if let Some(g) = &grid {
+                    out.push(g.clone());
+                }
+                placed = true;
+            }
+            b"PQT2" => {}
+            _ => out.push(s.to_vec()),
+        }
+    }
+    // A file with no grid yet gets one after its path and VBR index, where rekordbox puts it.
+    if let (false, Some(g)) = (placed, grid) {
+        let at = out
+            .iter()
+            .take_while(|s| matches!(s.get(..4), Some(b"PPTH" | b"PVBR")))
+            .count();
+        // Only `.DAT` files carry this grid; others just lose their extended one.
+        if out.iter().any(|s| s.get(..4) == Some(b"PWAV")) {
+            out.insert(at, g);
+        }
+    }
+    let total: usize = header.len() + out.iter().map(Vec::len).sum::<usize>();
+    let mut v = header.to_vec();
+    v[8..12].copy_from_slice(&(total as u32).to_be_bytes());
+    for s in out {
+        v.extend_from_slice(&s);
+    }
+    Some(v)
+}
+
 /// Height 0–31 and whiteness 0–7 per detail column. Heights follow the square of the level,
 /// scaled so the loudest passages (ignoring the odd stray peak) fill the display; that matches
 /// how rekordbox draws the same audio.
@@ -332,6 +392,35 @@ pub fn dat_path(track_id: u32, path: &str) -> String {
 #[allow(clippy::expect_used)] // tests: panicking is the failure mode
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_grid_swaps_into_someone_elses_file_keeping_the_rest() {
+        let mut d = Stored {
+            grid_bpm: Some(120.0),
+            first_beat: 0.5,
+            bar_offset: 0,
+            duration: 3.0,
+            detail: vec![0x5f; 450],
+        };
+        let (dat, ext) = files("/Contents/a.mp3", &d);
+        // Pretend rekordbox wrote these, with an extended grid in the .EXT.
+        let mut theirs_ext = ext.clone();
+        let pqt2 = section(*b"PQT2", &[0; 44], &[7; 16]);
+        theirs_ext.extend_from_slice(&pqt2);
+        let total = theirs_ext.len() as u32;
+        theirs_ext[8..12].copy_from_slice(&total.to_be_bytes());
+
+        d.set_grid(Some(100.0), 0.2, 2);
+        let new_dat = with_grid(&dat, &d).expect("dat");
+        assert_eq!(
+            new_dat,
+            files("/Contents/a.mp3", &d).0,
+            "only the grid changed"
+        );
+        let new_ext = with_grid(&theirs_ext, &d).expect("ext");
+        assert_eq!(new_ext, ext, "extended grid dropped, the rest kept");
+        assert!(with_grid(b"nope", &d).is_none());
+    }
 
     #[test]
     fn grids_start_at_the_first_beat_in_the_track() {
