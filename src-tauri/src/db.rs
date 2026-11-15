@@ -61,6 +61,7 @@ fn prepare_tags(conn: &Connection) -> Result<(), Error> {
     restore_tag_parents(conn)
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn open(path: &Path) -> Result<Connection, Error> {
     let conn = Connection::open(path)?;
     conn.execute_batch(
@@ -150,6 +151,13 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              failed      INTEGER NOT NULL,
              items       TEXT NOT NULL DEFAULT '[]',
              errors      TEXT NOT NULL DEFAULT '[]'
+         );
+         CREATE TABLE IF NOT EXISTS remote_prints (
+             target_id INTEGER NOT NULL,
+             path TEXT NOT NULL,
+             size INTEGER NOT NULL,
+             fingerprint TEXT NOT NULL,
+             PRIMARY KEY (target_id, path)
          );
          CREATE TABLE IF NOT EXISTS stale_remote (
              target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
@@ -673,6 +681,39 @@ pub fn synced_times(
         conn.prepare("SELECT track_id, synced_at FROM synced_files WHERE target_id = ?1")?;
     let rows = stmt.query_map(params![target_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Fingerprints of destination files read on earlier runs, keyed by `(path, size)`.
+pub fn remote_prints(
+    conn: &Connection,
+    target_id: i64,
+) -> Result<std::collections::HashMap<(String, u64), String>, Error> {
+    let mut stmt =
+        conn.prepare("SELECT path, size, fingerprint FROM remote_prints WHERE target_id = ?1")?;
+    let rows = stmt.query_map(params![target_id], |r| {
+        let size: i64 = r.get(1)?;
+        Ok(((r.get(0)?, u64::try_from(size).unwrap_or(0)), r.get(2)?))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+pub fn store_remote_prints(
+    conn: &Connection,
+    target_id: i64,
+    prints: &[(String, u64, String)],
+) -> Result<(), Error> {
+    let mut stmt = conn.prepare(
+        "INSERT OR REPLACE INTO remote_prints (target_id, path, size, fingerprint) VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    for (path, size, fp) in prints {
+        stmt.execute(params![
+            target_id,
+            path,
+            i64::try_from(*size).unwrap_or(i64::MAX),
+            fp
+        ])?;
+    }
+    Ok(())
 }
 
 pub fn track_path(conn: &Connection, id: i64) -> Result<Option<String>, Error> {

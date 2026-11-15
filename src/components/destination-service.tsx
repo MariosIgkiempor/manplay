@@ -7,7 +7,7 @@ import { Drawer } from "#/components/drawer.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
 import { SourceCard } from "#/components/source-card.tsx";
 import { SectionTitle, SourcePanel } from "#/components/source-panel.tsx";
-import { SyncReviewButton } from "#/components/sync-review.tsx";
+import { SyncButton } from "#/components/sync-flow.tsx";
 import { TargetDetail } from "#/components/target-detail.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useDetail } from "#/context/detail-context.ts";
@@ -94,7 +94,7 @@ export function DestinationServiceCard({ kind }: { kind: DestinationKind }) {
 						<Plus /> Set up
 					</Button>
 				) : (
-					<SyncReviewButton size="sm" ids={[...ids]} label="Review sync" disabled={busy} />
+					<SyncButton size="sm" ids={[...ids]} disabled={busy} />
 				)
 			}
 		/>

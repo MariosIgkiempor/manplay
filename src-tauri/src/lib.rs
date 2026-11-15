@@ -775,18 +775,23 @@ async fn sync_plan(
     state: State<'_, AppState>,
     target_ids: Option<Vec<i64>>,
 ) -> Result<sync::Plan, Error> {
-    let (targets, items, known, synced) = {
+    let (targets, items, known, synced, prints) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let targets = db::get_targets(&conn, target_ids.as_deref())?;
         let synced = targets
             .iter()
             .map(|t| Ok((t.id, db::synced_times(&conn, t.id)?)))
             .collect::<Result<HashMap<_, _>, Error>>()?;
+        let prints = targets
+            .iter()
+            .map(|t| Ok((t.id, db::remote_prints(&conn, t.id)?)))
+            .collect::<Result<HashMap<_, _>, Error>>()?;
         (
             targets,
             collect_items(&conn)?,
             collect_known(&conn)?,
             synced,
+            prints,
         )
     };
     if targets.is_empty() {
@@ -807,18 +812,23 @@ async fn sync_plan(
     let mut plans = Vec::new();
     for target in &targets {
         let times = synced.get(&target.id).cloned().unwrap_or_default();
-        plans.push(
-            sync::plan_target(
-                &app,
-                &state.http,
-                target,
-                &items,
-                &known,
-                &times,
-                &mut next_id,
-            )
-            .await,
-        );
+        let cached = prints.get(&target.id).cloned().unwrap_or_default();
+        let plan = sync::plan_target(
+            &app,
+            &state.http,
+            target,
+            &items,
+            &known,
+            &times,
+            &cached,
+            &mut next_id,
+        )
+        .await;
+        if !plan.fresh_prints.is_empty() {
+            let conn = state.db.lock().map_err(|_| Error::Lock)?;
+            db::store_remote_prints(&conn, target.id, &plan.fresh_prints)?;
+        }
+        plans.push(plan);
     }
     let plan = sync::Plan {
         id: unix_now().to_string(),

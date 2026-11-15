@@ -5,6 +5,7 @@ import { BrandIcon } from "#/components/brand-icon.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { SectionTitle } from "#/components/source-panel.tsx";
+import { PullButton, SyncButton } from "#/components/sync-flow.tsx";
 import { SyncReviewButton } from "#/components/sync-review.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -175,7 +176,9 @@ function Actions({ target, onRemoved }: { target: SyncTarget; onRemoved: () => v
 	return (
 		<div className="space-y-2">
 			<div className="flex flex-wrap gap-2">
-				<SyncReviewButton ids={[target.id]} label="Review sync" disabled={busy} />
+				<SyncButton ids={[target.id]} disabled={busy} />
+				<PullButton ids={[target.id]} disabled={busy} />
+				<SyncReviewButton ids={[target.id]} variant="outline" disabled={busy} />
 				<Button variant="ghost" onClick={() => remove.mutate(target.id)} disabled={busy}>
 					<Trash2 /> Remove
 				</Button>

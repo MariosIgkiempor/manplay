@@ -250,6 +250,34 @@ function TargetSection({
 	);
 }
 
+function DeleteToggle({
+	total,
+	marked,
+	busy,
+	onToggle,
+}: {
+	total: number;
+	marked: number;
+	busy: boolean;
+	onToggle: () => void;
+}) {
+	if (total === 0) {
+		return null;
+	}
+	return (
+		<div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground text-xs">
+			<span>
+				{marked === 0
+					? `${total.toLocaleString()} files only on the destination are kept. Deleting is opt-in.`
+					: `${marked.toLocaleString()} of ${total.toLocaleString()} extra files marked for deletion.`}
+			</span>
+			<Button variant="ghost" size="sm" disabled={busy} onClick={onToggle}>
+				{marked === 0 ? "Also delete extra files…" : "Keep extra files"}
+			</Button>
+		</div>
+	);
+}
+
 function Review({
 	plan,
 	busy,
@@ -261,9 +289,14 @@ function Review({
 	onConfirm: (ids: number[]) => void;
 	onCancel: () => void;
 }) {
-	const [skipped, setSkipped] = useState<ReadonlySet<number>>(new Set());
-	const [understood, setUnderstood] = useState(false);
 	const all = useMemo(() => plan.targets.flatMap((p) => p.actions), [plan]);
+	// Opt-in actions start unticked: deletions (other people may share the destination) and
+	// uploads of audio the destination already holds under another path.
+	const [skipped, setSkipped] = useState<ReadonlySet<number>>(
+		() => new Set(all.filter((a) => a.optional).map((a) => a.id)),
+	);
+	const [understood, setUnderstood] = useState(false);
+	const deletes = all.filter((a) => a.kind === "delete");
 	const chosen = all.filter((a) => !skipped.has(a.id));
 	const t = totals(chosen);
 	const progress = useSyncProgress();
@@ -305,6 +338,17 @@ function Review({
 				/>
 			))}
 			<div className="sticky -bottom-4 z-20 -mx-4 -mb-4 space-y-3 border-t bg-background px-4 pt-3 pb-4">
+				<DeleteToggle
+					total={deletes.length}
+					marked={t.remove}
+					busy={busy}
+					onToggle={() =>
+						toggleAll(
+							deletes.map((a) => a.id),
+							t.remove === 0,
+						)
+					}
+				/>
 				{t.remove > 0 && (
 					<div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
 						{drastic && (
@@ -351,7 +395,7 @@ function Review({
 							disabled={busy || chosen.length === 0 || (t.remove > 0 && !understood)}
 							onClick={() => onConfirm(chosen.map((a) => a.id))}
 						>
-							<CloudUpload /> {busy ? "Syncing…" : `Sync ${chosen.length.toLocaleString()} changes`}
+							<CloudUpload /> {busy ? "Pushing…" : `Push ${chosen.length.toLocaleString()} changes`}
 						</Button>
 					)}
 				</div>
@@ -367,7 +411,7 @@ function Result({ results, onDone }: { results: ApplySummary[]; onDone: () => vo
 			<div className="flex items-center gap-2">
 				<CheckCircle2 className={`size-5 ${failed > 0 ? "text-warning" : "text-success"}`} />
 				<h3 className="font-semibold text-lg tracking-tight">
-					{failed > 0 ? `Synced with ${failed.toLocaleString()} errors` : "Sync complete"}
+					{failed > 0 ? `Pushed with ${failed.toLocaleString()} errors` : "Push complete"}
 				</h3>
 			</div>
 			{results.length === 0 && <p className="text-sm">Nothing was changed.</p>}
@@ -400,7 +444,7 @@ function Result({ results, onDone }: { results: ApplySummary[]; onDone: () => vo
 	);
 }
 
-function Body({ ids, onClose }: { ids: number[] | undefined; onClose: () => void }) {
+export function ReviewBody({ ids, onClose }: { ids: number[] | undefined; onClose: () => void }) {
 	const plan = useSyncPlan();
 	const apply = useSyncApply();
 	const [progress, setProgress] = useState<PullProgress | null>(null);
@@ -475,7 +519,7 @@ function Body({ ids, onClose }: { ids: number[] | undefined; onClose: () => void
 /** Button that opens the review: nothing reaches a destination until the changes are confirmed. */
 export function SyncReviewButton({
 	ids,
-	label = "Review and sync",
+	label = "Review push",
 	size,
 	variant,
 	disabled,
@@ -501,8 +545,8 @@ export function SyncReviewButton({
 			>
 				<CloudUpload /> {label}
 			</Button>
-			<Drawer open={open} onClose={() => setOpen(false)} title="Review sync" width="w-[44rem]">
-				{open && <Body key={session} ids={ids} onClose={() => setOpen(false)} />}
+			<Drawer open={open} onClose={() => setOpen(false)} title="Review push" width="w-[44rem]">
+				{open && <ReviewBody key={session} ids={ids} onClose={() => setOpen(false)} />}
 			</Drawer>
 		</>
 	);

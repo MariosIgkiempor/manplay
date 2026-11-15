@@ -157,6 +157,49 @@ export function PullReview({ targetId, onDone }: { targetId: number; onDone: () 
 	return <Picker targetId={targetId} missing={scan.data.missing} onDone={onDone} />;
 }
 
+const filterFiles = (files: RemoteFile[], needle: string) =>
+	needle === "" ? files : files.filter((f) => key(f).toLowerCase().includes(needle));
+
+function FilterBar({
+	query,
+	onQuery,
+	shown,
+	active,
+	disabled,
+	onOnly,
+}: {
+	query: string;
+	onQuery: (q: string) => void;
+	shown: number;
+	active: boolean;
+	disabled: boolean;
+	onOnly: () => void;
+}) {
+	return (
+		<div className="flex flex-wrap items-center gap-2">
+			<input
+				type="search"
+				value={query}
+				onChange={(e) => onQuery(e.target.value)}
+				placeholder="Filter by artist, album or file name"
+				aria-label="Filter files"
+				className="h-8 min-w-0 flex-1 rounded-md border bg-transparent px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+			/>
+			{active && (
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={disabled || shown === 0}
+					onClick={onOnly}
+					title="Tick only the files shown, untick everything else"
+				>
+					Pull only these ({shown.toLocaleString()})
+				</Button>
+			)}
+		</div>
+	);
+}
+
 function Picker({
 	targetId,
 	missing,
@@ -203,6 +246,7 @@ function Picker({
 	}, []);
 
 	const [shown, setShown] = useState(HUNKS_PER_PAGE);
+	const [query, setQuery] = useState("");
 
 	if (pull.isSuccess) {
 		return <PullResult outcome={pull.data} onDone={onDone} />;
@@ -230,7 +274,9 @@ function Picker({
 			}
 			return next;
 		});
-	const hunks = groupByDir(missing, dirOf, nameOf);
+	const needle = query.trim().toLowerCase();
+	const matching = filterFiles(missing, needle);
+	const hunks = groupByDir(matching, dirOf, nameOf);
 	const duplicates = missing.filter((f) => verdicts.get(key(f))?.duplicateOf).length;
 	const otherFormat = missing.filter((f) => !verdicts.has(key(f)) && f.otherFormat).length;
 	return (
@@ -241,8 +287,8 @@ function Picker({
 					library
 				</h2>
 				<p className="text-muted-foreground text-sm">
-					This folder already has audio your library is missing. Tick what to pull in before the
-					first sync. Anything left behind will be proposed for deletion at the next review.
+					This folder has audio your library is missing. Tick what to copy into your library.
+					Anything you leave behind stays on the destination and is never deleted by a pull.
 				</p>
 				<Tally
 					items={[
@@ -252,6 +298,15 @@ function Picker({
 					]}
 				/>
 			</div>
+
+			<FilterBar
+				query={query}
+				onQuery={setQuery}
+				shown={matching.length}
+				active={needle !== ""}
+				disabled={busy}
+				onOnly={() => setSkipped(new Set(missing.filter((f) => !matching.includes(f)).map(key)))}
+			/>
 
 			<div className="space-y-2">
 				{hunks.slice(0, shown).map(([dir, files]) => (
