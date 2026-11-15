@@ -611,7 +611,6 @@ async fn analyze_tracks(
         // Only the songs this run looked at; older results are saved from the drawer.
         result.tags = Some(save_analysis_tags(&app, &state, Some(&ids)).await?);
     }
-    auto_export(&state);
     Ok(result)
 }
 
@@ -2902,6 +2901,9 @@ mod tests {
             http: reqwest::Client::new(),
             syncing: AtomicBool::new(false),
             fixing: AtomicBool::new(false),
+            analyzing: AtomicBool::new(false),
+            usb_exporting: AtomicBool::new(false),
+            cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
         };
         assert!(export_inner(&state, false).expect("export"));
