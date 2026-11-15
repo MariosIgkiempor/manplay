@@ -8,6 +8,7 @@ import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
 import { ItunesPanel } from "#/components/itunes-source.tsx";
 import { RekordboxPanel } from "#/components/rekordbox-source.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { UsbPanel } from "#/components/usb-drives.tsx";
 import {
 	type DetailView,
 	PanelScopeContext,
@@ -22,6 +23,7 @@ const SERVICE_PANELS = {
 	rekordbox: RekordboxPanel,
 	tailscale: () => <DestinationServicePanel kind="tailscale" />,
 	r2: () => <DestinationServicePanel kind="r2" />,
+	usb: UsbPanel,
 } as const;
 
 function Content({ view }: { view: DetailView }) {

@@ -4,6 +4,7 @@ import { RekordboxCard } from "#/components/rekordbox-source.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { PullButton, SyncButton } from "#/components/sync-flow.tsx";
 import { SyncReviewButton } from "#/components/sync-review.tsx";
+import { UsbCard } from "#/components/usb-drives.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { useSyncTargets, useTracks } from "#/lib/queries.ts";
 
@@ -40,6 +41,7 @@ function ExportPage() {
 				<DestinationServiceCard kind="tailscale" />
 				<DestinationServiceCard kind="r2" />
 				<RekordboxCard />
+				<UsbCard />
 			</section>
 			<StatusBar>
 				<Stat label="Destinations" value={targetCount} />

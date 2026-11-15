@@ -1,4 +1,4 @@
-import { Download } from "lucide-react";
+import { Download, Usb } from "lucide-react";
 import { siCloudflare, siItunes, siPioneerdj, siTailscale } from "simple-icons";
 import { cn } from "#/lib/utils.ts";
 
@@ -9,16 +9,21 @@ const BRANDS = {
 	rekordbox: { icon: siPioneerdj, label: "Rekordbox" },
 } as const;
 
-export type Brand = keyof typeof BRANDS | "downloads";
+export type Brand = keyof typeof BRANDS | "downloads" | "usb";
 
 /** Brand glyph on a tile in the brand's colour. "downloads" is not a brand, so it gets a neutral tile. */
 export function BrandIcon({ brand, className }: { brand: Brand; className?: string }) {
 	const tile =
 		"grid size-9 shrink-0 place-items-center rounded-lg ring-1 ring-black/5 dark:ring-white/10";
-	if (brand === "downloads") {
+	if (brand === "downloads" || brand === "usb") {
+		const Icon = brand === "usb" ? Usb : Download;
 		return (
-			<span role="img" aria-label="Downloads" className={cn(tile, "bg-muted", className)}>
-				<Download className="size-[55%] text-muted-foreground" />
+			<span
+				role="img"
+				aria-label={brand === "usb" ? "USB drive" : "Downloads"}
+				className={cn(tile, "bg-muted", className)}
+			>
+				<Icon className="size-[55%] text-muted-foreground" />
 			</span>
 		);
 	}

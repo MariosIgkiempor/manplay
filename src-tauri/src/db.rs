@@ -851,7 +851,7 @@ pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
 }
 
 /// The services a user can switch on or off.
-pub const SERVICES: [&str; 5] = ["downloads", "itunes", "tailscale", "r2", "rekordbox"];
+pub const SERVICES: [&str; 6] = ["downloads", "itunes", "tailscale", "r2", "rekordbox", "usb"];
 
 fn service_key(id: &str) -> String {
     format!("service.{id}")

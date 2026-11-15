@@ -8,12 +8,14 @@ mod error;
 mod fsops;
 mod import;
 mod itunes;
+mod pdb;
 mod r2;
 mod rekordbox;
 mod scan;
 mod sync;
 mod tags;
 mod tailscale;
+mod usb;
 mod webdav;
 
 use std::collections::{HashMap, HashSet};
@@ -996,6 +998,26 @@ fn dismiss_sync_runs(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), Er
 #[tauri::command]
 fn sync_history(state: State<'_, AppState>, limit: i64) -> Result<Vec<RunView>, Error> {
     with_db!(state, |c| db::history(c, limit))
+}
+
+/// Removable drives that are plugged in right now.
+#[tauri::command]
+async fn usb_drives() -> Result<Vec<usb::Drive>, Error> {
+    tauri::async_runtime::spawn_blocking(usb::list)
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))
+}
+
+/// The rekordbox library on a plugged-in drive; empty if it has none.
+#[tauri::command]
+async fn usb_library(mount: PathBuf) -> Result<pdb::Library, Error> {
+    tauri::async_runtime::spawn_blocking(move || {
+        usb::check_mount(&mount)?;
+        usb::library(&mount)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)
 }
 
 #[tauri::command]
@@ -2191,6 +2213,8 @@ pub fn run() {
             analysis_settings,
             set_analysis_settings,
             analysis_failures,
+            usb_drives,
+            usb_library,
             save_analysis_to_files,
             list_playlists,
             create_playlist,

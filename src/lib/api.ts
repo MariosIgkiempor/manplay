@@ -484,7 +484,7 @@ export function onPullProgress(handler: (p: PullProgress) => void): Promise<() =
 	});
 }
 
-export type ServiceId = "downloads" | "itunes" | "tailscale" | "r2" | "rekordbox";
+export type ServiceId = "downloads" | "itunes" | "tailscale" | "r2" | "rekordbox" | "usb";
 
 /** Explicit on/off choices by service id; a service never switched is absent. */
 export async function serviceFlags(): Promise<Record<string, string>> {
@@ -960,4 +960,75 @@ export function onImportProgress(handler: (p: ImportProgress) => void): Promise<
 			handler(parsed.data);
 		}
 	});
+}
+
+// ---- CDJ USB drives ---------------------------------------------------------
+
+const usbDriveSchema = z.object({
+	name: z.string(),
+	mount: z.string(),
+	filesystem: z.string(),
+	totalBytes: int,
+	freeBytes: int,
+	writable: z.boolean(),
+	/** Has a rekordbox Device Library (`PIONEER/rekordbox/export.pdb`). */
+	hasLibrary: z.boolean(),
+	/** Also has rekordbox's newer OneLibrary database, read by CDJ-3000X, Opus Quad, XDJ-AZ. */
+	hasOneLibrary: z.boolean(),
+});
+
+export type UsbDrive = z.infer<typeof usbDriveSchema>;
+
+const usbTrackSchema = z.object({
+	id: int,
+	title: z.string(),
+	artist: z.string(),
+	album: z.string(),
+	genre: z.string(),
+	key: z.string(),
+	comment: z.string(),
+	/** Relative to the drive root, e.g. "/Contents/Artist/Album/song.mp3". */
+	path: z.string(),
+	analyzePath: z.string(),
+	dateAdded: z.string(),
+	durationSecs: int,
+	/** BPM × 100; 0 when unknown. */
+	tempo: int,
+	bitrate: int,
+	sampleRate: int,
+	fileSize: int,
+	year: int,
+	trackNumber: int,
+	fileType: int,
+	artworkId: int,
+});
+
+export type UsbTrack = z.infer<typeof usbTrackSchema>;
+
+const usbPlaylistSchema = z.object({
+	id: int,
+	/** 0 at the top level. */
+	parentId: int,
+	name: z.string(),
+	isFolder: z.boolean(),
+	sortOrder: int,
+	trackIds: z.array(int),
+});
+
+export type UsbPlaylist = z.infer<typeof usbPlaylistSchema>;
+
+const usbLibrarySchema = z.object({
+	tracks: z.array(usbTrackSchema),
+	playlists: z.array(usbPlaylistSchema),
+	artwork: z.array(z.tuple([int, z.string()])),
+});
+
+export type UsbLibrary = z.infer<typeof usbLibrarySchema>;
+
+export async function usbDrives(): Promise<UsbDrive[]> {
+	return z.array(usbDriveSchema).parse(await invoke("usb_drives"));
+}
+
+export async function usbLibrary(mount: string): Promise<UsbLibrary> {
+	return usbLibrarySchema.parse(await invoke("usb_library", { mount }));
 }
