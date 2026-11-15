@@ -1,4 +1,5 @@
-import type { UsbPlaylist } from "#/lib/api.ts";
+import type { Track, UsbPlaylist, UsbTrack } from "#/lib/api.ts";
+import { normalizeKey } from "#/lib/musical-key.ts";
 
 export interface TreeRow {
 	playlist: UsbPlaylist;
@@ -77,4 +78,40 @@ export function freeName(
 		name = `${base} ${n}`;
 	}
 	return name;
+}
+
+const orNull = (n: number) => (n > 0 ? n : null);
+
+function asTrack(u: UsbTrack, mount: string, known: Track | undefined): Track {
+	return {
+		id: known?.id ?? -u.id,
+		path: `${mount}${u.path}`,
+		artist: u.artist || known?.artist || "",
+		album: u.album || known?.album || "",
+		title: u.title || u.path.split("/").pop() || "",
+		size: u.fileSize,
+		tags: known?.tags ?? [],
+		syncedCount: 0,
+		durationMs: orNull(u.durationSecs * 1000),
+		bitrate: orNull(u.bitrate),
+		sampleRate: orNull(u.sampleRate),
+		bpm: orNull(u.tempo / 100),
+		key: u.key === "" ? null : (normalizeKey(u.key) ?? u.key),
+		analyzed: u.analyzePath !== "",
+		fields: known?.fields ?? {},
+	};
+}
+
+/**
+ * Songs on a drive as library-style tracks, playable straight off the drive. A song that is the
+ * same file as one in the library (same size) borrows that track's id, so it shows its artwork,
+ * tags and menu; any other gets a negative id that matches nothing in the library.
+ */
+export function usbAsTracks(
+	songs: readonly UsbTrack[],
+	mount: string,
+	library: readonly Track[],
+): Track[] {
+	const bySize = new Map(library.map((t) => [t.size, t]));
+	return songs.map((u) => asTrack(u, mount, u.fileSize > 0 ? bySize.get(u.fileSize) : undefined));
 }

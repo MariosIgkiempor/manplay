@@ -1,7 +1,8 @@
-import { Pause, Play, SkipBack, SkipForward, Volume2 } from "lucide-react";
+import { Grid3x3, Pause, Play, SkipBack, SkipForward, Volume2 } from "lucide-react";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { WaveformDetail, WaveformSeek } from "#/components/waveform.tsx";
+import { useDetail } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import type { Track, TrackAnalysis } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
@@ -41,11 +42,17 @@ export function PlayerBar() {
 	const PlayIcon = p.playing ? Pause : Play;
 	const hasNext = p.index + 1 < p.queue.length;
 	const analysis = useTrackAnalysis(current?.id ?? null).data ?? null;
+	const detail = useDetail();
 
 	return (
 		<footer className="shrink-0 border-t bg-card">
 			{current && analysis && (
-				<WaveformDetail analysis={analysis} time={p.time} playing={p.playing} />
+				<WaveformDetail
+					analysis={analysis}
+					position={p.getTime}
+					running={p.playing}
+					revision={p.time}
+				/>
 			)}
 			<div className="grid h-20 grid-cols-[1fr_2fr_1fr] items-center gap-4 px-4">
 				<div className="flex min-w-0 items-center gap-3">
@@ -102,6 +109,17 @@ export function PlayerBar() {
 
 				<div className="flex items-center justify-end gap-2">
 					{current && <TempoKey track={current} />}
+					{current && analysis && (
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							aria-label="Edit beat grid"
+							title="Edit beat grid"
+							onClick={() => detail.open({ kind: "grid", trackId: current.id })}
+						>
+							<Grid3x3 />
+						</Button>
+					)}
 					<Volume2 className="size-4 text-muted-foreground" />
 					<input
 						type="range"

@@ -13,7 +13,7 @@ import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
 import { InlineEdit, InlineInput } from "#/components/inline-edit.tsx";
-import type { MenuEntry } from "#/components/menu.tsx";
+import { type MenuEntry, RowMenu } from "#/components/menu.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { PanelScopeContext, useDetail, useDetailNav } from "#/context/detail-context.ts";
@@ -37,9 +37,16 @@ interface Props {
 	sort?: Sort | null;
 	/** Makes the column headers sort the list. */
 	onSort?: (key: SortKey) => void;
-	renderAction?: (track: Track) => ReactNode;
+	renderAction?: ((track: Track, index: number) => ReactNode) | undefined;
 	/** Right-click items for where the list is, e.g. "Remove from playlist", for the songs it acts on. */
 	menuExtra?: (tracks: readonly Track[]) => readonly MenuEntry[];
+	/**
+	 * Replaces the library's right-click menu with these items, for songs that are not library
+	 * songs (e.g. on a USB drive). Gets the row's place in the list.
+	 */
+	rowMenu?: (track: Track, index: number) => readonly MenuEntry[];
+	/** Row keys, when the same song can be listed twice; defaults to the track id. */
+	rowKey?: (track: Track, index: number) => string | number;
 	/** Hide the artwork column (e.g. inside an album view). */
 	hideArt?: boolean;
 	/** Hide the artist name under each title (e.g. inside an artist view). */
@@ -291,7 +298,51 @@ interface RowProps extends Omit<Props, "tracks" | "selection" | "sort" | "onSort
 	layout: Layout;
 	/** Tracks a right-click acts on: the whole selection when the row is part of it. */
 	menuTracks: readonly Track[];
+	index: number;
 	onPlay: () => void;
+}
+
+/** The library's song menu, or the list's own `rowMenu` in its place. */
+function RowMenuFor({
+	track,
+	index,
+	menuTracks,
+	rowMenu,
+	menuExtra,
+	onPlay,
+	onRename,
+	noGoTo,
+	children,
+}: {
+	track: Track;
+	index: number;
+	menuTracks: readonly Track[];
+	rowMenu: RowProps["rowMenu"];
+	menuExtra: RowProps["menuExtra"];
+	onPlay: () => void;
+	onRename: (() => void) | undefined;
+	noGoTo: boolean;
+	children: ReactNode;
+}) {
+	if (rowMenu) {
+		return (
+			<RowMenu label={track.title} items={rowMenu(track, index)}>
+				{children}
+			</RowMenu>
+		);
+	}
+	return (
+		<AddToPlaylistMenu
+			tracks={menuTracks}
+			label={menuTracks.length === 1 ? track.title : `${menuTracks.length} songs`}
+			onRename={onRename}
+			onPlay={menuTracks.length === 1 ? onPlay : undefined}
+			extra={menuExtra?.(menuTracks)}
+			noGoTo={noGoTo}
+		>
+			{children}
+		</AddToPlaylistMenu>
+	);
 }
 
 function PlayButton({
@@ -366,6 +417,8 @@ function TrackRow({
 	layout,
 	menuTracks,
 	menuExtra,
+	rowMenu,
+	index,
 	onPlay,
 }: RowProps) {
 	const player = usePlayer();
@@ -387,12 +440,14 @@ function TrackRow({
 	};
 
 	return (
-		<AddToPlaylistMenu
-			tracks={menuTracks}
-			label={menuTracks.length === 1 ? track.title : `${menuTracks.length} songs`}
+		<RowMenuFor
+			track={track}
+			index={index}
+			menuTracks={menuTracks}
+			rowMenu={rowMenu}
+			menuExtra={menuExtra}
+			onPlay={onPlay}
 			onRename={canRename && menuTracks.length === 1 ? rename.start : undefined}
-			onPlay={menuTracks.length === 1 ? onPlay : undefined}
-			extra={menuExtra?.(menuTracks)}
 			noGoTo={hideArt ?? false}
 		>
 			<div
@@ -433,9 +488,9 @@ function TrackRow({
 				{layout.tags && <TagChips track={track} onRemoveTag={onRemoveTag} />}
 				{layout.duration && <DurationCell ms={track.durationMs} />}
 				<SyncBadge state={syncState([track], targetCount)} />
-				{renderAction?.(track)}
+				{renderAction?.(track, index)}
 			</div>
-		</AddToPlaylistMenu>
+		</RowMenuFor>
 	);
 }
 
@@ -502,7 +557,7 @@ function HeaderRow({
 	);
 }
 
-export function TrackList({ tracks, selection, sort, onSort, empty, ...rest }: Props) {
+export function TrackList({ tracks, selection, sort, onSort, empty, rowKey, ...rest }: Props) {
 	const player = usePlayer();
 	const inPanel = useContext(PanelScopeContext);
 	if (tracks.length === 0) {
@@ -538,8 +593,9 @@ export function TrackList({ tracks, selection, sort, onSort, empty, ...rest }: P
 			>
 				{tracks.map((track, i) => (
 					<TrackRow
-						key={track.id}
+						key={rowKey ? rowKey(track, i) : track.id}
 						track={track}
+						index={i}
 						selection={selection}
 						{...rest}
 						layout={layout}

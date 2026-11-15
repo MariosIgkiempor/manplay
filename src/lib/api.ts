@@ -1124,6 +1124,21 @@ const trackAnalysisSchema = z.object({
 
 export type TrackAnalysis = z.infer<typeof trackAnalysisSchema>;
 
+/** Saves an edited beat grid; the track's BPM follows it. Returns the analysis as kept now. */
+export async function setBeatGrid(
+	trackId: number,
+	grid: { bpm: number | null; firstBeat: number; barOffset: number },
+): Promise<TrackAnalysis | null> {
+	return trackAnalysisSchema.nullable().parse(
+		await invoke("set_beat_grid", {
+			trackId,
+			gridBpm: grid.bpm,
+			firstBeat: grid.firstBeat,
+			barOffset: grid.barOffset,
+		}),
+	);
+}
+
 /** The kept beat grid and waveform of a track; null until it has been analysed. */
 export async function trackAnalysis(trackId: number): Promise<TrackAnalysis | null> {
 	return trackAnalysisSchema.nullable().parse(await invoke("track_analysis", { trackId }));

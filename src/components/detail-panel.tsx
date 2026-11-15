@@ -5,6 +5,7 @@ import { AlbumPanel } from "#/components/album-panel.tsx";
 import { ArtistPanel } from "#/components/artist-panel.tsx";
 import { DownloadsPanel } from "#/components/downloads-source.tsx";
 import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
+import { GridEditorPanel } from "#/components/grid-editor.tsx";
 import { ItunesPanel } from "#/components/itunes-source.tsx";
 import { RekordboxPanel } from "#/components/rekordbox-source.tsx";
 import { TargetPanel } from "#/components/target-detail.tsx";
@@ -41,6 +42,8 @@ function Content({ view }: { view: DetailView }) {
 			return <TargetPanel id={view.id} />;
 		case "usb":
 			return <UsbDrivePanel mount={view.mount} />;
+		case "grid":
+			return <GridEditorPanel trackId={view.trackId} />;
 		case "add-destination":
 			return <AddDestinationPanel service={view.service} />;
 		case "value":
@@ -98,8 +101,8 @@ export function DetailPanel(): ReactNode {
 				inert={!open}
 				className={cn(
 					"absolute inset-y-0 right-0 z-20 flex max-w-full flex-col border-l bg-background shadow-2xl transition-[translate,width] duration-200",
-					// A drive's library browser needs room for its playlists beside their songs.
-					shown?.kind === "usb" ? "w-[60rem]" : "w-[36rem]",
+					// A drive's library browser and the grid editor need room for its playlists beside their songs.
+					shown?.kind === "usb" || shown?.kind === "grid" ? "w-[60rem]" : "w-[36rem]",
 					open ? "translate-x-0" : "translate-x-full",
 				)}
 			>

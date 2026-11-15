@@ -1,6 +1,14 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { useIsMutating } from "@tanstack/react-query";
-import { AudioWaveform, Disc3, PencilLine, Play, TextCursorInput, UserRound } from "lucide-react";
+import {
+	AudioWaveform,
+	Disc3,
+	Grid3x3,
+	PencilLine,
+	Play,
+	TextCursorInput,
+	UserRound,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { type MenuEntry, MenuItems, MenuLabel, MenuSeparator } from "#/components/menu.tsx";
 import { PlaylistSubmenu } from "#/components/playlist-submenu.tsx";
@@ -74,6 +82,12 @@ export function AddToPlaylistMenu({
 			icon: <TextCursorInput />,
 			onSelect: () => go({ kind: "edit", target }),
 		},
+		tracks.length === 1 &&
+			tracks[0]?.analyzed && {
+				label: "Edit beat grid…",
+				icon: <Grid3x3 />,
+				onSelect: () => go({ kind: "grid", trackId: tracks[0]?.id ?? 0 }),
+			},
 		{
 			label: "Analyze BPM & key",
 			icon: <AudioWaveform />,

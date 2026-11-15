@@ -16,6 +16,8 @@ export interface PlayerApi {
 	next: () => void;
 	prev: () => void;
 	seek: (seconds: number) => void;
+	/** The audio element's position right now, finer than `time` (which updates a few times a second). */
+	getTime: () => number;
 	setVolume: (volume: number) => void;
 }
 

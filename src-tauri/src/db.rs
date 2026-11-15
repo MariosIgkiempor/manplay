@@ -1378,6 +1378,8 @@ pub struct ExportTrack {
     pub bpm: Option<f64>,
     pub key: Option<String>,
     pub fingerprint: Option<String>,
+    /// The kept beat grid, written as a rekordbox `TEMPO` marker; filled in by the caller.
+    pub grid: Option<crate::rekordbox::Grid>,
 }
 
 pub struct ExportPlaylist {
@@ -1411,6 +1413,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
                 bpm: r.get(9)?,
                 key: r.get(10)?,
                 fingerprint: r.get(11)?,
+                grid: None,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1558,6 +1561,29 @@ pub fn analysis_jobs(
 }
 
 /// The audio fingerprint of a track, if it has been read.
+/// `(old, new)` fingerprints of tracks whose file content changed since the last scan, for
+/// carrying their kept analysis over.
+pub fn changed_fingerprints(
+    conn: &Connection,
+    tracks: &[NewTrack],
+) -> Result<Vec<(String, String)>, Error> {
+    let mut stmt = conn.prepare("SELECT fingerprint FROM tracks WHERE path = ?1")?;
+    let mut out = Vec::new();
+    for t in tracks {
+        let Some(new) = &t.fingerprint else { continue };
+        let old: Option<String> = stmt
+            .query_row(params![t.path], |r| r.get(0))
+            .optional()?
+            .flatten();
+        if let Some(old) = old
+            && &old != new
+        {
+            out.push((old, new.clone()));
+        }
+    }
+    Ok(out)
+}
+
 pub fn fingerprint_of(conn: &Connection, track_id: i64) -> Result<Option<String>, Error> {
     Ok(conn
         .query_row(

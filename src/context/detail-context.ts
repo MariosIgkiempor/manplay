@@ -15,6 +15,8 @@ export type DetailView =
 	| { kind: "target"; id: number }
 	/** A plugged-in CDJ USB drive and the rekordbox library on it. */
 	| { kind: "usb"; mount: string }
+	/** The beat grid editor for one song. */
+	| { kind: "grid"; trackId: number }
 	/** Adding an export destination; without `service`, the step that picks one. */
 	| { kind: "add-destination"; service?: DestinationService }
 	/** Songs holding one value of a tag field, e.g. every song in the genre "House". */

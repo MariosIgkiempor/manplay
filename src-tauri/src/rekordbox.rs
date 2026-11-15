@@ -56,6 +56,16 @@ fn kind(path: &str) -> &'static str {
     }
 }
 
+/// A constant-tempo beat grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Grid {
+    pub bpm: f64,
+    /// Seconds to the first beat.
+    pub first_beat: f64,
+    /// Place in the bar of the first beat, 0 for a downbeat.
+    pub bar_offset: u8,
+}
+
 fn write_track(out: &mut String, t: &ExportTrack) {
     let _ = write!(
         out,
@@ -82,7 +92,22 @@ fn write_track(out: &mut String, t: &ExportTrack) {
     if let Some(key) = &t.key {
         let _ = write!(out, " Tonality=\"{}\"", esc(key));
     }
-    let _ = writeln!(out, " Location=\"{}\"/>", esc(&location(&t.path)));
+    let _ = write!(out, " Location=\"{}\"", esc(&location(&t.path)));
+    match t.grid {
+        // One marker: rekordbox extends a constant grid both ways from it.
+        Some(g) if g.bpm > 0.0 => {
+            let _ = writeln!(
+                out,
+                ">\n      <TEMPO Inizio=\"{:.3}\" Bpm=\"{:.2}\" Metro=\"4/4\" Battito=\"{}\"/>\n    </TRACK>",
+                g.first_beat.max(0.0),
+                g.bpm,
+                g.bar_offset % 4 + 1,
+            );
+        }
+        _ => {
+            let _ = writeln!(out, "/>");
+        }
+    }
 }
 
 /// Tag playlists live in this sub-folder of the manplay folder.
@@ -275,7 +300,25 @@ mod tests {
             bpm: (id == 1).then_some(128.0),
             key: (id == 1).then(|| "Am".to_owned()),
             fingerprint: None,
+            grid: None,
         }
+    }
+
+    #[test]
+    fn a_kept_grid_becomes_a_tempo_marker() {
+        let mut t = track(1, "/m/a.mp3", "A");
+        t.grid = Some(Grid {
+            bpm: 124.0,
+            first_beat: 0.0425,
+            bar_offset: 2,
+        });
+        let xml = build_xml(&[t], &[], &[]);
+        assert!(
+            xml.contains(r#"<TEMPO Inizio="0.043" Bpm="124.00" Metro="4/4" Battito="3"/>"#),
+            "{xml}"
+        );
+        let doc = roxmltree::Document::parse(&xml).expect("well-formed");
+        assert!(doc.descendants().any(|n| n.has_tag_name("TEMPO")));
     }
 
     #[test]

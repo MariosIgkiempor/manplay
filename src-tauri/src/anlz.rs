@@ -233,6 +233,38 @@ impl Stored {
     }
 }
 
+impl Stored {
+    /// Replaces the beat grid. The first beat is moved to the earliest beat at or after the
+    /// start of the track, with its place in the bar following, so the grid itself is unchanged.
+    pub fn set_grid(&mut self, bpm: Option<f64>, first_beat: f64, bar_offset: u8) {
+        let bpm = bpm.filter(|b| b.is_finite() && *b > 0.0);
+        self.grid_bpm = bpm;
+        let Some(bpm) = bpm else {
+            self.first_beat = 0.0;
+            self.bar_offset = 0;
+            return;
+        };
+        let period = 60.0 / bpm;
+        let steps = (-first_beat / period).ceil();
+        let first = first_beat + steps * period;
+        self.first_beat = if first < 0.0 { first + period } else { first };
+        let moved = steps as i64 + i64::from(first < 0.0);
+        self.bar_offset = (i64::from(bar_offset) + moved).rem_euclid(4) as u8;
+    }
+}
+
+/// Copies a kept analysis to a new fingerprint (the file's tags changed, not its audio), unless
+/// the new one already has its own.
+pub fn carry(data_dir: &Path, from: &str, to: &str) {
+    let target = store_path(data_dir, to);
+    if target.exists() {
+        return;
+    }
+    if let Some(stored) = load(data_dir, from) {
+        let _ = save(data_dir, to, &stored);
+    }
+}
+
 /// Where manplay keeps a track's analysis, by audio fingerprint.
 pub fn store_path(data_dir: &Path, fingerprint: &str) -> PathBuf {
     let shard = fingerprint.get(..2).unwrap_or("00");
@@ -300,6 +332,27 @@ pub fn dat_path(track_id: u32, path: &str) -> String {
 #[allow(clippy::expect_used)] // tests: panicking is the failure mode
 mod tests {
     use super::*;
+
+    #[test]
+    fn grids_start_at_the_first_beat_in_the_track() {
+        let mut s = Stored {
+            grid_bpm: None,
+            first_beat: 0.0,
+            bar_offset: 0,
+            duration: 10.0,
+            detail: Vec::new(),
+        };
+        // 120 BPM: a beat every 0.5 s. Nudged 0.2 s early from 0.1 s, the grid's first beat is
+        // now at -0.1 s, so the next one, 0.4 s, is the first in the track and one place later.
+        s.set_grid(Some(120.0), -0.1, 3);
+        assert!((s.first_beat - 0.4).abs() < 1e-9, "{}", s.first_beat);
+        assert_eq!(s.bar_offset, 0);
+        s.set_grid(Some(120.0), 1.3, 1);
+        assert!((s.first_beat - 0.3).abs() < 1e-9, "{}", s.first_beat);
+        assert_eq!(s.bar_offset, 3);
+        s.set_grid(None, 1.0, 2);
+        assert_eq!((s.grid_bpm, s.bar_offset), (None, 0));
+    }
     use crate::analysis::Analysis;
 
     fn be(b: &[u8], o: usize) -> u32 {

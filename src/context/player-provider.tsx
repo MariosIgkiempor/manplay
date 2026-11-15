@@ -93,6 +93,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 		}
 	}, []);
 
+	const getTime = useCallback(() => audioRef.current?.currentTime ?? 0, []);
+
 	const onEnded = useCallback(() => {
 		if (index + 1 < queue.length) {
 			setIndex(index + 1);
@@ -116,9 +118,25 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			next,
 			prev,
 			seek,
+			getTime,
 			setVolume: setVolumeState,
 		}),
-		[current, queue, index, playing, time, duration, volume, error, play, toggle, next, prev, seek],
+		[
+			current,
+			queue,
+			index,
+			playing,
+			time,
+			duration,
+			volume,
+			error,
+			play,
+			toggle,
+			next,
+			prev,
+			seek,
+			getTime,
+		],
 	);
 
 	return (

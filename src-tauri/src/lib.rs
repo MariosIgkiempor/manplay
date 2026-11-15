@@ -63,6 +63,10 @@ async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error>
         .map_err(|e| Error::Msg(e.to_string()))?;
     let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
     detect_moves(&mut conn, &state.data_dir, &root, &result)?;
+    // A tag write changes the file's fingerprint; its beat grid and waveform follow it.
+    for (from, to) in db::changed_fingerprints(&conn, &result.tracks)? {
+        anlz::carry(&state.data_dir, &from, &to);
+    }
     db::upsert(&mut conn, &result.tracks)?;
     db::replace_tag_values(&mut conn, &result.values)?;
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
@@ -1254,6 +1258,51 @@ async fn track_analysis(
     }))
 }
 
+/// Replaces a track's kept beat grid, as edited in the grid editor, and makes its BPM match.
+/// USB exports and the rekordbox file use the edited grid from then on.
+#[tauri::command]
+async fn set_beat_grid(
+    state: State<'_, AppState>,
+    track_id: i64,
+    grid_bpm: Option<f64>,
+    first_beat: f64,
+    bar_offset: u8,
+) -> Result<Option<TrackAnalysisView>, Error> {
+    let Some(fp) = with_db!(state, |c| db::fingerprint_of(c, track_id))? else {
+        return Err(Error::Msg(
+            "This song has no audio to keep a grid for.".into(),
+        ));
+    };
+    let dir = state.data_dir.clone();
+    let key = fp.clone();
+    let stored = tauri::async_runtime::spawn_blocking(move || {
+        let mut s = anlz::load(&dir, &key)
+            .ok_or_else(|| "Analyze the song first; there is no grid to edit yet.".to_owned())?;
+        s.set_grid(grid_bpm, first_beat, bar_offset);
+        anlz::save(&dir, &key, &s).map_err(|e| e.to_string())?;
+        Ok::<_, String>(s)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)?;
+    if let Some(bpm) = stored.grid_bpm {
+        with_db!(state, |c| db::set_tempo_key(
+            c,
+            track_id,
+            Some(Some(bpm)),
+            None
+        ))?;
+    }
+    Ok(Some(TrackAnalysisView {
+        grid_bpm: stored.grid_bpm,
+        first_beat: stored.first_beat,
+        bar_offset: stored.bar_offset,
+        duration: stored.duration,
+        rate: analysis::WAVEFORM_RATE,
+        detail: stored.detail,
+    }))
+}
+
 #[tauri::command]
 fn service_flags(state: State<'_, AppState>) -> Result<Vec<(String, String)>, Error> {
     with_db!(state, |c| db::service_flags(c))
@@ -2062,7 +2111,20 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
             return Ok(false);
         };
         let selection = rekordbox_selection_of(&conn)?;
-        let (tracks, mut playlists) = db::export_data(&conn)?;
+        let (mut tracks, mut playlists) = db::export_data(&conn)?;
+        for t in &mut tracks {
+            t.grid = t
+                .fingerprint
+                .as_deref()
+                .and_then(|fp| anlz::load(&state.data_dir, fp))
+                .and_then(|s| {
+                    s.grid_bpm.map(|bpm| rekordbox::Grid {
+                        bpm,
+                        first_beat: s.first_beat,
+                        bar_offset: s.bar_offset,
+                    })
+                });
+        }
         playlists.retain(|p| {
             p.id.is_none_or(|id| !selection.excluded_playlists.contains(&id))
         });
@@ -2452,6 +2514,7 @@ pub fn run() {
             usb_library,
             export_to_usb,
             usb_edit_playlists,
+            set_beat_grid,
             track_analysis,
             is_exporting_to_usb,
             save_analysis_to_files,

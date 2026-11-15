@@ -16,18 +16,22 @@ import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { type MenuEntry, RowMenu } from "#/components/menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
+import { Cover } from "#/components/page-header.tsx";
+import { PanelHeader } from "#/components/panel-header.tsx";
+import { TrackList } from "#/components/track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import {
+	type Track,
 	type UsbEdit,
 	type UsbLibrary,
 	type UsbPlaylist,
 	type UsbTrack,
 	usbEditPlaylists,
 } from "#/lib/api.ts";
-import { clock } from "#/lib/format.ts";
-import { formatBpm } from "#/lib/musical-key.ts";
-import { freeName, moveTargets, playlistTree, within } from "#/lib/usb-library.ts";
+import { duration } from "#/lib/format.ts";
+import { useTracks } from "#/lib/queries.ts";
+import { freeName, moveTargets, playlistTree, usbAsTracks, within } from "#/lib/usb-library.ts";
 import { cn } from "#/lib/utils.ts";
 
 type View = { kind: "all" } | { kind: "playlist"; id: number };
@@ -133,9 +137,11 @@ export function UsbBrowser({
 					}}
 					actions={actions}
 				/>
-				<TrackTable
-					tracks={tracks}
-					ordered={playlist !== undefined}
+				<SongsView
+					mount={mount}
+					songs={tracks}
+					title={playlist?.name ?? "All tracks"}
+					isPlaylist={playlist !== undefined}
 					onRemove={
 						playlist && editable
 							? (positions) =>
@@ -376,117 +382,111 @@ function DeleteConfirm({
 	);
 }
 
-function matches(t: UsbTrack, q: string): boolean {
-	return [t.title, t.artist, t.album, t.genre].some((f) => f.toLowerCase().includes(q));
+function matches(t: Track, q: string): boolean {
+	return [t.title, t.artist, t.album].some((f) => f.toLowerCase().includes(q));
 }
 
-function TrackTable({
-	tracks,
-	ordered,
+/**
+ * A playlist (or every song) on the drive, laid out like a library playlist: cover, title,
+ * figures and Play, then the same song list. Songs play straight off the drive.
+ */
+function SongsView({
+	mount,
+	songs,
+	title,
+	isPlaylist,
 	onRemove,
 }: {
-	tracks: readonly UsbTrack[];
-	ordered: boolean;
+	mount: string;
+	songs: readonly UsbTrack[];
+	title: string;
+	isPlaylist: boolean;
 	/** Takes entries out of the shown playlist, by their 0-based place in it. */
 	onRemove?: ((positions: number[]) => void) | undefined;
 }) {
+	const library = useTracks();
 	const [query, setQuery] = useState("");
+	const all = useMemo(
+		() => usbAsTracks(songs, mount, library.data ?? []),
+		[songs, mount, library.data],
+	);
+	// Rows keep their place in the playlist, which removal goes by, even while filtered.
+	const rows = useMemo(() => all.map((track, slot) => ({ track, slot })), [all]);
 	const q = query.trim().toLowerCase();
-	// A playlist can hold the same track twice, so rows are keyed by their place in it.
-	const rows = useMemo(() => tracks.map((track, slot) => ({ track, slot })), [tracks]);
 	const shown = q === "" ? rows : rows.filter((r) => matches(r.track, q));
-	return (
-		<div className="min-w-0 space-y-3">
-			<Input
-				value={query}
-				onChange={(e) => setQuery(e.target.value)}
-				placeholder="Filter by title, artist, album or genre"
-				aria-label="Filter tracks"
-			/>
-			{shown.length === 0 ? (
-				<EmptyState title={tracks.length === 0 ? "No songs" : "No songs match"} />
-			) : (
-				<table className="w-full table-fixed text-sm">
-					<thead className="text-left text-muted-foreground text-xs">
-						<tr className="border-b">
-							{ordered && <th className="w-8 py-2 font-normal">#</th>}
-							<th className="py-2 font-normal">Title</th>
-							<th className="w-[30%] py-2 font-normal">Artist</th>
-							<th className="w-14 py-2 text-right font-normal">BPM</th>
-							<th className="w-12 py-2 text-right font-normal">Key</th>
-							<th className="w-12 py-2 text-right font-normal">Time</th>
-							{onRemove && <th className="w-8" aria-label="Remove" />}
-						</tr>
-					</thead>
-					<tbody>
-						{shown.map(({ track, slot }) => (
-							<TrackRow
-								key={slot}
-								track={track}
-								slot={ordered ? slot + 1 : null}
-								onRemove={onRemove && (() => onRemove([slot]))}
-							/>
-						))}
-					</tbody>
-				</table>
-			)}
-		</div>
-	);
-}
+	const seconds = all.reduce((n, t) => n + (t.durationMs ?? 0), 0) / 1000;
+	const slotOf = (i: number) => shown[i]?.slot ?? -1;
 
-function TrackRow({
-	track: t,
-	slot,
-	onRemove,
-}: {
-	track: UsbTrack;
-	slot: number | null;
-	onRemove?: (() => void) | undefined;
-}) {
-	const title = t.title || t.path.split("/").pop() || "";
-	const rowClass = "group border-b last:border-0 hover:bg-muted/40";
-	const cells = (
-		<>
-			{slot !== null && <td className="py-1.5 text-muted-foreground tabular-nums">{slot}</td>}
-			<td className="truncate py-1.5 pr-3">{title}</td>
-			<td className="truncate py-1.5 pr-3 text-muted-foreground">{t.artist}</td>
-			<td className="py-1.5 text-right tabular-nums">
-				{t.tempo > 0 ? formatBpm(t.tempo / 100) : ""}
-			</td>
-			<td className="py-1.5 text-right">{t.key}</td>
-			<td className="py-1.5 text-right text-muted-foreground tabular-nums">
-				{clock(t.durationSecs)}
-			</td>
-		</>
-	);
-	if (!onRemove) {
-		return (
-			<tr className={rowClass} title={t.path}>
-				{cells}
-			</tr>
-		);
-	}
 	return (
-		<RowMenu
-			label={title}
-			render={<tr className={rowClass} title={t.path} />}
-			items={[
-				{ label: "Remove from playlist", icon: <ListX />, destructive: true, onSelect: onRemove },
-			]}
-		>
-			{cells}
-			<td className="py-1 text-right">
-				<Button
-					size="icon-xs"
-					variant="ghost"
-					aria-label={`Remove ${title} from the playlist`}
-					title="Remove from playlist"
-					className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
-					onClick={onRemove}
-				>
-					<X />
-				</Button>
-			</td>
-		</RowMenu>
+		<div className="min-w-0 space-y-5">
+			<PanelHeader
+				kind={
+					<>
+						{isPlaylist ? <ListMusic /> : <Music />}{" "}
+						{isPlaylist ? "Playlist on the drive" : "On the drive"}
+					</>
+				}
+				title={title}
+				meta={
+					<>
+						<span>{plural(all.length, "song", "songs")}</span>
+						{seconds >= 1 && <span>{duration(seconds)}</span>}
+					</>
+				}
+				art={
+					<Cover
+						tracks={all.filter((t) => t.id > 0)}
+						fallback={isPlaylist ? <ListMusic className="size-8" /> : <Music className="size-8" />}
+						className="size-24"
+					/>
+				}
+				tracks={all}
+			/>
+			{all.length > 8 && (
+				<Input
+					value={query}
+					onChange={(e) => setQuery(e.target.value)}
+					placeholder="Filter by title, artist or album"
+					aria-label="Filter songs"
+				/>
+			)}
+			<TrackList
+				tracks={shown.map((r) => r.track)}
+				targetCount={0}
+				showDuration
+				rowKey={(_, i) => slotOf(i)}
+				rowMenu={(_, i) =>
+					onRemove
+						? [
+								{
+									label: "Remove from playlist",
+									icon: <ListX />,
+									destructive: true,
+									onSelect: () => onRemove([slotOf(i)]),
+								},
+							]
+						: []
+				}
+				renderAction={
+					onRemove &&
+					((t, i) => (
+						<Button
+							size="icon-xs"
+							variant="ghost"
+							aria-label={`Remove ${t.title} from the playlist`}
+							title="Remove from playlist"
+							className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+							onClick={(e) => {
+								e.stopPropagation();
+								onRemove([slotOf(i)]);
+							}}
+						>
+							<X />
+						</Button>
+					))
+				}
+				empty={<EmptyState title={songs.length === 0 ? "No songs" : "No songs match"} />}
+			/>
+		</div>
 	);
 }

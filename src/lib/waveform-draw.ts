@@ -26,6 +26,10 @@ export function drawOverview(
 	ctx.fillRect(Math.round(played * w) - 1, 0, 2, h);
 }
 
+/**
+ * One bar per waveform column at its exact (fractional) place, so the picture slides smoothly
+ * instead of re-sampling different columns into each pixel every frame.
+ */
 function drawColumns(
 	ctx: CanvasRenderingContext2D,
 	w: number,
@@ -36,16 +40,25 @@ function drawColumns(
 	perPixel: number,
 ) {
 	const mid = h / 2;
-	for (let x = 0; x < w; x++) {
-		const t = from + x * perPixel;
-		const byte = t < 0 ? undefined : analysis.detail[Math.floor(t * analysis.rate)];
+	const step = 1 / analysis.rate;
+	const width = step / perPixel;
+	const first = Math.max(0, Math.floor(from * analysis.rate));
+	const last = Math.min(
+		analysis.detail.length - 1,
+		Math.ceil((from + w * perPixel) * analysis.rate),
+	);
+	// Bars a little wider than their slot overlap instead of leaving hairline gaps.
+	const drawn = Math.max(1, width + 0.5);
+	for (let i = first; i <= last; i++) {
+		const byte = analysis.detail[i];
 		if (byte === undefined) {
 			continue;
 		}
+		const t = i * step;
 		const c = column(byte);
 		const half = Math.max(0.5, (c.height * h) / 2);
 		ctx.fillStyle = colour(c.white, t <= now ? 0.55 : 1);
-		ctx.fillRect(x, mid - half, 1, half * 2);
+		ctx.fillRect((t - from) / perPixel, mid - half, drawn, half * 2);
 	}
 }
 
@@ -62,7 +75,7 @@ export function drawDetail(
 	const perPixel = (2 * window) / w;
 	drawColumns(ctx, w, h, analysis, from, now, perPixel);
 	for (const beat of beatsBetween(analysis, from, now + window)) {
-		const x = Math.round((beat.time - from) / perPixel);
+		const x = (beat.time - from) / perPixel;
 		const tick = beat.downbeat ? h * 0.3 : h * 0.15;
 		const width = beat.downbeat ? 2 : 1;
 		ctx.fillStyle = beat.downbeat ? PLAYHEAD : "rgba(255, 255, 255, 0.85)";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { UsbPlaylist } from "#/lib/api.ts";
-import { freeName, moveTargets, playlistTree, within } from "#/lib/usb-library.ts";
+import type { Track, UsbPlaylist, UsbTrack } from "#/lib/api.ts";
+import { freeName, moveTargets, playlistTree, usbAsTracks, within } from "#/lib/usb-library.ts";
 
 const p = (id: number, parentId: number, sortOrder: number, isFolder = false): UsbPlaylist => ({
 	id,
@@ -42,5 +42,36 @@ describe("editing helpers", () => {
 	it("numbers a name already used beside it", () => {
 		expect(freeName(lists, 0, "p4")).toBe("p4 2");
 		expect(freeName(lists, 1, "p4")).toBe("p4");
+	});
+});
+
+describe("usbAsTracks", () => {
+	const song = (id: number, fileSize: number): UsbTrack => ({
+		id,
+		title: "",
+		artist: "DJ",
+		album: "",
+		genre: "",
+		key: "8A",
+		comment: "",
+		path: `/Contents/DJ/s${id}.mp3`,
+		analyzePath: "",
+		dateAdded: "",
+		durationSecs: 200,
+		tempo: 12_800,
+		bitrate: 320,
+		sampleRate: 44_100,
+		fileSize,
+		year: 0,
+		trackNumber: 0,
+		fileType: 1,
+		artworkId: 0,
+	});
+	const mine = { id: 7, size: 999, album: "LP", tags: ["Warm"] } as Track;
+
+	it("plays off the drive and borrows a matching library song's id", () => {
+		const [a, b] = usbAsTracks([song(1, 999), song(2, 5)], "/Volumes/STICK", [mine]);
+		expect(a).toMatchObject({ id: 7, album: "LP", path: "/Volumes/STICK/Contents/DJ/s1.mp3" });
+		expect(b).toMatchObject({ id: -2, title: "s2.mp3", bpm: 128, key: "Am", durationMs: 200_000 });
 	});
 });
