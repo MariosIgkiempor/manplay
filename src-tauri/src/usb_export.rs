@@ -13,7 +13,7 @@ use crate::analysis::{self, Detail};
 use crate::anlz;
 use crate::onelib;
 use crate::pdb::{self, Library};
-use crate::usb::PDB_PATH;
+use crate::usb::{ONE_LIBRARY_PATH, PDB_PATH};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -98,7 +98,6 @@ const UNKNOWN_ARTIST: &str = "UnknownArtist";
 const UNKNOWN_ALBUM: &str = "UnknownAlbum";
 /// Longest file or folder name written; rekordbox stays well inside FAT32's 255.
 const MAX_NAME: usize = 120;
-const ONE_LIBRARY_PATH: &str = "PIONEER/rekordbox/exportLibrary.db";
 /// rekordbox's newer database and its SQLite side files. The side files go before a new database
 /// goes in: SQLite would replay an old `-wal` into it.
 const ONE_LIBRARY: [&str; 3] = [

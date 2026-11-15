@@ -1018,6 +1018,18 @@ async fn usb_drives() -> Result<Vec<usb::Drive>, Error> {
         .map_err(|e| Error::Msg(e.to_string()))
 }
 
+/// Which rekordbox library formats a plugged-in drive holds, with their sizes.
+#[tauri::command]
+async fn usb_formats(mount: PathBuf) -> Result<usb::Formats, Error> {
+    tauri::async_runtime::spawn_blocking(move || {
+        usb::check_mount(&mount)?;
+        Ok(usb::formats(&mount))
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+    .map_err(Error::Msg)
+}
+
 /// The rekordbox library on a plugged-in drive; empty if it has none.
 #[tauri::command]
 async fn usb_library(mount: PathBuf) -> Result<pdb::Library, Error> {
@@ -2352,6 +2364,7 @@ pub fn run() {
             analysis_failures,
             usb_drives,
             usb_library,
+            usb_formats,
             export_to_usb,
             track_analysis,
             is_exporting_to_usb,

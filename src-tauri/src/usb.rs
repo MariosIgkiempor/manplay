@@ -1,6 +1,6 @@
 //! Removable drives a CDJ can read, and the rekordbox library already on them.
 
-use crate::pdb;
+use crate::{onelib, pdb};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -8,6 +8,7 @@ use std::process::Command;
 
 /// Where players look for the database, relative to the drive root.
 pub const PDB_PATH: &str = "PIONEER/rekordbox/export.pdb";
+pub const ONE_LIBRARY_PATH: &str = "PIONEER/rekordbox/exportLibrary.db";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,7 +107,7 @@ fn drive(mount: PathBuf, info: &DiskInfo) -> Drive {
             .max(info.number("APFSContainerFree")),
         writable: info.flag("Writable") || info.flag("WritableVolume"),
         has_library: rekordbox.join("export.pdb").is_file(),
-        has_one_library: rekordbox.join("exportLibrary.db").is_file(),
+        has_one_library: mount.join(ONE_LIBRARY_PATH).is_file(),
         mount,
     }
 }
@@ -144,6 +145,55 @@ pub fn library(mount: &Path) -> Result<pdb::Library, String> {
     }
 }
 
+/// Size of one of the drive's libraries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Summary {
+    pub tracks: usize,
+    pub playlists: usize,
+}
+
+impl Summary {
+    fn of(lib: &pdb::Library) -> Self {
+        Self {
+            tracks: lib.tracks.len(),
+            playlists: lib.playlists.iter().filter(|p| !p.is_folder).count(),
+        }
+    }
+}
+
+/// Which library formats a drive holds, and so which players can read it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Formats {
+    /// `export.pdb`, read by the CDJ-3000 and older players.
+    pub device_library: Option<Summary>,
+    /// `exportLibrary.db`, read by the CDJ-3000X, OPUS-QUAD, XDJ-AZ and OMNIS-DUO.
+    pub one_library: Option<Summary>,
+    /// Why a file that is there could not be read.
+    pub device_library_error: Option<String>,
+    pub one_library_error: Option<String>,
+}
+
+/// Reads both libraries on a drive (the `OneLibrary` from a temporary copy).
+pub fn formats(mount: &Path) -> Formats {
+    let mut f = Formats::default();
+    if mount.join(PDB_PATH).is_file() {
+        match library(mount) {
+            Ok(lib) => f.device_library = Some(Summary::of(&lib)),
+            Err(e) => f.device_library_error = Some(e),
+        }
+    }
+    let one = mount.join(ONE_LIBRARY_PATH);
+    if one.is_file() {
+        match onelib::read(&one) {
+            Ok(lib) => f.one_library = Some(Summary::of(&lib)),
+            Err(e) => f.one_library_error = Some(e),
+        }
+    }
+    f
+}
+
 /// Only paths under `/Volumes` may be read or written as drives.
 pub fn check_mount(mount: &Path) -> Result<(), String> {
     let ok = mount.starts_with("/Volumes")
@@ -174,6 +224,32 @@ mod tests {
   <key>VolumeName</key><string>NOCTURN</string>
   <key>Writable</key><true/>
 </dict></plist>"#;
+
+    #[test]
+    fn tells_which_formats_a_drive_has() {
+        let usb = std::env::temp_dir().join(format!("manplay-usb-formats-{}", std::process::id()));
+        let rb = usb.join("PIONEER/rekordbox");
+        std::fs::create_dir_all(&rb).expect("dir");
+        assert_eq!(formats(&usb), Formats::default());
+
+        std::fs::write(
+            rb.join("exportLibrary.db"),
+            include_bytes!("onelib/testdata/rekordbox7.db"),
+        )
+        .expect("db");
+        std::fs::write(rb.join("export.pdb"), b"garbage").expect("pdb");
+        let f = formats(&usb);
+        assert_eq!(
+            f.one_library,
+            Some(Summary {
+                tracks: 41,
+                playlists: 5
+            })
+        );
+        assert_eq!(f.device_library, None);
+        assert!(f.device_library_error.is_some());
+        let _ = std::fs::remove_dir_all(&usb);
+    }
 
     #[test]
     fn reads_diskutil_output() {

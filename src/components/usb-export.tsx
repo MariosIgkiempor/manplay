@@ -137,6 +137,7 @@ export function UsbExportButton({
 		mutationFn: () => exportToUsb(drive.mount, [...chosen]),
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["usb-library", drive.mount] });
+			await queryClient.invalidateQueries({ queryKey: ["usb-formats", drive.mount] });
 			await queryClient.invalidateQueries({ queryKey: ["usb-drives"] });
 		},
 	});

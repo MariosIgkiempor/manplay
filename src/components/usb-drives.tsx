@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Folder, ListMusic, Music, TriangleAlert } from "lucide-react";
+import { Check, ChevronRight, Folder, ListMusic, Minus, Music, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Drawer } from "#/components/drawer.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
@@ -9,7 +9,16 @@ import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { UsbExportButton } from "#/components/usb-export.tsx";
 import { useDetail } from "#/context/detail-context.ts";
-import { type UsbDrive, type UsbLibrary, type UsbTrack, usbDrives, usbLibrary } from "#/lib/api.ts";
+import {
+	type UsbDrive,
+	type UsbFormats,
+	type UsbLibrary,
+	type UsbLibrarySummary,
+	type UsbTrack,
+	usbDrives,
+	usbFormats,
+	usbLibrary,
+} from "#/lib/api.ts";
 import { clock, formatBytes } from "#/lib/format.ts";
 import { formatBpm } from "#/lib/musical-key.ts";
 import { useServices } from "#/lib/queries.ts";
@@ -174,15 +183,7 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 				</div>
 				<UsbExportButton drive={drive} library={library.data} />
 			</div>
-			{drive.hasOneLibrary && (
-				<p className="flex gap-2 rounded-lg border p-3 text-muted-foreground text-xs">
-					<TriangleAlert className="size-4 shrink-0" />
-					Rekordbox also wrote a OneLibrary database here, which the CDJ-3000X, Opus Quad, XDJ-AZ
-					and Omnis Duo read. This view shows the Device Library that other players read. Exporting
-					from manplay moves the OneLibrary files into a backup folder on the drive, so every player
-					reads the same library.
-				</p>
-			)}
+			{(drive.hasLibrary || drive.hasOneLibrary) && <DriveFormats mount={drive.mount} />}
 			{!drive.hasLibrary && (
 				<p className="py-10 text-center text-muted-foreground text-sm">
 					This drive has no rekordbox library yet. Export playlists to create one.
@@ -194,6 +195,100 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 			)}
 			{library.data && <LibraryBrowser library={library.data} view={view} onView={setView} />}
 		</div>
+	);
+}
+
+const FORMATS = [
+	{
+		key: "deviceLibrary",
+		name: "Device Library",
+		file: "export.pdb",
+		players:
+			"CDJ-3000, XDJ-XZ, XDJ-RX3, XDJ-RR, XDJ-1000MK2, XDJ-700, CDJ-900NXS2, CDJ-2000NXS2 and older",
+	},
+	{
+		key: "oneLibrary",
+		name: "OneLibrary",
+		file: "exportLibrary.db",
+		players: "CDJ-3000X, Opus Quad, XDJ-AZ, Omnis Duo",
+	},
+] as const;
+
+function summaryText(s: UsbLibrarySummary): string {
+	return s.tracks === 0
+		? "Empty"
+		: `${plural(s.tracks, "track", "tracks")} · ${plural(s.playlists, "playlist", "playlists")}`;
+}
+
+/** What to tell the user when the two formats do not cover every player with the same songs. */
+function formatsAdvice(f: UsbFormats): string | null {
+	const pdb = f.deviceLibrary;
+	const one = f.oneLibrary;
+	if (pdb && one && pdb.tracks !== one.tracks) {
+		return `The two libraries differ (${pdb.tracks.toLocaleString()} and ${one.tracks.toLocaleString()} tracks), so players show different songs. A CDJ-3000 on firmware 3.30 reads the OneLibrary first. Export from manplay to write both from one list.`;
+	}
+	if (pdb && pdb.tracks > 0 && !one) {
+		return "Players that read only OneLibrary show nothing from this drive. Export from manplay to add it.";
+	}
+	if (one && one.tracks > 0 && !pdb) {
+		return "The CDJ-3000 and older players show nothing from this drive. Export from manplay to add a Device Library.";
+	}
+	return null;
+}
+
+type FormatKey = (typeof FORMATS)[number]["key"];
+
+/** One format's line ("41 tracks · 5 playlists") and icon. */
+function formatStatus(f: UsbFormats | undefined, failed: boolean, key: FormatKey) {
+	const none = <Minus className="size-4 shrink-0 text-muted-foreground" />;
+	if (!f) {
+		return { text: failed ? "Could not check" : "Checking…", icon: none };
+	}
+	const error = f[`${key}Error`];
+	if (error) {
+		return {
+			text: "Could not be read",
+			error,
+			icon: <TriangleAlert className="size-4 shrink-0 text-destructive" />,
+		};
+	}
+	const summary = f[key];
+	if (!summary) {
+		return { text: "Not on this drive", icon: none };
+	}
+	const icon = summary.tracks > 0 ? <Check className="size-4 shrink-0 text-success" /> : none;
+	return { text: summaryText(summary), icon };
+}
+
+/** The drive's library formats, side by side with the players each one covers. */
+function DriveFormats({ mount }: { mount: string }) {
+	const formats = useQuery({ queryKey: ["usb-formats", mount], queryFn: () => usbFormats(mount) });
+	const advice = formats.data ? formatsAdvice(formats.data) : null;
+	return (
+		<section className="space-y-2">
+			<div className="grid gap-2 sm:grid-cols-2">
+				{FORMATS.map((format) => {
+					const status = formatStatus(formats.data, formats.isError, format.key);
+					return (
+						<div key={format.key} className="space-y-1 rounded-lg border p-3 text-xs">
+							<p className="flex items-center gap-2 font-medium text-sm">
+								{status.icon}
+								{format.name}
+								<code className="font-normal text-muted-foreground text-xs">{format.file}</code>
+							</p>
+							<p title={status.error}>{status.text}</p>
+							<p className="text-muted-foreground">{format.players}</p>
+						</div>
+					);
+				})}
+			</div>
+			{advice && (
+				<p className="flex gap-2 rounded-lg border p-3 text-muted-foreground text-xs">
+					<TriangleAlert className="size-4 shrink-0" />
+					{advice}
+				</p>
+			)}
+		</section>
 	);
 }
 

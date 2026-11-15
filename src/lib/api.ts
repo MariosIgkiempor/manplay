@@ -1033,6 +1033,25 @@ export async function usbLibrary(mount: string): Promise<UsbLibrary> {
 	return usbLibrarySchema.parse(await invoke("usb_library", { mount }));
 }
 
+const usbLibrarySummarySchema = z.object({ tracks: int, playlists: int });
+
+const usbFormatsSchema = z.object({
+	/** `export.pdb`, read by the CDJ-3000 and older players. */
+	deviceLibrary: usbLibrarySummarySchema.nullable(),
+	/** `exportLibrary.db`, read by the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo. */
+	oneLibrary: usbLibrarySummarySchema.nullable(),
+	deviceLibraryError: z.string().nullable(),
+	oneLibraryError: z.string().nullable(),
+});
+
+export type UsbFormats = z.infer<typeof usbFormatsSchema>;
+export type UsbLibrarySummary = z.infer<typeof usbLibrarySummarySchema>;
+
+/** Which rekordbox library formats a drive holds, with their sizes. */
+export async function usbFormats(mount: string): Promise<UsbFormats> {
+	return usbFormatsSchema.parse(await invoke("usb_formats", { mount }));
+}
+
 const usbExportProgressSchema = z.object({
 	phase: z.enum(["copying", "analyzing", "writing"]),
 	done: int,
