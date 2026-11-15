@@ -9,6 +9,8 @@ mod error;
 mod fsops;
 mod import;
 mod itunes;
+#[allow(dead_code)] // Read and written by the USB export once the writer lands.
+mod onelib;
 mod pdb;
 mod r2;
 mod rekordbox;
