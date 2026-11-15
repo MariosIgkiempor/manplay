@@ -5,13 +5,15 @@ import {
 	ChevronRight,
 	ChevronsLeft,
 	ChevronsRight,
+	Crosshair,
 	Magnet,
 	Pause,
 	Play,
 } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useState } from "react";
-import { HotCuePads, MemoryCues } from "#/components/cue-pads.tsx";
-import { EmptyState, ErrorLine, SectionHeading } from "#/components/page.tsx";
+import { CuePoints, HotCuePads } from "#/components/cue-pads.tsx";
+import { EmptyState, ErrorLine, Section } from "#/components/page.tsx";
+import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { WaveformDetail, WaveformSeek } from "#/components/waveform.tsx";
@@ -28,7 +30,18 @@ import {
 	tapBpm,
 	withGrid,
 } from "#/lib/beat-grid.ts";
-import { addMemory, barBeat, type Cue, sameCues, setHot, snap, stamp } from "#/lib/cues.ts";
+import {
+	addMemory,
+	barBeat,
+	type Cue,
+	clearStart,
+	START_COLOR,
+	sameCues,
+	setHot,
+	setStart,
+	snap,
+	stamp,
+} from "#/lib/cues.ts";
 import { formatBpm } from "#/lib/musical-key.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { typeScale } from "#/lib/type-scale.ts";
@@ -172,6 +185,7 @@ function Editor({
 		d: () => setGrid((g) => downbeatAt(g, pos.position())),
 		t: tap,
 		m: () => setCues((cs) => addMemory(cs, here())),
+		c: () => setCues((cs) => setStart(cs, here())),
 		...Object.fromEntries(
 			Array.from({ length: 8 }, (_, i) => [`pad${i + 1}`, () => pad(i)] as const),
 		),
@@ -243,6 +257,7 @@ function Editor({
 					onSnap={setSnapOn}
 					onZoom={setZoom}
 					onToggle={pos.toggle}
+					onCue={() => setCues((cs) => setStart(cs, here()))}
 					onStep={(beats) => pos.moveTo(Math.max(0, pos.position() + beats * period))}
 				/>
 			</Deck>
@@ -268,8 +283,10 @@ function Editor({
 					onDownbeat={() => setGrid((g) => downbeatAt(g, pos.position()))}
 					onShiftBar={(n) => setGrid((g) => shiftBar(g, n))}
 				/>
-				<MemoryCues
+				<CuePoints
 					cues={cues}
+					onSetStart={() => setCues((cs) => setStart(cs, here()))}
+					onClearStart={() => setCues(clearStart)}
 					onAdd={() => setCues((cs) => addMemory(cs, here()))}
 					onJump={pos.moveTo}
 					onRename={(cue, name) => setCues((cs) => cs.map((c) => (c === cue ? { ...c, name } : c)))}
@@ -376,6 +393,7 @@ function Transport({
 	onSnap,
 	onZoom,
 	onToggle,
+	onCue,
 	onStep,
 }: {
 	grid: Grid;
@@ -386,12 +404,25 @@ function Transport({
 	onSnap: (on: boolean) => void;
 	onZoom: (z: (typeof ZOOMS)[number]) => void;
 	onToggle: () => void;
+	/** Sets the start (main) cue at the playhead. */
+	onCue: () => void;
 	onStep: (beats: number) => void;
 }) {
 	const at = barBeat(grid, time);
 	return (
 		<div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2.5">
 			<div className="flex items-center gap-0.5">
+				{/* The CDJ's CUE button: sets where the song starts. */}
+				<button
+					type="button"
+					onClick={onCue}
+					title="Start the song here (C)"
+					aria-label="Set the start cue at the playhead"
+					className="mr-2 grid size-9 place-items-center rounded-full border-2 font-semibold text-[10px] tracking-wide outline-none transition-colors hover:bg-white/5 focus-visible:ring-2 focus-visible:ring-ring/60"
+					style={{ borderColor: START_COLOR, color: START_COLOR }}
+				>
+					CUE
+				</button>
 				<DeckButton label="Back one bar" onClick={() => onStep(-4)}>
 					<ChevronsLeft />
 				</DeckButton>
@@ -469,22 +500,12 @@ function BpmField({ grid, onBpm }: { grid: Grid; onBpm: (bpm: number) => void })
 				value={text}
 				inputMode="decimal"
 				aria-label="BPM"
-				className="h-9 w-24 text-right font-medium text-base tabular-nums"
+				className="h-7 w-20 text-right font-medium tabular-nums"
 				onChange={(e) => setText(e.target.value)}
 				onBlur={commit}
 				onKeyDown={(e) => e.key === "Enter" && commit()}
 			/>
 			<span className="text-muted-foreground text-xs">BPM</span>
-		</div>
-	);
-}
-
-/** A labelled line of controls. */
-function Line({ label, children }: { label: string; children: ReactNode }) {
-	return (
-		<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-			<span className="w-20 shrink-0 text-muted-foreground text-xs">{label}</span>
-			<div className="flex flex-wrap items-center gap-1.5">{children}</div>
 		</div>
 	);
 }
@@ -507,10 +528,9 @@ function GridControls({
 	onShiftBar: (beats: number) => void;
 }) {
 	return (
-		<section className="space-y-3">
-			<SectionHeading title="Grid" />
-			<div className="space-y-3">
-				<Line label="Tempo">
+		<Section title="Beat grid">
+			<SettingRows>
+				<SettingRow label="Tempo">
 					<BpmField grid={grid} onBpm={onBpm} />
 					<Button
 						size="sm"
@@ -538,39 +558,29 @@ function GridControls({
 					>
 						Tap
 					</Button>
-				</Line>
-				<Line label="Move grid">
-					<Button
-						size="sm"
-						variant="outline"
-						title="Earlier by 10 ms (←, with ⌥ 1 ms)"
-						onClick={(e) => onNudge(e.altKey ? -FINE : -COARSE)}
-					>
+				</SettingRow>
+				<SettingRow label="Move" title="10 ms a press, 1 ms with ⌥. Arrow keys do the same.">
+					<Button size="sm" variant="outline" onClick={(e) => onNudge(e.altKey ? -FINE : -COARSE)}>
 						<ChevronLeft /> Earlier
 					</Button>
-					<Button
-						size="sm"
-						variant="outline"
-						title="Later by 10 ms (→, with ⌥ 1 ms)"
-						onClick={(e) => onNudge(e.altKey ? FINE : COARSE)}
-					>
+					<Button size="sm" variant="outline" onClick={(e) => onNudge(e.altKey ? FINE : COARSE)}>
 						Later <ChevronRight />
 					</Button>
-				</Line>
-				<Line label="Bar start">
+				</SettingRow>
+				<SettingRow label="Downbeat">
 					<Button
 						size="sm"
 						variant="outline"
 						title="Put the first beat of a bar at the playhead (D)"
 						onClick={onDownbeat}
 					>
-						Downbeat here
+						<Crosshair /> Set here
 					</Button>
 					<Button
 						size="icon-sm"
 						variant="outline"
-						aria-label="Bar starts a beat earlier"
-						title="Bar starts a beat earlier"
+						aria-label="Downbeat a beat earlier"
+						title="A beat earlier"
 						onClick={() => onShiftBar(-1)}
 					>
 						<ChevronLeft />
@@ -578,14 +588,14 @@ function GridControls({
 					<Button
 						size="icon-sm"
 						variant="outline"
-						aria-label="Bar starts a beat later"
-						title="Bar starts a beat later"
+						aria-label="Downbeat a beat later"
+						title="A beat later"
 						onClick={() => onShiftBar(1)}
 					>
 						<ChevronRight />
 					</Button>
-				</Line>
-			</div>
-		</section>
+				</SettingRow>
+			</SettingRows>
+		</Section>
 	);
 }

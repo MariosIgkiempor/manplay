@@ -8,6 +8,11 @@ export interface Cue {
 	name: string;
 	/** `#rrggbb`, or "" for the player's default. */
 	color: string;
+	/**
+	 * The memory cue the song starts from: rekordbox's main (yellow) cue when it loads, with
+	 * auto cue set to memory cues. Exported as a memory cue.
+	 */
+	main: boolean;
 }
 
 export const PAD_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
@@ -26,6 +31,9 @@ export const CUE_COLORS = [
 
 /** Memory cues show red on a CDJ. */
 export const MEMORY_COLOR = "#e62828";
+
+/** The main cue's colour in rekordbox and on a CDJ. */
+export const START_COLOR = "#f5a623";
 
 export const defaultColor = (slot: number) => CUE_COLORS[slot % CUE_COLORS.length]?.hex ?? "";
 
@@ -54,7 +62,13 @@ export function setHot(cues: readonly Cue[], slot: number, time: number): Cue[] 
 	const rest = cues.filter((c) => c.slot !== slot);
 	return [
 		...rest,
-		{ slot, start: time, name: old?.name ?? "", color: old?.color || defaultColor(slot) },
+		{
+			slot,
+			start: time,
+			name: old?.name ?? "",
+			color: old?.color || defaultColor(slot),
+			main: false,
+		},
 	];
 }
 
@@ -63,11 +77,36 @@ export function addMemory(cues: readonly Cue[], time: number): Cue[] {
 	if (cues.some((c) => c.slot === null && Math.abs(c.start - time) < 0.01)) {
 		return [...cues];
 	}
-	return [...cues, { slot: null, start: time, name: "", color: "" }];
+	return [...cues, { slot: null, start: time, name: "", color: "", main: false }];
+}
+
+/** The start (main) cue, if set. */
+export const startOf = (cues: readonly Cue[]) => cues.find((c) => c.main);
+
+/** Moves the start cue to `time` (making a memory cue already there the start), or sets one. */
+export function setStart(cues: readonly Cue[], time: number): Cue[] {
+	const rest = cues.filter((c) => !c.main);
+	const there = rest.find((c) => c.slot === null && Math.abs(c.start - time) < 0.01);
+	if (there) {
+		return rest.map((c) => (c === there ? { ...c, main: true } : c));
+	}
+	const old = startOf(cues);
+	return [...rest, { slot: null, start: time, name: old?.name ?? "", color: "", main: true }];
+}
+
+export const clearStart = (cues: readonly Cue[]) => cues.filter((c) => !c.main);
+
+/**
+ * Memory cues before the start cue. A player loads the song at the earliest memory cue, so any
+ * of these would win over the start.
+ */
+export function beforeStart(cues: readonly Cue[]): Cue[] {
+	const start = startOf(cues);
+	return start ? cues.filter((c) => c.slot === null && !c.main && c.start < start.start) : [];
 }
 
 export function sameCues(a: readonly Cue[], b: readonly Cue[]): boolean {
-	const key = (c: Cue) => `${c.slot}|${c.start.toFixed(3)}|${c.name}|${c.color}`;
+	const key = (c: Cue) => `${c.slot}|${c.start.toFixed(3)}|${c.name}|${c.color}|${c.main}`;
 	const ka = a.map(key).sort();
 	const kb = b.map(key).sort();
 	return ka.length === kb.length && ka.every((k, i) => k === kb[i]);

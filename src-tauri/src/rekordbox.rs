@@ -361,12 +361,14 @@ mod tests {
                 start: 12.3456,
                 name: "Drop & go".into(),
                 color: "#305aff".into(),
+                main: false,
             },
             crate::db::Cue {
                 slot: None,
                 start: 1.0,
                 name: String::new(),
                 color: String::new(),
+                main: false,
             },
         ];
         let xml = build_xml(&[t], &[], &[]);

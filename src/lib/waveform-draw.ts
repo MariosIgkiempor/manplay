@@ -1,5 +1,5 @@
 import type { TrackAnalysis } from "#/lib/api.ts";
-import { type Cue, MEMORY_COLOR, PAD_LETTERS } from "#/lib/cues.ts";
+import { type Cue, MEMORY_COLOR, PAD_LETTERS, START_COLOR } from "#/lib/cues.ts";
 import { beatsBetween, colour, column, overview } from "#/lib/waveform.ts";
 
 const PLAYHEAD = "rgba(255, 70, 70, 0.95)";
@@ -24,17 +24,33 @@ export function drawOverview(
 		ctx.fillStyle = colour(c.white, x / w < played ? 1 : 0.4);
 		ctx.fillRect(x, h - height, Math.max(1, bar - gap), height);
 	});
-	const length = analysis.duration;
-	if (length > 0) {
-		for (const c of cues) {
-			const x = Math.round((c.start / length) * w);
+	drawCuePins(ctx, w, h, analysis.duration, cues);
+	ctx.fillStyle = PLAYHEAD;
+	ctx.fillRect(Math.round(played * w) - 1, 0, 2, h);
+}
+
+/** Cue pins across the whole track: hot cues full height, memory cues a notch at the top, the
+ * start cue a pin from the bottom. */
+function drawCuePins(
+	ctx: CanvasRenderingContext2D,
+	w: number,
+	h: number,
+	length: number,
+	cues: readonly Cue[],
+) {
+	if (length <= 0) {
+		return;
+	}
+	for (const c of cues) {
+		const x = Math.round((c.start / length) * w);
+		if (c.main) {
+			ctx.fillStyle = START_COLOR;
+			ctx.fillRect(x - 1, h * 0.55, 2, h * 0.45);
+		} else {
 			ctx.fillStyle = c.slot === null ? MEMORY_COLOR : c.color || "#28e214";
-			// Memory cues as a notch at the top, hot cues as a full-height pin, as on a CDJ.
 			ctx.fillRect(x - 1, 0, 2, c.slot === null ? h * 0.3 : h);
 		}
 	}
-	ctx.fillStyle = PLAYHEAD;
-	ctx.fillRect(Math.round(played * w) - 1, 0, 2, h);
 }
 
 /** Cue markers in the scrolling view: a lettered flag per hot cue, a red notch per memory cue. */
@@ -53,6 +69,17 @@ function drawCues(
 	for (const c of cues) {
 		const x = (c.start - from) / perPixel;
 		if (x < -flag * 2 || x > w + flag * 2) {
+			continue;
+		}
+		if (c.main) {
+			// rekordbox's main cue: an orange triangle on the bottom edge.
+			ctx.fillStyle = START_COLOR;
+			ctx.beginPath();
+			ctx.moveTo(x - flag * 0.7, h);
+			ctx.lineTo(x + flag * 0.7, h);
+			ctx.lineTo(x, h - flag);
+			ctx.fill();
+			ctx.fillRect(x - 0.75, 0, 1.5, h);
 			continue;
 		}
 		if (c.slot === null) {

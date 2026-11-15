@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { Drawer } from "#/components/drawer.tsx";
 import { ErrorLine, Section } from "#/components/page.tsx";
+import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { closeAnalysisDrawer, useAnalysisDrawerOpen } from "#/lib/analysis-drawer.ts";
@@ -269,24 +270,6 @@ function KeyFormatPicker({
 	);
 }
 
-/** A labelled setting: name on the left, control on the right. */
-function SettingRow({
-	label,
-	title,
-	children,
-}: {
-	label: string;
-	title?: string;
-	children: React.ReactNode;
-}) {
-	return (
-		<div className="flex items-center justify-between gap-4 py-2.5" title={title}>
-			<span className="text-sm">{label}</span>
-			{children}
-		</div>
-	);
-}
-
 function FileTags({
 	withResults,
 	running,
@@ -321,7 +304,7 @@ function FileTags({
 				</Button>
 			}
 		>
-			<div className="divide-y rounded-lg border px-3">
+			<SettingRows>
 				<SettingRow
 					label="Write after each analysis"
 					title="So rekordbox, CDJs and other apps see them. BPM is rounded; the audio is never changed."
@@ -335,7 +318,7 @@ function FileTags({
 				<SettingRow label="Key notation">
 					<KeyFormatPicker settings={current} onChange={(s) => setSettings.mutate(s)} />
 				</SettingRow>
-			</div>
+			</SettingRows>
 			{confirm && (
 				<ConfirmDialog
 					title={`Write BPM and key into ${plural(withResults, "song", "songs")}?`}
@@ -367,7 +350,7 @@ function HandEdits({ edited }: { edited: number }) {
 	}
 	return (
 		<Section title="Your edits" count={edited}>
-			<div className="divide-y rounded-lg border px-3">
+			<SettingRows>
 				<SettingRow
 					label="Re-analysis replaces my edits"
 					title="Off: a BPM, key or beat grid you set by hand stays when songs are analyzed again. Right-click a song to discard its edits."
@@ -378,7 +361,7 @@ function HandEdits({ edited }: { edited: number }) {
 						onChange={(on) => setSettings.mutate({ ...current, replaceEdits: on })}
 					/>
 				</SettingRow>
-			</div>
+			</SettingRows>
 		</Section>
 	);
 }

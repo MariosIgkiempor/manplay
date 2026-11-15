@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { addMemory, barBeat, defaultColor, sameCues, setHot, snap, stamp } from "#/lib/cues.ts";
+import {
+	addMemory,
+	barBeat,
+	beforeStart,
+	clearStart,
+	defaultColor,
+	sameCues,
+	setHot,
+	setStart,
+	snap,
+	stamp,
+	startOf,
+} from "#/lib/cues.ts";
 
 const grid = { bpm: 120, firstBeat: 0.5, barOffset: 0 };
 
@@ -19,7 +31,7 @@ describe("cues", () => {
 
 	it("moves a hot cue, keeping its name and colour", () => {
 		const one = setHot([], 2, 10);
-		expect(one).toEqual([{ slot: 2, start: 10, name: "", color: defaultColor(2) }]);
+		expect(one).toEqual([{ slot: 2, start: 10, name: "", color: defaultColor(2), main: false }]);
 		const named = [{ ...one[0], name: "Drop" }];
 		expect(setHot(named as never, 2, 20)[0]).toMatchObject({ start: 20, name: "Drop" });
 	});
@@ -34,5 +46,20 @@ describe("cues", () => {
 		const a = setHot(addMemory([], 1), 0, 2);
 		expect(sameCues(a, [...a].reverse())).toBe(true);
 		expect(stamp(62.5)).toBe("1:02.500");
+	});
+
+	it("keeps one start cue, which a memory cue already there can become", () => {
+		const a = setStart(addMemory([], 4), 4);
+		expect(a).toHaveLength(1);
+		expect(startOf(a)?.start).toBe(4);
+		const moved = setStart(a, 8);
+		expect(moved.filter((c) => c.main)).toHaveLength(1);
+		expect(startOf(moved)?.start).toBe(8);
+		expect(clearStart(moved)).toHaveLength(0);
+	});
+
+	it("flags memory cues a player would load before the start", () => {
+		const cues = setStart(addMemory([], 2), 8);
+		expect(beforeStart(cues).map((c) => c.start)).toEqual([2]);
 	});
 });

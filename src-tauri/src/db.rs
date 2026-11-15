@@ -196,7 +196,9 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              start       REAL NOT NULL,
              name        TEXT NOT NULL DEFAULT '',
              -- #rrggbb, or '' for the player's default.
-             color       TEXT NOT NULL DEFAULT ''
+             color       TEXT NOT NULL DEFAULT '',
+             -- The memory cue the song starts from (rekordbox's main cue on load).
+             main        INTEGER NOT NULL DEFAULT 0
          );
          CREATE INDEX IF NOT EXISTS cues_fingerprint ON cues(fingerprint);
          CREATE TABLE IF NOT EXISTS stale_remote (
@@ -228,6 +230,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
         "grid_edited",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
+    add_column(&conn, "cues", "main", "INTEGER NOT NULL DEFAULT 0")?;
     // Cues were set in manplay (possibly to none): they replace a drive's own on export.
     add_column(
         &conn,
@@ -268,8 +271,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
              WHERE t.path = ?1 AND t.fingerprint <> ?2",
         )?;
         let mut carry_cues = tx.prepare(
-            "INSERT INTO cues (fingerprint, slot, start, name, color)
-             SELECT ?2, c.slot, c.start, c.name, c.color
+            "INSERT INTO cues (fingerprint, slot, start, name, color, main)
+             SELECT ?2, c.slot, c.start, c.name, c.color, c.main
              FROM tracks t JOIN cues c ON c.fingerprint = t.fingerprint
              WHERE t.path = ?1 AND t.fingerprint <> ?2
                AND NOT EXISTS (SELECT 1 FROM cues WHERE fingerprint = ?2)",
@@ -880,6 +883,10 @@ pub struct Cue {
     pub name: String,
     /// `#rrggbb`, or empty for the player's default.
     pub color: String,
+    /// The memory cue the song starts from: rekordbox and CDJs set to auto-cue on memory cues
+    /// load the song at the earliest memory cue, so this one is written first.
+    #[serde(default)]
+    pub main: bool,
 }
 
 /// The cues set in manplay for audio with this fingerprint, hot cues first; `None` when cues
@@ -897,7 +904,7 @@ pub fn cues_of(conn: &Connection, fingerprint: &str) -> Result<Option<Vec<Cue>>,
         return Ok(None);
     }
     let mut stmt = conn.prepare(
-        "SELECT slot, start, name, color FROM cues WHERE fingerprint = ?1
+        "SELECT slot, start, name, color, main FROM cues WHERE fingerprint = ?1
          ORDER BY slot IS NULL, slot, start",
     )?;
     let rows = stmt.query_map(params![fingerprint], |r| {
@@ -906,6 +913,7 @@ pub fn cues_of(conn: &Connection, fingerprint: &str) -> Result<Option<Vec<Cue>>,
             start: r.get(1)?,
             name: r.get(2)?,
             color: r.get(3)?,
+            main: r.get(4)?,
         })
     })?;
     Ok(Some(rows.collect::<Result<Vec<_>, _>>()?))
@@ -938,15 +946,21 @@ pub fn set_cues(conn: &mut Connection, track_id: i64, cues: &[Cue]) -> Result<()
     tx.execute("DELETE FROM cues WHERE fingerprint = ?1", params![fp])?;
     {
         let mut ins = tx.prepare(
-            "INSERT INTO cues (fingerprint, slot, start, name, color) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO cues (fingerprint, slot, start, name, color, main)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
+        // One start cue at most, and only as a memory cue.
+        let mut main_seen = false;
         for c in cues {
+            let main = c.main && c.slot.is_none() && !main_seen;
+            main_seen |= main;
             ins.execute(params![
                 fp,
                 c.slot,
                 c.start.max(0.0),
                 c.name.trim(),
-                c.color
+                c.color,
+                main
             ])?;
         }
     }
@@ -1913,12 +1927,14 @@ mod tests {
             start: 32.5,
             name: " Drop ".into(),
             color: "#28e214".into(),
+            main: false,
         };
         let memory = Cue {
             slot: None,
             start: 1.0,
             name: String::new(),
             color: String::new(),
+            main: true,
         };
         set_cues(&mut conn, 1, &[memory.clone(), hot.clone()]).expect("set");
         let kept = cues_of(&conn, "x").expect("cues").expect("set");

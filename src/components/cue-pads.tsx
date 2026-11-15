@@ -1,11 +1,21 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { Bookmark, Crosshair, Palette, PencilLine, Plus, Trash2, X } from "lucide-react";
+import { Crosshair, Palette, PencilLine, Plus, Trash2, TriangleAlert, X } from "lucide-react";
 import { useState } from "react";
 import { InlineEdit, InlineInput } from "#/components/inline-edit.tsx";
 import { type MenuEntry, MenuItems, MenuLabel } from "#/components/menu.tsx";
-import { SectionHeading } from "#/components/page.tsx";
+import { Section } from "#/components/page.tsx";
+import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { CUE_COLORS, type Cue, MEMORY_COLOR, PAD_LETTERS, stamp } from "#/lib/cues.ts";
+import {
+	beforeStart,
+	CUE_COLORS,
+	type Cue,
+	MEMORY_COLOR,
+	PAD_LETTERS,
+	START_COLOR,
+	stamp,
+	startOf,
+} from "#/lib/cues.ts";
 import { popup } from "#/lib/menu-styles.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -128,7 +138,7 @@ function Pad({ slot, cue, actions }: { slot: number; cue: Cue | undefined; actio
 /** The eight hot cue pads, A–H. */
 export function HotCuePads({ cues, actions }: { cues: readonly Cue[]; actions: PadActions }) {
 	return (
-		<section className="space-y-2" aria-label="Hot cues">
+		<Section title="Hot cues" count={cues.filter((c) => c.slot !== null).length}>
 			<div className="grid grid-cols-4 gap-2 lg:grid-cols-8">
 				{PAD_LETTERS.map((_, slot) => (
 					<Pad
@@ -140,86 +150,144 @@ export function HotCuePads({ cues, actions }: { cues: readonly Cue[]; actions: P
 					/>
 				))}
 			</div>
-		</section>
+		</Section>
 	);
 }
 
-/** Memory cues in time order: jump, name, remove; add one at the playhead. */
-export function MemoryCues({
+/** A memory cue's marker: a small diamond in its colour. */
+function Marker({ color, start = false }: { color: string; start?: boolean }) {
+	return start ? (
+		<span
+			aria-hidden
+			className="size-0 border-x-[5px] border-x-transparent border-b-[8px]"
+			style={{ borderBottomColor: color }}
+		/>
+	) : (
+		<span aria-hidden className="size-2 rotate-45 rounded-[1px]" style={{ background: color }} />
+	);
+}
+
+function TimeButton({ time, onJump }: { time: number; onJump: (t: number) => void }) {
+	return (
+		<button
+			type="button"
+			onClick={() => onJump(time)}
+			title="Jump here"
+			className="rounded-sm text-sm tabular-nums outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60"
+		>
+			{stamp(time)}
+		</button>
+	);
+}
+
+/**
+ * Where the song starts (rekordbox's yellow main cue) and the memory cues, in time order.
+ * Players set to auto-cue on memory cues load the song at the earliest one, so the start is
+ * exported as a memory cue and warned about when another comes before it.
+ */
+export function CuePoints({
 	cues,
+	onSetStart,
+	onClearStart,
 	onAdd,
 	onJump,
 	onRename,
 	onDelete,
 }: {
 	cues: readonly Cue[];
+	onSetStart: () => void;
+	onClearStart: () => void;
 	onAdd: () => void;
 	onJump: (time: number) => void;
 	onRename: (cue: Cue, name: string) => void;
 	onDelete: (cue: Cue) => void;
 }) {
-	const list = cues.filter((c) => c.slot === null).sort((a, b) => a.start - b.start);
+	const start = startOf(cues);
+	const list = cues.filter((c) => c.slot === null && !c.main).sort((a, b) => a.start - b.start);
+	const early = beforeStart(cues)[0];
 	return (
-		<section className="space-y-3">
-			<SectionHeading
-				title="Memory cues"
-				count={list.length}
-				action={
+		<Section
+			title="Cue points"
+			count={list.length + (start ? 1 : 0)}
+			action={
+				<Button
+					size="sm"
+					variant="ghost"
+					title="Add a memory cue at the playhead (M)"
+					onClick={onAdd}
+				>
+					<Plus /> Memory cue
+				</Button>
+			}
+		>
+			<SettingRows>
+				<SettingRow
+					label={
+						<span className="flex items-center gap-2.5">
+							<Marker color={START_COLOR} start />
+							<span>Start</span>
+							{start ? (
+								<TimeButton time={start.start} onJump={onJump} />
+							) : (
+								<span className="text-muted-foreground text-xs">First beat</span>
+							)}
+						</span>
+					}
+					title="Where the song loads: rekordbox's main cue. Exported as the first memory cue; set players to auto-cue on memory cues."
+				>
 					<Button
-						size="xs"
-						variant="ghost"
-						title="Add a memory cue at the playhead (M)"
-						onClick={onAdd}
+						size="sm"
+						variant="outline"
+						onClick={onSetStart}
+						title="Start the song at the playhead (C)"
 					>
-						<Plus /> Add at playhead
+						<Crosshair /> Set here
 					</Button>
-				}
-			/>
-			{list.length === 0 ? (
-				<p className="flex items-center gap-2 text-muted-foreground text-xs">
-					<Bookmark className="size-3.5" style={{ color: MEMORY_COLOR }} />
-					None yet. Press M while playing to drop one.
-				</p>
-			) : (
-				<ul className="divide-y rounded-md border">
-					{list.map((c) => (
-						<li
-							key={`${c.start}`}
-							className="group grid grid-cols-[auto_5.5rem_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1"
+					{start && (
+						<Button
+							size="icon-sm"
+							variant="ghost"
+							aria-label="Clear the start"
+							title="Clear"
+							onClick={onClearStart}
 						>
-							<span
-								className="size-2 rotate-45 rounded-[1px]"
-								style={{ background: MEMORY_COLOR }}
-							/>
-							<button
-								type="button"
-								onClick={() => onJump(c.start)}
-								title="Jump here"
-								className="text-left text-xs tabular-nums outline-none hover:text-foreground hover:underline focus-visible:underline"
-							>
-								{stamp(c.start)}
-							</button>
+							<X />
+						</Button>
+					)}
+				</SettingRow>
+				{list.map((c) => (
+					<div key={`${c.start}`} className="group flex min-h-11 items-center gap-2.5 py-1.5">
+						<Marker color={MEMORY_COLOR} />
+						<TimeButton time={c.start} onJump={onJump} />
+						<div className="min-w-0 flex-1">
 							<InlineEdit
 								value={c.name}
 								label="Memory cue name"
 								placeholder="Add a name"
-								className="text-xs"
+								className="text-sm"
 								parse={(v) => v.trim()}
 								onCommit={(name) => onRename(c, name)}
 							/>
-							<Button
-								size="icon-xs"
-								variant="ghost"
-								aria-label={`Remove memory cue at ${stamp(c.start)}`}
-								className="opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-								onClick={() => onDelete(c)}
-							>
-								<X />
-							</Button>
-						</li>
-					))}
-				</ul>
+						</div>
+						<Button
+							size="icon-sm"
+							variant="ghost"
+							aria-label={`Remove memory cue at ${stamp(c.start)}`}
+							title="Remove"
+							className="opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+							onClick={() => onDelete(c)}
+						>
+							<X />
+						</Button>
+					</div>
+				))}
+			</SettingRows>
+			{early && (
+				<p className="flex items-center gap-2 text-warning text-xs">
+					<TriangleAlert className="size-3.5 shrink-0" />
+					The memory cue at {stamp(early.start)} comes first, so players will load the song there.
+				</p>
 			)}
-		</section>
+		</Section>
 	);
 }

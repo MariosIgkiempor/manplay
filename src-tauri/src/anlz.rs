@@ -512,12 +512,14 @@ mod tests {
                 start: 1.5,
                 name: "Drop".into(),
                 color: "#28e214".into(),
+                main: false,
             },
             Cue {
                 slot: None,
                 start: 0.25,
                 name: String::new(),
                 color: String::new(),
+                main: false,
             },
         ];
         let (with_cues_dat, with_cues_ext) = files("/Contents/a.mp3", &d, &cues);
@@ -535,6 +537,7 @@ mod tests {
             start: 1.5,
             name: "Hi".into(),
             color: "#305aff".into(),
+            main: false,
         }];
         let pcob = cue_list(&cues, true);
         assert_eq!(&pcob[..4], b"PCOB");

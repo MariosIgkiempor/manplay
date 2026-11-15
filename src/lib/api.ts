@@ -1162,6 +1162,8 @@ const cueSchema = z.object({
 	start: z.number(),
 	name: z.string(),
 	color: z.string(),
+	/** The memory cue the song starts from (rekordbox's main cue on load). */
+	main: z.boolean().default(false),
 });
 
 /** Cues set in manplay for a song; they go into the rekordbox file and onto USB drives. */
