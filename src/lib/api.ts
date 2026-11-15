@@ -1070,3 +1070,25 @@ export function onUsbExportProgress(handler: (p: UsbExportProgress) => void): Pr
 		}
 	});
 }
+
+// ---- beat grid and waveform ------------------------------------------------------------
+
+const trackAnalysisSchema = z.object({
+	gridBpm: z.number().nullable(),
+	/** Seconds. */
+	firstBeat: z.number(),
+	/** Position in the bar of the first beat (0 = downbeat). */
+	barOffset: int,
+	duration: z.number(),
+	/** Columns per second of `detail`. */
+	rate: z.number(),
+	/** Each column: whiteness (0–7) << 5 | height (0–31), as on a CDJ. */
+	detail: z.array(int),
+});
+
+export type TrackAnalysis = z.infer<typeof trackAnalysisSchema>;
+
+/** The kept beat grid and waveform of a track; null until it has been analysed. */
+export async function trackAnalysis(trackId: number): Promise<TrackAnalysis | null> {
+	return trackAnalysisSchema.nullable().parse(await invoke("track_analysis", { trackId }));
+}

@@ -1118,6 +1118,44 @@ fn is_exporting_to_usb(state: State<'_, AppState>) -> bool {
     state.usb_exporting.load(Ordering::SeqCst)
 }
 
+/// What the library shows for a track's analysis: its beat grid and detail waveform.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackAnalysisView {
+    grid_bpm: Option<f64>,
+    first_beat: f64,
+    bar_offset: u8,
+    duration: f64,
+    /// Columns per second of `detail`.
+    rate: f64,
+    /// Each whiteness << 5 | height, as on a CDJ.
+    detail: Vec<u8>,
+}
+
+/// The kept beat grid and waveform of a track; `None` until it has been analysed.
+#[tauri::command]
+async fn track_analysis(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<Option<TrackAnalysisView>, Error> {
+    let fingerprint = with_db!(state, |c| db::fingerprint_of(c, track_id))?;
+    let Some(fp) = fingerprint else {
+        return Ok(None);
+    };
+    let dir = state.data_dir.clone();
+    let stored = tauri::async_runtime::spawn_blocking(move || anlz::load(&dir, &fp))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?;
+    Ok(stored.map(|s| TrackAnalysisView {
+        grid_bpm: s.grid_bpm,
+        first_beat: s.first_beat,
+        bar_offset: s.bar_offset,
+        duration: s.duration,
+        rate: analysis::WAVEFORM_RATE,
+        detail: s.detail,
+    }))
+}
+
 #[tauri::command]
 fn service_flags(state: State<'_, AppState>) -> Result<Vec<(String, String)>, Error> {
     with_db!(state, |c| db::service_flags(c))
@@ -2315,6 +2353,7 @@ pub fn run() {
             usb_drives,
             usb_library,
             export_to_usb,
+            track_analysis,
             is_exporting_to_usb,
             save_analysis_to_files,
             list_playlists,

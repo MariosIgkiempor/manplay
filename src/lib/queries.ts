@@ -152,7 +152,13 @@ export function useAnalyze() {
 }
 
 async function refreshAfterAnalysis(queryClient: ReturnType<typeof useQueryClient>) {
-	for (const key of ["tracks", "playlist-tracks", "analysis-failures", "tag-values"]) {
+	for (const key of [
+		"tracks",
+		"playlist-tracks",
+		"analysis-failures",
+		"tag-values",
+		"track-analysis",
+	]) {
 		await queryClient.invalidateQueries({ queryKey: [key] });
 	}
 }

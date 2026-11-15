@@ -1518,6 +1518,18 @@ pub fn analysis_jobs(
     Ok(jobs)
 }
 
+/// The audio fingerprint of a track, if it has been read.
+pub fn fingerprint_of(conn: &Connection, track_id: i64) -> Result<Option<String>, Error> {
+    Ok(conn
+        .query_row(
+            "SELECT fingerprint FROM tracks WHERE id = ?1",
+            params![track_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
+}
+
 /// A present track with a detected BPM and/or key.
 pub struct AnalysisResult {
     pub path: String,
