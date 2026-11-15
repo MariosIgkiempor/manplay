@@ -1050,8 +1050,12 @@ const usbExportReportSchema = z.object({
 	analyzed: int,
 	playlists: int,
 	libraryTracks: int,
-	/** Folder on the drive with the previous database and rekordbox's OneLibrary files. */
+	/** Folder on the drive with copies of both previous databases. */
 	backup: z.string().nullable(),
+	/** Whether the OneLibrary (`exportLibrary.db`) was written alongside `export.pdb`. */
+	oneLibrary: z.boolean(),
+	/** Why it was not; the drive's old OneLibrary was then removed. */
+	oneLibraryError: z.string().nullable(),
 	failed: z.array(fileFailureSchema),
 });
 

@@ -86,12 +86,23 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 					<li>{plural(report.analyzed, "song", "songs")} given a beat grid and waveform</li>
 				)}
 				<li>{plural(report.libraryTracks, "track", "tracks")} in the drive's library now</li>
+				<li>
+					{report.oneLibrary
+						? "Written in both formats, for every Pioneer and AlphaTheta player"
+						: "Written for the CDJ-3000 and older players only"}
+				</li>
 				{report.backup && (
 					<li>
 						The previous library is saved in <code className="text-xs">{report.backup}</code>
 					</li>
 				)}
 			</ul>
+			{report.oneLibraryError && (
+				<p className="text-destructive text-xs">
+					The OneLibrary for the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo could not be written, so
+					the old one was removed: {report.oneLibraryError}
+				</p>
+			)}
 			{report.failed.length > 0 && (
 				<div className="space-y-1">
 					<p className="font-medium text-destructive">

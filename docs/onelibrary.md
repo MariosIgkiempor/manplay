@@ -32,7 +32,7 @@ Full `CREATE` statements: copy verbatim from the NOCTURN file (dumped to the scr
 
 | Table | Key columns | Notes from the real export |
 |---|---|---|
-| `content` | `content_id`, `title`, `artist_id_artist`, `album_id`, `genre_id`, `key_id`, `image_id`, `bpmx100`, `length` (seconds, not ms as pyrekordbox says), `path` (`/Contents/...`), `fileName`, `fileSize`, `fileType` (1 = mp3, same codes as export.pdb), `bitrate`, `bitDepth`, `samplingRate`, `dateAdded`/`dateCreated` (`YYYY-MM-DD`), `analysisDataFilePath` (`/PIONEER/USBANLZ/.../ANLZ0000.DAT`) | Empty strings for missing text; NULL for missing remixer/composer/label/genre; 0 for lyricist and colour. `analysedBits` 105 or 41, `contentLink` 853760 or 788224, `isHotCueAutoLoadOn` 1, `isKuvoDeliverStatusOn` 1, `masterDbId`/`masterContentId` = rekordbox collection ids |
+| `content` | `content_id`, `title`, `artist_id_artist`, `album_id`, `genre_id`, `key_id`, `image_id`, `bpmx100`, `length` (seconds, not ms as pyrekordbox says), `path` (`/Contents/...`), `fileName`, `fileSize`, `fileType` (1 = mp3, same codes as export.pdb), `bitrate`, `bitDepth`, `samplingRate`, `dateCreated` (`YYYY-MM-DD`, = export.pdb's date added, 41/41), `dateAdded` (when it went onto the drive), `analysisDataFilePath` (`/PIONEER/USBANLZ/.../ANLZ0000.DAT`) | Empty strings for missing text; NULL for missing remixer/composer/label/genre; 0 for lyricist and colour. `analysedBits` 105 or 41, `contentLink` 853760 or 788224, `isHotCueAutoLoadOn` 1, `isKuvoDeliverStatusOn` 1, `masterDbId`/`masterContentId` = rekordbox collection ids |
 | `artist`, `album`, `genre`, `label`, `key` | `*_id`, `name` | `key.name` is Camelot (`11A`); `album.artist_id`, `album.image_id` |
 | `image` | `image_id`, `path` | `/PIONEER/Artwork/00001/b1.jpg`, same ids as export.pdb artwork |
 | `playlist` | `playlist_id`, `sequenceNo`, `name`, `attribute` (0 list, folder value unknown, likely 1), `playlist_id_parent` (0 = root) | |
@@ -86,3 +86,17 @@ from one list.
 
 Fixture: the real db is 131 KB + 247 KB WAL. Commit a checkpointed copy (one file, ~130 KB, contains
 track names and paths from the user's library) or a trimmed one. Decide before step 2.
+
+## 7. What manplay does (since the writer landed)
+
+- `onelib::build` updates a copy of the drive's `exportLibrary.db` (rekordbox's cues, history,
+  My Tags and menu settings stay), or starts from `src-tauri/src/onelib/template.sql` (schema
+  and fixed rows from the real export) when the drive has none or an empty one. It is built in a
+  temp folder, in WAL mode like rekordbox's, and closed so it is one file.
+- `usb_export::export` reads both databases, merges what only OneLibrary has
+  (`onelib::merge`), writes `export.pdb`, removes the old `-wal`/`-shm`, then writes
+  `exportLibrary.db`. Both previous files are copied to `PIONEER/manplay-backup/<time>/` first.
+  If building fails, the old OneLibrary is removed so no player reads a stale one.
+- Dry run on a copy of NOCTURN's rekordbox files plus one real song: both files read back
+  identical (42 tracks, 6 playlists).
+- Still not tested on a OneLibrary player.

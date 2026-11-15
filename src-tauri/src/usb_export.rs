@@ -1,4 +1,6 @@
-//! Copies playlists onto a CDJ USB drive and rewrites its rekordbox Device Library.
+//! Copies playlists onto a CDJ USB drive and rewrites both its rekordbox libraries: the Device
+//! Library (`export.pdb`, CDJ-3000 and older) and `OneLibrary` (`exportLibrary.db`, CDJ-3000X,
+//! OPUS-QUAD, XDJ-AZ, OMNIS-DUO), from one list so they hold the same tracks, ids and playlists.
 //!
 //! The drive's existing library is kept: its tracks keep their ids (so rekordbox's beat grids and
 //! `exportExt.pdb` tags still line up) and its playlists stay, except ones with the same name as
@@ -9,6 +11,7 @@
 
 use crate::analysis::{self, Detail};
 use crate::anlz;
+use crate::onelib;
 use crate::pdb::{self, Library};
 use crate::usb::PDB_PATH;
 use serde::Serialize;
@@ -81,8 +84,12 @@ pub struct Report {
     pub playlists: usize,
     /// Tracks in the drive's library afterwards.
     pub library_tracks: usize,
-    /// Folder on the drive holding the previous database and the `OneLibrary` files moved aside.
+    /// Folder on the drive holding copies of both previous databases.
     pub backup: Option<String>,
+    /// Whether `exportLibrary.db` was written alongside `export.pdb`.
+    pub one_library: bool,
+    /// Why it was not; the drive's old copy is then removed so players never read a stale one.
+    pub one_library_error: Option<String>,
     pub failed: Vec<Failure>,
 }
 
@@ -91,8 +98,9 @@ const UNKNOWN_ARTIST: &str = "UnknownArtist";
 const UNKNOWN_ALBUM: &str = "UnknownAlbum";
 /// Longest file or folder name written; rekordbox stays well inside FAT32's 255.
 const MAX_NAME: usize = 120;
-/// rekordbox's newer database and its SQLite side files, which would show players that read it
-/// a library without manplay's playlists.
+const ONE_LIBRARY_PATH: &str = "PIONEER/rekordbox/exportLibrary.db";
+/// rekordbox's newer database and its SQLite side files. The side files go before a new database
+/// goes in: SQLite would replay an old `-wal` into it.
 const ONE_LIBRARY: [&str; 3] = [
     "exportLibrary.db",
     "exportLibrary.db-wal",
@@ -311,7 +319,7 @@ fn new_track(s: &Source, id: u32, dest: &str, today: &str) -> pdb::Track {
     }
 }
 
-/// Moves rekordbox's `OneLibrary` files aside and keeps a copy of the current database.
+/// Keeps a copy of both current databases.
 fn back_up(mount: &Path, stamp: &str) -> io::Result<Option<String>> {
     let rekordbox = mount.join("PIONEER/rekordbox");
     let pdb = rekordbox.join("export.pdb");
@@ -331,7 +339,7 @@ fn back_up(mount: &Path, stamp: &str) -> io::Result<Option<String>> {
     }
     for p in one {
         if let Some(name) = p.file_name() {
-            fs::rename(&p, dir.join(name))?;
+            copy_file(&p, &dir.join(name))?;
         }
     }
     Ok(Some(format!("/{rel}")))
@@ -473,6 +481,18 @@ pub struct Options<'a> {
     pub camelot: bool,
 }
 
+/// Removes the drive's `OneLibrary` and its side files.
+fn remove_one_library(mount: &Path) -> io::Result<()> {
+    let rekordbox = mount.join("PIONEER/rekordbox");
+    for name in ONE_LIBRARY {
+        match fs::remove_file(rekordbox.join(name)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Puts `playlists` (with their songs from `sources`) on the drive at `mount`.
 #[allow(clippy::too_many_lines)] // one pass: read, plan, copy, playlists, back up, write
 pub fn export(
@@ -495,6 +515,13 @@ pub fn export(
         Err(e) if e.kind() == io::ErrorKind::NotFound => (Library::default(), 1),
         Err(e) => return Err(format!("{}: {e}", pdb_path.display())),
     };
+    // Tracks and playlists rekordbox put only in the newer library (it does not always write
+    // the same playlists to both). An unreadable one is replaced, its copy kept in the backup.
+    let one_path = mount.join(ONE_LIBRARY_PATH);
+    let one_exists = one_path.is_file();
+    if one_exists && let Ok(one) = onelib::read(&one_path) {
+        onelib::merge(&mut lib, one);
+    }
 
     let by_id: HashMap<i64, &Source> = sources.iter().map(|s| (s.id, s)).collect();
     let mut wanted = Vec::new();
@@ -632,10 +659,26 @@ pub fn export(
         report.playlists += 1;
     }
 
+    // Built before anything on the drive changes; written after export.pdb.
+    let one_bytes = onelib::build(one_exists.then_some(one_path.as_path()), &lib, opts.today);
     report.backup =
         back_up(mount, opts.stamp).map_err(|e| format!("backing up the old library: {e}"))?;
     let bytes = pdb::write(&lib, sequence + 1);
     write_atomic(&pdb_path, &bytes).map_err(|e| format!("writing {}: {e}", pdb_path.display()))?;
+    let written = one_bytes.and_then(|b| {
+        remove_one_library(mount).map_err(|e| e.to_string())?;
+        write_atomic(&one_path, &b).map_err(|e| e.to_string())
+    });
+    match written {
+        Ok(()) => report.one_library = true,
+        Err(e) => {
+            let removed = remove_one_library(mount);
+            report.one_library_error = Some(match removed {
+                Ok(()) => e,
+                Err(r) => format!("{e}; the old OneLibrary could not be removed either: {r}"),
+            });
+        }
+    }
     report.library_tracks = lib.tracks.len();
     Ok(report)
 }
@@ -725,6 +768,7 @@ mod tests {
             (3, 0, 2)
         );
         assert_eq!(report.backup, None);
+        assert!(report.one_library, "{:?}", report.one_library_error);
         assert!(
             usb.join("Contents/Burial/Untrue/01 Archangel.mp3")
                 .is_file()
@@ -777,10 +821,12 @@ mod tests {
             .find(|p| p.name == "Warm up")
             .expect("playlist");
         assert_eq!(warm.track_ids.len(), 1);
+        let one = onelib::read(&usb.join(ONE_LIBRARY_PATH)).expect("OneLibrary");
+        assert_eq!(one, lib, "both databases agree");
     }
 
     #[test]
-    fn keeps_rekordbox_tracks_and_moves_one_library_aside() {
+    fn keeps_rekordbox_tracks_and_replaces_an_unreadable_one_library() {
         let lib_dir = dir("lib2");
         let usb = dir("usb2");
         // A drive rekordbox wrote, with a shortened file name for our song.
@@ -806,6 +852,7 @@ mod tests {
         fs::create_dir_all(&rb).expect("dir");
         fs::write(rb.join("export.pdb"), pdb::write(&existing, 40)).expect("pdb");
         fs::write(rb.join("exportLibrary.db"), b"one library").expect("db");
+        fs::write(rb.join("exportLibrary.db-wal"), b"stale").expect("wal");
 
         let sources = vec![source(
             &lib_dir,
@@ -822,9 +869,13 @@ mod tests {
         let report = export(&usb, &sources, &playlists, &opts(1 << 40), |_| {}).expect("exports");
         assert_eq!((report.copied, report.already_there), (0, 1));
         let backup = usb.join(report.backup.expect("backup").trim_start_matches('/'));
-        assert!(backup.join("exportLibrary.db").is_file());
+        assert_eq!(
+            fs::read(backup.join("exportLibrary.db")).expect("kept"),
+            b"one library"
+        );
         assert!(backup.join("export.pdb").is_file());
-        assert!(!rb.join("exportLibrary.db").exists());
+        assert!(report.one_library);
+        assert!(!rb.join("exportLibrary.db-wal").exists());
 
         let bytes = fs::read(rb.join("export.pdb")).expect("pdb");
         assert_eq!(pdb::sequence(&bytes), Some(41));
@@ -840,6 +891,60 @@ mod tests {
             .expect("playlist");
         assert_eq!(mine.track_ids, [7]);
         assert!(lib.playlists.iter().any(|p| p.name == "Theirs"));
+        let one = onelib::read(&rb.join("exportLibrary.db")).expect("OneLibrary");
+        assert_eq!(one, lib, "both databases agree");
+    }
+
+    #[test]
+    fn keeps_what_only_rekordbox_one_library_has() {
+        let lib_dir = dir("lib6");
+        let usb = dir("usb6");
+        let rb = usb.join("PIONEER/rekordbox");
+        fs::create_dir_all(&rb).expect("dir");
+        // rekordbox's real export: 41 tracks, 5 playlists in OneLibrary; export.pdb with one.
+        let one_path = rb.join("exportLibrary.db");
+        fs::write(&one_path, include_bytes!("onelib/testdata/rekordbox7.db")).expect("db");
+        let theirs = onelib::read(&one_path).expect("reads");
+        let pdb_lib = Library {
+            tracks: theirs.tracks.clone(),
+            playlists: vec![pdb::Playlist {
+                id: 1,
+                name: "Analyse".into(),
+                track_ids: (34..=41).collect(),
+                ..pdb::Playlist::default()
+            }],
+            artwork: theirs.artwork.clone(),
+        };
+        fs::write(rb.join("export.pdb"), pdb::write(&pdb_lib, 5)).expect("pdb");
+
+        let sources = vec![source(&lib_dir, 1, "Sully", "Swandiving", "new.mp3", 5555)];
+        let playlists = vec![SourcePlaylist {
+            name: "UKG".into(),
+            track_ids: vec![1],
+        }];
+        let report = export(&usb, &sources, &playlists, &opts(1 << 40), |_| {}).expect("exports");
+        assert!(report.one_library, "{:?}", report.one_library_error);
+        assert_eq!(report.library_tracks, 42);
+
+        let lib = crate::usb::library(&usb).expect("pdb");
+        let one = onelib::read(&one_path).expect("OneLibrary");
+        assert_eq!(one, lib, "both databases agree");
+        let names: Vec<_> = lib.playlists.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Analyse", "UKG", "Jungle / DnB", "Grime", "Dubstep"]
+        );
+        let ukg = &lib.playlists[1];
+        assert_eq!(
+            ukg.track_ids,
+            [42],
+            "replaced by manplay's playlist of the same name"
+        );
+        assert_eq!(
+            &lib.tracks[..41],
+            &theirs.tracks[..],
+            "rekordbox's tracks are untouched"
+        );
     }
 
     #[test]
@@ -928,6 +1033,10 @@ mod tests {
         println!("{report:?}");
         let after = crate::usb::library(&usb).expect("reads");
         assert_eq!(&after.tracks[..before.tracks.len()], &before.tracks[..]);
-        assert_eq!(after.playlists.len(), before.playlists.len() + 1);
+        assert!(after.playlists.iter().any(|p| p.name == "manplay dry run"));
+        if report.one_library {
+            let one = onelib::read(&usb.join(ONE_LIBRARY_PATH)).expect("OneLibrary");
+            assert_eq!(one, after, "both databases agree");
+        }
     }
 }
