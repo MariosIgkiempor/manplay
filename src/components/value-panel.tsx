@@ -3,34 +3,32 @@ import { Hash, Tag, TextCursorInput } from "lucide-react";
 import { useMemo } from "react";
 import { EmptyState } from "#/components/page.tsx";
 import { Cover } from "#/components/page-header.tsx";
-import { PanelHeader } from "#/components/panel-header.tsx";
+import { PANEL_ART, PanelHeader } from "#/components/panel-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { useDetail } from "#/context/detail-context.ts";
+import { useDetail, useDetailNav } from "#/context/detail-context.ts";
 import { listTags } from "#/lib/api.ts";
-import { duration } from "#/lib/format.ts";
+import { songFacts } from "#/lib/panel-facts.tsx";
 import { useTracks } from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
 import { trackHasValue, valueField } from "#/lib/track-fields.ts";
-
-const songs = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
 
 /** Every song holding one value of a tag field, opened from the Metadata screen. */
 export function ValuePanel({ field, value }: { field: string; value: string }) {
 	const tracks = useTracks();
 	const { push } = useDetail();
+	const go = useDetailNav();
 	// Library tags live in the database, so a fresh tag list keeps counts honest after edits.
 	useQuery({ queryKey: ["tags"], queryFn: listTags, enabled: field === "library" });
 	const matching = useMemo(
 		() => (tracks.data ?? []).filter((t) => trackHasValue(t, field, value)),
 		[tracks.data, field, value],
 	);
-	const seconds = matching.reduce((n, t) => n + (t.durationMs ?? 0), 0) / 1000;
 	const isTag = field === "library";
 	const Icon = isTag ? Tag : Hash;
 
 	return (
-		<div className="space-y-6">
+		<div className="space-y-8 pb-8">
 			<PanelHeader
 				kind={
 					<>
@@ -38,13 +36,10 @@ export function ValuePanel({ field, value }: { field: string; value: string }) {
 					</>
 				}
 				title={value}
-				meta={
-					<>
-						<span>{songs(matching.length)}</span>
-						{seconds >= 1 && <span>{duration(seconds)}</span>}
-					</>
+				facts={songFacts(matching)}
+				art={
+					<Cover tracks={matching} fallback={<Icon className="size-8" />} className={PANEL_ART} />
 				}
-				art={<Cover tracks={matching} fallback={<Icon className="size-8" />} className="size-28" />}
 				tracks={matching}
 				actions={
 					!isTag &&
@@ -53,6 +48,11 @@ export function ValuePanel({ field, value }: { field: string; value: string }) {
 							size="sm"
 							variant="outline"
 							onClick={() => {
+								const only = matching.length === 1 ? matching[0] : undefined;
+								if (only) {
+									go({ kind: "song", trackId: only.id, tab: "metadata" });
+									return;
+								}
 								const target = tagTargetFor(matching);
 								if (target) {
 									push({ kind: "edit", target });
@@ -66,7 +66,6 @@ export function ValuePanel({ field, value }: { field: string; value: string }) {
 			/>
 			<SelectableTrackList
 				tracks={matching}
-				showDuration
 				empty={<EmptyState title={tracks.isPending ? "Loading songs…" : "No songs use this yet"} />}
 			/>
 		</div>

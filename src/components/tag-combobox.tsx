@@ -22,6 +22,7 @@ export function TagCombobox({
 	placeholder,
 	touched,
 	onChange,
+	className,
 }: {
 	id: string;
 	value: string;
@@ -30,6 +31,7 @@ export function TagCombobox({
 	placeholder: string;
 	touched: boolean;
 	onChange: (value: string) => void;
+	className?: string;
 }) {
 	const listId = useId();
 	const [text, setText] = useState("");
@@ -190,6 +192,7 @@ export function TagCombobox({
 			<div
 				className={cn(
 					"flex min-h-8 flex-wrap items-center gap-1 rounded-lg border border-input bg-transparent px-1.5 py-1 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
+					className,
 					touched && "border-primary/60 bg-primary/5 dark:bg-primary/10",
 				)}
 			>

@@ -1,23 +1,15 @@
-import { ArrowLeft, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { AddDestinationPanel } from "#/components/add-destination-panel.tsx";
-import { AlbumPanel } from "#/components/album-panel.tsx";
-import { ArtistPanel } from "#/components/artist-panel.tsx";
 import { DownloadsPanel } from "#/components/downloads-source.tsx";
 import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
-import { GridEditorPanel } from "#/components/grid-editor.tsx";
 import { ItunesPanel } from "#/components/itunes-source.tsx";
+import { PanelBar } from "#/components/panel-header.tsx";
 import { RekordboxPanel } from "#/components/rekordbox-source.tsx";
 import { TargetPanel } from "#/components/target-detail.tsx";
-import { Button } from "#/components/ui/button.tsx";
 import { UsbDrivePanel } from "#/components/usb-drives.tsx";
 import { ValuePanel } from "#/components/value-panel.tsx";
-import {
-	type DetailView,
-	PanelScopeContext,
-	StatusSlotContext,
-	useDetail,
-} from "#/context/detail-context.ts";
+import { type DrawerView, PanelScopeContext, useDetail } from "#/context/detail-context.ts";
+import { StatusScopeContext, useStatusScopeHandlers } from "#/context/status-context.ts";
 import type { ServiceId } from "#/lib/api.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -28,12 +20,8 @@ const SERVICE_PANELS: Partial<Record<ServiceId, () => ReactNode>> = {
 	rekordbox: RekordboxPanel,
 };
 
-function Content({ view }: { view: DetailView }) {
+function Content({ view }: { view: DrawerView }) {
 	switch (view.kind) {
-		case "album":
-			return <AlbumPanel albumKey={view.key} />;
-		case "artist":
-			return <ArtistPanel name={view.name} />;
 		case "service": {
 			const Panel = SERVICE_PANELS[view.service];
 			return Panel ? <Panel /> : null;
@@ -42,14 +30,12 @@ function Content({ view }: { view: DetailView }) {
 			return <TargetPanel id={view.id} />;
 		case "usb":
 			return <UsbDrivePanel mount={view.mount} />;
-		case "grid":
-			return <GridEditorPanel trackId={view.trackId} list={view.list} />;
 		case "add-destination":
 			return <AddDestinationPanel service={view.service} />;
 		case "value":
 			return <ValuePanel field={view.field} value={view.value} />;
 		case "edit":
-			return <EditTagsPanel target={view.target} fromAlbum={view.fromAlbum ?? false} />;
+			return <EditTagsPanel target={view.target} />;
 		default:
 			return null;
 	}
@@ -59,12 +45,12 @@ function isTyping(target: EventTarget | null): boolean {
 	return target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
 }
 
-/** Right-hand slide-over for album / artist details, over a blurred backdrop; clicking the backdrop or pressing Escape closes it. */
+/** Right-hand slide-over for sources, destinations, drives and tag values, over a blurred backdrop; clicking the backdrop or pressing Escape closes it. */
 export function DetailPanel(): ReactNode {
 	const detail = useDetail();
+	const scopeHandlers = useStatusScopeHandlers("drawer");
 	// Keep the last view mounted while the panel slides out.
-	const [last, setLast] = useState<DetailView | null>(null);
-	const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
+	const [last, setLast] = useState<DrawerView | null>(null);
 	const { view, close } = detail;
 
 	useEffect(() => {
@@ -103,36 +89,29 @@ export function DetailPanel(): ReactNode {
 			/>
 			<aside
 				aria-label="Details"
+				{...scopeHandlers}
+				{...scopeHandlers}
 				inert={!open}
 				className={cn(
 					"absolute inset-y-0 right-0 z-20 flex max-w-full flex-col border-l bg-background shadow-2xl transition-[translate,width] duration-200",
-					// A drive's library browser and the grid editor need room for its playlists beside their songs.
-					shown?.kind === "usb" || shown?.kind === "grid" ? "w-[60rem]" : "w-[36rem]",
+					// A drive's library browser needs room for its playlists beside their songs.
+					shown?.kind === "usb" ? "w-[60rem]" : "w-[36rem]",
 					open ? "translate-x-0" : "translate-x-full",
 				)}
 			>
-				<div className="flex items-center justify-between border-b px-3 py-2">
-					<Button
-						variant="ghost"
-						size="sm"
-						onClick={detail.back}
-						disabled={!detail.canGoBack}
-						className={detail.canGoBack ? "" : "invisible"}
-					>
-						<ArrowLeft /> Back
-					</Button>
-					<Button variant="ghost" size="icon" aria-label="Close panel" onClick={detail.close}>
-						<X />
-					</Button>
-				</div>
+				<PanelBar
+					canGoBack={detail.canGoBack}
+					onBack={detail.back}
+					onClose={detail.close}
+					closeLabel="Close panel"
+				/>
 				<div className="min-h-0 flex-1 overflow-y-auto px-5 pt-5">
 					<PanelScopeContext.Provider value>
-						<StatusSlotContext.Provider value={statusSlot}>
+						<StatusScopeContext.Provider value="drawer">
 							<detail.UnsavedScope>{shown && <Content view={shown} />}</detail.UnsavedScope>
-						</StatusSlotContext.Provider>
+						</StatusScopeContext.Provider>
 					</PanelScopeContext.Provider>
 				</div>
-				<div ref={setStatusSlot} className="absolute inset-x-0 bottom-0" />
 			</aside>
 		</>
 	);

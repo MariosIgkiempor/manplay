@@ -106,9 +106,9 @@ export const GRID_SHORTCUTS: readonly { group: string; items: readonly [string, 
 	{
 		group: "Beat grid",
 		items: [
-			["D", "Downbeat at the playhead"],
+			["D", "Make the playhead beat 1"],
 			["← →", "Move the grid 10 ms (⌥ 1 ms)"],
-			["⇧← ⇧→", "Downbeat a beat earlier / later"],
+			["⇧← ⇧→", "Beat 1 a beat earlier / later"],
 			["↑ ↓", "Tempo ±0.1 BPM (⌥ 0.01)"],
 			["T", "Tap the tempo"],
 		],

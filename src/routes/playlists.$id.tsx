@@ -96,6 +96,7 @@ function PlaylistPage() {
 				) : (
 					<SelectableTrackList
 						tracks={list}
+						listOrder="Playlist order"
 						menuExtra={(ts) => [
 							{
 								label:

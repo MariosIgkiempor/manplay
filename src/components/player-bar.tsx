@@ -17,12 +17,10 @@ import { WaveformDetail, WaveformSeek } from "#/components/waveform.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import { TrackOrderContext } from "#/context/track-order.ts";
-import { albumKey } from "#/lib/albums.ts";
 import type { Track, TrackAnalysis } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
 import { useTracks } from "#/lib/queries.ts";
-import { tagTargetFor } from "#/lib/tag-target.ts";
 import { useTrackAnalysis } from "#/lib/use-track-analysis.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -76,13 +74,12 @@ function useWaveformShown(): [boolean, (on: boolean) => void] {
 }
 
 /**
- * Cover, title and artist of the playing song. The title opens its album and the artist the
+ * Cover, title and artist of the playing song. The title opens the song and the artist the
  * artist; a right-click offers the same menu as a song in any list, stepping through the queue.
  */
 function NowPlaying({ track, error }: { track: Track; error: string | null }) {
 	const detail = useDetail();
 	const p = usePlayer();
-	const album = track.album === "" ? null : albumKey(track.artist, track.album);
 	return (
 		<TrackOrderContext.Provider value={p.queue.map((t) => t.id)}>
 			<AddToPlaylistMenu tracks={[track]} label={track.title}>
@@ -91,12 +88,16 @@ function NowPlaying({ track, error }: { track: Track; error: string | null }) {
 					<div className="min-w-0">
 						<button
 							type="button"
-							disabled={album === null}
-							title={album === null ? track.title : `${track.title} · go to ${track.album}`}
-							onClick={() => album && detail.open({ kind: "album", key: album })}
+							title={`${track.title} · open song`}
+							onClick={() =>
+								detail.open({
+									kind: "song",
+									trackId: track.id,
+									list: p.queue.map((t) => t.id),
+								})
+							}
 							className={cn(
-								"block max-w-full truncate text-left font-medium text-sm",
-								album !== null && "hover:underline",
+								"block max-w-full truncate text-left font-medium text-sm hover:underline",
 							)}
 						>
 							{track.title}
@@ -115,7 +116,6 @@ function NowPlaying({ track, error }: { track: Track; error: string | null }) {
 function SongActions({ track }: { track: Track }) {
 	const detail = useDetail();
 	const p = usePlayer();
-	const target = tagTargetFor([track]);
 	return (
 		<>
 			<Button
@@ -124,22 +124,32 @@ function SongActions({ track }: { track: Track }) {
 				aria-label="Edit grid and cues"
 				title="Edit grid and cues"
 				onClick={() =>
-					detail.open({ kind: "grid", trackId: track.id, list: p.queue.map((t) => t.id) })
+					detail.open({
+						kind: "song",
+						trackId: track.id,
+						tab: "grid",
+						list: p.queue.map((t) => t.id),
+					})
 				}
 			>
 				<Grid3x3 />
 			</Button>
-			{target && (
-				<Button
-					variant="ghost"
-					size="icon-sm"
-					aria-label="Edit metadata"
-					title="Edit metadata"
-					onClick={() => detail.open({ kind: "edit", target })}
-				>
-					<TextCursorInput />
-				</Button>
-			)}
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				aria-label="Edit metadata"
+				title="Edit metadata"
+				onClick={() =>
+					detail.open({
+						kind: "song",
+						trackId: track.id,
+						tab: "metadata",
+						list: p.queue.map((t) => t.id),
+					})
+				}
+			>
+				<TextCursorInput />
+			</Button>
 		</>
 	);
 }

@@ -2,12 +2,18 @@ import { useIsMutating, useQueries } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { LibraryHeader } from "#/components/library-header.tsx";
-import { AnalyzeButton, LibraryList, ScanButtons } from "#/components/library-parts.tsx";
+import {
+	AnalyzeButton,
+	LibraryList,
+	LibrarySortMenu,
+	ScanButtons,
+} from "#/components/library-parts.tsx";
 import { SearchPalette } from "#/components/search-palette.tsx";
 import { ViewToggle } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
 import { playlistTracks } from "#/lib/api.ts";
+import { useLibrarySorts } from "#/lib/library-sorts.ts";
 import {
 	SCAN_KEY,
 	useLibraryRoot,
@@ -17,6 +23,7 @@ import {
 	useTracks,
 } from "#/lib/queries.ts";
 import { filterTracks, type Pill, type PlaylistMembers } from "#/lib/search.ts";
+import { sortAlbums } from "#/lib/sorting.ts";
 
 export const Route = createFileRoute("/")({ component: Library });
 
@@ -60,7 +67,11 @@ function Library() {
 		() => filterTracks(tracks.data ?? [], pills, search, members),
 		[tracks.data, pills, search, members],
 	);
-	const albums = useMemo(() => groupAlbums(visible), [visible]);
+	const sorts = useLibrarySorts();
+	const albums = useMemo(
+		() => sortAlbums(groupAlbums(visible), sorts.albums),
+		[visible, sorts.albums],
+	);
 
 	return (
 		<main>
@@ -69,6 +80,7 @@ function Library() {
 				subtitle={root.data ?? undefined}
 				controls={
 					<>
+						<LibrarySortMenu view={view} sorts={sorts} />
 						<ViewToggle view={view} onChange={setView} />
 						{root.data && <AnalyzeButton tracks={tracks.data ?? []} />}
 						<ScanButtons
@@ -89,6 +101,7 @@ function Library() {
 					albums={albums}
 					tracks={visible}
 					targetCount={targetCount}
+					sorts={sorts}
 					onOpen={(key) => detail.open({ kind: "album", key })}
 					onOpenArtist={(name) => detail.open({ kind: "artist", name })}
 				/>

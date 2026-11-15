@@ -9,6 +9,7 @@ import {
 	auditFix,
 	auditLibrary,
 	auditPlace,
+	DEFAULT_PANEL_TABS,
 	fsCopy,
 	fsMakeDir,
 	fsMove,
@@ -16,7 +17,9 @@ import {
 	fsTrash,
 	getLibraryRoot,
 	getLibraryView,
+	getPanelTabs,
 	getTagClipboard,
+	getUiSetting,
 	itunesImport,
 	itunesPending,
 	libraryStatus,
@@ -24,6 +27,7 @@ import {
 	listSyncTargets,
 	listTracks,
 	migrateLibraryTags,
+	type PanelTabs,
 	pickAndScan,
 	removeMissingNow,
 	rescanLibrary,
@@ -33,8 +37,10 @@ import {
 	serviceFlags,
 	setAnalysisSettings,
 	setLibraryView,
+	setPanelTabs,
 	setServiceEnabled,
 	setTagClipboard,
+	setUiSetting,
 	syncApply,
 	syncHistory,
 	syncPlan,
@@ -347,6 +353,42 @@ export function useLibraryView() {
 		onError: () => queryClient.invalidateQueries({ queryKey: ["library-view"] }),
 	});
 	return { view: query.data ?? null, setView: set.mutate };
+}
+
+/**
+ * A display preference kept in the database (e.g. how a list is sorted). `parse` turns what was
+ * stored into a value, or null to use `fallback`.
+ */
+export function useUiSetting<T>(name: string, fallback: T, parse: (raw: unknown) => T | null) {
+	const queryClient = useQueryClient();
+	const key = ["ui-setting", name];
+	const query = useQuery({ queryKey: key, queryFn: () => getUiSetting(name) });
+	const set = useMutation({
+		mutationFn: (next: T) => setUiSetting(name, next),
+		onMutate: (next) => queryClient.setQueryData(key, next),
+		onError: () => queryClient.invalidateQueries({ queryKey: key }),
+	});
+	const value = query.data === undefined ? fallback : (parse(query.data) ?? fallback);
+	return [value, set.mutate] as const;
+}
+
+/** Tabs last picked in the song and album views, stored in the database. */
+export function usePanelTabs() {
+	const queryClient = useQueryClient();
+	const query = useQuery({ queryKey: ["panel-tabs"], queryFn: getPanelTabs });
+	const tabs = query.data ?? DEFAULT_PANEL_TABS;
+	const set = useMutation({
+		mutationFn: setPanelTabs,
+		onMutate: (next) => queryClient.setQueryData(["panel-tabs"], next),
+		onError: () => queryClient.invalidateQueries({ queryKey: ["panel-tabs"] }),
+	});
+	const setTab = <K extends keyof PanelTabs>(which: K, value: PanelTabs[K]) => {
+		const now = queryClient.getQueryData<PanelTabs>(["panel-tabs"]) ?? tabs;
+		if (now[which] !== value) {
+			set.mutate({ ...now, [which]: value });
+		}
+	};
+	return { tabs, setTab };
 }
 
 /** Tags copied in the Files view, stored in the database. */

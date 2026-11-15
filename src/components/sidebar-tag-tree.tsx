@@ -5,10 +5,11 @@ import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
+import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
 import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
 import { rowBase, rowClass } from "#/components/sidebar-row.ts";
 import { usePlayer } from "#/context/player-context.ts";
-import { listTags, migrateLibraryTags } from "#/lib/api.ts";
+import { listTags, migrateLibraryTags, tagTracks } from "#/lib/api.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { buildTagTree, TAG_SEP, type TagNode, tagWithin, trackHasTag } from "#/lib/tag-tree.ts";
 import { cn } from "#/lib/utils.ts";
@@ -68,6 +69,32 @@ function saveOpen(open: ReadonlySet<string>) {
 }
 
 /** Library tags as a collapsible tree; clicking one opens its page. */
+/** Opens or closes a tag's subtags; an empty slot for tags without any, so rows line up. */
+function ExpandButton({
+	node,
+	open,
+	onToggle,
+}: {
+	node: TagNode;
+	open: boolean;
+	onToggle: () => void;
+}) {
+	if (node.children.length === 0) {
+		return <span className="size-5 shrink-0" />;
+	}
+	return (
+		<button
+			type="button"
+			aria-label={open ? `Collapse ${node.label}` : `Expand ${node.label}`}
+			aria-expanded={open}
+			className="grid size-5 shrink-0 place-items-center rounded hover:bg-background/60"
+			onClick={onToggle}
+		>
+			<ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+		</button>
+	);
+}
+
 export function SidebarTagTree() {
 	const tags = useQuery({ queryKey: ["tags"], queryFn: listTags });
 	const tree = useMemo(() => buildTagTree(tags.data ?? []), [tags.data]);
@@ -78,6 +105,34 @@ export function SidebarTagTree() {
 	const move = useTagMove();
 	const [renaming, setRenaming] = useState<string | null>(null);
 	const [ask, setAsk] = useState<Ask | null>(null);
+	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+	/** Creates an empty tag (inside `parent` when given), opens it, and shows it in the tree. */
+	const createTag = async (leaf: string, parent?: TagNode) => {
+		const name = parent ? `${parent.name}${TAG_SEP}${leaf}` : leaf;
+		await tagTracks(name, []);
+		await queryClient.invalidateQueries({ queryKey: ["tags"] });
+		await navigate({ to: "/tags/$", params: { _splat: name } });
+	};
+	/** Where a new tag is being named: "" at the top level, else its parent's key. */
+	const [adding, setAdding] = useState<string | null>(null);
+	const startTag = (parent: TagNode) => {
+		const key = parent.name.toLowerCase();
+		if (!open.has(key)) {
+			toggle(key);
+		}
+		setAdding(key);
+	};
+	const newTagRow = (parent: TagNode | undefined, depth: number) => (
+		<NewRow
+			icon={<Tag />}
+			indent={8 + depth * 14}
+			placeholder={parent ? `New tag in ${parent.label}` : "Tag name"}
+			parse={nonBlank}
+			onCancel={() => setAdding(null)}
+			onCreate={(leaf) => createTag(leaf, parent)}
+		/>
+	);
 	const songsWith = (name: string) => (tracks.data ?? []).filter((t) => trackHasTag(t, name));
 	const rename = (n: TagNode, leaf: string) => {
 		setRenaming(null);
@@ -130,7 +185,7 @@ export function SidebarTagTree() {
 							},
 						]}
 					>
-						<div className={rowClass(active)}>
+						<div className={cn("group/row", rowClass(active))}>
 							{renaming === key ? (
 								<div
 									className="flex min-w-0 flex-1 items-center gap-2 py-0.5"
@@ -158,34 +213,26 @@ export function SidebarTagTree() {
 									<RowCount n={n.trackCount} />
 								</Link>
 							)}
-							{n.children.length > 0 ? (
-								<button
-									type="button"
-									aria-label={isOpen ? `Collapse ${n.label}` : `Expand ${n.label}`}
-									aria-expanded={isOpen}
-									className="grid size-5 shrink-0 place-items-center rounded hover:bg-background/60"
-									onClick={() => toggle(key)}
-								>
-									<ChevronRight
-										className={cn("size-3.5 transition-transform", isOpen && "rotate-90")}
-									/>
-								</button>
-							) : (
-								<span className="size-5 shrink-0" />
-							)}
+							<AddButton
+								label={`New tag in ${n.label}`}
+								onClick={() => startTag(n)}
+								className="opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100"
+							/>
+							<ExpandButton node={n} open={isOpen} onToggle={() => toggle(key)} />
 						</div>
 					</RowMenu>
+					{adding === key && newTagRow(n, depth + 1)}
 					{isOpen && rows(n.children, depth + 1)}
 				</div>
 			);
 		});
 
-	if (tree.length === 0) {
-		return null;
-	}
 	return (
 		<section className="mt-4 space-y-0.5">
-			<SectionLabel>Tags</SectionLabel>
+			<SectionLabel action={<AddButton label="New tag" onClick={() => setAdding("")} />}>
+				Tags
+			</SectionLabel>
+			{adding === "" && newTagRow(undefined, 0)}
 			{rows(tree, 0)}
 			{move.isError && <p className="px-2 text-destructive text-xs">{String(move.error)}</p>}
 			{ask && (

@@ -3,11 +3,12 @@ import { useMemo } from "react";
 import { AlbumGrid } from "#/components/album-grid.tsx";
 import { EmptyState, Section } from "#/components/page.tsx";
 import { Cover } from "#/components/page-header.tsx";
-import { PanelHeader } from "#/components/panel-header.tsx";
+import { PANEL_ART, PanelHeader } from "#/components/panel-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
 import { splitNames } from "#/lib/names.ts";
+import { albumFact, songFacts } from "#/lib/panel-facts.tsx";
 import { useSyncTargets, useTracks } from "#/lib/queries.ts";
 
 export function ArtistPanel({ name }: { name: string }) {
@@ -24,7 +25,7 @@ export function ArtistPanel({ name }: { name: string }) {
 		return <EmptyState title="No songs by this artist" />;
 	}
 	return (
-		<div className="space-y-6">
+		<div className="space-y-8 pb-8">
 			<PanelHeader
 				kind={
 					<>
@@ -32,17 +33,14 @@ export function ArtistPanel({ name }: { name: string }) {
 					</>
 				}
 				title={name === "" ? "Unknown artist" : name}
-				meta={
-					<>
-						<span>
-							{albums.length} {albums.length === 1 ? "album" : "albums"}
-						</span>
-						<span>
-							{artistTracks.length} {artistTracks.length === 1 ? "song" : "songs"}
-						</span>
-					</>
+				facts={[albumFact(albums.length), ...songFacts(artistTracks)]}
+				art={
+					<Cover
+						tracks={artistTracks}
+						fallback={<Mic2 className="size-8" />}
+						className={PANEL_ART}
+					/>
 				}
-				art={<Cover tracks={artistTracks} fallback={<Mic2 className="size-8" />} />}
 				tracks={artistTracks}
 			/>
 			<Section title="Albums" count={albums.length}>
@@ -53,7 +51,7 @@ export function ArtistPanel({ name }: { name: string }) {
 				/>
 			</Section>
 			<Section title="Songs" count={artistTracks.length}>
-				<SelectableTrackList tracks={artistTracks} hideArtist showDuration />
+				<SelectableTrackList tracks={artistTracks} hideArtist />
 			</Section>
 		</div>
 	);

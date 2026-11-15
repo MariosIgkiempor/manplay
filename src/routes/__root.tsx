@@ -1,17 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
-import { AnalysisDrawer } from "#/components/analysis-drawer.tsx";
+import { Shell } from "#/components/app-shell.tsx";
 import { AutoRefresh } from "#/components/auto-refresh.tsx";
-import { DetailPanel } from "#/components/detail-panel.tsx";
-import { IssuesDrawer, IssuesIndicator } from "#/components/issues-drawer.tsx";
-import { MissingDrawer, MissingIndicator } from "#/components/missing-files.tsx";
-import { PlayerBar } from "#/components/player-bar.tsx";
-import { Sidebar } from "#/components/sidebar.tsx";
-import { StatusBarHost } from "#/components/status-bar.tsx";
+import { IssuesIndicator } from "#/components/issues-drawer.tsx";
+import { MissingIndicator } from "#/components/missing-files.tsx";
+import { StatusBarHost, StatusScopeProvider } from "#/components/status-bar.tsx";
 import { StatusSlotContext } from "#/context/detail-context.ts";
 import { DetailProvider } from "#/context/detail-provider.tsx";
 import { PlayerProvider } from "#/context/player-provider.tsx";
+import { SaveSlotContext } from "#/context/status-context.ts";
 import { SyncProgressProvider } from "#/context/sync-progress-provider.tsx";
 import { UndoProvider } from "#/context/undo-provider.tsx";
 import appCss from "../styles.css?url";
@@ -32,6 +30,7 @@ export const Route = createRootRoute({
 
 function RootDocument({ children }: { children: ReactNode }) {
 	const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
+	const [saveSlot, setSaveSlot] = useState<HTMLElement | null>(null);
 	const [missingOpen, setMissingOpen] = useState(false);
 	const [issuesOpen, setIssuesOpen] = useState(false);
 	return (
@@ -39,28 +38,27 @@ function RootDocument({ children }: { children: ReactNode }) {
 			<head>
 				<HeadContent />
 			</head>
-			<body className="overflow-hidden">
+			<body className="flex h-screen flex-col overflow-hidden">
 				<QueryClientProvider client={queryClient}>
 					<PlayerProvider>
 						<SyncProgressProvider>
 							<UndoProvider>
 								<DetailProvider>
-									<AutoRefresh />
-									<div className="flex h-screen flex-col">
-										<div className="flex min-h-0 flex-1">
-											<Sidebar />
-											<div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-												<div className="relative min-h-0 flex-1 overflow-hidden">
-													<StatusSlotContext.Provider value={statusSlot}>
-														<div className="h-full overflow-y-auto">{children}</div>
-													</StatusSlotContext.Provider>
-													<DetailPanel />
-													<MissingDrawer open={missingOpen} onClose={() => setMissingOpen(false)} />
-													<IssuesDrawer open={issuesOpen} onClose={() => setIssuesOpen(false)} />
-													<AnalysisDrawer />
-												</div>
+									<StatusScopeProvider>
+										<StatusSlotContext.Provider value={statusSlot}>
+											<SaveSlotContext.Provider value={saveSlot}>
+												<AutoRefresh />
+												<Shell
+													missingOpen={missingOpen}
+													issuesOpen={issuesOpen}
+													setMissingOpen={setMissingOpen}
+													setIssuesOpen={setIssuesOpen}
+												>
+													{children}
+												</Shell>
 												<StatusBarHost
 													setSlot={setStatusSlot}
+													setSaveSlot={setSaveSlot}
 													notices={
 														<>
 															<IssuesIndicator onClick={() => setIssuesOpen(true)} />
@@ -68,10 +66,9 @@ function RootDocument({ children }: { children: ReactNode }) {
 														</>
 													}
 												/>
-											</div>
-										</div>
-										<PlayerBar />
-									</div>
+											</SaveSlotContext.Provider>
+										</StatusSlotContext.Provider>
+									</StatusScopeProvider>
 								</DetailProvider>
 							</UndoProvider>
 						</SyncProgressProvider>

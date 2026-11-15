@@ -1,22 +1,10 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
-import {
-	Database,
-	Download,
-	FolderTree,
-	Library,
-	Music,
-	Plus,
-	Settings,
-	Upload,
-} from "lucide-react";
-import { type FormEvent, type ReactNode, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { Database, Download, FolderTree, Library, Music, Settings, Upload } from "lucide-react";
+import type { ReactNode } from "react";
+import { SidebarDrives } from "#/components/sidebar-drives.tsx";
 import { SidebarPlaylists } from "#/components/sidebar-playlists.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
-import { Button } from "#/components/ui/button.tsx";
-import { Input } from "#/components/ui/input.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
-import { createPlaylist } from "#/lib/api.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
 
 const linkClass =
@@ -43,28 +31,8 @@ function NavLink({
 }
 
 export function Sidebar() {
-	const queryClient = useQueryClient();
-	const navigate = useNavigate();
 	const syncing = useSyncProgress().size > 0;
 	const updateAvailable = useUpdateCheck().data != null;
-	const [name, setName] = useState("");
-	const create = useMutation({
-		mutationFn: createPlaylist,
-		onSuccess: async (id) => {
-			setName("");
-			await queryClient.invalidateQueries({ queryKey: ["playlists"] });
-			await navigate({ to: "/playlists/$id", params: { id: String(id) } });
-		},
-	});
-
-	const onSubmit = (e: FormEvent) => {
-		e.preventDefault();
-		const trimmed = name.trim();
-		if (trimmed !== "") {
-			create.mutate(trimmed);
-		}
-	};
-
 	return (
 		<aside className="flex w-60 shrink-0 flex-col gap-4 border-r bg-card/40 p-3">
 			<div className="flex items-center gap-2 px-2 pt-1 font-semibold">
@@ -95,22 +63,10 @@ export function Sidebar() {
 				</NavLink>
 			</nav>
 			<div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+				<SidebarDrives />
 				<SidebarPlaylists />
 				<SidebarTagTree />
 			</div>
-			<form onSubmit={onSubmit} className="flex gap-2">
-				<Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New playlist" />
-				<Button
-					type="submit"
-					size="icon"
-					variant="outline"
-					aria-label="Create playlist"
-					disabled={create.isPending || name.trim() === ""}
-				>
-					<Plus />
-				</Button>
-			</form>
-			{create.isError && <p className="text-destructive text-xs">{String(create.error)}</p>}
 			<nav className="border-t pt-2">
 				<NavLink to="/settings">
 					<Settings className="size-4" />

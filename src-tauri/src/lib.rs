@@ -1862,6 +1862,34 @@ fn set_library_view(state: State<'_, AppState>, view: String) -> Result<(), Erro
     db::set_setting(&conn, SETTING_LIBRARY_VIEW, Some(&view))
 }
 
+const SETTING_PANEL_TABS: &str = "panel_tabs";
+
+/// Tabs last picked in the song and album views (JSON), so the next one opens on the same tab.
+#[tauri::command]
+fn get_panel_tabs(state: State<'_, AppState>) -> Result<Option<String>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::get_setting(&conn, SETTING_PANEL_TABS)
+}
+
+#[tauri::command]
+fn set_panel_tabs(state: State<'_, AppState>, tabs: String) -> Result<(), Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::set_setting(&conn, SETTING_PANEL_TABS, Some(&tabs))
+}
+
+/// A display preference (JSON) such as how a list is sorted, kept under `ui.<name>`.
+#[tauri::command]
+fn get_ui_setting(state: State<'_, AppState>, name: String) -> Result<Option<String>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::get_setting(&conn, &format!("ui.{name}"))
+}
+
+#[tauri::command]
+fn set_ui_setting(state: State<'_, AppState>, name: String, value: String) -> Result<(), Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::set_setting(&conn, &format!("ui.{name}"), Some(&value))
+}
+
 const SETTING_TAG_CLIPBOARD: &str = "tag_clipboard";
 
 /// Tags copied in the Files view (JSON), kept across restarts. `None` when nothing is copied.
@@ -2737,6 +2765,10 @@ pub fn run() {
             tags_preview,
             get_library_view,
             set_library_view,
+            get_panel_tabs,
+            set_panel_tabs,
+            get_ui_setting,
+            set_ui_setting,
             get_tag_clipboard,
             set_tag_clipboard,
             tags_write,

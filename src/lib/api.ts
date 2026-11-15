@@ -31,6 +31,8 @@ const trackSchema = z.object({
 	edited: z
 		.object({ bpm: z.boolean(), key: z.boolean(), grid: z.boolean() })
 		.default({ bpm: false, key: false, grid: false }),
+	/** Unix seconds the song came into the library; null for songs from before this was kept. */
+	addedAt: int.nullable().optional(),
 });
 
 export type Track = z.infer<typeof trackSchema>;
@@ -870,6 +872,48 @@ export async function getLibraryView(): Promise<LibraryView> {
 
 export async function setLibraryView(view: LibraryView): Promise<void> {
 	await invoke("set_library_view", { view });
+}
+
+const panelTabsSchema = z.object({
+	song: z.enum(["grid", "metadata"]).catch("grid"),
+	album: z.enum(["songs", "metadata"]).catch("songs"),
+});
+export type PanelTabs = z.infer<typeof panelTabsSchema>;
+export const DEFAULT_PANEL_TABS: PanelTabs = { song: "grid", album: "songs" };
+
+/** Tabs last picked in the song and album views; kept in the database. */
+export async function getPanelTabs(): Promise<PanelTabs> {
+	const raw = z
+		.string()
+		.nullable()
+		.parse(await invoke("get_panel_tabs"));
+	try {
+		const parsed = panelTabsSchema.safeParse(raw === null ? {} : JSON.parse(raw));
+		return parsed.success ? parsed.data : DEFAULT_PANEL_TABS;
+	} catch {
+		return DEFAULT_PANEL_TABS;
+	}
+}
+
+export async function setPanelTabs(tabs: PanelTabs): Promise<void> {
+	await invoke("set_panel_tabs", { tabs: JSON.stringify(tabs) });
+}
+
+/** A display preference (e.g. how a list is sorted), kept in the database as JSON. */
+export async function getUiSetting(name: string): Promise<unknown> {
+	const raw = z
+		.string()
+		.nullable()
+		.parse(await invoke("get_ui_setting", { name }));
+	try {
+		return raw === null ? null : JSON.parse(raw);
+	} catch {
+		return null;
+	}
+}
+
+export async function setUiSetting(name: string, value: unknown): Promise<void> {
+	await invoke("set_ui_setting", { name, value: JSON.stringify(value) });
 }
 
 const tagClipboardSchema = z.object({

@@ -460,7 +460,6 @@ function SongsView({
 			<TrackList
 				tracks={shown.map((r) => r.track)}
 				targetCount={0}
-				showDuration
 				rowKey={(_, i) => slotOf(i)}
 				rowMenu={(_, i) =>
 					onRemove

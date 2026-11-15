@@ -45,7 +45,7 @@ export function keyRank(key: string | null): number | null {
 	return Number(code[1]) * 2 + (code[2] === "B" ? 1 : 0);
 }
 
-export type SortKey = "title" | "album" | "bpm" | "key" | "duration";
+export type SortKey = "title" | "artist" | "album" | "added" | "bpm" | "key" | "duration";
 export interface Sort {
 	key: SortKey;
 	desc: boolean;
@@ -61,6 +61,14 @@ function numeric(a: number | null, b: number | null, desc: boolean): number {
 	return desc ? b - a : a - b;
 }
 
+/**
+ * When two songs came into the library, oldest first. Songs from before dates were kept have none
+ * and come first, in the order they were added (their ids).
+ */
+export function addedOrder(a: Track, b: Track): number {
+	return (a.addedAt ?? 0) - (b.addedAt ?? 0) || a.id - b.id;
+}
+
 /** `tracks` ordered by `sort`; the original order when `sort` is null. Stable. */
 export function sortTracks(tracks: readonly Track[], sort: Sort | null): readonly Track[] {
 	if (sort === null) {
@@ -71,8 +79,14 @@ export function sortTracks(tracks: readonly Track[], sort: Sort | null): readonl
 		switch (sort.key) {
 			case "title":
 				return sign * text(a.title, b.title);
+			case "artist":
+				return (
+					sign * (text(a.artist, b.artist) || text(a.album, b.album) || text(a.title, b.title))
+				);
 			case "album":
 				return sign * (text(a.album, b.album) || text(a.title, b.title));
+			case "added":
+				return sign * addedOrder(a, b);
 			case "bpm":
 				return numeric(a.bpm, b.bpm, sort.desc);
 			case "key":

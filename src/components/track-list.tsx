@@ -1,14 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowDown, ArrowUp, Pause, Play } from "lucide-react";
-import {
-	type KeyboardEvent,
-	type MouseEvent,
-	type ReactNode,
-	useContext,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { Activity, Clock, Disc3, KeyRound, Pause, Play } from "lucide-react";
+import { type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useState } from "react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
@@ -23,7 +15,7 @@ import { albumKey, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName, normalizeKey } from "#/lib/musical-key.ts";
-import { parseBpm, type Sort, type SortKey } from "#/lib/track-fields.ts";
+import { parseBpm } from "#/lib/track-fields.ts";
 import type { InlineField } from "#/lib/use-track-edit.ts";
 import type { TrackSelection } from "#/lib/use-track-selection.ts";
 import { cn } from "#/lib/utils.ts";
@@ -35,9 +27,6 @@ interface Props {
 	onRemoveTag?: (track: Track, tag: string) => void;
 	/** Saves an inline edit. Without it the BPM, key and title cells are read-only. */
 	onEdit?: (track: Track, field: InlineField, value: string) => void;
-	sort?: Sort | null;
-	/** Makes the column headers sort the list. */
-	onSort?: (key: SortKey) => void;
 	renderAction?: ((track: Track, index: number) => ReactNode) | undefined;
 	/** Right-click items for where the list is, e.g. "Remove from playlist", for the songs it acts on. */
 	menuExtra?: (tracks: readonly Track[]) => readonly MenuEntry[];
@@ -54,38 +43,26 @@ interface Props {
 	hideArtist?: boolean;
 	/** Hide the album column. */
 	hideAlbum?: boolean;
-	/** Show each song's length. */
-	showDuration?: boolean;
 	/** Shown when there are no tracks. */
 	empty?: ReactNode;
 }
 
 const stop = (e: MouseEvent) => e.stopPropagation();
 
-/** How long a second click on a selected title waits before it starts a rename (Finder-style). */
-const RENAME_DELAY = 450;
-
 interface Layout {
-	album: boolean;
+	/** Room for tag chips: hidden in the narrow split and drawer. */
 	tags: boolean;
-	duration: boolean;
-	action: boolean;
 }
 
-function columns(l: Layout): string {
-	return [
-		"2rem",
-		"minmax(0,2.4fr)",
-		l.album && "minmax(0,1.4fr)",
-		"3.25rem",
-		"3.25rem",
-		l.tags && "minmax(0,1.2fr)",
-		l.duration && "3rem",
-		"1.25rem",
-		l.action && "auto",
-	]
-		.filter(Boolean)
-		.join(" ");
+/**
+ * Columns: play, the song (art and three lines), tags when there is room, then sync and actions.
+ * Tags only show once the list is wide enough for them.
+ */
+function rowColumns(l: Layout): string {
+	return cn(
+		"grid-cols-[2rem_minmax(0,1fr)_auto]",
+		l.tags && "@3xl/list:grid-cols-[2rem_minmax(0,1.6fr)_minmax(0,1fr)_auto]",
+	);
 }
 
 /** Inline link that opens a detail panel without touching row selection. */
@@ -162,67 +139,104 @@ function TagChips({
 	);
 }
 
-function TitleCell({
+/**
+ * The song in three lines: title; artist and album; length, BPM and key. BPM and key can be
+ * edited in place when the list can save.
+ */
+function SongCell({
 	track,
 	isCurrent,
+	isOpen,
+	open,
 	hideArt,
 	hideArtist,
+	hideAlbum,
 	renaming,
 	onRename,
 	onRenameEnd,
+	onEdit,
 }: {
 	track: Track;
 	isCurrent: boolean;
+	/** The song is the one the split shows. */
+	isOpen: boolean;
+	/** Opens the song; absent for songs that are not in the library. */
+	open: (() => void) | undefined;
 	hideArt?: boolean | undefined;
 	hideArtist?: boolean | undefined;
+	hideAlbum?: boolean | undefined;
 	renaming: boolean;
 	onRename: (title: string) => void;
 	onRenameEnd: () => void;
+	onEdit: Props["onEdit"];
 }) {
+	const go = useDetailNav();
+	const showArtist = !hideArtist && track.artist !== "";
+	const showAlbum = !hideAlbum && track.album !== "";
+	let title: ReactNode = track.title;
+	if (renaming) {
+		title = (
+			<InlineInput
+				initial={track.title}
+				label="Title"
+				parse={(v) => (v.trim() === "" ? null : v.trim())}
+				onCommit={(v) => {
+					onRenameEnd();
+					onRename(v);
+				}}
+				onCancel={onRenameEnd}
+			/>
+		);
+	} else if (open) {
+		title = (
+			<button
+				type="button"
+				title={`Open ${track.title}`}
+				className="max-w-full truncate text-left hover:underline"
+				onClick={(e) => {
+					e.stopPropagation();
+					open();
+				}}
+			>
+				{track.title}
+			</button>
+		);
+	}
 	return (
 		<div className="flex min-w-0 items-center gap-3">
-			{!hideArt && <AlbumArt trackId={track.id} className="size-9 shrink-0 rounded" />}
-			<div className="min-w-0 flex-1">
-				{renaming ? (
-					<InlineInput
-						initial={track.title}
-						label="Title"
-						parse={(v) => (v.trim() === "" ? null : v.trim())}
-						onCommit={(v) => {
-							onRenameEnd();
-							onRename(v);
-						}}
-						onCancel={onRenameEnd}
-					/>
-				) : (
-					<div
-						data-title
-						className={cn("truncate", isCurrent && "font-medium text-primary")}
-						title={track.title}
-					>
-						{track.title}
+			{!hideArt && <AlbumArt trackId={track.id} className="size-12 shrink-0 rounded-md" />}
+			<div className="min-w-0 flex-1 leading-tight">
+				<div
+					className={cn("truncate text-sm", (isCurrent || isOpen) && "font-medium text-primary")}
+					title={track.title}
+				>
+					{title}
+				</div>
+				{(showArtist || showAlbum) && (
+					<div className="mt-0.5 flex min-w-0 items-center gap-2 text-muted-foreground text-xs">
+						{showArtist && <ArtistLinks artist={track.artist} icon />}
+						{showAlbum && (
+							<span className="flex min-w-0 shrink items-center gap-1">
+								<Disc3 aria-hidden="true" className="size-3 shrink-0 opacity-60" />
+								<LinkButton
+									title={`Open ${track.album}`}
+									onClick={() => go({ kind: "album", key: albumKey(track.artist, track.album) })}
+								>
+									{track.album}
+								</LinkButton>
+							</span>
+						)}
 					</div>
 				)}
-				{!hideArtist && (
-					<div className="truncate text-muted-foreground text-xs">
-						<ArtistLinks artist={track.artist} />
-					</div>
-				)}
+				<div className="mt-0.5 flex h-5 items-center gap-3 text-muted-foreground text-xs tabular-nums">
+					<span className="flex items-center gap-1" title="Length">
+						<Clock aria-hidden="true" className="size-3 opacity-60" />
+						{track.durationMs === null ? "–" : clock(track.durationMs / 1000)}
+					</span>
+					<FieldCell track={track} field="bpm" onEdit={onEdit} />
+					<FieldCell track={track} field="key" onEdit={onEdit} />
+				</div>
 			</div>
-		</div>
-	);
-}
-
-function AlbumCell({ track }: { track: Track }) {
-	const go = useDetailNav();
-	return (
-		<div className="truncate text-muted-foreground">
-			<LinkButton
-				title={track.album}
-				onClick={() => go({ kind: "album", key: albumKey(track.artist, track.album) })}
-			>
-				{track.album}
-			</LinkButton>
 		</div>
 	);
 }
@@ -267,22 +281,25 @@ function FieldCell({
 	const { value, hint: base } = shown(track, field);
 	const edited = track.edited[field];
 	const hint = edited ? `${base}, set by you` : base;
-	// Values set by hand carry a dot, and re-analysis keeps them unless told otherwise.
-	const mark =
-		edited &&
-		"relative before:absolute before:top-1/2 before:-left-2 before:size-1 before:-translate-y-1/2 before:rounded-full before:bg-primary";
+	const Icon = field === "bpm" ? Activity : KeyRound;
+	// Values set by hand show the icon in the accent colour; re-analysis keeps them.
+	const icon = (
+		<Icon
+			aria-hidden="true"
+			className={cn("size-3 shrink-0", edited ? "text-primary" : "opacity-60")}
+		/>
+	);
 	if (!onEdit) {
 		return (
-			<div
-				title={hint}
-				className={cn("tabular-nums", value === "" && "text-muted-foreground/50", mark)}
-			>
+			<span title={hint} className={cn("flex items-center gap-1", value === "" && "opacity-50")}>
+				{icon}
 				{value || "–"}
-			</div>
+			</span>
 		);
 	}
 	return (
-		<div className={cn("min-w-0", mark)}>
+		<span className="flex min-w-0 items-center gap-0.5">
+			{icon}
 			<InlineEdit
 				value={value}
 				hint={`${hint}. Click to edit`}
@@ -291,20 +308,13 @@ function FieldCell({
 				parse={field === "bpm" ? parseBpm : parseKey}
 				suggestions={field === "key" ? CAMELOT : undefined}
 				onCommit={(v) => onEdit(track, field, v)}
+				className="mx-0 h-5 w-auto min-w-6 px-1 text-xs"
 			/>
-		</div>
+		</span>
 	);
 }
 
-function DurationCell({ ms }: { ms: number | null }) {
-	return (
-		<div className="text-right text-muted-foreground tabular-nums">
-			{ms === null ? "–" : clock(ms / 1000)}
-		</div>
-	);
-}
-
-interface RowProps extends Omit<Props, "tracks" | "selection" | "sort" | "onSort" | "empty"> {
+interface RowProps extends Omit<Props, "tracks" | "selection" | "empty"> {
 	selection: TrackSelection | undefined;
 	track: Track;
 	layout: Layout;
@@ -392,29 +402,10 @@ function PlayButton({
 	);
 }
 
-/**
- * Finder-style rename: a second, slow click on the title of the only selected row starts it,
- * unless the click turns into a double-click (which plays).
- */
-function useSlowClickRename(allowed: boolean) {
+/** Inline rename of a song's title, from F2 or the right-click menu. */
+function useRename() {
 	const [active, setActive] = useState(false);
-	const timer = useRef<number | undefined>(undefined);
-	useEffect(() => () => window.clearTimeout(timer.current), []);
-	const cancelPending = () => window.clearTimeout(timer.current);
-	const onClick = (e: MouseEvent) => {
-		if (!allowed || e.shiftKey || e.metaKey || e.ctrlKey || e.detail > 1) {
-			return;
-		}
-		cancelPending();
-		timer.current = window.setTimeout(() => setActive(true), RENAME_DELAY);
-	};
-	return {
-		active,
-		onClick,
-		cancelPending,
-		start: () => setActive(true),
-		end: () => setActive(false),
-	};
+	return { active, start: () => setActive(true), end: () => setActive(false) };
 }
 
 function TrackRow({
@@ -426,6 +417,7 @@ function TrackRow({
 	renderAction,
 	hideArt,
 	hideArtist,
+	hideAlbum,
 	layout,
 	menuTracks,
 	menuExtra,
@@ -434,10 +426,14 @@ function TrackRow({
 	onPlay,
 }: RowProps) {
 	const player = usePlayer();
+	const go = useDetailNav();
+	const order = useContext(TrackOrderContext);
+	const splitView = useDetail().split.view;
+	const isOpen = splitView?.kind === "song" && splitView.trackId === track.id;
 	const isCurrent = player.current?.id === track.id;
 	const isSelected = selection?.selected.has(track.id) ?? false;
 	const canRename = onEdit !== undefined;
-	const rename = useSlowClickRename(canRename && isSelected && selection?.selected.size === 1);
+	const rename = useRename();
 
 	const onKeyDown = (e: KeyboardEvent) => {
 		if (e.key === "Enter") {
@@ -467,121 +463,55 @@ function TrackRow({
 				aria-selected={isSelected}
 				tabIndex={0}
 				className={cn(
-					"group grid h-12 cursor-default items-center gap-3 rounded-md px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+					"group grid min-h-16 cursor-default items-center gap-3 rounded-md px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+					rowColumns(layout),
 					isSelected ? "bg-primary/15" : "hover:bg-muted/60",
 					isCurrent && !isSelected && "bg-muted/80",
 				)}
-				style={{ gridTemplateColumns: columns(layout) }}
-				onClick={(e) => {
-					if (e.target instanceof Element && e.target.closest("[data-title]")) {
-						rename.onClick(e);
-					}
-					selection?.click(track.id, e);
-				}}
-				onDoubleClick={() => {
-					rename.cancelPending();
-					onPlay();
-				}}
+				onClick={(e) => selection?.click(track.id, e)}
+				onDoubleClick={onPlay}
 				onKeyDown={onKeyDown}
 			>
 				<PlayButton track={track} isCurrent={isCurrent} onPlay={onPlay} />
-				<TitleCell
+				<SongCell
 					track={track}
 					isCurrent={isCurrent}
+					isOpen={isOpen}
+					open={
+						rowMenu
+							? undefined
+							: () => go({ kind: "song", trackId: track.id, list: order ?? undefined })
+					}
 					hideArt={hideArt}
 					hideArtist={hideArtist}
+					hideAlbum={hideAlbum}
 					renaming={rename.active}
 					onRename={(title) => onEdit?.(track, "title", title)}
 					onRenameEnd={rename.end}
+					onEdit={onEdit}
 				/>
-				{layout.album && <AlbumCell track={track} />}
-				<FieldCell track={track} field="bpm" onEdit={onEdit} />
-				<FieldCell track={track} field="key" onEdit={onEdit} />
-				{layout.tags && <TagChips track={track} onRemoveTag={onRemoveTag} />}
-				{layout.duration && <DurationCell ms={track.durationMs} />}
-				<SyncBadge state={syncState([track], targetCount)} />
-				{renderAction?.(track, index)}
+				{layout.tags && (
+					<div className="hidden min-w-0 @3xl/list:block">
+						<TagChips track={track} onRemoveTag={onRemoveTag} />
+					</div>
+				)}
+				<div className="flex items-center gap-2">
+					<SyncBadge state={syncState([track], targetCount)} />
+					{renderAction?.(track, index)}
+				</div>
 			</div>
 		</RowMenuFor>
 	);
 }
 
-function HeaderCell({
-	label,
-	sortKey,
-	sort,
-	onSort,
-	align = "left",
-}: {
-	label: string;
-	sortKey?: SortKey;
-	sort: Sort | null | undefined;
-	onSort: ((key: SortKey) => void) | undefined;
-	align?: "left" | "right";
-}) {
-	if (!sortKey || !onSort) {
-		return <div className={cn("truncate", align === "right" && "text-right")}>{label}</div>;
-	}
-	const active = sort?.key === sortKey;
-	const Arrow = sort?.desc ? ArrowDown : ArrowUp;
-	return (
-		<button
-			type="button"
-			onClick={() => onSort(sortKey)}
-			aria-label={`Sort by ${label.toLowerCase()}`}
-			className={cn(
-				"flex min-w-0 items-center gap-1 truncate hover:text-foreground",
-				align === "right" && "justify-end",
-				active && "text-foreground",
-			)}
-		>
-			{label}
-			{active && <Arrow className="size-3 shrink-0" />}
-		</button>
-	);
-}
-
-function HeaderRow({
-	layout,
-	sort,
-	onSort,
-}: {
-	layout: Layout;
-	sort: Sort | null | undefined;
-	onSort: ((key: SortKey) => void) | undefined;
-}) {
-	const cell = { sort, onSort };
-	return (
-		<div
-			className="grid h-8 items-center gap-3 border-b px-2 font-medium text-muted-foreground text-xs"
-			style={{ gridTemplateColumns: columns(layout) }}
-		>
-			<span />
-			<HeaderCell label="Title" sortKey="title" {...cell} />
-			{layout.album && <HeaderCell label="Album" sortKey="album" {...cell} />}
-			<HeaderCell label="BPM" sortKey="bpm" {...cell} />
-			<HeaderCell label="Key" sortKey="key" {...cell} />
-			{layout.tags && <HeaderCell label="Tags" {...cell} />}
-			{layout.duration && <HeaderCell label="Time" sortKey="duration" align="right" {...cell} />}
-			<span />
-			{layout.action && <span />}
-		</div>
-	);
-}
-
-export function TrackList({ tracks, selection, sort, onSort, empty, rowKey, ...rest }: Props) {
+export function TrackList({ tracks, selection, empty, rowKey, ...rest }: Props) {
 	const player = usePlayer();
 	const inPanel = useContext(PanelScopeContext);
 	if (tracks.length === 0) {
 		return empty ?? <EmptyState title="No songs" />;
 	}
-	const layout: Layout = {
-		album: !rest.hideAlbum,
-		// The slide-over is too narrow for tag chips; the right-click menu still manages tags.
-		tags: !inPanel,
-		duration: !!rest.showDuration,
-		action: rest.renderAction !== undefined,
-	};
+	// The split and drawer are too narrow for tag chips; the right-click menu still manages tags.
+	const layout: Layout = { tags: !inPanel };
 	const menuTracksFor = (track: Track): readonly Track[] =>
 		selection?.selected.has(track.id) && selection.selected.size > 1
 			? tracks.filter((t) => selection.selected.has(t.id))
@@ -594,14 +524,13 @@ export function TrackList({ tracks, selection, sort, onSort, empty, rowKey, ...r
 	};
 	return (
 		<TrackOrderContext.Provider value={tracks.map((t) => t.id)}>
-			<div className="select-none">
-				<HeaderRow layout={layout} sort={sort} onSort={onSort} />
+			<div className="@container/list select-none">
 				<div
 					role="listbox"
 					aria-multiselectable
 					aria-label="Songs"
 					tabIndex={-1}
-					className="space-y-px pt-1 outline-none"
+					className="space-y-px outline-none"
 					onKeyDown={onKeyDown}
 				>
 					{tracks.map((track, i) => (

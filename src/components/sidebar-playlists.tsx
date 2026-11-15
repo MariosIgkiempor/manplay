@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
+import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
 import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
 import { rowBase, rowClass } from "#/components/sidebar-row.ts";
 import { usePlayer } from "#/context/player-context.ts";
@@ -74,10 +75,12 @@ function usePlaylistActions() {
 /** Library playlists in the sidebar; right-click one to play, rename, duplicate or delete it. */
 export function SidebarPlaylists() {
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const matchRoute = useMatchRoute();
 	const playlists = useQuery({ queryKey: ["playlists"], queryFn: listPlaylists });
 	const actions = usePlaylistActions();
 	const [renaming, setRenaming] = useState<number | null>(null);
+	const [adding, setAdding] = useState(false);
 	const [deleting, setDeleting] = useState<Playlist | null>(null);
 	const all = playlists.data ?? [];
 	const m = matchRoute({ to: "/playlists/$id" });
@@ -86,7 +89,22 @@ export function SidebarPlaylists() {
 
 	return (
 		<section className="space-y-0.5">
-			<SectionLabel>Playlists</SectionLabel>
+			<SectionLabel action={<AddButton label="New playlist" onClick={() => setAdding(true)} />}>
+				Playlists
+			</SectionLabel>
+			{adding && (
+				<NewRow
+					icon={<ListMusic />}
+					placeholder="Playlist name"
+					parse={(v) => v.trim() || null}
+					onCancel={() => setAdding(false)}
+					onCreate={async (name) => {
+						const id = await createPlaylist(name);
+						await queryClient.invalidateQueries({ queryKey: ["playlists"] });
+						await navigate({ to: "/playlists/$id", params: { id: String(id) } });
+					}}
+				/>
+			)}
 			{all.map((p) => (
 				<RowMenu
 					key={p.id}

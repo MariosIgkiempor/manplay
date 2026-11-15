@@ -4,6 +4,7 @@ import {
 	AudioWaveform,
 	Disc3,
 	Grid3x3,
+	Music,
 	PencilLine,
 	Play,
 	TextCursorInput,
@@ -75,6 +76,7 @@ export function AddToPlaylistMenu({
 	const analyzing = useIsMutating({ mutationKey: ANALYSIS_KEY }) > 0;
 	const { album, artist } = noGoTo ? { album: null, artist: null } : shared(tracks);
 	const target = tagTargetFor(tracks);
+	const song = tracks.length === 1 ? tracks[0] : undefined;
 	const edits: MenuEntry[] = [
 		onRename && {
 			label: "Rename",
@@ -82,15 +84,23 @@ export function AddToPlaylistMenu({
 			shortcut: "F2",
 			onSelect: onRename,
 		},
+		song && {
+			label: "Open song",
+			icon: <Music />,
+			onSelect: () => go({ kind: "song", trackId: song.id, list: order ?? undefined }),
+		},
 		target && {
 			label: "Edit metadata…",
 			icon: <TextCursorInput />,
-			onSelect: () => go({ kind: "edit", target }),
+			onSelect: () =>
+				song
+					? go({ kind: "song", trackId: song.id, tab: "metadata", list: order ?? undefined })
+					: go({ kind: "edit", target }),
 		},
-		tracks.length === 1 && {
+		song && {
 			label: "Edit grid & cues…",
 			icon: <Grid3x3 />,
-			onSelect: () => go({ kind: "grid", trackId: tracks[0]?.id ?? 0, list: order ?? undefined }),
+			onSelect: () => go({ kind: "song", trackId: song.id, tab: "grid", list: order ?? undefined }),
 		},
 		{
 			label: "Analyze BPM & key",

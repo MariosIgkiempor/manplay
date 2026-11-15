@@ -6,16 +6,7 @@ import { type MenuEntry, MenuItems, MenuLabel } from "#/components/menu.tsx";
 import { Section } from "#/components/page.tsx";
 import { SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import {
-	beforeStart,
-	CUE_COLORS,
-	type Cue,
-	MEMORY_COLOR,
-	PAD_LETTERS,
-	START_COLOR,
-	stamp,
-	startOf,
-} from "#/lib/cues.ts";
+import { beforeStart, CUE_COLORS, type Cue, MEMORY_COLOR, PAD_LETTERS, stamp } from "#/lib/cues.ts";
 import { popup } from "#/lib/menu-styles.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -139,7 +130,7 @@ function Pad({ slot, cue, actions }: { slot: number; cue: Cue | undefined; actio
 export function HotCuePads({ cues, actions }: { cues: readonly Cue[]; actions: PadActions }) {
 	return (
 		<Section title="Hot cues" count={cues.filter((c) => c.slot !== null).length}>
-			<div className="grid grid-cols-4 gap-2 lg:grid-cols-8">
+			<div className="grid grid-cols-4 gap-2 @3xl/split:grid-cols-8">
 				{PAD_LETTERS.map((_, slot) => (
 					<Pad
 						// biome-ignore lint/suspicious/noArrayIndexKey: pads are fixed places A–H
@@ -177,52 +168,6 @@ function TimeButton({ time, onJump }: { time: number; onJump: (t: number) => voi
 		>
 			{stamp(time)}
 		</button>
-	);
-}
-
-/**
- * Where the song starts (rekordbox's yellow main cue), for the transport bar: jumps there, or
- * to the grid's first beat while none is set. The CUE button sets it.
- */
-export function StartCue({
-	cues,
-	firstBeat,
-	onJump,
-	onClear,
-}: {
-	cues: readonly Cue[];
-	firstBeat: number;
-	onJump: (time: number) => void;
-	onClear: () => void;
-}) {
-	const start = startOf(cues);
-	return (
-		<div className="flex items-center rounded-md bg-white/5">
-			<button
-				type="button"
-				onClick={() => onJump(start ? start.start : firstBeat)}
-				title={
-					start
-						? "Where the song loads (rekordbox's main cue). Jump here."
-						: "No start set: the song loads at the first beat. Press CUE to start it at the playhead."
-				}
-				className="flex items-center gap-2 rounded-md px-2 py-1 text-neutral-300 text-xs tabular-nums outline-none transition-colors hover:bg-white/10 hover:text-neutral-50 focus-visible:ring-2 focus-visible:ring-ring/60"
-			>
-				<Marker color={START_COLOR} start />
-				{start ? stamp(start.start) : "First beat"}
-			</button>
-			{start && (
-				<button
-					type="button"
-					aria-label="Clear the start"
-					title="Clear the start"
-					onClick={onClear}
-					className="grid size-6 place-items-center rounded-md text-neutral-500 outline-none transition-colors hover:bg-white/10 hover:text-neutral-100 focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3"
-				>
-					<X />
-				</button>
-			)}
-		</div>
 	);
 }
 

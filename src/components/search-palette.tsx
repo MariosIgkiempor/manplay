@@ -174,7 +174,7 @@ export function SearchPalette({ pills, onPills, text, onText }: Props) {
 						onFocus={() => setOpen(true)}
 						onBlur={() => setOpen(false)}
 						onKeyDown={onKeyDown}
-						placeholder={pills.length === 0 ? "Search songs, artists, playlists, tags…  ⌘K" : ""}
+						placeholder={pills.length === 0 ? "Search songs, artists, playlists, tags…" : ""}
 						aria-label="Search"
 						role="combobox"
 						aria-expanded={open}
@@ -182,6 +182,14 @@ export function SearchPalette({ pills, onPills, text, onText }: Props) {
 						className="h-full min-w-24 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
 					/>
 				</div>
+				{!hasAny && !open && (
+					<kbd
+						title="Jump to search from anywhere"
+						className="shrink-0 rounded border bg-muted px-1.5 font-sans text-[11px] text-muted-foreground"
+					>
+						⌘K
+					</kbd>
+				)}
 				{hasAny && (
 					<button
 						type="button"

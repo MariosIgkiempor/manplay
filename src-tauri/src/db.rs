@@ -30,6 +30,8 @@ pub struct Track {
     pub fields: std::collections::BTreeMap<String, String>,
     /// Which of BPM, key and beat grid were set by hand.
     pub edited: Edited,
+    /// Unix seconds the song came into the library, when known.
+    pub added_at: Option<i64>,
 }
 
 #[derive(Default)]
@@ -146,6 +148,9 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "tracks", "tag_bpm", "REAL")?;
     add_column(&conn, "tracks", "tag_key", "TEXT")?;
     add_column(&conn, "tracks", "fields", "TEXT")?;
+    // Unix seconds the song first came into the library; NULL for songs from before this column
+    // (they sort by id, which follows the order they were added).
+    add_column(&conn, "tracks", "added_at", "INTEGER")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
          CREATE TABLE IF NOT EXISTS import_cache (
@@ -299,8 +304,9 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
         }
         let mut stmt = tx.prepare(
             "INSERT INTO tracks (path, artist, album, title, size, fingerprint,
-                                 duration_ms, bitrate, sample_rate, tag_bpm, tag_key, fields)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                                 duration_ms, bitrate, sample_rate, tag_bpm, tag_key, fields,
+                                 added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CAST(strftime('%s', 'now') AS INTEGER))
              ON CONFLICT(path) DO UPDATE SET
                  artist = excluded.artist,
                  album = excluded.album,
@@ -343,7 +349,8 @@ const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
     t.duration_ms, t.bitrate, t.sample_rate,
     COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key), (COALESCE(a.version, 0) >= 2
         AND (a.waveform IS NOT NULL OR a.error IS NOT NULL)),
-    t.fields, COALESCE(a.bpm_edited, 0), COALESCE(a.key_edited, 0), COALESCE(a.grid_edited, 0)";
+    t.fields, COALESCE(a.bpm_edited, 0), COALESCE(a.key_edited, 0), COALESCE(a.grid_edited, 0),
+    t.added_at";
 
 /// Joined wherever [`TRACK_COLS`] is selected.
 const ANALYSIS_JOIN: &str = "LEFT JOIN analysis a ON a.fingerprint = t.fingerprint";
@@ -376,6 +383,7 @@ fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
             key: r.get(16)?,
             grid: r.get(17)?,
         },
+        added_at: r.get(18)?,
     })
 }
 

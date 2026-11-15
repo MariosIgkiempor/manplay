@@ -1,8 +1,16 @@
+import type { ReactNode } from "react";
+
 /** Right-aligned song count. */
 export function RowCount({ n }: { n: number }) {
 	return <span className="ml-auto pl-2 text-xs tabular-nums">{n}</span>;
 }
 
-export function SectionLabel({ children }: { children: string }) {
-	return <div className="px-2 pt-1 pb-1 font-medium text-muted-foreground text-xs">{children}</div>;
+/** A sidebar section's heading, with an optional action (e.g. +) lined up with the row ends. */
+export function SectionLabel({ children, action }: { children: string; action?: ReactNode }) {
+	return (
+		<div className="flex items-center justify-between pt-1 pr-1 pb-1 pl-2">
+			<span className="font-medium text-muted-foreground text-xs">{children}</span>
+			{action}
+		</div>
+	);
 }

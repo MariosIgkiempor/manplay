@@ -1,6 +1,7 @@
 import { Music } from "lucide-react";
 import { useState } from "react";
 import { artUrl } from "#/lib/api.ts";
+import { useArtVersion } from "#/lib/art-version.ts";
 import { cn } from "#/lib/utils.ts";
 
 interface Props {
@@ -8,7 +9,7 @@ interface Props {
 	className?: string;
 }
 
-function ArtImage({ trackId, className }: Props) {
+function ArtImage({ trackId, className, version }: Props & { version: number }) {
 	const [failed, setFailed] = useState(false);
 	return (
 		<div className={cn("relative aspect-square overflow-hidden bg-muted", className)}>
@@ -18,7 +19,7 @@ function ArtImage({ trackId, className }: Props) {
 				</div>
 			) : (
 				<img
-					src={artUrl(trackId)}
+					src={`${artUrl(trackId)}?v=${version}`}
 					alt=""
 					loading="lazy"
 					decoding="async"
@@ -33,6 +34,7 @@ function ArtImage({ trackId, className }: Props) {
 
 /** Album cover with a placeholder when the track has no artwork. */
 export function AlbumArt(props: Props) {
-	// Keyed so the "failed" state resets when a different track is shown.
-	return <ArtImage key={props.trackId} {...props} />;
+	const version = useArtVersion();
+	// Keyed so the "failed" state resets when a different track or a new cover is shown.
+	return <ArtImage key={`${props.trackId}:${version}`} {...props} version={version} />;
 }
