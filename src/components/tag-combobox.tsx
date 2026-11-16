@@ -1,5 +1,14 @@
 import { GripVertical, X } from "lucide-react";
-import { type ClipboardEvent, type KeyboardEvent, useId, useMemo, useState } from "react";
+import {
+	type ClipboardEvent,
+	type KeyboardEvent,
+	type RefObject,
+	useId,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { joinNames, splitNames } from "#/lib/names.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -84,6 +93,26 @@ export function TagCombobox({
 			next.splice(to, 0, moved);
 			onChange(joinNames(next));
 		}
+	};
+	/** While dragging, chips show the order the drop would produce, so the gap is the preview. */
+	const order = (() => {
+		if (!drag || drag.from === drag.over) {
+			return chips;
+		}
+		const next = [...chips];
+		const [moved] = next.splice(drag.from, 1);
+		if (moved !== undefined) {
+			next.splice(drag.over, 0, moved);
+		}
+		return next;
+	})();
+	const rowRef = useRef<HTMLDivElement>(null);
+	useSlide(rowRef, order.join("\u0000"));
+	const dropDrag = () => {
+		if (drag) {
+			reorder(drag.from, drag.over);
+		}
+		setDrag(null);
 	};
 	const removeChip = (name: string) => onChange(joinNames(chips.filter((c) => c !== name)));
 
@@ -189,33 +218,42 @@ export function TagCombobox({
 
 	return (
 		<div className="relative">
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for chip reordering */}
 			<div
+				ref={rowRef}
+				onDragOver={(e) => drag && e.preventDefault()}
+				onDrop={(e) => {
+					e.preventDefault();
+					dropDrag();
+				}}
 				className={cn(
 					"flex min-h-8 flex-wrap items-center gap-1 rounded-lg border border-input bg-transparent px-1.5 py-1 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
 					className,
 					touched && "border-primary/60 bg-primary/5 dark:bg-primary/10",
 				)}
 			>
-				{chips.map((c, i) => (
-					<Chip
-						key={c}
-						name={c}
-						selected={allSelected}
-						dragging={drag?.from === i}
-						dropBefore={drag !== null && drag.over === i && drag.from !== i}
-						onDragStart={() => setDrag({ from: i, over: i })}
-						onDragOver={() => setDrag((d) => (d ? { ...d, over: i } : d))}
-						onDrop={() => {
-							if (drag) {
-								reorder(drag.from, i);
+				{order.map((c) => {
+					const at = chips.indexOf(c);
+					return (
+						<Chip
+							key={c}
+							name={c}
+							selected={allSelected}
+							dragging={drag?.from === at}
+							onDragStart={() =>
+								// After the browser has taken its drag image of the untouched chip.
+								setTimeout(() => setDrag({ from: at, over: at }), 0)
 							}
-							setDrag(null);
-						}}
-						onDragEnd={() => setDrag(null)}
-						onNudge={(step) => reorder(i, i + step)}
-						onRemove={() => removeChip(c)}
-					/>
-				))}
+							onDragOver={() =>
+								setDrag((d) => (d && d.from !== at && d.over !== at ? { ...d, over: at } : d))
+							}
+							onDrop={dropDrag}
+							onDragEnd={() => setDrag(null)}
+							onNudge={(step) => reorder(at, at + step)}
+							onRemove={() => removeChip(c)}
+						/>
+					);
+				})}
 				<input
 					id={id}
 					role="combobox"
@@ -292,7 +330,6 @@ function Chip({
 	name,
 	selected,
 	dragging,
-	dropBefore,
 	onDragStart,
 	onDragOver,
 	onDrop,
@@ -303,7 +340,6 @@ function Chip({
 	name: string;
 	selected: boolean;
 	dragging: boolean;
-	dropBefore: boolean;
 	onDragStart: () => void;
 	onDragOver: () => void;
 	onDrop: () => void;
@@ -315,6 +351,7 @@ function Chip({
 		// biome-ignore lint/a11y/noStaticElementInteractions: draggable chip; Alt+arrows reorder from the keyboard
 		<span
 			draggable
+			data-chip={name}
 			// Focusable so Alt+←/→ can reorder without a mouse.
 			// biome-ignore lint/a11y/noNoninteractiveTabindex: reorderable chip
 			tabIndex={0}
@@ -342,8 +379,9 @@ function Chip({
 			className={cn(
 				"flex max-w-full cursor-grab items-center gap-0.5 rounded-md bg-secondary py-0.5 pr-0.5 pl-0.5 text-secondary-foreground text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
 				selected && "bg-primary text-primary-foreground",
-				dragging && "opacity-40",
-				dropBefore && "shadow-[-2px_0_0_0_var(--color-primary)]",
+				// The dragged chip's slot is the landing preview: a dashed, empty outline.
+				dragging &&
+					"bg-primary/10 outline-1 -outline-offset-1 outline-primary/70 outline-dashed *:invisible",
 			)}
 		>
 			<GripVertical className="size-3 shrink-0 text-muted-foreground/60" />
@@ -358,4 +396,38 @@ function Chip({
 			</button>
 		</span>
 	);
+}
+
+/** Animates one element from where it was (`was`) to where it is now. */
+function slideFrom(el: HTMLElement, was: DOMRect | undefined, now: DOMRect) {
+	if (!was || (was.left === now.left && was.top === now.top)) {
+		return;
+	}
+	const from = `translate(${was.left - now.left}px, ${was.top - now.top}px)`;
+	el.animate([{ transform: from }, { transform: "translate(0, 0)" }], {
+		duration: 200,
+		easing: "cubic-bezier(0.2, 0, 0, 1)",
+	});
+}
+
+/**
+ * Slides chips to their new place whenever the order changes (FLIP): compare each chip's box
+ * with the last render and animate it from the old position.
+ */
+function useSlide(ref: RefObject<HTMLDivElement | null>, orderKey: string) {
+	const last = useRef(new Map<string, DOMRect>());
+	// biome-ignore lint/correctness/useExhaustiveDependencies: orderKey is the trigger
+	useLayoutEffect(() => {
+		const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		const now = new Map<string, DOMRect>();
+		for (const el of ref.current?.querySelectorAll<HTMLElement>("[data-chip]") ?? []) {
+			const key = el.getAttribute("data-chip") ?? "";
+			const box = el.getBoundingClientRect();
+			now.set(key, box);
+			if (!calm) {
+				slideFrom(el, last.current.get(key), box);
+			}
+		}
+		last.current = now;
+	}, [ref, orderKey]);
 }
