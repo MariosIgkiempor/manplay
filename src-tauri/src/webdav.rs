@@ -22,6 +22,8 @@ pub struct Entry {
     pub name: String,
     pub is_dir: bool,
     pub size: Option<u64>,
+    /// Unix seconds.
+    pub modified: Option<i64>,
 }
 
 fn url(segments: &[String]) -> String {
@@ -87,7 +89,18 @@ pub async fn list(client: &Client, segments: &[String]) -> Result<Vec<Entry>, Er
                 .find(|n| n.has_tag_name((DAV_NS, "getcontentlength")))
                 .and_then(|n| n.text())
                 .and_then(|t| t.trim().parse().ok());
-            Some(Entry { name, is_dir, size })
+            let modified = resp
+                .descendants()
+                .find(|n| n.has_tag_name((DAV_NS, "getlastmodified")))
+                .and_then(|n| n.text())
+                .and_then(|t| jiff::fmt::rfc2822::parse(t.trim()).ok())
+                .map(|z| z.timestamp().as_second());
+            Some(Entry {
+                name,
+                is_dir,
+                size,
+                modified,
+            })
         })
         .collect();
     entries.sort_by(|a, b| {

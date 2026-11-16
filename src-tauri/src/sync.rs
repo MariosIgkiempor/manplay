@@ -10,6 +10,8 @@ use crate::error::Error;
 use crate::r2::{self, R2};
 use crate::webdav;
 
+pub mod transfer;
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Progress<'a> {
@@ -106,6 +108,22 @@ impl<'a> Backend<'a> {
         match self {
             Self::Dav(c) => webdav::put(c, dest, file).await,
             Self::R2(c, r) => r.put(c, dest, file).await,
+        }
+    }
+
+    /// The folders and files directly inside `dir`, folders first, then by name.
+    async fn list_dir(&self, dir: &[String]) -> Result<Vec<webdav::Entry>, Error> {
+        match self {
+            Self::Dav(c) => webdav::list(c, dir).await,
+            Self::R2(c, r) => {
+                let mut entries = r.list_dir(c, dir).await?;
+                entries.sort_by(|a, b| {
+                    b.is_dir
+                        .cmp(&a.is_dir)
+                        .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                });
+                Ok(entries)
+            }
         }
     }
 
@@ -1217,6 +1235,74 @@ pub async fn list_remote(client: &Client, target: &SyncTarget) -> Result<Vec<Rem
     backend.list(&base).await
 }
 
+/// Total size of the files inside each subfolder of `rel`, by folder name.
+pub async fn remote_dir_sizes(
+    client: &Client,
+    target: &SyncTarget,
+    rel: &[String],
+) -> Result<HashMap<String, u64>, Error> {
+    let dir: Vec<String> = base_of(target)
+        .into_iter()
+        .chain(rel.iter().cloned())
+        .collect();
+    let mut out: HashMap<String, u64> = HashMap::new();
+    for file in Backend::for_target(client, target)?.list(&dir).await? {
+        // Files directly in `rel` belong to no subfolder.
+        if let (Some(folder), true) = (file.rel.first(), file.rel.len() > 1)
+            && !folder.starts_with('.')
+        {
+            *out.entry(folder.clone()).or_default() += file.size;
+        }
+    }
+    Ok(out)
+}
+
+/// Size of one file on a destination, `None` when it is not there.
+pub async fn remote_file_size(
+    client: &Client,
+    target: &SyncTarget,
+    rel: &[String],
+) -> Result<Option<u64>, Error> {
+    let path: Vec<String> = base_of(target)
+        .into_iter()
+        .chain(rel.iter().cloned())
+        .collect();
+    Backend::for_target(client, target)?
+        .remote_size(&path)
+        .await
+}
+
+/// `len` bytes of one destination file starting at `start`, for streaming playback.
+pub async fn read_remote_range(
+    client: &Client,
+    target: &SyncTarget,
+    rel: &[String],
+    start: u64,
+    len: u64,
+) -> Result<Vec<u8>, Error> {
+    let path: Vec<String> = base_of(target)
+        .into_iter()
+        .chain(rel.iter().cloned())
+        .collect();
+    Backend::for_target(client, target)?
+        .get_range(&path, start, len)
+        .await
+}
+
+/// One level of a destination, for browsing. `rel` is relative to the destination folder.
+pub async fn browse_remote(
+    client: &Client,
+    target: &SyncTarget,
+    rel: &[String],
+) -> Result<Vec<webdav::Entry>, Error> {
+    let dir: Vec<String> = base_of(target)
+        .into_iter()
+        .chain(rel.iter().cloned())
+        .collect();
+    let backend = Backend::for_target(client, target)?;
+    backend.list_dir(&dir).await
+}
+
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullOutcome {
@@ -1304,7 +1390,17 @@ async fn pull_one(
         return Err(Error::Msg("unsafe path on destination".to_owned()));
     }
     let dest = file.rel.iter().fold(root.to_path_buf(), |p, s| p.join(s));
-    if tokio::fs::try_exists(&dest).await? {
+    pull_file(backend, base, file, &dest).await
+}
+
+/// Downloads one destination file to exactly `dest`. Returns `false` if a file is already there.
+async fn pull_file(
+    backend: &Backend<'_>,
+    base: &[String],
+    file: &Remote,
+    dest: &Path,
+) -> Result<bool, Error> {
+    if tokio::fs::try_exists(dest).await? {
         return Ok(false);
     }
     if let Some(parent) = dest.parent() {
@@ -1323,7 +1419,7 @@ async fn pull_one(
                 file.size
             )));
         }
-        tokio::fs::rename(&tmp, &dest).await?;
+        tokio::fs::rename(&tmp, dest).await?;
         Ok(())
     }
     .await;

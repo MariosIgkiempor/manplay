@@ -2207,6 +2207,7 @@ dependencies = [
  "futures-util",
  "hmac",
  "image",
+ "jiff",
  "keyring",
  "lofty",
  "log",

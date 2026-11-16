@@ -216,9 +216,18 @@ export function pathArtUrl(path: string): string {
 	return convertFileSrc(path, "art");
 }
 
-/** URL the webview can stream audio from. */
+const REMOTE_PREFIX = "remote:";
+
+/** The player's name for a file on a destination: `remote:<destination id>/<folder>/<file>`. */
+export function remoteTrackPath(targetId: number, rel: readonly string[]): string {
+	return `${REMOTE_PREFIX}${[String(targetId), ...rel].join("/")}`;
+}
+
+/** URL the webview can stream audio from; destination files stream through the `remote` scheme. */
 export function audioUrl(path: string): string {
-	return convertFileSrc(path);
+	return path.startsWith(REMOTE_PREFIX)
+		? convertFileSrc(path.slice(REMOTE_PREFIX.length), "remote")
+		: convertFileSrc(path);
 }
 
 // ---- playlists ------------------------------------------------------------
@@ -507,6 +516,39 @@ export async function remotePull(targetId: number, files: string[][]): Promise<P
 	return pullOutcomeSchema.parse(await invoke("remote_pull", { targetId, files }));
 }
 
+/** A file or folder on a destination, by path below the destination folder. */
+export interface RemoteItem {
+	rel: string[];
+	isDir: boolean;
+}
+
+/** Copies files and folders of a destination into a library folder. Existing files are skipped. */
+export async function remoteDownload(
+	targetId: number,
+	items: RemoteItem[],
+	dest: string,
+): Promise<PullOutcome> {
+	return pullOutcomeSchema.parse(await invoke("remote_download", { targetId, items, dest }));
+}
+
+/** Copies library files and folders to a destination folder. Existing files are skipped. */
+export async function remoteUpload(
+	targetId: number,
+	paths: string[],
+	dest: string[],
+): Promise<PullOutcome> {
+	return pullOutcomeSchema.parse(await invoke("remote_upload", { targetId, paths, dest }));
+}
+
+/** Moves files and folders into another folder of the same destination; returns how many moved. */
+export async function remoteMove(
+	targetId: number,
+	items: RemoteItem[],
+	dest: string[],
+): Promise<number> {
+	return int.parse(await invoke("remote_move", { targetId, items, dest }));
+}
+
 const pullProgressSchema = z.object({ done: int, total: int, current: z.string() });
 export type PullProgress = z.infer<typeof pullProgressSchema>;
 
@@ -689,6 +731,37 @@ export type FsEntry = z.infer<typeof fsEntrySchema>;
 /** Lists a folder inside the library (folders first). */
 export async function fsList(path: string): Promise<FsEntry[]> {
 	return z.array(fsEntrySchema).parse(await invoke("fs_list", { path }));
+}
+
+const remoteEntrySchema = z.object({
+	name: z.string(),
+	isDir: z.boolean(),
+	size: int.nullable(),
+	modified: int.nullable(),
+});
+
+/**
+ * Lists one folder of a destination (`rel` is relative to the destination folder), folders first,
+ * in the same shape as {@link fsList}.
+ */
+export async function remoteList(targetId: number, rel: string[]): Promise<FsEntry[]> {
+	const raw = z.array(remoteEntrySchema).parse(await invoke("remote_list", { targetId, rel }));
+	return raw.map((e) => ({ ...e, size: e.size ?? 0 }));
+}
+
+const dirSizesSchema = z.record(z.string(), int);
+
+/** Total size of each subfolder of a library folder, by name. Slower than {@link fsList}. */
+export async function fsDirSizes(path: string): Promise<Record<string, number>> {
+	return dirSizesSchema.parse(await invoke("fs_dir_sizes", { path }));
+}
+
+/** Total size of each subfolder of a destination folder, by name. */
+export async function remoteDirSizes(
+	targetId: number,
+	rel: string[],
+): Promise<Record<string, number>> {
+	return dirSizesSchema.parse(await invoke("remote_dir_sizes", { targetId, rel }));
 }
 
 /** Creates a folder and returns its path. */

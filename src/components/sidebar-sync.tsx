@@ -1,5 +1,5 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
-import { ChevronRight, CloudUpload, Download, RefreshCw, Upload } from "lucide-react";
+import { ChevronRight, CloudUpload, Download, FolderOpen, RefreshCw, Upload } from "lucide-react";
 import type { ReactNode } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { useDownloadsEnabled } from "#/components/downloads-source.tsx";
@@ -62,6 +62,7 @@ function ChildRow({
 	active,
 	dim,
 	trailing,
+	browse,
 	onOpen,
 }: {
 	brand: Brand;
@@ -71,10 +72,12 @@ function ChildRow({
 	/** Switched off: shown, but quieter. */
 	dim?: boolean;
 	trailing?: ReactNode;
+	/** Destination id whose files can be browsed; adds a hover button next to the row. */
+	browse?: number;
 	onOpen: () => void;
 }) {
 	return (
-		<div className={rowClass(active)}>
+		<div className={cn("group/row", rowClass(active))}>
 			<button
 				type="button"
 				title={title ?? label}
@@ -86,7 +89,22 @@ function ChildRow({
 				<span className="truncate">{label}</span>
 				{trailing && <span className="ml-auto shrink-0 pl-2 text-xs tabular-nums">{trailing}</span>}
 			</button>
-			<span className="size-5 shrink-0" />
+			{browse === undefined ? (
+				<span className="size-5 shrink-0" />
+			) : (
+				<Link
+					to="/files"
+					search={{ target: browse }}
+					aria-label={`Browse files on ${label}`}
+					title="Browse files"
+					className={cn(
+						iconButton,
+						"size-5 opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100",
+					)}
+				>
+					<FolderOpen />
+				</Link>
+			)}
 		</div>
 	);
 }
@@ -177,6 +195,7 @@ function ExportItems() {
 						label={t.machine}
 						title={`${t.machine}: ${t.path.join(" / ") || "bucket root"}`}
 						active={isView(detail.view, view)}
+						browse={t.id}
 						trailing={
 							syncing.has(t.id) && (
 								<span

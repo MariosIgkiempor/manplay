@@ -297,6 +297,91 @@ impl R2 {
         Ok(out)
     }
 
+    /// The folders and objects directly inside `prefix`; R2 has no real folders, so a folder is a
+    /// shared key prefix.
+    pub async fn list_dir(
+        &self,
+        client: &Client,
+        prefix: &[String],
+    ) -> Result<Vec<crate::webdav::Entry>, Error> {
+        let prefix = if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", prefix.join("/"))
+        };
+        let mut out = Vec::new();
+        let mut token = String::new();
+        loop {
+            // Pairs must stay sorted by name.
+            let mut query = Vec::new();
+            if !token.is_empty() {
+                query.push(("continuation-token", token.as_str()));
+            }
+            query.push(("delimiter", "/"));
+            query.push(("list-type", "2"));
+            if !prefix.is_empty() {
+                query.push(("prefix", prefix.as_str()));
+            }
+            let resp = self
+                .signed(client, &Method::GET, &[], &query)
+                .send()
+                .await?;
+            if !resp.status().is_success() {
+                return Err(Error::Msg(format!("r2 LIST {}", resp.status())));
+            }
+            let body = resp.text().await?;
+            let doc = roxmltree::Document::parse(&body).map_err(|e| Error::Msg(e.to_string()))?;
+            let text = |n: roxmltree::Node<'_, '_>, tag: &str| {
+                n.children()
+                    .find(|c| c.has_tag_name(tag))
+                    .and_then(|c| c.text())
+                    .map(str::to_owned)
+            };
+            let name_of = |key: &str| {
+                key.strip_prefix(prefix.as_str())
+                    .unwrap_or(key)
+                    .trim_end_matches('/')
+                    .to_owned()
+            };
+            for c in doc
+                .descendants()
+                .filter(|n| n.has_tag_name("CommonPrefixes"))
+            {
+                if let Some(p) = text(c, "Prefix") {
+                    out.push(crate::webdav::Entry {
+                        name: name_of(&p),
+                        is_dir: true,
+                        size: None,
+                        modified: None,
+                    });
+                }
+            }
+            for c in doc.descendants().filter(|n| n.has_tag_name("Contents")) {
+                let Some(key) = text(c, "Key") else { continue };
+                let name = name_of(&key);
+                // The folder's own placeholder key, if one exists.
+                if key.ends_with('/') || name.is_empty() {
+                    continue;
+                }
+                out.push(crate::webdav::Entry {
+                    name,
+                    is_dir: false,
+                    size: text(c, "Size").and_then(|s| s.parse().ok()),
+                    modified: text(c, "LastModified")
+                        .and_then(|t| t.parse::<jiff::Timestamp>().ok())
+                        .map(jiff::Timestamp::as_second),
+                });
+            }
+            let root = doc.root_element();
+            let truncated = text(root, "IsTruncated").is_some_and(|t| t == "true");
+            match text(root, "NextContinuationToken") {
+                Some(next) if truncated => token = next,
+                _ => break,
+            }
+        }
+        Ok(out)
+    }
+
     /// Reads `len` bytes starting at `start`.
     pub async fn get_range(
         &self,

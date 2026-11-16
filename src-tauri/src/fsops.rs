@@ -199,6 +199,31 @@ pub fn list(root: &Path, dir: &Path) -> Result<Vec<FsEntry>, Error> {
     Ok(out)
 }
 
+/// Total size in bytes of the files inside each subfolder of `dir`, by folder name. Hidden
+/// folders are left out, like in [`list`].
+pub fn dir_sizes(root: &Path, dir: &Path) -> Result<std::collections::HashMap<String, u64>, Error> {
+    let dir = inside(root, dir)?;
+    let mut out = std::collections::HashMap::new();
+    for entry in read_dir(&dir)? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if name.starts_with('.') || !entry.path().is_dir() {
+            continue;
+        }
+        let total = walkdir::WalkDir::new(entry.path())
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.len())
+            .sum();
+        out.insert(name, total);
+    }
+    Ok(out)
+}
+
 /// Shows `path` selected in a Finder window.
 pub fn reveal(root: &Path, path: &Path) -> Result<(), Error> {
     let target = inside(root, path)?;
@@ -401,6 +426,18 @@ mod tests {
     fn touch(p: &Path) {
         std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
         std::fs::write(p, b"x").expect("write");
+    }
+
+    #[test]
+    fn folder_sizes_count_everything_inside() {
+        let root = tmp("sizes");
+        touch(&root.join("a").join("one.mp3"));
+        touch(&root.join("a").join("deep").join("two.mp3"));
+        touch(&root.join("loose.mp3"));
+        touch(&root.join(".hidden").join("x"));
+        let sizes = dir_sizes(&root, &root).expect("sizes");
+        assert_eq!(sizes.len(), 1);
+        assert_eq!(sizes.get("a"), Some(&2));
     }
 
     #[test]

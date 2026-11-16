@@ -1,13 +1,14 @@
-import { Tags, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FilePane } from "#/components/file-pane.tsx";
 import { FileShortcuts } from "#/components/file-shortcuts.tsx";
+import { FilesHeader } from "#/components/files-header.tsx";
+import { FilesSourcePicker } from "#/components/files-source-picker.tsx";
 import { type FixNotice, HealthBar } from "#/components/library-health.tsx";
+import { NoticeBar } from "#/components/notice-bar.tsx";
+import { RemotePane } from "#/components/remote-pane.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TagCopyDialog } from "#/components/tag-copy-dialog.tsx";
 import type { TagTarget } from "#/components/tag-editor.tsx";
-import { Button } from "#/components/ui/button.tsx";
-import { Switch } from "#/components/ui/switch.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { useUndo } from "#/context/undo-context.ts";
 import { confirmFix, type FixReport } from "#/lib/api.ts";
@@ -16,15 +17,19 @@ import {
 	useAudit,
 	useAuditFix,
 	useLibraryRoot,
+	useSyncTargets,
 	useTagClipboard,
 	useTagsWrite,
 	useTracks,
 } from "#/lib/queries.ts";
 import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
 import { DEFAULT_FILE_SORT, type FileSort } from "#/lib/tree.ts";
+import { DragProvider } from "#/lib/use-file-drag.tsx";
 import type { FsClipboard } from "#/lib/use-fs-ops.ts";
+import { usePaneSources } from "#/lib/use-pane-sources.ts";
 import { type TagConfirmRequest, useTagConfirm } from "#/lib/use-tag-confirm.tsx";
 import { useTagPanelNav } from "#/lib/use-tag-panel-nav.ts";
+import { useTransfer } from "#/lib/use-transfer.tsx";
 
 const AUTO_KEY = "manplay.tags.autoOpen";
 const VIEW_KEY = "manplay.files.view";
@@ -34,12 +39,19 @@ interface SavedView {
 	paths: [string | null, string | null];
 	split: boolean;
 	sort: FileSort;
+	/** The destination shown in the second pane; `null` for the library. */
+	right: number | null;
 }
 
 const SORT_KEYS = new Set(["name", "size", "modified"]);
 
 function loadView(): SavedView {
-	const fallback: SavedView = { paths: [null, null], split: false, sort: DEFAULT_FILE_SORT };
+	const fallback: SavedView = {
+		paths: [null, null],
+		split: false,
+		sort: DEFAULT_FILE_SORT,
+		right: null,
+	};
 	try {
 		const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null");
 		if (!v || typeof v !== "object") {
@@ -49,6 +61,7 @@ function loadView(): SavedView {
 		return {
 			paths: [str(v.paths?.[0]), str(v.paths?.[1])],
 			split: v.split === true,
+			right: Number.isInteger(v.right) && v.right > 0 ? v.right : null,
 			sort: SORT_KEYS.has(v.sort?.key)
 				? { key: v.sort.key, desc: v.sort.desc === true }
 				: DEFAULT_FILE_SORT,
@@ -120,8 +133,30 @@ async function pasteTagsOnto(
 	setNotice({ kind: "report", report: total, verb: "Updated metadata on" });
 }
 
-/** Two-pane file manager over the library folder. */
-export function FilesView() {
+/** Shown instead of the panes until the library folder is known. */
+function NoFolderNote({ loaded }: { loaded: boolean }) {
+	return (
+		<div className="p-6">
+			<p className="text-muted-foreground text-sm">
+				{loaded ? "Choose a library folder in Library first." : "Loading…"}
+			</p>
+		</div>
+	);
+}
+
+/**
+ * Two-pane file manager. Each pane shows the library folder or a destination, and rows can be
+ * dragged between panes: inside the library or one destination they move, between the library and
+ * a destination they copy.
+ */
+export function FilesView({
+	target,
+	onSourceChange,
+}: {
+	target: number | undefined;
+	/** Chooses what the first pane shows (the page's address holds it). */
+	onSourceChange: (id: number | undefined) => void;
+}) {
 	const root = useLibraryRoot();
 	const audit = useAudit();
 	const tracks = useTracks();
@@ -129,6 +164,7 @@ export function FilesView() {
 	const [saved] = useState(loadView);
 	const [split, setSplit] = useState(saved.split);
 	const [sort, setSort] = useState<FileSort>(saved.sort);
+	const [right, setRight] = useState<number | null>(saved.right);
 	const [shortcuts, setShortcuts] = useState(false);
 	const [clipboard, setClipboard] = useState<FsClipboard | null>(null);
 	const [active, setActive] = useState<0 | 1>(0);
@@ -174,28 +210,18 @@ export function FilesView() {
 	});
 	// Per-pane folder; `null` means "the library root".
 	const [paths, setPaths] = useState<[string | null, string | null]>(saved.paths);
-	useEffect(() => saveView({ paths, split, sort }), [paths, split, sort]);
+	useEffect(() => saveView({ paths, split, sort, right }), [paths, split, sort, right]);
 
 	const issues = audit.data;
 	const health = useMemo(() => indexIssues(root.data ?? "", issues ?? []), [root.data, issues]);
 
-	if (root.data === undefined || root.data === null) {
-		return (
-			<div className="p-6">
-				<p className="text-muted-foreground text-sm">
-					{root.isSuccess ? "Choose a library folder in Library first." : "Loading…"}
-				</p>
-			</div>
-		);
-	}
-	const base = root.data;
-	/** A remembered folder only counts while it is still inside the library folder. */
-	const at = (i: 0 | 1) => {
-		const p = paths[i];
-		return p && (p === base || p.startsWith(`${base}/`)) ? p : base;
-	};
-	const go = (i: 0 | 1) => (p: string) =>
-		setPaths((prev) => (i === 0 ? [p, prev[1]] : [prev[0], p]));
+	const destinations = useSyncTargets();
+	const { sources, nameOf: nameOfSource } = usePaneSources(target, right);
+	const transfer = useTransfer(nameOfSource);
+
+	const panesShown: (0 | 1)[] = split ? [0, 1] : [0];
+	const hasLocal = panesShown.some((i) => sources[i].kind === "library");
+
 	const toggleSplit = () => {
 		if (split) {
 			setActive(0);
@@ -204,7 +230,48 @@ export function FilesView() {
 		}
 		setSplit(!split);
 	};
-	const panes: (0 | 1)[] = split ? [0, 1] : [0];
+	const header = (
+		<FilesHeader
+			target={
+				sources[0].kind === "remote"
+					? destinations.data?.find((t) => t.id === (sources[0] as { id: number }).id)
+					: undefined
+			}
+			onSourceChange={onSourceChange}
+			split={split}
+			onToggleSplit={toggleSplit}
+			hasLocal={hasLocal}
+			canUndo={fsUndo.canUndo}
+			undoLabel={fsUndo.label}
+			onUndo={() => void fsUndo.undo()}
+			tagsOpen={tagsOpen}
+			canOpenTags={tagTarget !== null}
+			onToggleTags={() => (tagsOpen ? detail.close() : openTags())}
+			autoOpen={autoOpen}
+			onAutoOpen={(on) => {
+				setAutoOpen(on);
+				saveAutoOpen(on);
+			}}
+		/>
+	);
+
+	if (hasLocal && (root.data === undefined || root.data === null)) {
+		return (
+			<main className="flex h-full flex-col">
+				{header}
+				<NoFolderNote loaded={root.isSuccess} />
+			</main>
+		);
+	}
+	const base = root.data ?? "";
+	/** A remembered folder only counts while it is still inside the library folder. */
+	const at = (i: 0 | 1) => {
+		const p = paths[i];
+		return p && (p === base || p.startsWith(`${base}/`)) ? p : base;
+	};
+	const go = (i: 0 | 1) => (p: string) =>
+		setPaths((prev) => (i === 0 ? [p, prev[1]] : [prev[0], p]));
+	const panes = panesShown;
 
 	/** Fixes the fixable files at or under `scopes` (the whole library when omitted). */
 	const fix = async (scopes?: string[]) => {
@@ -222,83 +289,91 @@ export function FilesView() {
 	const pasteTags = (targets: TagTarget[]) =>
 		pasteTagsOnto(tagClip, targets, tagWriter.mutateAsync, setNotice, tagConfirm.ask);
 
-	return (
-		<div ref={rootRef} className="relative flex h-full min-h-0 flex-col overflow-hidden border-t">
-			<HealthBar
-				error={audit.isError ? String(audit.error) : null}
-				notice={notice}
-				onDismiss={() => setNotice(null)}
+	/** Split panes each choose their own source; a single pane uses the header's. */
+	const pickerFor = (i: 0 | 1) =>
+		split ? (
+			<FilesSourcePicker
+				variant="field"
+				value={sources[i].kind === "remote" ? (sources[i] as { id: number }).id : undefined}
+				onChange={(id) => (i === 0 ? onSourceChange(id) : setRight(id ?? null))}
 			/>
-			<div className="flex items-center justify-end gap-3 border-b px-3 py-1 text-xs">
-				<span className="flex items-center gap-2 text-muted-foreground">
-					Open metadata when selecting
-					<Switch
-						checked={autoOpen}
-						onChange={(on) => {
-							setAutoOpen(on);
-							saveAutoOpen(on);
-						}}
-						label="Open the metadata pane automatically when selecting a song or folder"
+		) : undefined;
+
+	const libraryPane = (i: 0 | 1) => (
+		<FilePane
+			key="library"
+			pane={i}
+			root={base}
+			onRecord={fsUndo.record}
+			path={at(i)}
+			onNavigate={go(i)}
+			active={split && active === i}
+			onActivate={() => setActive(i)}
+			clipboard={clipboard}
+			setClipboard={setClipboard}
+			sourcePicker={pickerFor(i)}
+			otherPath={split && sources[i === 0 ? 1 : 0].kind === "library" ? at(i === 0 ? 1 : 0) : null}
+			health={health}
+			fixing={fixer.isPending}
+			onFix={fix}
+			onEditTags={editTags}
+			onSelectTarget={selectTarget}
+			tagClipboard={tagClip}
+			onCopyTags={setCopying}
+			onPasteTags={pasteTags}
+			onFocusTags={tagNav.focusTags}
+			sort={sort}
+			onSort={setSort}
+			onShowShortcuts={() => setShortcuts(true)}
+		/>
+	);
+
+	const pane = (i: 0 | 1) => {
+		const src = sources[i];
+		return src.kind === "remote" ? (
+			<RemotePane
+				key={`remote-${src.id}`}
+				pane={i}
+				targetId={src.id}
+				label={nameOfSource(src)}
+				sourcePicker={pickerFor(i)}
+				onActivate={() => setActive(i)}
+			/>
+		) : (
+			libraryPane(i)
+		);
+	};
+
+	return (
+		<main className="flex h-full flex-col">
+			{header}
+			<DragProvider onTransfer={transfer.onTransfer}>
+				<div ref={rootRef} className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+					<HealthBar
+						error={audit.isError ? String(audit.error) : null}
+						notice={notice}
+						onDismiss={() => setNotice(null)}
 					/>
-				</span>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={() => void fsUndo.undo()}
-					disabled={!fsUndo.canUndo}
-					title={fsUndo.label ? `Undo ${fsUndo.label} (⌘Z)` : "Nothing to undo"}
-				>
-					<Undo2 />
-					Undo
-				</Button>
-				<Button
-					variant={tagsOpen ? "secondary" : "outline"}
-					size="sm"
-					onClick={() => (tagsOpen ? detail.close() : openTags())}
-					disabled={tagTarget === null}
-				>
-					<Tags />
-					Metadata
-				</Button>
-			</div>
-			<div className="flex min-h-0 flex-1">
-				{panes.map((i) => (
-					<FilePane
-						key={i}
-						root={base}
-						onRecord={fsUndo.record}
-						path={at(i)}
-						onNavigate={go(i)}
-						active={split && active === i}
-						onActivate={() => setActive(i)}
-						clipboard={clipboard}
-						setClipboard={setClipboard}
-						onToggleSplit={toggleSplit}
-						otherPath={split ? at(i === 0 ? 1 : 0) : null}
-						health={health}
-						fixing={fixer.isPending}
-						onFix={fix}
-						onEditTags={editTags}
-						onSelectTarget={selectTarget}
-						tagClipboard={tagClip}
-						onCopyTags={setCopying}
-						onPasteTags={pasteTags}
-						onFocusTags={tagNav.focusTags}
-						sort={sort}
-						onSort={setSort}
-						onShowShortcuts={() => setShortcuts(true)}
-					/>
-				))}
-			</div>
-			{copying && (
-				<TagCopyDialog target={copying} onCopy={setTagClip} onClose={() => setCopying(null)} />
-			)}
-			<StatusBar>
-				<Stat label="Songs" value={tracks.data?.length ?? 0} />
-				<Stat label="Issues" value={issues?.length ?? 0} />
-			</StatusBar>
-			{tagConfirm.dialog}
-			{shortcuts && <FileShortcuts onClose={() => setShortcuts(false)} />}
-		</div>
+					<NoticeBar notice={transfer.notice} onDismiss={transfer.dismiss} />
+					<div className="flex min-h-0 flex-1">
+						{panes.map((i) => (
+							<div key={i} className="flex min-h-0 min-w-0 flex-1 flex-col">
+								{pane(i)}
+							</div>
+						))}
+					</div>
+					{copying && (
+						<TagCopyDialog target={copying} onCopy={setTagClip} onClose={() => setCopying(null)} />
+					)}
+					<StatusBar>
+						<Stat label="Songs" value={tracks.data?.length ?? 0} />
+						<Stat label="Issues" value={issues?.length ?? 0} />
+					</StatusBar>
+					{tagConfirm.dialog}
+					{transfer.dialog}
+					{shortcuts && <FileShortcuts onClose={() => setShortcuts(false)} />}
+				</div>
+			</DragProvider>
+		</main>
 	);
 }

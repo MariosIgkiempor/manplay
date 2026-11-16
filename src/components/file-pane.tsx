@@ -5,7 +5,6 @@ import {
 	ArrowUp,
 	ChevronRight,
 	ClipboardPaste,
-	Columns2,
 	Copy,
 	File as FileIcon,
 	Folder,
@@ -18,7 +17,6 @@ import {
 	Play,
 	Scissors,
 	Search,
-	Square,
 	Tags,
 	Trash2,
 	Wrench,
@@ -32,6 +30,13 @@ import {
 	useRef,
 	useState,
 } from "react";
+import {
+	CARRIED_ROW,
+	DROP_PANE,
+	DROP_ROW,
+	DropChip,
+	DropHintBar,
+} from "#/components/drop-feedback.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
 import { IssuePopover } from "#/components/issue-popover.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -39,6 +44,7 @@ import { Input } from "#/components/ui/input.tsx";
 import type { UndoEntry } from "#/context/undo-context.ts";
 import { type FsEntry, fsReveal, pathArtUrl } from "#/lib/api.ts";
 import type { IssueIndex } from "#/lib/audit.ts";
+import { LIBRARY } from "#/lib/drag-session.ts";
 import { isAudioName, joinPath, parentPath, relSegments } from "#/lib/fs-path.ts";
 import { applyClick, EMPTY_SELECTION, type Selection } from "#/lib/selection.ts";
 import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
@@ -50,7 +56,7 @@ import {
 	nameMatches,
 	type TreeRow,
 } from "#/lib/tree.ts";
-import { useFileDrag } from "#/lib/use-file-drag.ts";
+import { useFileDrag } from "#/lib/use-file-drag.tsx";
 import { useFilePlay } from "#/lib/use-file-play.ts";
 import type { FsClipboard } from "#/lib/use-fs-ops.ts";
 import { useFsOps } from "#/lib/use-fs-ops.ts";
@@ -75,9 +81,9 @@ function useReportTarget(row: TreeRow | undefined, report: PaneProps["onSelectTa
 }
 
 /** Pixels of indent per tree level. */
-const INDENT = 16;
+export const INDENT = 16;
 
-function size(n: number): string {
+export function size(n: number): string {
 	if (n < 1024) {
 		return `${n} B`;
 	}
@@ -118,6 +124,8 @@ function collapseRow(
 }
 
 interface PaneProps {
+	/** Which side of the view this pane is on. */
+	pane: 0 | 1;
 	/** Remembers an operation on the shared undo stack. */
 	onRecord: (entry: UndoEntry) => void;
 	clipboard: FsClipboard | null;
@@ -129,7 +137,8 @@ interface PaneProps {
 	onActivate: () => void;
 	/** The other pane's folder, when the view is split. */
 	otherPath: string | null;
-	onToggleSplit: () => void;
+	/** Shown first in the toolbar when the view is split: what this pane shows. */
+	sourcePicker?: React.ReactNode;
 	/** Library health findings, for the warning icons. */
 	health: IssueIndex;
 	fixing: boolean;
@@ -153,6 +162,7 @@ interface PaneProps {
 }
 
 export function FilePane({
+	pane,
 	onRecord,
 	clipboard,
 	setClipboard,
@@ -162,7 +172,7 @@ export function FilePane({
 	active,
 	onActivate,
 	otherPath,
-	onToggleSplit,
+	sourcePicker,
 	health,
 	fixing,
 	onFix,
@@ -226,9 +236,19 @@ export function FilePane({
 	const crumbs = relSegments(root, path);
 
 	const drag = useFileDrag({
+		pane,
+		source: LIBRARY,
+		describe: (p) => {
+			const r = rowByPath.get(p);
+			return r && { path: p, name: r.entry.name, isDir: r.entry.isDir };
+		},
 		selected,
 		selectOnly: (p) => setSel({ selected: new Set([p]), anchor: p }),
-		onDrop: runMove,
+		onLibraryMove: runMove,
+		spring: {
+			isClosedFolder: (p) => rowByPath.get(p)?.entry.isDir === true && !expanded.has(p),
+			open: (p) => setOpen(p, true),
+		},
 	});
 
 	const isSong = (r: TreeRow) => !r.entry.isDir && isAudioName(r.entry.name);
@@ -448,7 +468,7 @@ export function FilePane({
 			data-file-pane
 			tabIndex={-1}
 			className={cn(
-				"@container/pane flex min-h-0 min-w-0 flex-1 flex-col border-r bg-card/40 outline-none last:border-r-0",
+				"@container/pane relative flex min-h-0 min-w-0 flex-1 flex-col border-r bg-card/40 outline-none last:border-r-0",
 				active && "bg-card/70",
 			)}
 			onKeyDown={onKeyDown}
@@ -458,6 +478,7 @@ export function FilePane({
 			}}
 		>
 			<div className="flex items-center gap-1 border-b px-2 py-1.5">
+				{sourcePicker}
 				<Button
 					variant="ghost"
 					size="icon-sm"
@@ -481,7 +502,6 @@ export function FilePane({
 					onCopy={() => actions.copy(selectedPaths)}
 					onPaste={() => actions.paste(keyboardDest)}
 					onTrash={() => actions.remove(selectedPaths)}
-					onToggleSplit={onToggleSplit}
 					onMove={() => otherPath !== null && runMove(selectedPaths, otherPath)}
 				/>
 			</div>
@@ -501,7 +521,7 @@ export function FilePane({
 				<div
 					className={cn(
 						"min-h-0 flex-1 overflow-y-auto py-0.5",
-						drag.dropTarget === path && "bg-primary/10",
+						drag.dropTarget === path && DROP_PANE,
 					)}
 					onDragOver={(ev) => drag.allowDrop(ev, path)}
 					onDragLeave={drag.clearDrop}
@@ -535,10 +555,13 @@ export function FilePane({
 									onIssueOpen={(open) => issueNav.toggleIssue(r.path, open)}
 									clipboard={clipboard}
 									dropTarget={drag.dropTarget}
+									dropOp={drag.dropOp}
+									carried={drag.carried.has(r.path)}
 									playState={playStateOf(r.path)}
 									onPlay={isSong(r) ? () => play(r) : undefined}
 									onToggle={() => setOpen(r.path, !expanded.has(r.path))}
 									onDragStart={(ev) => drag.dragStart(ev, r.path)}
+									onDragEnd={drag.dragEnd}
 									onClick={(ev) => onRowClick(r, ev)}
 									onOpen={() => enter(r)}
 									onDragOver={(ev) => drag.allowDrop(ev, r.path)}
@@ -568,12 +591,15 @@ export function FilePane({
 				bytes={selectedBytes}
 				onShowShortcuts={onShowShortcuts}
 			/>
+			<DropHintBar
+				hint={drag.hintFor((p) => (p === root ? "Library" : (p.split(/[\\/]/).pop() ?? p)))}
+			/>
 		</section>
 	);
 }
 
 /** Counts for the pane and the shortcut sheet button. */
-function PaneFooter({
+export function PaneFooter({
 	count,
 	matches,
 	selected,
@@ -585,10 +611,9 @@ function PaneFooter({
 	matches: number | null;
 	selected: number;
 	bytes: number;
-	onShowShortcuts: () => void;
+	onShowShortcuts?: () => void;
 }) {
-	const items =
-		matches === null ? `${count} item${count === 1 ? "" : "s"}` : `${matches} matching`;
+	const items = matches === null ? `${count} item${count === 1 ? "" : "s"}` : `${matches} matching`;
 	const picked =
 		selected > 0 ? ` · ${selected} selected${bytes > 0 ? ` (${size(bytes)})` : ""}` : "";
 	return (
@@ -597,21 +622,23 @@ function PaneFooter({
 				{items}
 				{picked}
 			</span>
-			<button
-				type="button"
-				onClick={onShowShortcuts}
-				title="Keyboard shortcuts (?)"
-				className="-mr-1.5 flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground [&_svg]:size-3.5"
-			>
-				<Keyboard />
-				<span className="hidden @md/pane:inline">Shortcuts</span>
-			</button>
+			{onShowShortcuts && (
+				<button
+					type="button"
+					onClick={onShowShortcuts}
+					title="Keyboard shortcuts (?)"
+					className="-mr-1.5 flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground [&_svg]:size-3.5"
+				>
+					<Keyboard />
+					<span className="hidden @md/pane:inline">Shortcuts</span>
+				</button>
+			)}
 		</div>
 	);
 }
 
 /** Always-visible filter; `/` jumps into it, Enter goes back to the list, Escape clears it. */
-function FilterBox({
+export function FilterBox({
 	inputRef,
 	value,
 	matches,
@@ -671,8 +698,8 @@ function FilterBox({
 }
 
 /** Shared widths so the header and every row line up. */
-const DATE_COL = "hidden w-28 shrink-0 text-right @lg/pane:block";
-const SIZE_COL = "w-16 shrink-0 text-right";
+export const DATE_COL = "hidden w-28 shrink-0 text-right @lg/pane:block";
+export const SIZE_COL = "w-16 shrink-0 text-right";
 
 const SORT_COLUMNS: { key: FileSortKey; label: string; className: string; desc: boolean }[] = [
 	{ key: "name", label: "Name", className: "min-w-0 flex-1 text-left", desc: false },
@@ -681,7 +708,7 @@ const SORT_COLUMNS: { key: FileSortKey; label: string; className: string; desc: 
 ];
 
 /** Column names that sort when clicked; clicking the sorted one flips it. */
-function ColumnHeader({ sort, onSort }: { sort: FileSort; onSort: (s: FileSort) => void }) {
+export function ColumnHeader({ sort, onSort }: { sort: FileSort; onSort: (s: FileSort) => void }) {
 	return (
 		<div className="flex h-7 items-center gap-2 border-b pr-3 pl-[72px] text-muted-foreground text-xs">
 			{SORT_COLUMNS.map((c) => {
@@ -747,7 +774,7 @@ function PaneEmpty({
 }
 
 /** What an empty list means and the one thing to do about it. */
-function EmptyNote({
+export function EmptyNote({
 	title,
 	hint,
 	action,
@@ -769,7 +796,7 @@ function EmptyNote({
 	);
 }
 
-function Banners({ error, listError }: { error: string | null; listError: string | null }) {
+export function Banners({ error, listError }: { error: string | null; listError: string | null }) {
 	return (
 		<>
 			{error && (
@@ -868,7 +895,6 @@ function PaneActions({
 	onCopy,
 	onPaste,
 	onTrash,
-	onToggleSplit,
 	onMove,
 }: {
 	busy: boolean;
@@ -882,7 +908,6 @@ function PaneActions({
 	onCopy: () => void;
 	onPaste: () => void;
 	onTrash: () => void;
-	onToggleSplit: () => void;
 	onMove: () => void;
 }) {
 	const none = busy || count === 0;
@@ -910,15 +935,18 @@ function PaneActions({
 			<Tool label="Move to Trash (⌘⌫)" disabled={none} onClick={onTrash}>
 				<Trash2 />
 			</Tool>
-			<Divider />
 			{split && (
-				<Tool label="Move selection to the other pane" disabled={none || !canMove} onClick={onMove}>
-					<ArrowRight />
-				</Tool>
+				<>
+					<Divider />
+					<Tool
+						label="Move selection to the other pane"
+						disabled={none || !canMove}
+						onClick={onMove}
+					>
+						<ArrowRight />
+					</Tool>
+				</>
 			)}
-			<Tool label={split ? "Single pane" : "Split panes"} onClick={onToggleSplit}>
-				{split ? <Square /> : <Columns2 />}
-			</Tool>
 		</div>
 	);
 }
@@ -1161,7 +1189,7 @@ function Thumb({ src, children }: { src: string; children: React.ReactNode }) {
  * A song's cover with a play button over it on hover, and a steady pause / play mark while it is
  * the one loaded in the player.
  */
-function SongIcon({
+export function SongIcon({
 	entry,
 	path,
 	state,
@@ -1198,10 +1226,10 @@ function SongIcon({
 	);
 }
 
-type PlayState = "playing" | "paused" | null;
+export type PlayState = "playing" | "paused" | null;
 
 /** The name with the filtered-for part marked. */
-function Name({ name, query }: { name: string; query: string }) {
+export function Name({ name, query }: { name: string; query: string }) {
 	const q = query.trim().toLowerCase();
 	const at = q === "" ? -1 : name.toLowerCase().indexOf(q);
 	if (at === -1) {
@@ -1220,7 +1248,7 @@ const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 const timeFmt = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 
 /** Today's changes by time, older ones by date. */
-function modifiedLabel(unix: number | null): string {
+export function modifiedLabel(unix: number | null): string {
 	if (unix === null) {
 		return "–";
 	}
@@ -1229,7 +1257,7 @@ function modifiedLabel(unix: number | null): string {
 }
 
 /** Album art when the file or folder has any, otherwise a plain icon. */
-function EntryIcon({ entry, path }: { entry: FsEntry; path?: string }) {
+export function EntryIcon({ entry, path }: { entry: FsEntry; path?: string }) {
 	const plain = (
 		<span className="flex size-7 shrink-0 items-center justify-center">
 			<PlainIcon entry={entry} />
@@ -1254,7 +1282,7 @@ function PlainIcon({ entry }: { entry: FsEntry }) {
 }
 
 /** Expand/collapse toggle of a folder row; files get a blank of the same width. */
-function Chevron({
+export function Chevron({
 	entry,
 	open,
 	loading,
@@ -1291,6 +1319,35 @@ function Chevron({
 	);
 }
 
+/** The Modified and Size columns of a row. A folder's size fills in once it has been counted. */
+export function EntryColumns({ entry }: { entry: FsEntry }) {
+	return (
+		<>
+			<span className={cn(DATE_COL, "text-muted-foreground text-xs tabular-nums")}>
+				{modifiedLabel(entry.modified)}
+			</span>
+			<span className={cn(SIZE_COL, "text-muted-foreground text-xs tabular-nums")}>
+				{entry.isDir && entry.size === 0 ? <span className="opacity-40">–</span> : size(entry.size)}
+			</span>
+		</>
+	);
+}
+
+/** Row background: selected, being carried, cut, or the drop target. */
+export function rowTone(o: {
+	selected: boolean;
+	active: boolean;
+	dropping: boolean;
+	faded: boolean;
+}) {
+	const highlight = o.active ? "bg-primary/25" : "bg-muted";
+	return cn(
+		o.selected ? highlight : "hover:bg-muted/60",
+		o.dropping && DROP_ROW,
+		o.faded && CARRIED_ROW,
+	);
+}
+
 function EntryRow({
 	row,
 	query,
@@ -1307,8 +1364,11 @@ function EntryRow({
 	onIssueOpen,
 	clipboard,
 	dropTarget,
+	dropOp,
+	carried,
 	onToggle,
 	onDragStart,
+	onDragEnd,
 	onClick,
 	onOpen,
 	onDragOver,
@@ -1333,8 +1393,13 @@ function EntryRow({
 	onIssueOpen: (open: boolean) => void;
 	clipboard: FsClipboard | null;
 	dropTarget: string | null;
+	/** What a drop on the target would do. */
+	dropOp: "move" | "copy" | null;
+	/** This row is part of the drag in progress. */
+	carried: boolean;
 	onToggle: () => void;
 	onDragStart: (ev: DragEvent) => void;
+	onDragEnd: () => void;
 	onClick: (ev: MouseEvent) => void;
 	onOpen: () => void;
 	onDragOver: (ev: DragEvent) => void;
@@ -1348,7 +1413,6 @@ function EntryRow({
 	const loading = open && isLoading(path);
 	const dropping = dropTarget === path;
 	const dimmed = clipboard?.mode === "cut" && clipboard.paths.includes(path);
-	const highlight = active ? "bg-primary/25" : "bg-muted";
 	return (
 		<MenuShell items={menu}>
 			{/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard handled at pane level */}
@@ -1357,6 +1421,7 @@ function EntryRow({
 				data-row-path={path}
 				draggable
 				onDragStart={onDragStart}
+				onDragEnd={onDragEnd}
 				onClick={onClick}
 				onDoubleClick={onOpen}
 				onContextMenu={(ev) => {
@@ -1369,9 +1434,7 @@ function EntryRow({
 				style={{ paddingLeft: `${12 + depth * INDENT}px` }}
 				className={cn(
 					"group/row mx-1 flex cursor-default select-none items-center gap-2 rounded-md py-1 pr-2 text-sm",
-					selected ? highlight : "hover:bg-muted/60",
-					dropping && "bg-primary/30 ring-1 ring-primary ring-inset",
-					dimmed && "opacity-50",
+					rowTone({ selected, active, dropping, faded: dimmed === true || carried }),
 				)}
 			>
 				<Chevron entry={entry} open={open} loading={loading} onToggle={onToggle} />
@@ -1395,18 +1458,14 @@ function EntryRow({
 					open={issueOpen}
 					onOpenChange={onIssueOpen}
 				/>
-				<span className={cn(DATE_COL, "text-muted-foreground text-xs tabular-nums")}>
-					{modifiedLabel(entry.modified)}
-				</span>
-				<span className={cn(SIZE_COL, "text-muted-foreground text-xs tabular-nums")}>
-					{entry.isDir ? <span className="opacity-40">–</span> : size(entry.size)}
-				</span>
+				{dropping && dropOp && <DropChip op={dropOp} />}
+				<EntryColumns entry={entry} />
 			</div>
 		</MenuShell>
 	);
 }
 
-interface MenuItem {
+export interface MenuItem {
 	label: string;
 	icon: typeof Pencil;
 	run: () => unknown;
@@ -1423,7 +1482,13 @@ const menuItem =
 	"flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-muted";
 
 /** Right-click menu around a single child element. */
-function MenuShell({ items, children }: { items: MenuItem[]; children: React.ReactElement }) {
+export function MenuShell({
+	items,
+	children,
+}: {
+	items: MenuItem[];
+	children: React.ReactElement;
+}) {
 	return (
 		<ContextMenu.Root>
 			<ContextMenu.Trigger render={children} />

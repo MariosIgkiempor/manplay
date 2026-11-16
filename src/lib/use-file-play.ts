@@ -6,11 +6,11 @@ import { useTracks } from "#/lib/queries.ts";
 import type { TreeRow } from "#/lib/tree.ts";
 
 /** A stand-in for a file the library has not scanned yet, named after the file. */
-function looseTrack(row: TreeRow): Track {
+function looseTrack(row: TreeRow, path: string): Track {
 	const dot = row.entry.name.lastIndexOf(".");
 	return {
 		id: -1,
-		path: row.path,
+		path,
 		artist: "",
 		album: "",
 		title: dot > 0 ? row.entry.name.slice(0, dot) : row.entry.name,
@@ -32,7 +32,7 @@ function looseTrack(row: TreeRow): Track {
  * Plays songs straight from the file browser. The queue is the songs shown in the pane, in the
  * order shown, so next and previous walk the folder.
  */
-export function useFilePlay() {
+export function useFilePlay(resolve: (path: string) => string = (p) => p) {
 	const player = usePlayer();
 	const tracks = useTracks();
 	const byPath = useMemo(() => new Map((tracks.data ?? []).map((t) => [t.path, t])), [tracks.data]);
@@ -43,7 +43,7 @@ export function useFilePlay() {
 		playing: player.playing,
 		/** Plays `path`, or pauses / resumes it when it is already the one loaded. */
 		toggle: (rows: readonly TreeRow[], path: string) => {
-			if (current === path) {
+			if (current === resolve(path)) {
 				player.toggle();
 				return;
 			}
@@ -53,7 +53,7 @@ export function useFilePlay() {
 				return;
 			}
 			player.play(
-				songs.map((r) => byPath.get(r.path) ?? looseTrack(r)),
+				songs.map((r) => byPath.get(resolve(r.path)) ?? looseTrack(r, resolve(r.path))),
 				index,
 			);
 		},

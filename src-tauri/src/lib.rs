@@ -15,6 +15,7 @@ mod pdb;
 mod r2;
 mod rekordbox;
 mod scan;
+mod stream;
 mod sync;
 mod tag_region;
 mod tags;
@@ -941,6 +942,40 @@ type KnownLibrary = (
     HashMap<String, String>,
 );
 
+/// One folder of a destination, for the file browser. `rel` is relative to the destination folder.
+#[tauri::command]
+async fn remote_list(
+    state: State<'_, AppState>,
+    target_id: i64,
+    rel: Vec<String>,
+) -> Result<Vec<webdav::Entry>, Error> {
+    if rel
+        .iter()
+        .any(|s| s.is_empty() || s == "." || s == ".." || s.contains('/'))
+    {
+        return Err(Error::Msg("invalid folder".to_owned()));
+    }
+    let (target, _) = find_target(&state, target_id)?;
+    sync::browse_remote(&state.http, &target, &rel).await
+}
+
+/// Size of each subfolder of a destination folder, by name.
+#[tauri::command]
+async fn remote_dir_sizes(
+    state: State<'_, AppState>,
+    target_id: i64,
+    rel: Vec<String>,
+) -> Result<HashMap<String, u64>, Error> {
+    if rel
+        .iter()
+        .any(|s| s.is_empty() || s == "." || s == ".." || s.contains('/'))
+    {
+        return Err(Error::Msg("invalid folder".to_owned()));
+    }
+    let (target, _) = find_target(&state, target_id)?;
+    sync::remote_dir_sizes(&state.http, &target, &rel).await
+}
+
 /// Looks inside a destination for audio files the library is missing.
 #[tauri::command]
 async fn remote_scan(state: State<'_, AppState>, target_id: i64) -> Result<RemoteScan, Error> {
@@ -1046,7 +1081,8 @@ async fn remote_verify(
         .collect())
 }
 
-/// Downloads the chosen files from a destination into the library, then rescans.
+/// Downloads the chosen files (and the contents of chosen folders) from a destination into the
+/// library, then rescans.
 #[tauri::command]
 async fn remote_pull(
     app: AppHandle,
@@ -1059,18 +1095,124 @@ async fn remote_pull(
         return Err(Error::Msg("a sync is already running".to_owned()));
     }
     let _guard = SyncGuard(&state.syncing);
-    // Only paths the destination really lists are downloaded.
+    // Only paths the destination really lists are downloaded. A chosen folder brings everything
+    // under it.
     let wanted: HashSet<Vec<String>> = files.into_iter().collect();
     let chosen: Vec<sync::Remote> = sync::list_remote(&state.http, &target)
         .await?
         .into_iter()
-        .filter(|r| wanted.contains(&r.rel))
+        .filter(|r| (1..=r.rel.len()).any(|n| wanted.contains(&r.rel[..n])))
         .collect();
     let outcome = sync::pull(&app, &state.http, &target, &root, &chosen).await;
     if outcome.pulled > 0 {
         scan_and_store(&state, root).await?;
     }
     Ok(outcome)
+}
+
+/// Copies files and folders of a destination into a library folder (a drag from a destination
+/// onto the library), then rescans. Files already there are skipped.
+#[tauri::command]
+async fn remote_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: i64,
+    items: Vec<sync::transfer::Item>,
+    dest: PathBuf,
+) -> Result<sync::PullOutcome, Error> {
+    let (target, root) = find_target(&state, target_id)?;
+    let dest = fsops::inside(&root, &dest)?;
+    if !dest.is_dir() {
+        return Err(Error::Msg("destination is not a folder".to_owned()));
+    }
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    let outcome = sync::transfer::download(&app, &state.http, &target, &items, &dest).await?;
+    if outcome.pulled > 0 {
+        scan_and_store(&state, root).await?;
+    }
+    Ok(outcome)
+}
+
+/// Every file at or under `paths`, with where it goes below `dest` on a destination. Hidden
+/// files and folders are left out.
+fn upload_list(
+    root: &Path,
+    paths: &[PathBuf],
+    dest: &[String],
+) -> Result<Vec<(PathBuf, Vec<String>)>, Error> {
+    let mut out = Vec::new();
+    for p in paths {
+        let from = fsops::inside(root, p)?;
+        let Some(name) = from.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        let head: Vec<String> = dest.iter().cloned().chain([name]).collect();
+        if from.is_file() {
+            out.push((from, head));
+            continue;
+        }
+        for entry in walkdir::WalkDir::new(&from)
+            .into_iter()
+            .filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.'))
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+        {
+            let Ok(rel) = entry.path().strip_prefix(&from) else {
+                continue;
+            };
+            let parts: Option<Vec<String>> = rel
+                .components()
+                .map(|c| c.as_os_str().to_str().map(str::to_owned))
+                .collect();
+            if let Some(parts) = parts {
+                out.push((
+                    entry.path().to_path_buf(),
+                    head.iter().cloned().chain(parts).collect(),
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Copies library files and folders to a destination folder (a drag from the library onto a
+/// destination). Files already there are skipped; the library is not changed.
+#[tauri::command]
+async fn remote_upload(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: i64,
+    paths: Vec<PathBuf>,
+    dest: Vec<String>,
+) -> Result<sync::PullOutcome, Error> {
+    let (target, root) = find_target(&state, target_id)?;
+    let files = tauri::async_runtime::spawn_blocking(move || upload_list(&root, &paths, &dest))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    sync::transfer::upload(&app, &state.http, &target, &files).await
+}
+
+/// Moves files and folders into another folder of the same destination.
+#[tauri::command]
+async fn remote_move(
+    state: State<'_, AppState>,
+    target_id: i64,
+    items: Vec<sync::transfer::Item>,
+    dest: Vec<String>,
+) -> Result<usize, Error> {
+    let (target, _) = find_target(&state, target_id)?;
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    sync::transfer::move_items(&state.http, &target, &items, &dest).await
 }
 
 #[tauri::command]
@@ -1694,6 +1836,19 @@ fn library_root(state: &AppState) -> Result<PathBuf, Error> {
 async fn fs_list(state: State<'_, AppState>, path: PathBuf) -> Result<Vec<fsops::FsEntry>, Error> {
     let root = library_root(&state)?;
     tauri::async_runtime::spawn_blocking(move || fsops::list(&root, &path))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+/// Size of each subfolder of a library folder, by name. Slow on big folders, so the file
+/// browser asks for it separately from the listing.
+#[tauri::command]
+async fn fs_dir_sizes(
+    state: State<'_, AppState>,
+    path: PathBuf,
+) -> Result<HashMap<String, u64>, Error> {
+    let root = library_root(&state)?;
+    tauri::async_runtime::spawn_blocking(move || fsops::dir_sizes(&root, &path))
         .await
         .map_err(|e| Error::Msg(e.to_string()))?
 }
@@ -2699,6 +2854,18 @@ pub fn run() {
             let target = ArtTarget::parse(request.uri().path());
             std::thread::spawn(move || responder.respond(art_response(&app, target)));
         })
+        .register_asynchronous_uri_scheme_protocol("remote", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            let range = request
+                .headers()
+                .get("range")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            tauri::async_runtime::spawn(async move {
+                responder.respond(stream::respond(&app, &path, range.as_deref()).await);
+            });
+        })
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -2784,6 +2951,11 @@ pub fn run() {
             sync_plan,
             sync_apply,
             remote_scan,
+            remote_list,
+            remote_download,
+            remote_upload,
+            remote_move,
+            remote_dir_sizes,
             remote_pull,
             remote_verify,
             is_syncing,
@@ -2799,6 +2971,7 @@ pub fn run() {
             itunes_import,
             itunes_pending,
             fs_list,
+            fs_dir_sizes,
             fs_reveal,
             fs_make_dir,
             fs_rename,
