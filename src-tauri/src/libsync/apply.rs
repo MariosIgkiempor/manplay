@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use super::entities;
 use super::ops::{Entity, F_NAME, F_POS, F_PRESENT, FORMAT, Op, member_id};
 use super::state;
 use crate::error::Error;
@@ -70,6 +71,9 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
     let mut tags = BTreeSet::new();
     let mut playlists = BTreeSet::new();
     let mut members: BTreeSet<(Entity, String, String)> = BTreeSet::new();
+    let mut smarts = BTreeSet::new();
+    let mut customs = BTreeSet::new();
+    let mut analyses = BTreeSet::new();
     let mut won = 0;
     for op in ops {
         if op.v > FORMAT {
@@ -98,8 +102,26 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
                     members.insert((e, parent.to_owned(), fp.to_owned()));
                 }
             }
-            _ => {}
+            Entity::SmartPlaylist => {
+                smarts.insert(op.id.clone());
+            }
+            Entity::TagCustom => {
+                customs.insert(op.id.clone());
+            }
+            Entity::Analysis => {
+                analyses.insert(op.id.clone());
+            }
+            Entity::Other(_) => {}
         }
+    }
+    for uid in &smarts {
+        entities::materialize_smart(conn, uid)?;
+    }
+    for id in &customs {
+        entities::materialize_custom(conn, id)?;
+    }
+    for fp in &analyses {
+        entities::materialize_analysis(conn, fp)?;
     }
     let mut touched = BTreeSet::new();
     for uid in &tags {
@@ -437,6 +459,7 @@ pub fn materialize_pending(conn: &mut Connection) -> Result<usize, Error> {
     for id in touched {
         renumber(&tx, id)?;
     }
+    let analyses = entities::materialize_waiting_analysis(&tx)?;
     tx.commit()?;
-    Ok(waiting.len())
+    Ok(waiting.len() + analyses)
 }

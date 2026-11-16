@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
 	autoName,
+	DEVICE_ONLY_FILTERS,
 	dateInput,
 	describeRules,
 	EMPTY_RULES,
 	fromDateInput,
 	hasRules,
+	isUnknownTag,
 	placeTag,
 	roleOf,
+	ruleTagLabel,
 	sameRules,
 	withAddedKind,
 } from "#/lib/smart-rules.ts";
@@ -93,5 +96,24 @@ describe("placeTag", () => {
 		expect(r.noneTags).toEqual(["house"]);
 		expect(roleOf(r, "HOUSE")).toBe("none");
 		expect(roleOf(r, "techno")).toBeNull();
+	});
+});
+
+describe("tags this device does not have", () => {
+	it("shows a stand-in for an unknown tag and keeps it out of names", () => {
+		expect(isUnknownTag("?0190a0e5-7c1e-7d3a-8b1b-2f6a1c3d4e5f")).toBe(true);
+		expect(isUnknownTag("Genre/House")).toBe(false);
+		expect(ruleTagLabel("?0190a0e5")).toBe("Unknown tag");
+		expect(ruleTagLabel("Genre/House")).toBe("House");
+		expect(describeRules({ ...EMPTY_RULES, allTags: ["?x", "Genre/House"] })).toBe(
+			"Songs tagged Unknown tag and House",
+		);
+	});
+});
+
+describe("filters on data only this device has", () => {
+	it("marks the added date and not the tempo", () => {
+		expect(DEVICE_ONLY_FILTERS.added).toBe(true);
+		expect(DEVICE_ONLY_FILTERS.bpm).toBe(false);
 	});
 });

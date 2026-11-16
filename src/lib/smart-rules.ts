@@ -32,10 +32,23 @@ export function sameRules(a: SmartRules, b: SmartRules): boolean {
 	return key(a) === key(b);
 }
 
+/**
+ * A tag entry the backend could not name: the tag is local to another device or was deleted. It
+ * comes as `?<uid>` and goes back unchanged when the rules are saved, so the uid is not lost.
+ */
+export function isUnknownTag(name: string): boolean {
+	return name.startsWith("?");
+}
+
+/** The last level of a rule's tag, or a stand-in for one this device does not have. */
+export function ruleTagLabel(name: string): string {
+	return isUnknownTag(name) ? "Unknown tag" : tagLeaf(name);
+}
+
 /** A name from the rules: the ALL tags' last levels joined with "+", then the ANY ones. */
 export function autoName(r: SmartRules): string {
-	const all = r.allTags.map(tagLeaf);
-	const any = r.anyTags.map(tagLeaf);
+	const all = r.allTags.map(ruleTagLabel);
+	const any = r.anyTags.map(ruleTagLabel);
 	const parts = [...all, ...(any.length > 0 ? [any.join(" or ")] : [])];
 	return parts.length > 0 ? parts.join(" + ") : "New smart playlist";
 }
@@ -157,6 +170,13 @@ export function removeTag(r: SmartRules, tag: string): SmartRules {
 /** A filter on something other than tags. */
 export type FilterKind = "added" | "bpm";
 
+/**
+ * Filters on data that only this device has. The rules are shared, but each device counts them
+ * over its own data, so the same playlist can list different songs elsewhere. "Added" is when
+ * the song reached this device; tags and tempo are shared.
+ */
+export const DEVICE_ONLY_FILTERS: Record<FilterKind, boolean> = { added: true, bpm: false };
+
 /** A piece of the rule sentence: plain words, a tag in its group's colours, or a filter. */
 export type Part =
 	| { text: string }
@@ -210,6 +230,6 @@ export function describeRules(
 	formatDate: (unix: number) => string = shortDate,
 ): string {
 	return describeParts(r, formatDate)
-		.map((p) => ("tag" in p ? tagLeaf(p.tag) : p.text))
+		.map((p) => ("tag" in p ? ruleTagLabel(p.tag) : p.text))
 		.join("");
 }

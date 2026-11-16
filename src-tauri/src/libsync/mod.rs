@@ -1,4 +1,5 @@
-//! Library data shared between devices: tags and playlists (more entities come in later steps).
+//! Library data shared between devices: tags, playlists, smart playlists, analysis and the
+//! Tag Database's hand-made values. Waveforms are files (`waveforms.rs`).
 //!
 //! Every edit to a shared item is also written as an *op*: one `(entity, id, field, value)` line
 //! stamped with a hybrid logical clock. Each device uploads its new ops to the destination as an
@@ -8,12 +9,14 @@
 
 pub mod apply;
 pub mod clock;
+pub mod entities;
 pub mod frac;
 pub mod ops;
 pub mod remote;
 pub mod schema;
 pub mod seed;
 pub mod state;
+pub mod waveforms;
 pub mod write;
 
 pub use remote::{ChunkRef, ChunkStore, run};

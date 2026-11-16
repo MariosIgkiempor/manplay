@@ -126,8 +126,9 @@ export function SyncResult({
 							key={`library-${l.targetId}`}
 							title={`Library data: ${l.name}`}
 							stats={[
-								{ tone: "add", count: l.sent, label: "tag and playlist edits sent" },
+								{ tone: "add", count: l.sent, label: "library edits sent" },
 								{ tone: "change", count: l.received, label: "received" },
+								{ tone: "add", count: l.waveformsSent, label: "waveforms uploaded" },
 							]}
 							failed={l.error ? [l.error] : []}
 							failedTotal={l.error ? 1 : 0}

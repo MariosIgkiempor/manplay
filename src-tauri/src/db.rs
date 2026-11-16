@@ -242,56 +242,152 @@ pub fn set_export_selection(
     Ok(())
 }
 
+/// Rules as the editor sees them (tag names) turned into what is stored and shared (tag uids).
+/// A name that is no tag here stays as typed; an unknown-tag marker goes back to its uid.
+fn rules_to_stored(
+    conn: &Connection,
+    rules: &crate::smart::Rules,
+) -> Result<crate::smart::Rules, Error> {
+    let mut failure = None;
+    let out = rules.map_tags(|entry| {
+        if let Some(uid) = entry.strip_prefix(crate::smart::UNKNOWN_PREFIX)
+            && crate::smart::is_uid(uid)
+        {
+            return uid.to_owned();
+        }
+        if crate::smart::is_uid(entry) {
+            return entry.to_owned();
+        }
+        match conn
+            .query_row(
+                "SELECT uid FROM tags WHERE name = ?1 AND uid IS NOT NULL",
+                params![entry],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+        {
+            Ok(uid) => uid.unwrap_or_else(|| entry.to_owned()),
+            Err(e) => {
+                failure = Some(e);
+                entry.to_owned()
+            }
+        }
+    });
+    failure.map_or(Ok(out), |e| Err(e.into()))
+}
+
+/// Stored rules turned into tag names for the editor and for working out songs. A uid this
+/// device has no tag for (a tag that is local to another device, or was deleted) comes back as
+/// `?<uid>`, which matches no song and is saved back as the same uid.
+fn rules_from_stored(
+    conn: &Connection,
+    rules: &crate::smart::Rules,
+) -> Result<crate::smart::Rules, Error> {
+    let mut failure = None;
+    let out = rules.map_tags(|entry| {
+        if !crate::smart::is_uid(entry) {
+            return entry.to_owned();
+        }
+        match conn
+            .query_row(
+                "SELECT name FROM tags WHERE uid = ?1",
+                params![entry],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+        {
+            Ok(name) => name.unwrap_or_else(|| format!("{}{entry}", crate::smart::UNKNOWN_PREFIX)),
+            Err(e) => {
+                failure = Some(e);
+                entry.to_owned()
+            }
+        }
+    });
+    failure.map_or(Ok(out), |e| Err(e.into()))
+}
+
+fn rules_json(rules: &crate::smart::Rules) -> Result<serde_json::Value, Error> {
+    serde_json::to_value(rules).map_err(|e| Error::Msg(e.to_string()))
+}
+
 /// Every smart playlist, by name.
 pub fn smart_playlists(conn: &Connection) -> Result<Vec<crate::smart::SmartPlaylist>, Error> {
     let mut stmt =
         conn.prepare("SELECT id, name, rules FROM smart_playlists ORDER BY name COLLATE NOCASE")?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, i64>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
-        ))
-    })?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
     let mut out = Vec::new();
-    for row in rows {
-        let (id, name, rules) = row?;
+    for (id, name, rules) in rows {
+        let stored: crate::smart::Rules = serde_json::from_str(&rules).unwrap_or_default();
         out.push(crate::smart::SmartPlaylist {
             id,
             name,
-            rules: serde_json::from_str(&rules).unwrap_or_default(),
+            rules: rules_from_stored(conn, &stored)?,
         });
     }
     Ok(out)
 }
 
-/// Adds a smart playlist (`id` 0) or changes one; returns it as stored.
+/// Adds a smart playlist (`id` 0) or changes one; returns it as stored. Shared ones also write
+/// their ops.
 pub fn save_smart_playlist(
     conn: &Connection,
     playlist: &crate::smart::SmartPlaylist,
 ) -> Result<crate::smart::SmartPlaylist, Error> {
-    let rules = serde_json::to_string(&playlist.rules).map_err(|e| Error::Msg(e.to_string()))?;
+    let tx = conn.unchecked_transaction()?;
+    let stored = rules_to_stored(&tx, &playlist.rules)?;
+    let value = rules_json(&stored)?;
+    let rules = value.to_string();
+    let mut ops = crate::libsync::Batch::new(&tx)?;
     let id = if playlist.id == 0 {
-        conn.execute(
+        let uid = crate::libsync::new_uid();
+        let scope = crate::libsync::default_scope(&tx)?;
+        tx.execute(
             "INSERT INTO smart_playlists (name, rules, uid, scope) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                playlist.name,
-                rules,
-                crate::libsync::new_uid(),
-                crate::libsync::default_scope(conn)?
-            ],
+            params![playlist.name, rules, uid, scope],
         )?;
-        conn.last_insert_rowid()
+        if scope == "shared" {
+            ops.smart_playlist(&uid, &playlist.name, &value);
+        }
+        tx.last_insert_rowid()
     } else {
-        let changed = conn.execute(
+        let old: Option<(String, String, String, String)> = tx
+            .query_row(
+                "SELECT COALESCE(uid, ''), scope, name, rules FROM smart_playlists WHERE id = ?1",
+                params![playlist.id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let Some((uid, scope, old_name, old_rules)) = old else {
+            return Err(Error::Msg("That smart playlist no longer exists.".into()));
+        };
+        tx.execute(
             "UPDATE smart_playlists SET name = ?2, rules = ?3 WHERE id = ?1",
             params![playlist.id, playlist.name, rules],
         )?;
-        if changed == 0 {
-            return Err(Error::Msg("That smart playlist no longer exists.".into()));
+        if scope == "shared" && !uid.is_empty() {
+            if old_name != playlist.name {
+                ops.smart_playlist(&uid, &playlist.name, &value);
+            } else if serde_json::from_str::<serde_json::Value>(&old_rules)
+                .ok()
+                .as_ref()
+                != Some(&value)
+            {
+                ops.smart_playlist_rules(&uid, &value);
+            }
         }
         playlist.id
     };
+    ops.commit(&tx)?;
+    tx.commit()?;
     Ok(crate::smart::SmartPlaylist {
         id,
         ..playlist.clone()
@@ -299,7 +395,91 @@ pub fn save_smart_playlist(
 }
 
 pub fn delete_smart_playlist(conn: &Connection, id: i64) -> Result<(), Error> {
-    conn.execute("DELETE FROM smart_playlists WHERE id = ?1", params![id])?;
+    let tx = conn.unchecked_transaction()?;
+    let ident: Option<(String, String)> = tx
+        .query_row(
+            "SELECT COALESCE(uid, ''), scope FROM smart_playlists WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    tx.execute("DELETE FROM smart_playlists WHERE id = ?1", params![id])?;
+    if let Some((uid, scope)) = ident
+        && scope == "shared"
+        && !uid.is_empty()
+    {
+        let mut ops = crate::libsync::Batch::new(&tx)?;
+        ops.smart_playlist_deleted(&uid);
+        ops.commit(&tx)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// A tag moved to another tag (rename or merge): smart playlists that used its uid use the new
+/// one, so the rules keep working.
+fn repoint_smart_rules(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    ops: &mut crate::libsync::Batch,
+) -> Result<(), Error> {
+    if from.is_empty() || to.is_empty() || from == to {
+        return Ok(());
+    }
+    let rows: Vec<(i64, String, String, String)> = conn
+        .prepare(
+            "SELECT id, COALESCE(uid, ''), scope, rules FROM smart_playlists
+             WHERE instr(rules, ?1) > 0",
+        )?
+        .query_map(params![from], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    for (id, uid, scope, rules) in rows {
+        let rules: crate::smart::Rules = serde_json::from_str(&rules).unwrap_or_default();
+        let moved = rules.map_tags(|t| {
+            if t == from {
+                to.to_owned()
+            } else {
+                t.to_owned()
+            }
+        });
+        if moved == rules {
+            continue;
+        }
+        let value = rules_json(&moved)?;
+        conn.execute(
+            "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
+            params![id, value.to_string()],
+        )?;
+        if scope == "shared" && !uid.is_empty() {
+            ops.smart_playlist_rules(&uid, &value);
+        }
+    }
+    Ok(())
+}
+
+/// Rules saved before they were kept by tag uid hold tag names: each name that is a tag here is
+/// replaced by its uid. A name that is no tag stays as it is (it matched nothing before and
+/// still does not). Safe to repeat.
+fn convert_smart_rules(conn: &Connection) -> Result<(), Error> {
+    let rows: Vec<(i64, String)> = conn
+        .prepare("SELECT id, rules FROM smart_playlists")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (id, rules) in rows {
+        let Ok(old) = serde_json::from_str::<crate::smart::Rules>(&rules) else {
+            continue;
+        };
+        let new = rules_to_stored(conn, &old)?;
+        if new != old {
+            conn.execute(
+                "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
+                params![id, rules_json(&new)?.to_string()],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -462,6 +642,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     prepare_tags(&conn)?;
     create_export_selections(&conn)?;
     prepare_smart_sharing(&conn)?;
+    crate::libsync::seed::catch_up(&conn)?;
     Ok(conn)
 }
 
@@ -485,7 +666,8 @@ fn prepare_sharing(conn: &Connection) -> Result<(), Error> {
 }
 
 fn prepare_smart_sharing(conn: &Connection) -> Result<(), Error> {
-    add_sharing_columns(conn, "smart_playlists")
+    add_sharing_columns(conn, "smart_playlists")?;
+    convert_smart_rules(conn)
 }
 
 fn add_sharing_columns(conn: &Connection, table: &str) -> Result<(), Error> {
@@ -555,6 +737,8 @@ fn add_analysis_columns(conn: &Connection, table: &str) -> Result<(), Error> {
     }
     // Cues were set in manplay (possibly to none): they replace a drive's own on export.
     add_column(conn, table, "cues_edited", "INTEGER NOT NULL DEFAULT 0")?;
+    // Whether the waveform is known to be on the sharing destination (see `libsync::waveforms`).
+    add_column(conn, table, "wf_pushed", "INTEGER NOT NULL DEFAULT 0")?;
     Ok(())
 }
 
@@ -809,10 +993,15 @@ pub fn tag_values(conn: &Connection, field: &str) -> Result<Vec<TagValue>, Error
 
 /// Adds a value by hand so it shows up in pick lists before any song uses it.
 pub fn create_tag_value(conn: &Connection, field: &str, value: &str) -> Result<(), Error> {
-    conn.execute(
+    let added = conn.execute(
         "INSERT OR IGNORE INTO tag_custom (field, value) VALUES (?1, ?2)",
         params![field, value],
     )?;
+    if added > 0 {
+        let mut ops = crate::libsync::Batch::new(conn)?;
+        ops.custom_value(field, value, true);
+        ops.commit(conn)?;
+    }
     Ok(())
 }
 
@@ -825,12 +1014,18 @@ pub fn migrate_custom_values(
     to: Option<&str>,
 ) -> Result<(), Error> {
     let mut had = false;
+    let mut ops = crate::libsync::Batch::new(conn)?;
     for name in from {
-        had |= conn.execute(
+        let gone = conn.execute(
             "DELETE FROM tag_custom WHERE field = ?1 AND value = ?2",
             params![field, name],
         )? > 0;
+        if gone {
+            ops.custom_value(field, name, false);
+        }
+        had |= gone;
     }
+    ops.commit(conn)?;
     if let (true, Some(to)) = (had, to) {
         create_tag_value(conn, field, to)?;
     }
@@ -1281,6 +1476,7 @@ fn move_tag(
     for fp in members {
         ops.track_tag(&target_uid, &fp, true);
     }
+    repoint_smart_rules(tx, &uid, &target_uid, ops)?;
     if shared {
         ops.tag_deleted(&uid);
     }
@@ -1584,6 +1780,21 @@ pub fn set_tempo_key(
             params![id, key],
         )?;
     }
+    let mut ops = crate::libsync::Batch::new(conn)?;
+    if ops.is_on()
+        && let Some(fp) = audio_fp_of(conn, id)?
+    {
+        use crate::libsync::ops::{A_BPM_EDITED, A_BPM_HAND, A_KEY_EDITED, A_KEY_HAND};
+        if let Some(bpm) = bpm {
+            ops.analysis(&fp, A_BPM_HAND, serde_json::json!(bpm));
+            ops.analysis(&fp, A_BPM_EDITED, serde_json::json!(true));
+        }
+        if let Some(key) = key {
+            ops.analysis(&fp, A_KEY_HAND, serde_json::json!(key));
+            ops.analysis(&fp, A_KEY_EDITED, serde_json::json!(true));
+        }
+    }
+    ops.commit(conn)?;
     Ok(())
 }
 
@@ -1689,6 +1900,28 @@ pub fn mark_grid_edited(conn: &Connection, id: i64) -> Result<(), Error> {
          WHERE audio_fp = (SELECT audio_fp FROM tracks WHERE id = ?1)",
         params![id],
     )?;
+    let mut ops = crate::libsync::Batch::new(conn)?;
+    if ops.is_on()
+        && let Some(fp) = audio_fp_of(conn, id)?
+    {
+        use crate::libsync::ops::{A_GRID_EDITED, A_GRID_HAND};
+        let grid: Option<(Option<f64>, Option<f64>, Option<i64>)> = conn
+            .query_row(
+                "SELECT grid_bpm, first_beat, bar_offset FROM analysis WHERE audio_fp = ?1",
+                params![fp],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        if let Some((bpm, first, bar)) = grid {
+            ops.analysis(
+                &fp,
+                A_GRID_HAND,
+                serde_json::json!({"grid_bpm": bpm, "first_beat": first, "bar_offset": bar}),
+            );
+            ops.analysis(&fp, A_GRID_EDITED, serde_json::json!(true));
+        }
+    }
+    ops.commit(conn)?;
     Ok(())
 }
 
@@ -2690,6 +2923,18 @@ pub fn store_analysis(
         Ok((a, _)) => (a.bpm, a.key.as_deref(), None),
         Err(e) => (None, None, Some(e.as_str())),
     };
+    // Which hand edits this forgets, so other devices forget them too.
+    let forgotten: (bool, bool, bool) = if replace_edits {
+        conn.query_row(
+            "SELECT bpm_edited, key_edited, grid_edited FROM analysis WHERE audio_fp = ?1",
+            params![audio_fp],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?
+        .unwrap_or_default()
+    } else {
+        (false, false, false)
+    };
     conn.execute(
         "INSERT INTO analysis (audio_fp, bpm, musical_key, error, version, analyzed_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -2712,9 +2957,9 @@ pub fn store_analysis(
             replace_edits
         ],
     )?;
-    if let Ok((_, stored)) = result {
+    if let Ok((a, stored)) = result {
         conn.execute(
-            "UPDATE analysis SET duration = ?2, waveform = ?3,
+            "UPDATE analysis SET duration = ?2, waveform = ?3, wf_pushed = 0,
                  grid_bpm = CASE WHEN grid_edited AND waveform IS NOT NULL
                      THEN grid_bpm ELSE ?4 END,
                  first_beat = CASE WHEN grid_edited AND waveform IS NOT NULL
@@ -2731,8 +2976,43 @@ pub fn store_analysis(
                 stored.bar_offset
             ],
         )?;
+        let mut ops = crate::libsync::Batch::new(conn)?;
+        if ops.is_on() {
+            use crate::libsync::ops::{
+                A_BPM, A_BPM_EDITED, A_GRID_EDITED, A_KEY, A_KEY_EDITED, A_VERSION,
+            };
+            use serde_json::json;
+            ops.analysis(audio_fp, A_BPM, json!(a.bpm));
+            ops.analysis(audio_fp, A_KEY, json!(a.key));
+            ops.analysis(audio_fp, A_VERSION, json!(crate::analysis::VERSION));
+            share_auto_grid(&mut ops, audio_fp, stored);
+            for (was, flag) in [
+                (forgotten.0, A_BPM_EDITED),
+                (forgotten.1, A_KEY_EDITED),
+                (forgotten.2, A_GRID_EDITED),
+            ] {
+                if was {
+                    ops.analysis(audio_fp, flag, json!(false));
+                }
+            }
+        }
+        ops.commit(conn)?;
     }
     Ok(())
+}
+
+/// Writes the automatic beat grid and duration of a finished analysis as ops.
+pub fn share_auto_grid(
+    ops: &mut crate::libsync::Batch,
+    audio_fp: &str,
+    stored: &crate::anlz::Stored,
+) {
+    use crate::libsync::ops::{A_BAR_OFFSET, A_DURATION, A_FIRST_BEAT, A_GRID_BPM};
+    use serde_json::json;
+    ops.analysis(audio_fp, A_GRID_BPM, json!(stored.grid_bpm));
+    ops.analysis(audio_fp, A_FIRST_BEAT, json!(stored.first_beat));
+    ops.analysis(audio_fp, A_BAR_OFFSET, json!(stored.bar_offset));
+    ops.analysis(audio_fp, A_DURATION, json!(stored.duration));
 }
 
 #[cfg(test)]
@@ -2801,6 +3081,40 @@ mod tests {
             Some(Vec::new()),
             "cleared, not unset"
         );
+    }
+
+    #[test]
+    fn saved_rules_with_tag_names_become_uids_and_keep_working() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(&mut conn, &[track("/a.mp3", "fp-a", None)]).expect("upsert");
+        let id: i64 = conn
+            .query_row("SELECT id FROM tracks", [], |r| r.get(0))
+            .expect("id");
+        tag_tracks(&mut conn, "Genre/House", &[id]).expect("tag");
+        conn.execute(
+            "INSERT INTO smart_playlists (name, rules, uid) VALUES ('Old', ?1, 'u')",
+            params![r#"{"allTags":["genre/house"],"anyTags":["Ghost"],"noneTags":[]}"#],
+        )
+        .expect("legacy row");
+        convert_smart_rules(&conn).expect("convert");
+        let stored: String = conn
+            .query_row("SELECT rules FROM smart_playlists", [], |r| r.get(0))
+            .expect("rules");
+        let parsed: crate::smart::Rules = serde_json::from_str(&stored).expect("json");
+        assert!(crate::smart::is_uid(&parsed.all_tags[0]), "{stored}");
+        assert_eq!(
+            parsed.any_tags,
+            ["Ghost"],
+            "a name that is no tag stays as it was"
+        );
+        let shown = smart_playlists(&conn).expect("list").remove(0);
+        assert_eq!(shown.rules.all_tags, ["Genre/House"]);
+        // Converting again changes nothing.
+        convert_smart_rules(&conn).expect("again");
+        let again: String = conn
+            .query_row("SELECT rules FROM smart_playlists", [], |r| r.get(0))
+            .expect("rules");
+        assert_eq!(again, stored);
     }
 
     fn kept(bpm: Option<f64>) -> crate::anlz::Stored {

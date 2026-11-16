@@ -12,6 +12,7 @@ use super::clock::{self, Hlc};
 use super::frac;
 use super::ops::{FORMAT, Op};
 use super::remote::{self, ChunkRef, ChunkStore};
+use super::waveforms::{self, Misses, WaveformRef};
 use super::{run, seed, state};
 use crate::db;
 use crate::error::Error;
@@ -466,17 +467,31 @@ fn chunks_round_trip_and_keep_what_they_do_not_understand() {
 
 // ---- two devices -------------------------------------------------------------
 
+/// A destination in memory: chunks and waveform files, counting waveform writes.
 #[derive(Default)]
-struct Memory(Mutex<BTreeMap<ChunkRef, Vec<u8>>>);
+struct Memory {
+    chunks: Mutex<BTreeMap<ChunkRef, Vec<u8>>>,
+    waves: Mutex<BTreeMap<String, Vec<u8>>>,
+    wave_writes: std::sync::atomic::AtomicUsize,
+}
+
+impl Memory {
+    fn wave_key(w: &WaveformRef) -> Result<String, Error> {
+        let (dir, name) = w
+            .rel()
+            .ok_or_else(|| Error::Msg("unsafe waveform name".into()))?;
+        Ok(format!("{dir}/{name}"))
+    }
+}
 
 #[allow(clippy::unused_async_trait_impl)] // the trait is async; memory never waits
 impl ChunkStore for Memory {
     async fn list_chunks(&self) -> Result<Vec<ChunkRef>, Error> {
-        Ok(self.0.lock().expect("lock").keys().cloned().collect())
+        Ok(self.chunks.lock().expect("lock").keys().cloned().collect())
     }
 
     async fn read_chunk(&self, chunk: &ChunkRef) -> Result<Vec<u8>, Error> {
-        self.0
+        self.chunks
             .lock()
             .expect("lock")
             .get(chunk)
@@ -485,11 +500,39 @@ impl ChunkStore for Memory {
     }
 
     async fn write_chunk(&self, chunk: &ChunkRef, bytes: Vec<u8>) -> Result<(), Error> {
-        let mut chunks = self.0.lock().expect("lock");
+        let mut chunks = self.chunks.lock().expect("lock");
         if chunks.contains_key(chunk) {
             return Err(Error::Msg("exists".into()));
         }
         chunks.insert(chunk.clone(), bytes);
+        Ok(())
+    }
+
+    async fn waveform_exists(&self, w: &WaveformRef) -> Result<bool, Error> {
+        Ok(self
+            .waves
+            .lock()
+            .expect("lock")
+            .contains_key(&Self::wave_key(w)?))
+    }
+
+    async fn read_waveform(&self, w: &WaveformRef) -> Result<Option<Vec<u8>>, Error> {
+        Ok(self
+            .waves
+            .lock()
+            .expect("lock")
+            .get(&Self::wave_key(w)?)
+            .cloned())
+    }
+
+    async fn write_waveform(&self, w: &WaveformRef, bytes: Vec<u8>) -> Result<(), Error> {
+        self.waves
+            .lock()
+            .expect("lock")
+            .entry(Self::wave_key(w)?)
+            .or_insert(bytes);
+        self.wave_writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 }
@@ -762,7 +805,7 @@ async fn a_gap_in_a_devices_chunks_stops_the_reader_there() {
     }
     let me = super::write::device_id(&a.lock().expect("lock")).expect("id");
     let second = ChunkRef { dev: me, seq: 2 };
-    store.0.lock().expect("lock").remove(&second);
+    store.chunks.lock().expect("lock").remove(&second);
     assert!(run(&b, &store).await.error.is_none());
     let text = shown(&b);
     assert!(
@@ -809,4 +852,494 @@ fn legacy_playlists_get_position_keys_and_every_item_a_uid() {
     assert_eq!(pos.len(), 3);
     assert!(pos.windows(2).all(|w| w[0] < w[1]), "{pos:?}");
     let _ = std::fs::remove_file(&path);
+}
+
+// ---- smart playlists, Tag Database values, analysis, waveforms ----------------
+
+fn smart(db: &Mutex<Connection>, name: &str, tags: &[&str]) -> i64 {
+    let rules = crate::smart::Rules {
+        all_tags: tags.iter().map(|&t| t.to_owned()).collect(),
+        ..crate::smart::Rules::default()
+    };
+    db::save_smart_playlist(
+        &db.lock().expect("lock"),
+        &crate::smart::SmartPlaylist {
+            id: 0,
+            name: name.to_owned(),
+            rules,
+        },
+    )
+    .expect("save")
+    .id
+}
+
+/// Names and rules of every smart playlist and the songs (by audio) its rules pick.
+fn smart_shown(db: &Mutex<Connection>) -> String {
+    let conn = db.lock().expect("lock");
+    let tracks = db::list(&conn).expect("list");
+    let mut out = Vec::new();
+    for p in db::smart_playlists(&conn).expect("smart") {
+        let mut picked: Vec<String> = crate::smart::resolve(&p.rules, &tracks, 0)
+            .into_iter()
+            .map(|id| db::audio_fp_of(&conn, id).expect("fp").unwrap_or_default())
+            .collect();
+        picked.sort();
+        out.push(format!("{} {:?} -> {picked:?}", p.name, p.rules.all_tags));
+    }
+    out.join("\n")
+}
+
+fn finished(bpm: f64) -> (crate::analysis::Analysis, crate::anlz::Stored) {
+    (
+        crate::analysis::Analysis {
+            bpm: Some(bpm),
+            key: Some("Am".to_owned()),
+        },
+        crate::anlz::Stored {
+            grid_bpm: Some(bpm),
+            first_beat: 0.25,
+            bar_offset: 1,
+            duration: 3.0,
+            detail: vec![0x5f; 450],
+        },
+    )
+}
+
+type AnalysisRow = (
+    Option<f64>,
+    Option<String>,
+    i64,
+    Option<f64>,
+    Option<f64>,
+    bool,
+    bool,
+);
+
+fn analysis_row(db: &Mutex<Connection>, fp: &str) -> Option<AnalysisRow> {
+    db.lock()
+        .expect("lock")
+        .query_row(
+            "SELECT bpm, musical_key, version, grid_bpm, first_beat, bpm_edited, waveform IS NOT NULL
+             FROM analysis WHERE audio_fp = ?1",
+            params![fp],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            },
+        )
+        .ok()
+}
+
+#[tokio::test]
+async fn a_smart_playlist_rule_survives_renaming_its_tag_and_reaches_other_devices() {
+    let store = Memory::default();
+    let a = device(4);
+    let b = device(4);
+    tag(&a, "Genre/House", &[1, 2]);
+    tag(&a, "vocal", &[2]);
+    let id = smart(&a, "House", &["Genre/House"]);
+    assert_eq!(
+        smart_shown(&a),
+        "House [\"Genre/House\"] -> [\"fp1\", \"fp2\"]"
+    );
+    // The rules are kept by uid, not by name.
+    let stored: String = a
+        .lock()
+        .expect("lock")
+        .query_row(
+            "SELECT rules FROM smart_playlists WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .expect("rules");
+    assert!(!stored.contains("House"), "{stored}");
+
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert_eq!(smart_shown(&a), smart_shown(&b));
+
+    // Renaming the tag on A: the rule follows it, here and on B.
+    db::migrate_tags(
+        &mut a.lock().expect("lock"),
+        &["Genre/House".to_owned()],
+        Some("Genre/Deep House"),
+    )
+    .expect("rename");
+    assert_eq!(
+        smart_shown(&a),
+        "House [\"Genre/Deep House\"] -> [\"fp1\", \"fp2\"]"
+    );
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert_eq!(smart_shown(&a), smart_shown(&b));
+    assert_eq!(
+        smart_shown(&b),
+        "House [\"Genre/Deep House\"] -> [\"fp1\", \"fp2\"]"
+    );
+
+    // Renaming and deleting the playlist travel too.
+    let mut p = db::smart_playlists(&a.lock().expect("lock"))
+        .expect("list")
+        .remove(0);
+    p.name = "Deep".to_owned();
+    db::save_smart_playlist(&a.lock().expect("lock"), &p).expect("save");
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert!(smart_shown(&b).starts_with("Deep "), "{}", smart_shown(&b));
+    db::delete_smart_playlist(&a.lock().expect("lock"), p.id).expect("delete");
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert_eq!(smart_shown(&b), "");
+}
+
+#[tokio::test]
+async fn a_local_smart_playlist_and_a_tag_this_device_lacks_stay_safe() {
+    let store = Memory::default();
+    let a = device(2);
+    let b = device(2);
+    a.lock()
+        .expect("lock")
+        .execute(
+            "INSERT INTO settings (key, value) VALUES ('default_scope', 'local')",
+            [],
+        )
+        .expect("scope");
+    tag(&a, "Mine", &[1]);
+    smart(&a, "Private", &["Mine"]);
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert_eq!(smart_shown(&b), "", "local items are not sent");
+
+    // A shared playlist over a tag that is local to A: B cannot name the tag, and the rule
+    // keeps its uid when B saves it again.
+    a.lock()
+        .expect("lock")
+        .execute("DELETE FROM settings WHERE key = 'default_scope'", [])
+        .expect("scope");
+    smart(&a, "Shared", &["Mine"]);
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    let seen = db::smart_playlists(&b.lock().expect("lock"))
+        .expect("list")
+        .remove(0);
+    assert!(seen.rules.all_tags[0].starts_with('?'), "{:?}", seen.rules);
+    db::save_smart_playlist(&b.lock().expect("lock"), &seen).expect("save back");
+    let stored: String = b
+        .lock()
+        .expect("lock")
+        .query_row("SELECT rules FROM smart_playlists", [], |r| r.get(0))
+        .expect("rules");
+    assert!(stored.contains(&seen.rules.all_tags[0][1..]), "{stored}");
+}
+
+fn analysis_ops(ops: &[(i64, &str, &str, Value)]) -> Vec<Op> {
+    ops.iter()
+        .map(|(t, dev, f, v)| op(*t, dev, "analysis", "fp1", f, v.clone()))
+        .collect()
+}
+
+#[test]
+fn a_hand_edited_bpm_beats_an_automatic_one_whatever_the_clocks_say() {
+    let hand = [
+        (10, DEV_A, "bpm_hand", json!(130.0)),
+        (10, DEV_A, "bpm_edited", json!(true)),
+        (10, DEV_A, "version", json!(2)),
+    ];
+    let auto = [
+        (50, DEV_B, "bpm", json!(128.0)),
+        (50, DEV_B, "version", json!(2)),
+    ];
+    for (first, second) in [(&hand[..], &auto[..]), (&auto[..], &hand[..])] {
+        let mut conn = open();
+        library(&conn, 1);
+        for batch in [first, second] {
+            let tx = conn.transaction().expect("tx");
+            apply_ops(&tx, &analysis_ops(batch)).expect("apply");
+            tx.commit().expect("commit");
+        }
+        let (bpm, _, _, _, _, edited, _) = analysis_row(&Mutex::new(conn), "fp1").expect("row");
+        assert_eq!((bpm, edited), (Some(130.0), true));
+    }
+    // Resetting the hand edit (a later flag of false) brings the automatic value back.
+    let mut conn = open();
+    library(&conn, 1);
+    let mut all = analysis_ops(&hand);
+    all.extend(analysis_ops(&auto));
+    all.extend(analysis_ops(&[(90, DEV_A, "bpm_edited", json!(false))]));
+    let tx = conn.transaction().expect("tx");
+    apply_ops(&tx, &all).expect("apply");
+    tx.commit().expect("commit");
+    let (bpm, _, _, _, _, edited, _) = analysis_row(&Mutex::new(conn), "fp1").expect("row");
+    assert_eq!((bpm, edited), (Some(128.0), false));
+}
+
+#[tokio::test]
+async fn analysis_and_hand_edits_reach_another_device_without_analysing_there() {
+    let store = Memory::default();
+    let a = device(2);
+    let b = device(2);
+    db::store_analysis(
+        &a.lock().expect("lock"),
+        "fp1",
+        &Ok(finished(128.0)),
+        100,
+        false,
+    )
+    .expect("analyse");
+    // Hand edits: a tempo, and a grid.
+    let t1 = track(&a, 1);
+    db::set_tempo_key(&a.lock().expect("lock"), t1, Some(Some(126.0)), None).expect("bpm");
+    db::mark_grid_edited(&a.lock().expect("lock"), t1).expect("grid");
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+
+    let (bpm, key, version, grid, first, edited, has_waveform) =
+        analysis_row(&b, "fp1").expect("row on B");
+    assert_eq!((bpm, key.as_deref(), version), (Some(126.0), Some("Am"), 2));
+    assert_eq!(
+        (grid, first, edited, has_waveform),
+        (Some(128.0), Some(0.25), true, false)
+    );
+    // B does not queue it for analysis once the waveform arrives.
+    assert!(analysis_row(&b, "fp2").is_none());
+
+    // A later automatic result from B does not undo A's hand edit, on either device.
+    db::store_analysis(
+        &b.lock().expect("lock"),
+        "fp1",
+        &Ok(finished(127.0)),
+        200,
+        false,
+    )
+    .expect("again");
+    assert!(run(&b, &store).await.error.is_none());
+    assert!(run(&a, &store).await.error.is_none());
+    for d in [&a, &b] {
+        assert_eq!(analysis_row(d, "fp1").expect("row").0, Some(126.0));
+    }
+
+    // "Replace edits" forgets the hand edit everywhere.
+    db::store_analysis(
+        &b.lock().expect("lock"),
+        "fp1",
+        &Ok(finished(127.0)),
+        300,
+        true,
+    )
+    .expect("replace");
+    assert!(run(&b, &store).await.error.is_none());
+    assert!(run(&a, &store).await.error.is_none());
+    let row = analysis_row(&a, "fp1").expect("row");
+    assert_eq!((row.0, row.5), (Some(127.0), false));
+}
+
+#[tokio::test]
+async fn waveforms_are_uploaded_once_and_fetched_when_needed() {
+    let store = Memory::default();
+    let a = device(3);
+    let b = device(3);
+    for fp in ["fp1", "fp2"] {
+        db::store_analysis(&a.lock().expect("lock"), fp, &Ok(finished(120.0)), 1, false)
+            .expect("analyse");
+    }
+    // Too big for the cap: never uploaded.
+    db::store_analysis(
+        &a.lock().expect("lock"),
+        "fp3",
+        &Ok(finished(120.0)),
+        1,
+        false,
+    )
+    .expect("analyse");
+    a.lock()
+        .expect("lock")
+        .execute(
+            "UPDATE analysis SET waveform = zeroblob(?1) WHERE audio_fp = 'fp3'",
+            params![i64::try_from(waveforms::MAX_BYTES).expect("fits") + 1],
+        )
+        .expect("big");
+    // fp2's waveform is already on the destination (another device wrote it first).
+    let wave2 = WaveformRef::new("fp2", 2);
+    store
+        .write_waveform(&wave2, vec![7; 10])
+        .await
+        .expect("other device");
+    store
+        .wave_writes
+        .store(0, std::sync::atomic::Ordering::SeqCst);
+
+    let pushed = waveforms::push(&a, &store, 100).await.expect("push");
+    assert_eq!((pushed.sent, pushed.existed, pushed.too_big), (1, 1, 1));
+    let again = waveforms::push(&a, &store, 100).await.expect("push again");
+    assert_eq!(
+        again,
+        waveforms::PushSummary::default(),
+        "nothing left to check"
+    );
+    assert_eq!(
+        store.wave_writes.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        store
+            .waves
+            .lock()
+            .expect("lock")
+            .get("fp/fp2-v2.bin")
+            .map(Vec::len),
+        Some(10),
+        "first writer wins"
+    );
+
+    // B learns the analysis from ops, has no waveform, and fills it when asked.
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert!(!analysis_row(&b, "fp1").expect("row").6);
+    let misses = Misses::default();
+    assert!(
+        waveforms::fetch(&b, &store, &misses, "fp1")
+            .await
+            .expect("fetch")
+    );
+    assert!(analysis_row(&b, "fp1").expect("row").6);
+    let kept = crate::anlz::load(&b.lock().expect("lock"), "fp1").expect("loads");
+    assert_eq!(kept.detail, vec![0x5f; 450]);
+    assert_eq!(kept.grid_bpm, Some(120.0));
+    // A missing file is asked for once until the next sync.
+    assert!(
+        !waveforms::fetch(&b, &store, &misses, "fp3")
+            .await
+            .expect("none")
+    );
+    assert!(misses.contains("fp3"));
+
+    // The background fill takes what is left, up to its limit.
+    let filled = waveforms::fill(
+        &b,
+        &store,
+        &Misses::default(),
+        10,
+        std::time::Duration::ZERO,
+    )
+    .await
+    .expect("fill");
+    assert_eq!(filled, 1, "fp2 only: fp3 has no file");
+    assert!(analysis_row(&b, "fp2").expect("row").6);
+}
+
+#[tokio::test]
+async fn hand_made_tag_database_values_travel() {
+    let store = Memory::default();
+    let a = device(1);
+    let b = device(1);
+    db::create_tag_value(&a.lock().expect("lock"), "artist", "DJ Foo").expect("add");
+    db::create_tag_value(&a.lock().expect("lock"), "genre", "Zouk").expect("add");
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    let values = |d: &Mutex<Connection>, field: &str| {
+        db::tag_values(&d.lock().expect("lock"), field)
+            .expect("values")
+            .into_iter()
+            .map(|v| v.value)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(values(&b, "artist"), ["DJ Foo"]);
+    assert_eq!(values(&b, "genre"), ["Zouk"]);
+    // Removing one (a migration away from it) removes it everywhere.
+    db::migrate_custom_values(
+        &a.lock().expect("lock"),
+        "genre",
+        &["Zouk".to_owned()],
+        None,
+    )
+    .expect("migrate");
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert_eq!(values(&b, "genre"), Vec::<String>::new());
+}
+
+#[test]
+fn switching_sharing_on_covers_smart_playlists_values_and_analysis() {
+    let mut conn = open();
+    library(&conn, 2);
+    tag_direct(&mut conn, "Genre/House", 1);
+    db::save_smart_playlist(
+        &conn,
+        &crate::smart::SmartPlaylist {
+            id: 0,
+            name: "House".into(),
+            rules: crate::smart::Rules {
+                all_tags: vec!["Genre/House".into()],
+                ..crate::smart::Rules::default()
+            },
+        },
+    )
+    .expect("smart");
+    db::create_tag_value(&conn, "artist", "DJ Foo").expect("value");
+    db::store_analysis(&conn, "fp1", &Ok(finished(124.0)), 5, false).expect("analyse");
+    db::set_tempo_key(&conn, 1, Some(Some(125.0)), None).expect("bpm");
+    assert_eq!(
+        count_ops(&conn),
+        0,
+        "nothing is written while sharing is off"
+    );
+
+    share(&mut conn);
+    for (entity, id) in [
+        ("smart_playlist", None),
+        ("tag_custom", Some("artist/dj foo")),
+        ("analysis", Some("fp1")),
+    ] {
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM oplog WHERE e = ?1 AND (?2 IS NULL OR id = ?2)",
+                params![entity, id],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert!(n > 0, "{entity} was not seeded");
+    }
+    let hand: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM oplog WHERE e = 'analysis' AND f IN ('bpm_hand', 'bpm_edited')",
+            [],
+            |r| r.get(0),
+        )
+        .expect("hand");
+    assert_eq!(hand, 2, "the hand-set tempo goes as an edit");
+
+    // A library that shared tags and playlists before these were shared is caught up, once.
+    let before = count_ops(&conn);
+    conn.execute("DELETE FROM settings WHERE key = 'libsync_seeded'", [])
+        .expect("old");
+    conn.execute(
+        "DELETE FROM oplog WHERE e IN ('smart_playlist', 'tag_custom', 'analysis')",
+        [],
+    )
+    .expect("drop");
+    conn.execute(
+        "DELETE FROM op_state WHERE e IN ('smart_playlist', 'tag_custom', 'analysis')",
+        [],
+    )
+    .expect("drop");
+    seed::catch_up(&conn).expect("catch up");
+    assert_eq!(count_ops(&conn), before);
+    seed::catch_up(&conn).expect("again");
+    assert_eq!(count_ops(&conn), before, "only once");
+}
+
+fn count_ops(conn: &Connection) -> i64 {
+    conn.query_row("SELECT COUNT(*) FROM oplog", [], |r| r.get(0))
+        .expect("count")
+}
+
+fn tag_direct(conn: &mut Connection, name: &str, song: i64) {
+    db::tag_tracks(conn, name, &[song]).expect("tag");
 }

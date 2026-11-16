@@ -280,6 +280,98 @@ impl libsync::ChunkStore for LogStore<'_, '_> {
         let _ = tokio::fs::remove_file(&tmp).await;
         sent
     }
+
+    async fn waveform_exists(&self, w: &libsync::waveforms::WaveformRef) -> Result<bool, Error> {
+        let (_, path) = self.waveform_path(w)?;
+        Ok(self.backend.remote_size(&path).await?.is_some())
+    }
+
+    async fn read_waveform(
+        &self,
+        w: &libsync::waveforms::WaveformRef,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        let (_, path) = self.waveform_path(w)?;
+        match self.backend.remote_size(&path).await? {
+            None => return Ok(None),
+            Some(size) if size > libsync::waveforms::MAX_BYTES as u64 => return Ok(None),
+            Some(_) => {}
+        }
+        let tmp = std::env::temp_dir().join(format!(
+            "manplay-wf-{}-{}-{}",
+            std::process::id(),
+            w.audio_fp,
+            w.version
+        ));
+        let got = self.backend.get(&path, &tmp).await;
+        let bytes = match got {
+            Ok(()) => tokio::fs::read(&tmp).await.map(Some).map_err(Error::from),
+            Err(e) => Err(e),
+        };
+        let _ = tokio::fs::remove_file(&tmp).await;
+        bytes
+    }
+
+    async fn write_waveform(
+        &self,
+        w: &libsync::waveforms::WaveformRef,
+        bytes: Vec<u8>,
+    ) -> Result<(), Error> {
+        let (dir, dest) = self.waveform_path(w)?;
+        for depth in self.base.len() + 1..=dir.len() {
+            self.backend.mkdir(&dir[..depth]).await?;
+        }
+        // First writer wins: a file that appeared meanwhile is the same waveform.
+        if self.backend.remote_size(&dest).await?.is_some() {
+            return Ok(());
+        }
+        let tmp = std::env::temp_dir().join(format!(
+            "manplay-wf-{}-{}-{}.up",
+            std::process::id(),
+            w.audio_fp,
+            w.version
+        ));
+        tokio::fs::write(&tmp, &bytes).await?;
+        let sent = match self.backend {
+            Backend::Dav(_) => {
+                let mut part = dest.clone();
+                if let Some(name) = part.last_mut() {
+                    name.push_str(".part");
+                }
+                match self.backend.put(&part, &tmp).await {
+                    Ok(()) => self.backend.rename(&part, &dest).await,
+                    Err(e) => Err(e),
+                }
+            }
+            Backend::R2(..) => self.backend.put(&dest, &tmp).await,
+        };
+        let _ = tokio::fs::remove_file(&tmp).await;
+        match sent {
+            // Lost the race to another device: its file is the same.
+            Err(_) if self.backend.remote_size(&dest).await?.is_some() => Ok(()),
+            other => other,
+        }
+    }
+}
+
+impl LogStore<'_, '_> {
+    /// The folder and the full path of a waveform file.
+    fn waveform_path(
+        &self,
+        w: &libsync::waveforms::WaveformRef,
+    ) -> Result<(Vec<String>, Vec<String>), Error> {
+        let (sub, name) = w
+            .rel()
+            .ok_or_else(|| Error::Msg("this song's audio print cannot name a file".into()))?;
+        let mut dir = self.base.clone();
+        dir.extend([
+            libsync::remote::DIR.to_owned(),
+            libsync::waveforms::DIR.to_owned(),
+            sub,
+        ]);
+        let mut path = dir.clone();
+        path.push(name);
+        Ok((dir, path))
+    }
 }
 
 /// What library data did on one destination.
@@ -291,8 +383,16 @@ pub struct LibraryOutcome {
     pub sent: usize,
     pub received: usize,
     pub unreadable: usize,
+    /// Waveform files uploaded.
+    pub waveforms_sent: usize,
     pub error: Option<String>,
 }
+
+/// How many waveforms one sync uploads; the rest follow in the next syncs.
+const WAVEFORMS_PER_RUN: usize = 200;
+/// How many waveforms the fill after a sync downloads, and the pause between them.
+const FILL_PER_RUN: usize = 500;
+const FILL_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Sends this device's new library edits to the destination and applies everyone else's. Runs
 /// before the files so tags and playlists are in place when songs arrive.
@@ -307,6 +407,7 @@ pub async fn run_library_data(
         sent: 0,
         received: 0,
         unreadable: 0,
+        waveforms_sent: 0,
         error: None,
     };
     let base = base_of(target);
@@ -328,19 +429,55 @@ pub async fn run_library_data(
             return out;
         }
     }
-    let summary = libsync::run(
-        db,
-        &LogStore {
-            backend: &backend,
-            base,
-        },
-    )
-    .await;
+    let store = LogStore {
+        backend: &backend,
+        base,
+    };
+    let summary = libsync::run(db, &store).await;
     out.sent = summary.sent;
     out.received = summary.received;
     out.unreadable = summary.unreadable;
     out.error = summary.error;
+    if out.error.is_none() {
+        match libsync::waveforms::push(db, &store, WAVEFORMS_PER_RUN).await {
+            Ok(pushed) => out.waveforms_sent = pushed.sent,
+            Err(e) => out.error = Some(format!("waveforms: {e}")),
+        }
+    }
     out
+}
+
+/// Downloads the waveforms of songs other devices analysed, in the background after a sync.
+/// Returns how many it filled.
+pub async fn fill_waveforms(
+    client: &Client,
+    target: &SyncTarget,
+    db: &std::sync::Mutex<rusqlite::Connection>,
+    misses: &libsync::waveforms::Misses,
+) -> Result<usize, Error> {
+    let backend = Backend::for_target(client, target)?;
+    let store = LogStore {
+        backend: &backend,
+        base: base_of(target),
+    };
+    libsync::waveforms::fill(db, &store, misses, FILL_PER_RUN, FILL_PAUSE).await
+}
+
+/// Fetches one song's waveform from the destination when it is shown or played and this device
+/// has none. True when it was filled.
+pub async fn fetch_waveform(
+    client: &Client,
+    target: &SyncTarget,
+    db: &std::sync::Mutex<rusqlite::Connection>,
+    misses: &libsync::waveforms::Misses,
+    audio_fp: &str,
+) -> Result<bool, Error> {
+    let backend = Backend::for_target(client, target)?;
+    let store = LogStore {
+        backend: &backend,
+        base: base_of(target),
+    };
+    libsync::waveforms::fetch(db, &store, misses, audio_fp).await
 }
 
 // ---- review plan -------------------------------------------------------------

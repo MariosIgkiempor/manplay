@@ -1,6 +1,6 @@
 //! Smart playlists: rules over tags, when a song was added and its tempo, worked out into songs
-//! at export time. They belong to one export destination (the rekordbox file or a USB drive) and
-//! never become library playlists.
+//! at export time. They never become library playlists. Stored (and shared) rules name tags by
+//! uid; everything else in the app, the editor included, sees tag names (see `db.rs`).
 
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +62,39 @@ pub struct Rules {
     pub bpm_min: Option<f64>,
     pub bpm_max: Option<f64>,
 }
+
+impl Rules {
+    /// The same rules with every tag entry replaced by `f(entry)`; entries that end up equal
+    /// within a group are kept once.
+    pub fn map_tags(&self, mut f: impl FnMut(&str) -> String) -> Self {
+        let mut map = |names: &[String]| {
+            let mut out: Vec<String> = Vec::new();
+            for name in names {
+                let mapped = f(name);
+                if !out.contains(&mapped) {
+                    out.push(mapped);
+                }
+            }
+            out
+        };
+        Self {
+            all_tags: map(&self.all_tags),
+            any_tags: map(&self.any_tags),
+            none_tags: map(&self.none_tags),
+            ..self.clone()
+        }
+    }
+}
+
+/// Whether a stored tag entry is a tag's uid (rules are kept by uid, so renaming a tag leaves
+/// them intact) rather than a name from before rules were kept by uid.
+pub fn is_uid(entry: &str) -> bool {
+    uuid::Uuid::parse_str(entry).is_ok()
+}
+
+/// How an unresolved uid is shown to the editor: this device does not have the tag (it is
+/// local to another device, or deleted). Sent back unchanged, it keeps the uid.
+pub const UNKNOWN_PREFIX: char = '?';
 
 /// A smart playlist as stored for a destination.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -257,6 +290,18 @@ mod tests {
             ..Rules::default()
         };
         assert_eq!(resolve(&rules, &library(), 0), [1, 2, 3]);
+    }
+
+    #[test]
+    fn map_tags_keeps_each_entry_once() {
+        let rules = Rules {
+            all_tags: vec!["a".into(), "A".into(), "b".into()],
+            ..Rules::default()
+        };
+        let lower = rules.map_tags(str::to_lowercase);
+        assert_eq!(lower.all_tags, ["a", "b"]);
+        assert!(is_uid("0190a0e5-7c1e-7d3a-8b1b-2f6a1c3d4e5f"));
+        assert!(!is_uid("Genre/House"));
     }
 
     #[test]

@@ -18,6 +18,7 @@ use super::apply::apply_ops;
 use super::clock;
 use super::ops::Op;
 use super::state;
+use super::waveforms::WaveformRef;
 use super::write::device_id;
 use crate::error::Error;
 
@@ -54,6 +55,22 @@ pub trait ChunkStore {
     fn write_chunk(
         &self,
         chunk: &ChunkRef,
+        bytes: Vec<u8>,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
+    /// Whether a waveform file is on the destination (a HEAD request, no download).
+    fn waveform_exists(
+        &self,
+        waveform: &WaveformRef,
+    ) -> impl Future<Output = Result<bool, Error>> + Send;
+    /// The waveform file, or `None` when it is not there.
+    fn read_waveform(
+        &self,
+        waveform: &WaveformRef,
+    ) -> impl Future<Output = Result<Option<Vec<u8>>, Error>> + Send;
+    /// Stores a waveform file. Files are written once: one that exists is left as it is.
+    fn write_waveform(
+        &self,
+        waveform: &WaveformRef,
         bytes: Vec<u8>,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 }

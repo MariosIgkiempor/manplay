@@ -482,7 +482,7 @@ pub fn save(conn: &Connection, audio_fp: &str, stored: &Stored) -> Result<(), Er
     )?;
     conn.execute(
         "UPDATE analysis SET grid_bpm = ?2, first_beat = ?3, bar_offset = ?4, duration = ?5,
-             waveform = ?6
+             waveform = ?6, wf_pushed = 0
          WHERE audio_fp = ?1",
         params![
             audio_fp,

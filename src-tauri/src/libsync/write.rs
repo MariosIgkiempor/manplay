@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 
 use super::clock;
-use super::ops::{F_DELETE, F_NAME, F_POS, F_PRESENT, FORMAT, Op, member_id};
+use super::ops::{F_DELETE, F_NAME, F_POS, F_PRESENT, F_RULES, FORMAT, Op, member_id};
 use super::state;
 use crate::db;
 use crate::error::Error;
@@ -137,6 +137,37 @@ impl Batch {
                 F_PRESENT,
                 json!(false),
             );
+        }
+    }
+
+    /// A smart playlist was created or changed. `rules` has tags by uid.
+    pub fn smart_playlist(&mut self, uid: &str, name: &str, rules: &Value) {
+        self.push("smart_playlist", uid, F_NAME, json!(name));
+        self.push("smart_playlist", uid, F_RULES, rules.clone());
+    }
+
+    pub fn smart_playlist_rules(&mut self, uid: &str, rules: &Value) {
+        self.push("smart_playlist", uid, F_RULES, rules.clone());
+    }
+
+    pub fn smart_playlist_deleted(&mut self, uid: &str) {
+        self.push("smart_playlist", uid, F_DELETE, Value::Null);
+    }
+
+    /// A value of the Tag Database was added or removed by hand. Values compare ignoring case,
+    /// so the id is lower case and the spelling travels as the `name`.
+    pub fn custom_value(&mut self, field: &str, value: &str, present: bool) {
+        let id = format!("{field}/{}", value.to_lowercase());
+        if present {
+            self.push("tag_custom", &id, F_NAME, json!(value));
+        }
+        self.push("tag_custom", &id, F_PRESENT, json!(present));
+    }
+
+    /// One field of a song's analysis (see the `A_*` constants).
+    pub fn analysis(&mut self, audio_fp: &str, field: &'static str, val: Value) {
+        if !audio_fp.is_empty() {
+            self.push("analysis", audio_fp, field, val);
         }
     }
 

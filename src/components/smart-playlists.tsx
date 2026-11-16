@@ -39,16 +39,19 @@ import {
 	type AddedKind,
 	addedKind,
 	autoName,
+	DEVICE_ONLY_FILTERS,
 	dateInput,
 	describeParts,
 	describeRules,
 	type FilterKind,
 	fromDateInput,
+	isUnknownTag,
 	type Part,
 	placeTag,
 	ROLE_FIELD,
 	removeTag,
 	roleOf,
+	ruleTagLabel,
 	sameRules,
 	type TagRole,
 	withAddedKind,
@@ -216,6 +219,16 @@ const ARROWS: Record<string, number> = { ArrowDown: 1, ArrowUp: -1 };
 
 /** A tag path with its parents quiet: Genre › **House**. */
 function TagPath({ name }: { name: string }) {
+	if (isUnknownTag(name)) {
+		return (
+			<span
+				className="min-w-0 truncate text-muted-foreground italic"
+				title="Not a tag on this device"
+			>
+				Unknown tag
+			</span>
+		);
+	}
 	const parts = name.split(TAG_SEP);
 	const leaf = parts.pop();
 	return (
@@ -486,6 +499,14 @@ function FilterRow({
 			</span>
 			<div className="flex flex-wrap items-center gap-2">
 				{children}
+				{DEVICE_ONLY_FILTERS[kind] && (
+					<span
+						className="rounded border px-1.5 py-px text-muted-foreground text-xs"
+						title={DEVICE_ONLY_NOTE}
+					>
+						This device only
+					</span>
+				)}
 				{onClear && (
 					<Button
 						size="xs"
@@ -644,6 +665,9 @@ const TAG_LOOK: Record<TagRole, { icon: LucideIcon; text: string }> = {
 	none: { icon: Ban, text: "text-destructive" },
 };
 
+const DEVICE_ONLY_NOTE =
+	"Counts when a song reached this device. Other devices sharing this playlist count their own, so they can list different songs.";
+
 const FILTER_LOOK: Record<FilterKind, { icon: LucideIcon; text: string; label: string }> = {
 	added: { icon: CalendarClock, text: "text-warning", label: "Added" },
 	bpm: { icon: Metronome, text: "text-success", label: "Tempo" },
@@ -658,7 +682,7 @@ function RuleWord({
 }: {
 	icon: LucideIcon;
 	className: string;
-	title?: string;
+	title?: string | undefined;
 	children: ReactNode;
 }) {
 	return (
@@ -674,14 +698,18 @@ function SentencePart({ part }: { part: Part }) {
 		const look = TAG_LOOK[part.role];
 		return (
 			<RuleWord icon={look.icon} className={look.text} title={part.tag}>
-				{tagLeaf(part.tag)}
+				{ruleTagLabel(part.tag)}
 			</RuleWord>
 		);
 	}
 	if ("filter" in part) {
 		const look = FILTER_LOOK[part.filter];
 		return (
-			<RuleWord icon={look.icon} className={look.text}>
+			<RuleWord
+				icon={look.icon}
+				className={look.text}
+				title={DEVICE_ONLY_FILTERS[part.filter] ? DEVICE_ONLY_NOTE : undefined}
+			>
 				{part.text}
 			</RuleWord>
 		);

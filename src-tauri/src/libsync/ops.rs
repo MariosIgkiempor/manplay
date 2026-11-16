@@ -9,6 +9,27 @@ pub const FORMAT: u32 = 1;
 pub const F_NAME: &str = "name";
 pub const F_PRESENT: &str = "present";
 pub const F_POS: &str = "pos";
+/// A smart playlist's rules (tags by uid).
+pub const F_RULES: &str = "rules";
+
+// Fields of an `analysis` entity. The plain ones hold the automatic result; a hand edit goes to
+// the `*_hand` register and raises the `*_edited` flag, and while a flag is up the hand value
+// is the one that shows, whatever the clocks say.
+pub const A_BPM: &str = "bpm";
+pub const A_KEY: &str = "key";
+pub const A_GRID_BPM: &str = "grid_bpm";
+pub const A_FIRST_BEAT: &str = "first_beat";
+pub const A_BAR_OFFSET: &str = "bar_offset";
+pub const A_DURATION: &str = "duration";
+/// The analysis version that made the result; names the waveform file.
+pub const A_VERSION: &str = "version";
+pub const A_BPM_HAND: &str = "bpm_hand";
+pub const A_KEY_HAND: &str = "key_hand";
+/// `{grid_bpm, first_beat, bar_offset}` set in the grid editor.
+pub const A_GRID_HAND: &str = "grid_hand";
+pub const A_BPM_EDITED: &str = "bpm_edited";
+pub const A_KEY_EDITED: &str = "key_edited";
+pub const A_GRID_EDITED: &str = "grid_edited";
 /// Tombstone: the entity is gone. Wins over every edit, earlier or later.
 pub const F_DELETE: &str = "_delete";
 // `_merge` (`val` is the uid the entity was merged into) is part of the format but not written

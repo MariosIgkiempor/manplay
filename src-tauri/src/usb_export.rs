@@ -385,7 +385,12 @@ fn analyzed(source: &Source, store: Option<&Store>) -> Result<Analyzed, String> 
         && let Ok(conn) = db.lock()
     {
         // Keeping it only saves time next export; failing to is not worth stopping for.
-        let _ = anlz::save(&conn, fp, &stored);
+        if anlz::save(&conn, fp, &stored).is_ok()
+            && let Ok(mut ops) = crate::libsync::Batch::new(&conn)
+        {
+            crate::db::share_auto_grid(&mut ops, fp, &stored);
+            let _ = ops.commit(&conn);
+        }
     }
     Ok(Analyzed {
         stored,

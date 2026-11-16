@@ -53,6 +53,10 @@ struct AppState {
     cancel_analysis: AtomicBool,
     /// The last sync review, awaiting the user's confirmation.
     plan: Mutex<Option<sync::Plan>>,
+    /// Waveforms the sharing destination did not have since the last sync.
+    wf_misses: libsync::waveforms::Misses,
+    /// Held while waveforms are being downloaded in the background.
+    wf_filling: AtomicBool,
 }
 
 const SETTING_ROOT: &str = "library_root";
@@ -695,6 +699,49 @@ fn run_analysis(
     Ok(out)
 }
 
+/// Songs another device already analysed have their result (from its ops) but no waveform here
+/// yet: their waveform is fetched from the sharing destination instead of analysing them again.
+/// What could not be fetched stays in `jobs`.
+async fn drop_analysed_elsewhere(
+    state: &AppState,
+    jobs: Vec<db::AnalysisJob>,
+) -> Vec<db::AnalysisJob> {
+    let waiting: Vec<String> = state.db.lock().map_or_else(
+        |_| Vec::new(),
+        |c| {
+            jobs.iter()
+                .filter(|j| {
+                    c.query_row(
+                        "SELECT EXISTS (SELECT 1 FROM analysis WHERE audio_fp = ?1
+                             AND version >= ?2 AND waveform IS NULL)",
+                        rusqlite::params![j.audio_fp, analysis::VERSION],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .unwrap_or(false)
+                })
+                .map(|j| j.audio_fp.clone())
+                .collect()
+        },
+    );
+    for fp in &waiting {
+        fetch_shared_waveform(state, fp).await;
+    }
+    let Ok(c) = state.db.lock() else {
+        return jobs;
+    };
+    jobs.into_iter()
+        .filter(|j| {
+            !waiting.contains(&j.audio_fp)
+                || c.query_row(
+                    "SELECT waveform IS NULL FROM analysis WHERE audio_fp = ?1",
+                    [&j.audio_fp],
+                    |r| r.get::<_, bool>(0),
+                )
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
 /// Detects BPM and key for the tracks in `track_ids` (every track when `None`). Unless
 /// `force`, audio that was analysed before is skipped. Values set by hand are kept unless
 /// `replace_edits` (the setting's value when `None`). Emits `analysis-progress` events.
@@ -720,6 +767,11 @@ async fn analyze_tracks(
             &jobs.iter().map(|j| j.audio_fp.as_str()).collect::<Vec<_>>(),
         )?;
         (jobs, ids, replace_edits)
+    };
+    let jobs = if force {
+        jobs
+    } else {
+        drop_analysed_elsewhere(&state, jobs).await
     };
     if jobs.is_empty() {
         return Ok(AnalysisReport::default());
@@ -1694,9 +1746,21 @@ async fn track_analysis(
     state: State<'_, AppState>,
     track_id: i64,
 ) -> Result<Option<TrackAnalysisView>, Error> {
-    let stored = with_db!(state, |c| {
-        db::audio_fp_of(c, track_id).map(|fp| fp.and_then(|fp| anlz::load(c, &fp)))
+    let (fp, stored) = with_db!(state, |c| {
+        db::audio_fp_of(c, track_id).map(|fp| {
+            let stored = fp.as_deref().and_then(|fp| anlz::load(c, fp));
+            (fp, stored)
+        })
     })?;
+    let stored = match (stored, fp) {
+        (Some(s), _) => Some(s),
+        // Analysed on another device: the waveform comes from the sharing destination.
+        (None, Some(fp)) => {
+            fetch_shared_waveform(&state, &fp).await;
+            with_db!(state, |c| Ok::<_, Error>(anlz::load(c, &fp)))?
+        }
+        (None, None) => None,
+    };
     Ok(stored.map(|s| TrackAnalysisView {
         grid_bpm: s.grid_bpm,
         first_beat: s.first_beat,
@@ -1705,6 +1769,32 @@ async fn track_analysis(
         rate: analysis::WAVEFORM_RATE,
         detail: s.detail,
     }))
+}
+
+/// Asks the sharing destination for the waveform of audio that has an analysis here but no
+/// waveform (it was analysed on another device). Failing is fine: the song shows without one.
+async fn fetch_shared_waveform(state: &AppState, audio_fp: &str) {
+    let target = state.db.lock().ok().and_then(|c| {
+        let waiting = c
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM analysis WHERE audio_fp = ?1 AND waveform IS NULL)",
+                [audio_fp],
+                |r| r.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
+        if !waiting {
+            return None;
+        }
+        db::get_targets(&c, None)
+            .ok()
+            .and_then(|t| t.into_iter().find(|t| t.libsync))
+    });
+    if let Some(target) = target
+        && let Err(e) =
+            sync::fetch_waveform(&state.http, &target, &state.db, &state.wf_misses, audio_fp).await
+    {
+        log::debug!("no waveform from the destination: {e}");
+    }
 }
 
 /// Replaces a track's kept beat grid, as edited in the grid editor, and makes its BPM match.
@@ -2047,6 +2137,7 @@ fn set_target_libsync(state: State<'_, AppState>, id: i64, enabled: bool) -> Res
 /// edits and applies everyone else's. Run before the files of a sync.
 #[tauri::command]
 async fn libsync_run(
+    app: AppHandle,
     state: State<'_, AppState>,
     target_ids: Vec<i64>,
 ) -> Result<Vec<sync::LibraryOutcome>, Error> {
@@ -2059,10 +2150,29 @@ async fn libsync_run(
         db::get_targets(&conn, Some(&target_ids))?
     };
     let mut out = Vec::new();
+    state.wf_misses.clear();
     for target in targets.iter().filter(|t| t.libsync) {
         out.push(sync::run_library_data(&state.http, target, &state.db).await);
     }
+    if let Some(target) = targets.into_iter().find(|t| t.libsync) {
+        tauri::async_runtime::spawn(fill_waveforms(app, target));
+    }
     Ok(out)
+}
+
+/// Downloads the waveforms other devices made, a few at a time, after a sync. Problems are only
+/// logged: a waveform still missing is fetched when its song is shown.
+async fn fill_waveforms(app: AppHandle, target: db::SyncTarget) {
+    let state = app.state::<AppState>();
+    if state.wf_filling.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _guard = SyncGuard(&state.wf_filling);
+    match sync::fill_waveforms(&state.http, &target, &state.db, &state.wf_misses).await {
+        Ok(0) => {}
+        Ok(n) => log::info!("fetched {n} waveforms from {}", sync::target_name(&target)),
+        Err(e) => log::warn!("could not fetch waveforms: {e}"),
+    }
 }
 
 #[tauri::command]
@@ -3161,6 +3271,8 @@ pub fn run() {
                 usb_exporting: AtomicBool::new(false),
                 cancel_analysis: AtomicBool::new(false),
                 plan: Mutex::new(None),
+                wf_misses: libsync::waveforms::Misses::default(),
+                wf_filling: AtomicBool::new(false),
             });
             tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
             Ok(())
@@ -3767,6 +3879,8 @@ mod tests {
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
+            wf_misses: libsync::waveforms::Misses::default(),
+            wf_filling: AtomicBool::new(false),
         };
         assert!(export_inner(&state, false).expect("export"));
 
@@ -3858,6 +3972,8 @@ mod tests {
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
+            wf_misses: libsync::waveforms::Misses::default(),
+            wf_filling: AtomicBool::new(false),
         };
         assert!(export_inner(&state, false).expect("export"));
 
@@ -3896,6 +4012,8 @@ mod tests {
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
+            wf_misses: libsync::waveforms::Misses::default(),
+            wf_filling: AtomicBool::new(false),
         };
         assert!(!export_inner(&state, false).expect("no-op"));
     }

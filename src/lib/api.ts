@@ -409,8 +409,9 @@ export async function updateSyncTarget(t: {
 }
 
 /**
- * Switches sharing of tags and playlists through one destination. Only one destination shares
- * them at a time; switching on sends everything the library holds.
+ * Switches sharing of library data (tags, playlists, smart playlists, BPM, key and beat grids,
+ * waveforms) through one destination. Only one destination shares it at a time; switching on
+ * sends everything the library holds.
  */
 export async function setTargetLibsync(id: number, enabled: boolean): Promise<void> {
 	await invoke("set_target_libsync", { id, enabled });
@@ -422,12 +423,13 @@ const libraryOutcomeSchema = z.object({
 	sent: int,
 	received: int,
 	unreadable: int,
+	waveformsSent: int,
 	error: z.string().nullable(),
 });
 export type LibraryOutcome = z.infer<typeof libraryOutcomeSchema>;
 
 /**
- * Sends this device's tag and playlist edits to the destinations that share them and applies
+ * Sends this device's library edits to the destinations that share them and applies
  * everyone else's. Run before the files.
  */
 export async function libsyncRun(targetIds: number[]): Promise<LibraryOutcome[]> {
