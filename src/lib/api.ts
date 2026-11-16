@@ -202,6 +202,27 @@ export async function listMissing(): Promise<MissingTrack[]> {
 	return z.array(missingTrackSchema).parse(await invoke("list_missing"));
 }
 
+const duplicateGroupSchema = z.object({
+	audioFp: z.string(),
+	tracks: z.array(
+		z.object({
+			id: int,
+			path: z.string(),
+			title: z.string(),
+			artist: z.string(),
+			album: z.string(),
+			size: int,
+		}),
+	),
+});
+
+export type DuplicateGroup = z.infer<typeof duplicateGroupSchema>;
+
+/** Groups of present songs with the same audio: they share tags, grid and playlist entries. */
+export async function listDuplicates(): Promise<DuplicateGroup[]> {
+	return z.array(duplicateGroupSchema).parse(await invoke("list_duplicates"));
+}
+
 /** Ends the grace period for missing tracks; the next sync removes their remote copies. */
 export async function removeMissingNow(): Promise<void> {
 	await invoke("remove_missing_now");

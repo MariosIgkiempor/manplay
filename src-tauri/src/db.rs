@@ -43,6 +43,9 @@ pub struct NewTrack {
     pub size: i64,
     /// See `scan::fingerprint`; `None` when the file could not be sampled.
     pub fingerprint: Option<String>,
+    /// See `audioprint`; an empty string when the audio could not be fingerprinted, `None` when
+    /// it was not tried.
+    pub audio_fp: Option<String>,
     pub duration_ms: Option<i64>,
     pub bitrate: Option<i64>,
     pub sample_rate: Option<i64>,
@@ -364,14 +367,16 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     // Unix seconds the song first came into the library; NULL for songs from before this column
     // (they sort by id, which follows the order they were added).
     add_column(&conn, "tracks", "added_at", "INTEGER")?;
-    // Fingerprint of the audio alone (see `audioprint`), filled in as imports need it.
+    // Fingerprint of the audio alone (see `audioprint`): the key of a song's analysis and cues.
     add_column(&conn, "tracks", "audio_fp", "TEXT")?;
+    retire_fingerprint_keys(&conn)?;
     // What each side of a destination looked like at the last successful sync (see `Base`).
     add_column(&conn, "synced_files", "local_sig", "TEXT")?;
     add_column(&conn, "synced_files", "remote_sig", "TEXT")?;
     add_column(&conn, "synced_files", "base_tags", "TEXT")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
+         CREATE INDEX IF NOT EXISTS tracks_audio_fp ON tracks(audio_fp);
          CREATE TABLE IF NOT EXISTS import_cache (
              folder TEXT PRIMARY KEY,
              data   TEXT NOT NULL
@@ -404,7 +409,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
          -- BPM and key detection results, by audio content: they follow a file through renames,
          -- moves, tag edits and library resets, and duplicates share them.
          CREATE TABLE IF NOT EXISTS analysis (
-             fingerprint TEXT PRIMARY KEY,
+             audio_fp    TEXT PRIMARY KEY,
              bpm         REAL,
              musical_key TEXT,
              error       TEXT,
@@ -414,7 +419,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
          -- Hot and memory cues set in manplay, by audio content like the analysis.
          CREATE TABLE IF NOT EXISTS cues (
              id          INTEGER PRIMARY KEY,
-             fingerprint TEXT NOT NULL,
+             audio_fp    TEXT NOT NULL,
              -- 0-7 for hot cues A-H, NULL for a memory cue.
              slot        INTEGER,
              start       REAL NOT NULL,
@@ -424,7 +429,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              -- The memory cue the song starts from (rekordbox's main cue on load).
              main        INTEGER NOT NULL DEFAULT 0
          );
-         CREATE INDEX IF NOT EXISTS cues_fingerprint ON cues(fingerprint);
+         CREATE INDEX IF NOT EXISTS cues_audio_fp ON cues(audio_fp);
          CREATE TABLE IF NOT EXISTS stale_remote (
              target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
              track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
@@ -435,26 +440,30 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "sync_runs", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
     add_column(&conn, "sync_runs", "errors", "TEXT NOT NULL DEFAULT '[]'")?;
     add_column(&conn, "sync_runs", "batch", "INTEGER NOT NULL DEFAULT 0")?;
-    // Values set by hand, which a new analysis keeps unless told to replace them.
-    add_column(
-        &conn,
-        "analysis",
-        "bpm_edited",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column(
-        &conn,
-        "analysis",
-        "key_edited",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column(
-        &conn,
-        "analysis",
-        "grid_edited",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
+    add_analysis_columns(&conn, "analysis")?;
     add_column(&conn, "cues", "main", "INTEGER NOT NULL DEFAULT 0")?;
+    if get_setting(&conn, SETTING_AUDIO_FP_VERSION)?.is_none() {
+        set_setting(
+            &conn,
+            SETTING_AUDIO_FP_VERSION,
+            Some(&crate::audioprint::VERSION.to_string()),
+        )?;
+    }
+    prepare_tags(&conn)?;
+    create_export_selections(&conn).map(|()| conn)
+}
+
+/// Setting that records which version of `audioprint` made the stored `audio_fp` values. A new
+/// algorithm needs a remap of `tracks.audio_fp`, `analysis` and `cues` before it is used.
+pub const SETTING_AUDIO_FP_VERSION: &str = "audio_fp_version";
+
+/// The columns of `analysis` added after its first version (also for `analysis_legacy`, so the
+/// old table is complete before it is re-keyed).
+fn add_analysis_columns(conn: &Connection, table: &str) -> Result<(), Error> {
+    // Values set by hand, which a new analysis keeps unless told to replace them.
+    for column in ["bpm_edited", "key_edited", "grid_edited"] {
+        add_column(conn, table, column, "INTEGER NOT NULL DEFAULT 0")?;
+    }
     // The beat grid (seconds to the first beat, its place in the bar) and the detail waveform
     // (`analysis::WAVEFORM_RATE` columns per second, each whiteness << 5 | height) that the
     // library shows and USB drives and rekordbox get. A NULL waveform: not analysed that far.
@@ -465,17 +474,99 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
         ("duration", "REAL"),
         ("waveform", "BLOB"),
     ] {
-        add_column(&conn, "analysis", column, decl)?;
+        add_column(conn, table, column, decl)?;
     }
     // Cues were set in manplay (possibly to none): they replace a drive's own on export.
-    add_column(
-        &conn,
-        "analysis",
-        "cues_edited",
-        "INTEGER NOT NULL DEFAULT 0",
+    add_column(conn, table, "cues_edited", "INTEGER NOT NULL DEFAULT 0")?;
+    Ok(())
+}
+
+/// Older databases keyed `analysis` and `cues` by `tracks.fingerprint` (the whole file, which
+/// every tag edit changes). Those tables are set aside as `analysis_legacy` and `cues_legacy`;
+/// [`rekey_legacy`] copies what maps to a track's `audio_fp` into the new ones.
+fn retire_fingerprint_keys(conn: &Connection) -> Result<(), Error> {
+    if has_column(conn, "analysis", "fingerprint")? {
+        add_analysis_columns(conn, "analysis")?;
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS analysis_legacy;
+             ALTER TABLE analysis RENAME TO analysis_legacy;",
+        )?;
+    }
+    if has_column(conn, "cues", "fingerprint")? {
+        add_column(conn, "cues", "main", "INTEGER NOT NULL DEFAULT 0")?;
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS cues_fingerprint;
+             DROP TABLE IF EXISTS cues_legacy;
+             ALTER TABLE cues RENAME TO cues_legacy;",
+        )?;
+    }
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, name: &str) -> Result<bool, Error> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![name],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// Finishes the move of `analysis` and `cues` to `audio_fp` keys: every old row whose track now
+/// has an audio fingerprint is copied under it (hand edits, grids, waveforms and cues included).
+/// Once every present track has been fingerprinted the old tables are dropped, and rows that map
+/// to no track go with them. Does nothing on a database without them.
+pub fn rekey_legacy(conn: &mut Connection) -> Result<(), Error> {
+    let has_analysis = table_exists(conn, "analysis_legacy")?;
+    let has_cues = table_exists(conn, "cues_legacy")?;
+    if !has_analysis && !has_cues {
+        return Ok(());
+    }
+    let tx = conn.transaction()?;
+    if has_analysis {
+        // Present tracks first, then the newest analysis, win when duplicates disagree.
+        tx.execute(
+            "INSERT OR IGNORE INTO analysis
+                 (audio_fp, bpm, musical_key, error, version, analyzed_at, bpm_edited, key_edited,
+                  grid_edited, cues_edited, grid_bpm, first_beat, bar_offset, duration, waveform)
+             SELECT t.audio_fp, a.bpm, a.musical_key, a.error, a.version, a.analyzed_at,
+                    a.bpm_edited, a.key_edited, a.grid_edited, a.cues_edited,
+                    a.grid_bpm, a.first_beat, a.bar_offset, a.duration, a.waveform
+             FROM analysis_legacy a JOIN tracks t ON t.fingerprint = a.fingerprint
+             WHERE t.audio_fp IS NOT NULL AND t.audio_fp <> ''
+             ORDER BY t.missing_since IS NOT NULL, a.analyzed_at DESC",
+            [],
+        )?;
+    }
+    if has_cues {
+        // One legacy fingerprint's cues per audio, and never over cues set since.
+        tx.execute(
+            "INSERT INTO cues (audio_fp, slot, start, name, color, main)
+             SELECT p.audio_fp, c.slot, c.start, c.name, c.color, c.main
+             FROM (SELECT t.audio_fp AS audio_fp, MIN(t.fingerprint) AS fingerprint
+                   FROM tracks t
+                   WHERE t.audio_fp IS NOT NULL AND t.audio_fp <> ''
+                     AND t.fingerprint IN (SELECT fingerprint FROM cues_legacy)
+                   GROUP BY t.audio_fp) p
+             JOIN cues_legacy c ON c.fingerprint = p.fingerprint
+             WHERE NOT EXISTS (SELECT 1 FROM cues n WHERE n.audio_fp = p.audio_fp)",
+            [],
+        )?;
+    }
+    let pending: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM tracks WHERE missing_since IS NULL AND audio_fp IS NULL",
+        [],
+        |r| r.get(0),
     )?;
-    prepare_tags(&conn)?;
-    create_export_selections(&conn).map(|()| conn)
+    if pending == 0 {
+        tx.execute_batch(
+            "DROP TABLE IF EXISTS analysis_legacy; DROP TABLE IF EXISTS cues_legacy;",
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, Error> {
@@ -499,37 +590,12 @@ fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Resul
 pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
     let tx = conn.transaction()?;
     {
-        // Writing tags can change a file's fingerprint (its size changes); its analysis (BPM,
-        // key, beat grid, waveform) follows it to the new one rather than being lost.
-        let mut carry = tx.prepare(
-            "INSERT OR IGNORE INTO analysis
-                 (fingerprint, bpm, musical_key, error, version, analyzed_at,
-                  bpm_edited, key_edited, grid_edited, cues_edited,
-                  grid_bpm, first_beat, bar_offset, duration, waveform)
-             SELECT ?2, a.bpm, a.musical_key, a.error, a.version, a.analyzed_at,
-                    a.bpm_edited, a.key_edited, a.grid_edited, a.cues_edited,
-                    a.grid_bpm, a.first_beat, a.bar_offset, a.duration, a.waveform
-             FROM tracks t JOIN analysis a ON a.fingerprint = t.fingerprint
-             WHERE t.path = ?1 AND t.fingerprint <> ?2",
-        )?;
-        let mut carry_cues = tx.prepare(
-            "INSERT INTO cues (fingerprint, slot, start, name, color, main)
-             SELECT ?2, c.slot, c.start, c.name, c.color, c.main
-             FROM tracks t JOIN cues c ON c.fingerprint = t.fingerprint
-             WHERE t.path = ?1 AND t.fingerprint <> ?2
-               AND NOT EXISTS (SELECT 1 FROM cues WHERE fingerprint = ?2)",
-        )?;
-        for t in tracks {
-            if let Some(fp) = &t.fingerprint {
-                carry.execute(params![t.path, fp])?;
-                carry_cues.execute(params![t.path, fp])?;
-            }
-        }
         let mut stmt = tx.prepare(
             "INSERT INTO tracks (path, artist, album, title, size, fingerprint,
                                  duration_ms, bitrate, sample_rate, tag_bpm, tag_key, fields,
-                                 added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CAST(strftime('%s', 'now') AS INTEGER))
+                                 audio_fp, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                     CAST(strftime('%s', 'now') AS INTEGER))
              ON CONFLICT(path) DO UPDATE SET
                  artist = excluded.artist,
                  album = excluded.album,
@@ -542,6 +608,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                  tag_bpm = excluded.tag_bpm,
                  tag_key = excluded.tag_key,
                  fields = COALESCE(excluded.fields, fields),
+                 audio_fp = CASE WHEN excluded.audio_fp <> '' THEN excluded.audio_fp
+                     ELSE COALESCE(audio_fp, excluded.audio_fp) END,
                  missing_since = NULL",
         )?;
         for t in tracks {
@@ -557,7 +625,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                 t.sample_rate,
                 t.tag_bpm,
                 t.tag_key,
-                t.fields
+                t.fields,
+                t.audio_fp
             ])?;
         }
     }
@@ -576,7 +645,7 @@ const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
     t.added_at";
 
 /// Joined wherever [`TRACK_COLS`] is selected.
-const ANALYSIS_JOIN: &str = "LEFT JOIN analysis a ON a.fingerprint = t.fingerprint";
+const ANALYSIS_JOIN: &str = "LEFT JOIN analysis a ON a.audio_fp = t.audio_fp";
 
 fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
     let tags: Option<String> = r.get(6)?;
@@ -714,11 +783,23 @@ pub struct Playlist {
     pub track_count: i64,
 }
 
+/// Extra condition for queries over `playlist_tracks pt JOIN tracks t`: a song whose audio
+/// appears more than once in a playlist (copies share one `audio_fp`) is listed once, at its
+/// first place.
+const ONE_PER_AUDIO: &str = "AND NOT EXISTS (
+        SELECT 1 FROM playlist_tracks p2 JOIN tracks t2 ON t2.id = p2.track_id
+        WHERE p2.playlist_id = pt.playlist_id AND p2.position < pt.position
+          AND t2.missing_since IS NULL AND t2.audio_fp <> '' AND t2.audio_fp = t.audio_fp)";
+
 pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>, Error> {
     let mut stmt = conn.prepare(
         "SELECT p.id, p.name, COUNT(t.id)
          FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
          LEFT JOIN tracks t ON t.id = pt.track_id AND t.missing_since IS NULL
+             AND NOT EXISTS (
+                SELECT 1 FROM playlist_tracks p2 JOIN tracks t2 ON t2.id = p2.track_id
+                WHERE p2.playlist_id = pt.playlist_id AND p2.position < pt.position
+                  AND t2.missing_since IS NULL AND t2.audio_fp <> '' AND t2.audio_fp = t.audio_fp)
          GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -785,7 +866,8 @@ pub fn remove_from_playlist(
 pub fn playlist_tracks(conn: &Connection, playlist_id: i64) -> Result<Vec<Track>, Error> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {TRACK_COLS} FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
-         {ANALYSIS_JOIN} WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL ORDER BY pt.position"
+         {ANALYSIS_JOIN} WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL {ONE_PER_AUDIO}
+         ORDER BY pt.position"
     ))?;
     let rows = stmt.query_map(params![playlist_id], track_from_row)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1186,21 +1268,21 @@ pub fn set_tempo_key(
     // A song never analysed gets a row (version 0, so it is still analysed later) to hold the
     // value; the analysis then fills in the rest around it.
     conn.execute(
-        "INSERT OR IGNORE INTO analysis (fingerprint, version, analyzed_at)
-         SELECT fingerprint, 0, 0 FROM tracks WHERE id = ?1 AND fingerprint IS NOT NULL",
+        "INSERT OR IGNORE INTO analysis (audio_fp, version, analyzed_at)
+         SELECT audio_fp, 0, 0 FROM tracks WHERE id = ?1 AND audio_fp <> ''",
         params![id],
     )?;
     if let Some(bpm) = bpm {
         conn.execute(
             "UPDATE analysis SET bpm = ?2, bpm_edited = 1, error = NULL
-             WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
+             WHERE audio_fp = (SELECT audio_fp FROM tracks WHERE id = ?1)",
             params![id, bpm],
         )?;
     }
     if let Some(key) = key {
         conn.execute(
             "UPDATE analysis SET musical_key = ?2, key_edited = 1, error = NULL
-             WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
+             WHERE audio_fp = (SELECT audio_fp FROM tracks WHERE id = ?1)",
             params![id, key],
         )?;
     }
@@ -1223,13 +1305,13 @@ pub struct Cue {
     pub main: bool,
 }
 
-/// The cues set in manplay for audio with this fingerprint, hot cues first; `None` when cues
+/// The cues set in manplay for audio with this `audio_fp`, hot cues first; `None` when cues
 /// were never set here (so a drive's own cues are left alone).
-pub fn cues_of(conn: &Connection, fingerprint: &str) -> Result<Option<Vec<Cue>>, Error> {
+pub fn cues_of(conn: &Connection, audio_fp: &str) -> Result<Option<Vec<Cue>>, Error> {
     let edited: bool = conn
         .query_row(
-            "SELECT cues_edited FROM analysis WHERE fingerprint = ?1",
-            params![fingerprint],
+            "SELECT cues_edited FROM analysis WHERE audio_fp = ?1",
+            params![audio_fp],
             |r| r.get(0),
         )
         .optional()?
@@ -1238,10 +1320,10 @@ pub fn cues_of(conn: &Connection, fingerprint: &str) -> Result<Option<Vec<Cue>>,
         return Ok(None);
     }
     let mut stmt = conn.prepare(
-        "SELECT slot, start, name, color, main FROM cues WHERE fingerprint = ?1
+        "SELECT slot, start, name, color, main FROM cues WHERE audio_fp = ?1
          ORDER BY slot IS NULL, slot, start",
     )?;
-    let rows = stmt.query_map(params![fingerprint], |r| {
+    let rows = stmt.query_map(params![audio_fp], |r| {
         Ok(Cue {
             slot: r.get(0)?,
             start: r.get(1)?,
@@ -1258,7 +1340,7 @@ pub fn set_cues(conn: &mut Connection, track_id: i64, cues: &[Cue]) -> Result<()
     let tx = conn.transaction()?;
     let fp: Option<String> = tx
         .query_row(
-            "SELECT fingerprint FROM tracks WHERE id = ?1",
+            "SELECT audio_fp FROM tracks WHERE id = ?1 AND audio_fp <> ''",
             params![track_id],
             |r| r.get(0),
         )
@@ -1270,17 +1352,17 @@ pub fn set_cues(conn: &mut Connection, track_id: i64, cues: &[Cue]) -> Result<()
         ));
     };
     tx.execute(
-        "INSERT OR IGNORE INTO analysis (fingerprint, version, analyzed_at) VALUES (?1, 0, 0)",
+        "INSERT OR IGNORE INTO analysis (audio_fp, version, analyzed_at) VALUES (?1, 0, 0)",
         params![fp],
     )?;
     tx.execute(
-        "UPDATE analysis SET cues_edited = 1 WHERE fingerprint = ?1",
+        "UPDATE analysis SET cues_edited = 1 WHERE audio_fp = ?1",
         params![fp],
     )?;
-    tx.execute("DELETE FROM cues WHERE fingerprint = ?1", params![fp])?;
+    tx.execute("DELETE FROM cues WHERE audio_fp = ?1", params![fp])?;
     {
         let mut ins = tx.prepare(
-            "INSERT INTO cues (fingerprint, slot, start, name, color, main)
+            "INSERT INTO cues (audio_fp, slot, start, name, color, main)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
         // One start cue at most, and only as a memory cue.
@@ -1306,7 +1388,7 @@ pub fn set_cues(conn: &mut Connection, track_id: i64, cues: &[Cue]) -> Result<()
 pub fn mark_grid_edited(conn: &Connection, id: i64) -> Result<(), Error> {
     conn.execute(
         "UPDATE analysis SET grid_edited = 1
-         WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
+         WHERE audio_fp = (SELECT audio_fp FROM tracks WHERE id = ?1)",
         params![id],
     )?;
     Ok(())
@@ -1834,7 +1916,8 @@ pub fn apply_move(
         "UPDATE tracks SET path = ?2, artist = ?3, album = ?4, title = ?5, size = ?6,
                 fingerprint = ?7, missing_since = NULL,
                 duration_ms = COALESCE(?8, duration_ms), bitrate = COALESCE(?9, bitrate),
-                sample_rate = COALESCE(?10, sample_rate), fields = COALESCE(?11, fields)
+                sample_rate = COALESCE(?10, sample_rate), fields = COALESCE(?11, fields),
+                audio_fp = CASE WHEN ?12 <> '' THEN ?12 ELSE COALESCE(audio_fp, ?12) END
          WHERE id = ?1",
         params![
             id,
@@ -1847,7 +1930,8 @@ pub fn apply_move(
             new.duration_ms,
             new.bitrate,
             new.sample_rate,
-            new.fields
+            new.fields,
+            new.audio_fp
         ],
     )?;
     tx.commit()?;
@@ -1893,7 +1977,8 @@ pub struct ExportTrack {
     pub sample_rate: Option<i64>,
     pub bpm: Option<f64>,
     pub key: Option<String>,
-    pub fingerprint: Option<String>,
+    /// Under which the song's analysis and cues are kept.
+    pub audio_fp: Option<String>,
     /// The kept beat grid, written as a rekordbox `TEMPO` marker; filled in by the caller.
     pub grid: Option<crate::rekordbox::Grid>,
     /// The beat grid was set by hand in manplay.
@@ -1914,8 +1999,8 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
     let mut stmt = conn.prepare(
         "SELECT t.id, t.path, t.artist, t.album, t.title, t.size, t.duration_ms, t.bitrate,
                 t.sample_rate, COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key),
-                t.fingerprint, COALESCE(a.grid_edited, 0)
-         FROM tracks t LEFT JOIN analysis a ON a.fingerprint = t.fingerprint
+                NULLIF(t.audio_fp, ''), COALESCE(a.grid_edited, 0)
+         FROM tracks t LEFT JOIN analysis a ON a.audio_fp = t.audio_fp
          WHERE t.missing_since IS NULL ORDER BY t.artist, t.album, t.path",
     )?;
     let tracks = stmt
@@ -1932,7 +2017,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
                 sample_rate: r.get(8)?,
                 bpm: r.get(9)?,
                 key: r.get(10)?,
-                fingerprint: r.get(11)?,
+                audio_fp: r.get(11)?,
                 grid: None,
                 grid_edited: r.get(12)?,
                 cues: Vec::new(),
@@ -1945,10 +2030,11 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
     let heads = pl_stmt
         .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut member_stmt = conn.prepare(
+    let mut member_stmt = conn.prepare(&format!(
         "SELECT pt.track_id FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
-         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL ORDER BY pt.position",
-    )?;
+         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL {ONE_PER_AUDIO}
+         ORDER BY pt.position"
+    ))?;
     let mut playlists = Vec::new();
     for (id, name) in heads {
         let track_ids = member_stmt
@@ -2025,6 +2111,64 @@ pub fn audio_index(conn: &Connection) -> Result<std::collections::HashMap<String
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// One file of a [`DuplicateGroup`].
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateTrack {
+    pub id: i64,
+    pub path: String,
+    pub artist: String,
+    pub album: String,
+    pub title: String,
+    pub size: i64,
+}
+
+/// Present songs that share one `audio_fp`: the same recording stored more than once. They share
+/// tags, analysis and playlist entries.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateGroup {
+    pub audio_fp: String,
+    pub tracks: Vec<DuplicateTrack>,
+}
+
+/// Every group of present songs with the same audio, files in path order.
+pub fn duplicate_groups(conn: &Connection) -> Result<Vec<DuplicateGroup>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT t.audio_fp, t.id, t.path, t.artist, t.album, t.title, t.size FROM tracks t
+         WHERE t.missing_since IS NULL AND t.audio_fp <> '' AND t.audio_fp IN (
+             SELECT audio_fp FROM tracks
+             WHERE missing_since IS NULL AND audio_fp IS NOT NULL AND audio_fp <> ''
+             GROUP BY audio_fp HAVING COUNT(*) > 1)
+         ORDER BY t.audio_fp, t.path",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            DuplicateTrack {
+                id: r.get(1)?,
+                path: r.get(2)?,
+                artist: r.get(3)?,
+                album: r.get(4)?,
+                title: r.get(5)?,
+                size: r.get(6)?,
+            },
+        ))
+    })?;
+    let mut groups: Vec<DuplicateGroup> = Vec::new();
+    for row in rows {
+        let (audio_fp, track) = row?;
+        match groups.last_mut() {
+            Some(g) if g.audio_fp == audio_fp => g.tracks.push(track),
+            _ => groups.push(DuplicateGroup {
+                audio_fp,
+                tracks: vec![track],
+            }),
+        }
+    }
+    Ok(groups)
+}
+
 /// Present library songs whose audio has not been fingerprinted yet.
 pub fn tracks_without_audio_fp(conn: &Connection) -> Result<Vec<(i64, String)>, Error> {
     let mut stmt = conn
@@ -2070,7 +2214,7 @@ pub fn put_import_cache(conn: &Connection, folder: &str, data: &str) -> Result<(
 /// A file waiting for BPM and key detection.
 pub struct AnalysisJob {
     pub path: String,
-    pub fingerprint: String,
+    pub audio_fp: String,
 }
 
 /// Present tracks to analyse: those in `ids` (every track when `None`), one per distinct audio
@@ -2082,10 +2226,10 @@ pub fn analysis_jobs(
 ) -> Result<Vec<AnalysisJob>, Error> {
     let wanted: Option<std::collections::HashSet<i64>> = ids.map(|i| i.iter().copied().collect());
     let mut stmt = conn.prepare(
-        "SELECT t.id, t.path, t.fingerprint, a.version, a.waveform IS NULL AND a.error IS NULL
+        "SELECT t.id, t.path, t.audio_fp, a.version, a.waveform IS NULL AND a.error IS NULL
          FROM tracks t
-         LEFT JOIN analysis a ON a.fingerprint = t.fingerprint
-         WHERE t.missing_since IS NULL AND t.fingerprint IS NOT NULL
+         LEFT JOIN analysis a ON a.audio_fp = t.audio_fp
+         WHERE t.missing_since IS NULL AND t.audio_fp <> ''
          ORDER BY t.artist, t.album, t.path",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -2100,7 +2244,7 @@ pub fn analysis_jobs(
     let mut seen = std::collections::HashSet::new();
     let mut jobs = Vec::new();
     for row in rows {
-        let (id, path, fingerprint, version, no_waveform) = row?;
+        let (id, path, audio_fp, version, no_waveform) = row?;
         if wanted.as_ref().is_some_and(|w| !w.contains(&id)) {
             continue;
         }
@@ -2110,18 +2254,18 @@ pub fn analysis_jobs(
         if !force && version.is_some_and(|v| v >= crate::analysis::VERSION) && !no_waveform {
             continue;
         }
-        if seen.insert(fingerprint.clone()) {
-            jobs.push(AnalysisJob { path, fingerprint });
+        if seen.insert(audio_fp.clone()) {
+            jobs.push(AnalysisJob { path, audio_fp });
         }
     }
     Ok(jobs)
 }
 
-/// The audio fingerprint of a track, if it has been read.
-pub fn fingerprint_of(conn: &Connection, track_id: i64) -> Result<Option<String>, Error> {
+/// The `audio_fp` of a track, if it has been read.
+pub fn audio_fp_of(conn: &Connection, track_id: i64) -> Result<Option<String>, Error> {
     Ok(conn
         .query_row(
-            "SELECT fingerprint FROM tracks WHERE id = ?1",
+            "SELECT audio_fp FROM tracks WHERE id = ?1 AND audio_fp <> ''",
             params![track_id],
             |r| r.get::<_, Option<String>>(0),
         )
@@ -2144,7 +2288,7 @@ pub fn analysis_results(
     let wanted: Option<std::collections::HashSet<i64>> = ids.map(|i| i.iter().copied().collect());
     let mut stmt = conn.prepare(
         "SELECT t.id, t.path, a.bpm, a.musical_key FROM tracks t
-         JOIN analysis a ON a.fingerprint = t.fingerprint
+         JOIN analysis a ON a.audio_fp = t.audio_fp
          WHERE t.missing_since IS NULL AND (a.bpm IS NOT NULL OR a.musical_key IS NOT NULL)
          ORDER BY t.path",
     )?;
@@ -2168,10 +2312,10 @@ pub fn analysis_results(
     Ok(out)
 }
 
-/// Ids of present tracks holding any of these audio fingerprints (duplicates included).
-pub fn track_ids_with_fingerprints(conn: &Connection, prints: &[&str]) -> Result<Vec<i64>, Error> {
+/// Ids of present tracks holding any of these `audio_fp`s (duplicates included).
+pub fn track_ids_with_audio_fps(conn: &Connection, prints: &[&str]) -> Result<Vec<i64>, Error> {
     let mut stmt =
-        conn.prepare("SELECT id FROM tracks WHERE fingerprint = ?1 AND missing_since IS NULL")?;
+        conn.prepare("SELECT id FROM tracks WHERE audio_fp = ?1 AND missing_since IS NULL")?;
     let mut ids = Vec::new();
     for fp in prints {
         for id in stmt.query_map(params![fp], |r| r.get(0))? {
@@ -2184,7 +2328,7 @@ pub fn track_ids_with_fingerprints(conn: &Connection, prints: &[&str]) -> Result
 /// Present tracks whose last analysis failed, with the reason.
 pub fn analysis_failures(conn: &Connection) -> Result<Vec<crate::audit::FixFailure>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT t.path, a.error FROM tracks t JOIN analysis a ON a.fingerprint = t.fingerprint
+        "SELECT t.path, a.error FROM tracks t JOIN analysis a ON a.audio_fp = t.audio_fp
          WHERE t.missing_since IS NULL AND a.error IS NOT NULL ORDER BY t.path",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -2196,12 +2340,12 @@ pub fn analysis_failures(conn: &Connection) -> Result<Vec<crate::audit::FixFailu
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-/// Stores the outcome of analysing the audio with this fingerprint: BPM, key, and the beat
+/// Stores the outcome of analysing the audio with this `audio_fp`: BPM, key, and the beat
 /// grid and waveform in `stored`. BPM, key and grid set by hand stay, unless `replace_edits`,
 /// which also forgets that they were set by hand. A failed analysis keeps any earlier waveform.
 pub fn store_analysis(
     conn: &Connection,
-    fingerprint: &str,
+    audio_fp: &str,
     result: &Result<(crate::analysis::Analysis, crate::anlz::Stored), String>,
     now: i64,
     replace_edits: bool,
@@ -2211,9 +2355,9 @@ pub fn store_analysis(
         Err(e) => (None, None, Some(e.as_str())),
     };
     conn.execute(
-        "INSERT INTO analysis (fingerprint, bpm, musical_key, error, version, analyzed_at)
+        "INSERT INTO analysis (audio_fp, bpm, musical_key, error, version, analyzed_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(fingerprint) DO UPDATE SET
+         ON CONFLICT(audio_fp) DO UPDATE SET
              bpm = CASE WHEN analysis.bpm_edited AND NOT ?7 THEN analysis.bpm ELSE excluded.bpm END,
              musical_key = CASE WHEN analysis.key_edited AND NOT ?7
                  THEN analysis.musical_key ELSE excluded.musical_key END,
@@ -2223,7 +2367,7 @@ pub fn store_analysis(
              key_edited = analysis.key_edited AND NOT ?7,
              grid_edited = analysis.grid_edited AND NOT ?7",
         params![
-            fingerprint,
+            audio_fp,
             bpm,
             key,
             error,
@@ -2241,9 +2385,9 @@ pub fn store_analysis(
                      THEN first_beat ELSE ?5 END,
                  bar_offset = CASE WHEN grid_edited AND waveform IS NOT NULL
                      THEN bar_offset ELSE ?6 END
-             WHERE fingerprint = ?1",
+             WHERE audio_fp = ?1",
             params![
-                fingerprint,
+                audio_fp,
                 stored.duration,
                 stored.detail,
                 stored.grid_bpm,
@@ -2261,7 +2405,13 @@ mod tests {
     use super::*;
     use crate::analysis::Analysis;
 
-    fn track(path: &str, fp: &str, tag_bpm: Option<f64>) -> NewTrack {
+    /// A file whose audio is `audio` (its `audio_fp`).
+    fn track(path: &str, audio: &str, tag_bpm: Option<f64>) -> NewTrack {
+        track_with(path, &format!("file-of-{audio}"), audio, tag_bpm)
+    }
+
+    /// A file with whole-file fingerprint `fp` and `audio_fp` `audio`.
+    fn track_with(path: &str, fp: &str, audio: &str, tag_bpm: Option<f64>) -> NewTrack {
         NewTrack {
             path: path.into(),
             artist: "A".into(),
@@ -2269,6 +2419,7 @@ mod tests {
             title: path.into(),
             size: 1,
             fingerprint: Some(fp.into()),
+            audio_fp: Some(audio.into()),
             tag_bpm,
             tag_key: tag_bpm.map(|_| "Fm".to_owned()),
             ..NewTrack::default()
@@ -2304,16 +2455,13 @@ mod tests {
         assert_eq!(kept[0].name, "Drop", "hot cues first, names trimmed");
         assert_eq!(kept[1], memory);
 
-        // A tag write changes the fingerprint; the cues come along.
-        upsert(&mut conn, &[track("/a.mp3", "x2", None)]).expect("upsert");
-        assert_eq!(
-            cues_of(&conn, "x2").expect("cues").map(|c| c.len()),
-            Some(2)
-        );
+        // A tag write changes the fingerprint but not the audio; the cues stay.
+        upsert(&mut conn, &[track_with("/a.mp3", "f2", "x", None)]).expect("upsert");
+        assert_eq!(cues_of(&conn, "x").expect("cues").map(|c| c.len()), Some(2));
 
         set_cues(&mut conn, 1, &[]).expect("clear");
         assert_eq!(
-            cues_of(&conn, "x2").expect("cues"),
+            cues_of(&conn, "x").expect("cues"),
             Some(Vec::new()),
             "cleared, not unset"
         );
@@ -2335,7 +2483,7 @@ mod tests {
         upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
         // BPM and key from before the waveform was kept in the database.
         conn.execute(
-            "INSERT INTO analysis (fingerprint, bpm, version, analyzed_at) VALUES ('x', 120, ?1, 1)",
+            "INSERT INTO analysis (audio_fp, bpm, version, analyzed_at) VALUES ('x', 120, ?1, 1)",
             params![crate::analysis::VERSION],
         )
         .expect("row");
@@ -2347,15 +2495,127 @@ mod tests {
     }
 
     #[test]
-    fn analysis_follows_a_tag_edit_to_the_new_fingerprint() {
+    fn analysis_survives_a_retag() {
         let mut conn = open(Path::new(":memory:")).expect("db");
-        upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
-        crate::anlz::save(&conn, "x", &kept(Some(124.0))).expect("save");
-        upsert(&mut conn, &[track("/a.mp3", "x2", None)]).expect("retag");
+        upsert(&mut conn, &[track_with("/a.mp3", "f1", "x", None)]).expect("upsert");
+        let found = Ok((
+            Analysis {
+                bpm: Some(124.0),
+                key: None,
+            },
+            kept(Some(124.0)),
+        ));
+        store_analysis(&conn, "x", &found, 1, false).expect("store");
+        assert!(list(&conn).expect("list")[0].analyzed);
+        // A retag: new whole-file fingerprint, same audio.
+        upsert(&mut conn, &[track_with("/a.mp3", "f2", "x", None)]).expect("retag");
         assert_eq!(
-            crate::anlz::load(&conn, "x2").expect("carried").grid_bpm,
+            crate::anlz::load(&conn, "x").expect("kept").grid_bpm,
             Some(124.0)
         );
+        assert!(list(&conn).expect("list")[0].analyzed, "still joins");
+        assert!(analysis_jobs(&conn, None, false).expect("jobs").is_empty());
+    }
+
+    #[test]
+    fn duplicates_are_present_tracks_with_the_same_audio() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(
+            &mut conn,
+            &[
+                track("/a.mp3", "x", None),
+                track_with("/a copy.mp3", "other", "x", None),
+                track("/b.mp3", "y", None),
+                track_with("/gone.mp3", "g", "y", None),
+                track_with("/c.mp3", "c1", "", None),
+                track_with("/d.mp3", "d1", "", None),
+            ],
+        )
+        .expect("upsert");
+        mark_missing(&mut conn, &[4], 1).expect("missing");
+        let groups = duplicate_groups(&conn).expect("groups");
+        assert_eq!(groups.len(), 1, "a missing copy and unreadable audio do not count");
+        assert_eq!(groups[0].audio_fp, "x");
+        let paths: Vec<&str> = groups[0].tracks.iter().map(|t| t.path.as_str()).collect();
+        assert_eq!(paths, ["/a copy.mp3", "/a.mp3"]);
+    }
+
+    #[test]
+    fn playlists_list_one_entry_per_audio() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(
+            &mut conn,
+            &[
+                track("/a.mp3", "x", None),
+                track_with("/a copy.mp3", "other", "x", None),
+                track("/b.mp3", "y", None),
+            ],
+        )
+        .expect("upsert");
+        let pl = create_playlist(&conn, "P").expect("playlist");
+        add_to_playlist(&mut conn, pl, &[2, 1, 3]).expect("add");
+        let names: Vec<String> = playlist_tracks(&conn, pl)
+            .expect("tracks")
+            .into_iter()
+            .map(|t| t.path)
+            .collect();
+        assert_eq!(names, ["/a copy.mp3", "/b.mp3"]);
+        assert_eq!(list_playlists(&conn).expect("lists")[0].track_count, 2);
+    }
+
+    #[test]
+    fn old_analysis_and_cues_are_rekeyed_through_their_tracks() {
+        let dir = std::env::temp_dir().join(format!("manplay-rekey-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("library.db");
+        {
+            // A database from before `audio_fp` keyed the analysis.
+            let conn = open(&path).expect("db");
+            conn.execute_batch(
+                "DROP TABLE analysis; DROP TABLE cues;
+                 CREATE TABLE analysis (fingerprint TEXT PRIMARY KEY, bpm REAL, musical_key TEXT,
+                     error TEXT, version INTEGER NOT NULL, analyzed_at INTEGER NOT NULL);
+                 CREATE TABLE cues (id INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL, slot INTEGER,
+                     start REAL NOT NULL, name TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '');
+                 INSERT INTO analysis VALUES ('f-a', 120, 'Am', NULL, 3, 5), ('f-orphan', 90, NULL, NULL, 3, 5);
+                 INSERT INTO cues (fingerprint, slot, start) VALUES ('f-a', 0, 1.5), ('f-orphan', 1, 2.0);",
+            )
+            .expect("old shape");
+            let mut conn = conn;
+            let mut a = track_with("/a.mp3", "f-a", "", None);
+            a.audio_fp = None;
+            upsert(&mut conn, &[a]).expect("upsert");
+        }
+        let mut conn = open(&path).expect("migrates");
+        assert!(table_exists(&conn, "analysis_legacy").expect("legacy"));
+        assert!(table_exists(&conn, "cues_legacy").expect("legacy"));
+        // Not fingerprinted yet: nothing maps, the old rows wait.
+        rekey_legacy(&mut conn).expect("rekey");
+        assert!(table_exists(&conn, "analysis_legacy").expect("legacy"));
+        assert_eq!(analysis_results(&conn, None).expect("results").len(), 0);
+
+        set_audio_fps(&mut conn, &[(1, "audio-a".into())]).expect("fps");
+        rekey_legacy(&mut conn).expect("rekey");
+        let t = &list(&conn).expect("list")[0];
+        assert_eq!(t.bpm, Some(120.0), "analysis follows the audio");
+        let cues = cues_of(&conn, "audio-a").expect("cues");
+        assert_eq!(cues, None, "cues_edited was never set before, so they stay unset");
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM cues WHERE audio_fp = 'audio-a'", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(n, 1, "the cue moved; the orphan's did not");
+        let all: i64 = conn
+            .query_row("SELECT COUNT(*) FROM analysis", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(all, 1, "the row without a track is dropped");
+        assert!(!table_exists(&conn, "analysis_legacy").expect("gone"));
+        assert!(!table_exists(&conn, "cues_legacy").expect("gone"));
+        assert_eq!(
+            get_setting(&conn, SETTING_AUDIO_FP_VERSION).expect("setting"),
+            Some(crate::audioprint::VERSION.to_string())
+        );
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2458,11 +2718,11 @@ mod tests {
             "/b.mp3"
         );
 
-        // Tags written into /a.mp3 changed its size and so its fingerprint.
-        upsert(&mut conn, &[track("/a.mp3", "x2", Some(128.0))]).expect("rescan");
+        // Tags written into /a.mp3 changed its size and so its fingerprint, not its audio.
+        upsert(&mut conn, &[track_with("/a.mp3", "x2", "x", Some(128.0))]).expect("rescan");
         let tracks = list(&conn).expect("list");
         let a = tracks.iter().find(|t| t.path == "/a.mp3").expect("a");
-        assert!(a.analyzed, "analysis follows the new fingerprint");
+        assert!(a.analyzed, "analysis stays with the audio");
         assert_eq!(a.key.as_deref(), Some("Am"));
     }
 

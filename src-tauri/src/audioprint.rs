@@ -8,6 +8,10 @@ use std::io::{Read, Seek, SeekFrom};
 
 const SAMPLE: u64 = 64 * 1024;
 
+/// Version of this algorithm, kept in the `audio_fp_version` setting. Changing how prints are
+/// made means bumping it and remapping every stored `audio_fp` (tracks, analysis, cues).
+pub const VERSION: u32 = 1;
+
 fn read_at<R: Read + Seek>(r: &mut R, at: u64, len: usize) -> Option<Vec<u8>> {
     r.seek(SeekFrom::Start(at)).ok()?;
     let mut buf = vec![0_u8; len];

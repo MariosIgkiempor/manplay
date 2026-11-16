@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { AnalysisDrawer } from "#/components/analysis-drawer.tsx";
+import { DuplicatesDrawer } from "#/components/duplicates.tsx";
 import { IssuesDrawer } from "#/components/issues-drawer.tsx";
 import { MissingDrawer } from "#/components/missing-files.tsx";
 import { PlayerBar } from "#/components/player-bar.tsx";
@@ -13,14 +14,18 @@ export function Shell({
 	children,
 	missingOpen,
 	issuesOpen,
+	duplicatesOpen,
 	setMissingOpen,
 	setIssuesOpen,
+	setDuplicatesOpen,
 }: {
 	children: ReactNode;
 	missingOpen: boolean;
 	issuesOpen: boolean;
+	duplicatesOpen: boolean;
 	setMissingOpen: (open: boolean) => void;
 	setIssuesOpen: (open: boolean) => void;
+	setDuplicatesOpen: (open: boolean) => void;
 }) {
 	const mainScope = useStatusScopeHandlers("main");
 	return (
@@ -31,6 +36,7 @@ export function Shell({
 					<div className="@container/main h-full overflow-y-auto">{children}</div>
 					<MissingDrawer open={missingOpen} onClose={() => setMissingOpen(false)} />
 					<IssuesDrawer open={issuesOpen} onClose={() => setIssuesOpen(false)} />
+					<DuplicatesDrawer open={duplicatesOpen} onClose={() => setDuplicatesOpen(false)} />
 					<AnalysisDrawer />
 					<SyncDrawers />
 				</div>

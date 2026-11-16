@@ -23,6 +23,7 @@ import {
 	itunesImport,
 	itunesPending,
 	libraryStatus,
+	listDuplicates,
 	listMissing,
 	listSyncTargets,
 	listTracks,
@@ -121,6 +122,15 @@ export function useLibraryStatus() {
 /** Tracks whose files are gone; only fetched while `enabled` (the list drawer is open). */
 export function useMissingTracks(enabled: boolean) {
 	return useQuery({ queryKey: ["missing-tracks"], queryFn: listMissing, enabled });
+}
+
+/** Songs stored more than once (same audio); re-run after any file change. */
+export function useDuplicates() {
+	return useQuery({
+		queryKey: ["duplicates"],
+		queryFn: listDuplicates,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
 }
 
 /** Ends the grace period for missing tracks. Their remote copies are offered for deletion at the next sync review. */
@@ -269,9 +279,16 @@ export function useItunesImport() {
 /** Everything that can change when files move on disk (the backend rescans afterwards). */
 export async function refreshAfterFsChange(queryClient: ReturnType<typeof useQueryClient>) {
 	await Promise.all(
-		["fs", "tracks", "playlists", "tags", "library-status", "audit", "tag-values"].map((k) =>
-			queryClient.invalidateQueries({ queryKey: [k] }),
-		),
+		[
+			"fs",
+			"tracks",
+			"playlists",
+			"tags",
+			"library-status",
+			"audit",
+			"tag-values",
+			"duplicates",
+		].map((k) => queryClient.invalidateQueries({ queryKey: [k] })),
 	);
 }
 

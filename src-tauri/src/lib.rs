@@ -71,11 +71,39 @@ async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error>
     let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
     detect_moves(&mut conn, &state.data_dir, &root, &result)?;
     db::upsert(&mut conn, &result.tracks)?;
+    db::rekey_legacy(&mut conn)?;
     db::replace_tag_values(&mut conn, &result.values)?;
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
     reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
     drop(conn);
     Ok(result.tracks.len())
+}
+
+/// Fingerprints the audio of present tracks that have no `audio_fp` yet (libraries from before
+/// scans did it) and re-keys the old fingerprint-keyed analysis and cues onto them. Scans do
+/// this for every file they read, so this only matters until the first scan after an update.
+async fn fill_audio_fps(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let todo = match state.db.lock().map_err(|_| Error::Lock) {
+        Ok(conn) => db::tracks_without_audio_fp(&conn),
+        Err(e) => Err(e),
+    };
+    let Ok(todo) = todo else { return };
+    let printed = tauri::async_runtime::spawn_blocking(move || {
+        todo.into_iter()
+            .map(|(id, path)| {
+                let fp = audioprint::audio_print_path(Path::new(&path)).unwrap_or_default();
+                (id, fp)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
+    let Ok(printed) = printed else { return };
+    let Ok(mut conn) = state.db.lock() else { return };
+    let stored = db::set_audio_fps(&mut conn, &printed).and_then(|()| db::rekey_legacy(&mut conn));
+    if let Err(e) = stored {
+        log::warn!("could not fingerprint the library's audio: {e}");
+    }
 }
 
 /// Path relative to the library root, as it appears on sync destinations.
@@ -197,6 +225,13 @@ fn library_status(state: State<'_, AppState>) -> Result<LibraryStatus, Error> {
         missing: db::missing_count(&conn)?,
         grace_days: GRACE_DAYS,
     })
+}
+
+/// Groups of present songs with the same audio (see `db::duplicate_groups`).
+#[tauri::command]
+fn list_duplicates(state: State<'_, AppState>) -> Result<Vec<db::DuplicateGroup>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::duplicate_groups(&conn)
 }
 
 #[derive(serde::Serialize)]
@@ -636,7 +671,7 @@ fn run_analysis(
                 let conn = state.db.lock().map_err(|_| Error::Lock)?;
                 db::store_analysis(
                     &conn,
-                    &jobs[i].fingerprint,
+                    &jobs[i].audio_fp,
                     &result,
                     unix_now(),
                     replace_edits,
@@ -679,11 +714,11 @@ async fn analyze_tracks(
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let replace_edits = replace_edits.unwrap_or(analysis_settings_of(&conn)?.replace_edits);
         let jobs = db::analysis_jobs(&conn, track_ids.as_deref(), force)?;
-        let ids = db::track_ids_with_fingerprints(
+        let ids = db::track_ids_with_audio_fps(
             &conn,
             &jobs
                 .iter()
-                .map(|j| j.fingerprint.as_str())
+                .map(|j| j.audio_fp.as_str())
                 .collect::<Vec<_>>(),
         )?;
         (jobs, ids, replace_edits)
@@ -1439,10 +1474,10 @@ fn usb_inputs(
                 }
             }),
             cues: t
-                .fingerprint
+                .audio_fp
                 .as_deref()
                 .and_then(|fp| db::cues_of(&conn, fp).ok().flatten()),
-            fingerprint: t.fingerprint,
+            audio_fp: t.audio_fp,
             grid_edited: t.grid_edited,
         })
         .collect();
@@ -1662,7 +1697,7 @@ async fn track_analysis(
     track_id: i64,
 ) -> Result<Option<TrackAnalysisView>, Error> {
     let stored = with_db!(state, |c| {
-        db::fingerprint_of(c, track_id).map(|fp| fp.and_then(|fp| anlz::load(c, &fp)))
+        db::audio_fp_of(c, track_id).map(|fp| fp.and_then(|fp| anlz::load(c, &fp)))
     })?;
     Ok(stored.map(|s| TrackAnalysisView {
         grid_bpm: s.grid_bpm,
@@ -1684,7 +1719,7 @@ async fn set_beat_grid(
     first_beat: f64,
     bar_offset: u8,
 ) -> Result<Option<TrackAnalysisView>, Error> {
-    let Some(fp) = with_db!(state, |c| db::fingerprint_of(c, track_id))? else {
+    let Some(fp) = with_db!(state, |c| db::audio_fp_of(c, track_id))? else {
         return Err(Error::Msg(
             "This song has no audio to keep a grid for.".into(),
         ));
@@ -1717,7 +1752,7 @@ async fn set_beat_grid(
 #[tauri::command]
 fn track_cues(state: State<'_, AppState>, track_id: i64) -> Result<Vec<db::Cue>, Error> {
     with_db!(state, |c| {
-        match db::fingerprint_of(c, track_id)? {
+        match db::audio_fp_of(c, track_id)? {
             Some(fp) => Ok(db::cues_of(c, &fp)?.unwrap_or_default()),
             None => Ok(Vec::new()),
         }
@@ -2670,14 +2705,14 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
         let (mut tracks, mut playlists) = db::export_data(&conn)?;
         for t in &mut tracks {
             t.cues = t
-                .fingerprint
+                .audio_fp
                 .as_deref()
                 .map(|fp| db::cues_of(&conn, fp))
                 .transpose()?
                 .flatten()
                 .unwrap_or_default();
             t.grid = t
-                .fingerprint
+                .audio_fp
                 .as_deref()
                 .and_then(|fp| anlz::load(&conn, fp))
                 .and_then(|s| {
@@ -3100,6 +3135,7 @@ pub fn run() {
                 cancel_analysis: AtomicBool::new(false),
                 plan: Mutex::new(None),
             });
+            tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3107,6 +3143,7 @@ pub fn run() {
             get_library_root,
             library_status,
             list_missing,
+            list_duplicates,
             remove_missing_now,
             rescan_library,
             reset_library,

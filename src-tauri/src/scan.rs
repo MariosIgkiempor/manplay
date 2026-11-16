@@ -161,6 +161,7 @@ fn read_track(
         title,
         size: i64::try_from(len).ok()?,
         fingerprint: fingerprint(path, len),
+        audio_fp: Some(crate::audioprint::audio_print_path(path).unwrap_or_default()),
         duration_ms: millis.filter(|m| *m > 0),
         bitrate: props.and_then(FileProperties::audio_bitrate).map(i64::from),
         sample_rate: props.and_then(FileProperties::sample_rate).map(i64::from),

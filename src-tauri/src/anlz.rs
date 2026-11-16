@@ -451,13 +451,13 @@ impl Stored {
     }
 }
 
-/// The kept beat grid and waveform of the audio with this fingerprint; `None` until it has
+/// The kept beat grid and waveform of the audio with this `audio_fp`; `None` until it has
 /// been analysed.
-pub fn load(conn: &Connection, fingerprint: &str) -> Option<Stored> {
+pub fn load(conn: &Connection, audio_fp: &str) -> Option<Stored> {
     conn.query_row(
         "SELECT grid_bpm, first_beat, bar_offset, duration, waveform FROM analysis
-         WHERE fingerprint = ?1 AND waveform IS NOT NULL",
-        params![fingerprint],
+         WHERE audio_fp = ?1 AND waveform IS NOT NULL",
+        params![audio_fp],
         |r| {
             Ok(Stored {
                 grid_bpm: r.get::<_, Option<f64>>(0)?.filter(|b| *b > 0.0),
@@ -473,19 +473,19 @@ pub fn load(conn: &Connection, fingerprint: &str) -> Option<Stored> {
     .flatten()
 }
 
-/// Keeps a beat grid and waveform for the audio with this fingerprint. Audio never analysed
+/// Keeps a beat grid and waveform for the audio with this `audio_fp`. Audio never analysed
 /// gets a row of version 0, so the library analysis still detects its BPM and key later.
-pub fn save(conn: &Connection, fingerprint: &str, stored: &Stored) -> Result<(), Error> {
+pub fn save(conn: &Connection, audio_fp: &str, stored: &Stored) -> Result<(), Error> {
     conn.execute(
-        "INSERT OR IGNORE INTO analysis (fingerprint, version, analyzed_at) VALUES (?1, 0, 0)",
-        params![fingerprint],
+        "INSERT OR IGNORE INTO analysis (audio_fp, version, analyzed_at) VALUES (?1, 0, 0)",
+        params![audio_fp],
     )?;
     conn.execute(
         "UPDATE analysis SET grid_bpm = ?2, first_beat = ?3, bar_offset = ?4, duration = ?5,
              waveform = ?6
-         WHERE fingerprint = ?1",
+         WHERE audio_fp = ?1",
         params![
-            fingerprint,
+            audio_fp,
             stored.grid_bpm,
             stored.first_beat,
             stored.bar_offset,
@@ -854,7 +854,7 @@ mod tests {
         assert_eq!(load(&conn, "missing"), None);
         // A row with BPM and key only (set by hand) has no waveform to show yet.
         conn.execute(
-            "INSERT INTO analysis (fingerprint, version, analyzed_at) VALUES ('bare', 0, 0)",
+            "INSERT INTO analysis (audio_fp, version, analyzed_at) VALUES ('bare', 0, 0)",
             [],
         )
         .expect("row");

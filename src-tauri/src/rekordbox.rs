@@ -366,7 +366,7 @@ mod tests {
             sample_rate: Some(44100),
             bpm: (id == 1).then_some(128.0),
             key: (id == 1).then(|| "Am".to_owned()),
-            fingerprint: None,
+            audio_fp: None,
             grid: None,
             grid_edited: false,
             cues: Vec::new(),

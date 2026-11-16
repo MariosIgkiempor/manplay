@@ -37,8 +37,8 @@ pub struct Source {
     pub bpm: Option<f64>,
     /// As the player should show it, already in the chosen notation.
     pub key: Option<String>,
-    /// Audio fingerprint, under which manplay keeps the song's analysis.
-    pub fingerprint: Option<String>,
+    /// `audio_fp`, under which manplay keeps the song's analysis.
+    pub audio_fp: Option<String>,
     /// The beat grid was set by hand: it replaces the grid in analysis files rekordbox wrote.
     pub grid_edited: bool,
     /// Cues set in manplay, which replace the drive's own; `None` when never set here.
@@ -373,7 +373,7 @@ struct Analyzed {
 /// analysis without a beat grid is redone when the library has a tempo to lay one out with.
 fn analyzed(source: &Source, store: Option<&Store>) -> Result<Analyzed, String> {
     let kept = store
-        .zip(source.fingerprint.as_deref())
+        .zip(source.audio_fp.as_deref())
         .and_then(|(db, fp)| anlz::load(&*db.lock().ok()?, fp))
         .filter(|s| s.grid_bpm.is_some() || source.bpm.is_none());
     if let Some(stored) = kept {
@@ -381,7 +381,7 @@ fn analyzed(source: &Source, store: Option<&Store>) -> Result<Analyzed, String> 
     }
     let d: Detail = analysis::analyze_detail(&source.path, source.bpm)?;
     let stored = anlz::Stored::from_detail(&d);
-    if let (Some(db), Some(fp)) = (store, source.fingerprint.as_deref())
+    if let (Some(db), Some(fp)) = (store, source.audio_fp.as_deref())
         && let Ok(conn) = db.lock()
     {
         // Keeping it only saves time next export; failing to is not worth stopping for.
@@ -539,7 +539,7 @@ fn refresh_grids(
         };
         let Some(stored) = p
             .source
-            .fingerprint
+            .audio_fp
             .as_deref()
             .and_then(|fp| anlz::load(&*db.lock().ok()?, fp))
         else {
@@ -1163,7 +1163,7 @@ mod tests {
             sample_rate: Some(44_100),
             bpm: Some(140.0),
             key: Some("8A".into()),
-            fingerprint: None,
+            audio_fp: None,
             grid_edited: false,
             cues: None,
         }
@@ -1494,7 +1494,7 @@ mod tests {
         let store = test_store();
         // The "song" is not real audio, so only the kept analysis can give it a grid.
         let mut song = source(&lib_dir, 1, "A", "B", "a.mp3", 100);
-        song.fingerprint = Some("ab12".into());
+        song.audio_fp = Some("ab12".into());
         song.bpm = Some(128.0);
         let kept = anlz::Stored {
             grid_bpm: Some(128.0),
@@ -1524,7 +1524,7 @@ mod tests {
         let usb = dir("usb7");
         let store = test_store();
         let mut song = source(&lib_dir, 1, "A", "B", "a.mp3", 100);
-        song.fingerprint = Some("cd34".into());
+        song.audio_fp = Some("cd34".into());
         let mut kept = anlz::Stored {
             grid_bpm: Some(128.0),
             first_beat: 0.25,
@@ -1602,7 +1602,7 @@ mod tests {
             sample_rate: Some(44_100),
             bpm: Some(128.0),
             key: Some("8A".into()),
-            fingerprint: None,
+            audio_fp: None,
             grid_edited: false,
             cues: None,
         };
