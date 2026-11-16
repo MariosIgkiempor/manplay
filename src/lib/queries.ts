@@ -29,6 +29,7 @@ import {
 	migrateLibraryTags,
 	type PanelTabs,
 	pickAndScan,
+	type Resolution,
 	removeMissingNow,
 	rescanLibrary,
 	resetLibrary,
@@ -92,8 +93,15 @@ export function useSyncApply() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationKey: SYNC_KEY,
-		mutationFn: ({ planId, actionIds }: { planId: string; actionIds: number[] }) =>
-			syncApply(planId, actionIds),
+		mutationFn: ({
+			planId,
+			actionIds,
+			resolutions,
+		}: {
+			planId: string;
+			actionIds: number[];
+			resolutions?: Record<number, Resolution>;
+		}) => syncApply(planId, actionIds, resolutions),
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["sync-history"] });
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });

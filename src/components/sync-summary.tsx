@@ -10,6 +10,7 @@ import {
 } from "react";
 import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
 import { PullList } from "#/components/pull-review.tsx";
+import { IncomingList } from "#/components/sync-incoming.tsx";
 import { SyncResult } from "#/components/sync-result.tsx";
 import {
 	countKinds,
@@ -30,6 +31,7 @@ import {
 	type PullOutcome,
 	type PullProgress,
 	type RemoteFile,
+	type Resolution,
 	remotePull,
 	remoteScan,
 	type SyncAction,
@@ -37,6 +39,14 @@ import {
 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
 import { useSyncApply, useSyncPlan } from "#/lib/queries.ts";
+import {
+	type Choices,
+	type IncomingAction,
+	isIncoming,
+	isPush,
+	isSettled,
+	type PushAction,
+} from "#/lib/sync-choices.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** Which halves of a sync start switched on. */
@@ -171,8 +181,14 @@ interface Row {
 	/** What would be pulled if the switch were on, and what is, with it off nothing. */
 	pullSel: RemoteFile[];
 	pull: RemoteFile[];
-	pushSel: SyncAction[];
-	push: SyncAction[];
+	/** Files edited on the destination that would change the library: they belong to the pull. */
+	incoming: IncomingAction[];
+	incomingSel: IncomingAction[];
+	/** What runs: the selection, unless the pull is switched off. */
+	incomingRun: IncomingAction[];
+	pushActions: PushAction[];
+	pushSel: PushAction[];
+	push: PushAction[];
 }
 
 /** The state setters and tick lookups a destination's block works through. */
@@ -181,8 +197,74 @@ interface Ui {
 	setSwitched: Dispatch<SetStateAction<ReadonlyMap<string, boolean>>>;
 	setPullFlips: Dispatch<SetStateAction<ReadonlySet<string>>>;
 	setPushFlips: Dispatch<SetStateAction<ReadonlySet<number>>>;
+	setChoices: Dispatch<SetStateAction<Choices>>;
+	choices: Choices;
 	pullPicked: (id: number, f: RemoteFile) => boolean;
 	pushPicked: (a: SyncAction) => boolean;
+}
+
+/** What a destination's pull holds: songs the library lacks and songs edited over there. */
+function PullSummary({ t }: { t: Row }) {
+	if (t.missing.length + t.incoming.length === 0) {
+		return <span className="text-muted-foreground text-sm">Nothing to pull</span>;
+	}
+	return (
+		<span className="inline-flex flex-wrap gap-x-4 text-sm tabular-nums">
+			{t.missing.length > 0 && (
+				<span>
+					<span className="font-medium text-success">+{t.pullSel.length.toLocaleString()}</span>{" "}
+					<span className="text-muted-foreground">
+						of {t.missing.length.toLocaleString()} songs not in your library
+					</span>
+				</span>
+			)}
+			{t.incoming.length > 0 && (
+				<span>
+					<span className="font-medium text-warning">~{t.incomingSel.length.toLocaleString()}</span>{" "}
+					<span className="text-muted-foreground">
+						of {t.incoming.length.toLocaleString()} edited on the destination
+					</span>
+				</span>
+			)}
+		</span>
+	);
+}
+
+/** Files edited on the destination: updates, merges and conflicts, with their ticks and choices. */
+function PullIncoming({ t, ui }: { t: Row; ui: Ui }) {
+	if (t.incoming.length === 0) {
+		return null;
+	}
+	const { setPushFlips, setChoices, choices, pushPicked } = ui;
+	return (
+		<IncomingList
+			actions={t.incoming}
+			choices={choices}
+			picked={pushPicked}
+			// A conflict is ticked by choosing a copy; unticking forgets the choice.
+			onToggle={(a) =>
+				a.kind === "conflict"
+					? setChoices((m) => {
+							const next = new Map(m);
+							next.delete(a.id);
+							return next;
+						})
+					: setPushFlips((s) => flip(s, a.id))
+			}
+			onToggleAll={(items, on) =>
+				setPushFlips((s) => {
+					let next = s;
+					for (const a of items) {
+						if (a.kind !== "conflict" && isSettled(a, choices.get(a.id)) && pushPicked(a) !== on) {
+							next = flip(next, a.id);
+						}
+					}
+					return next;
+				})
+			}
+			onChoose={(aid, next) => setChoices((m) => new Map(m).set(aid, next))}
+		/>
+	);
 }
 
 /** One destination: how much already matches, then its pull and its push. */
@@ -199,7 +281,8 @@ function TargetBlock({
 }) {
 	const { setOpen, setSwitched, setPullFlips, setPushFlips, pullPicked, pushPicked } = ui;
 	const id = t.plan.targetId;
-	const skippedPush = new Set(t.plan.actions.filter((a) => !pushPicked(a)).map((a) => a.id));
+	const skippedPush = new Set(t.pushActions.filter((a) => !pushPicked(a)).map((a) => a.id));
+	const pullCount = t.missing.length + t.incoming.length;
 	// Pressing the title opens the list; with a filter on it first clears the filter, and only a
 	// list showing everything closes.
 	const toggleOpen = (side: Side) =>
@@ -237,23 +320,13 @@ function TargetBlock({
 				title="Pull"
 				on={t.pullOn}
 				onToggle={(v) => setSwitched((m) => new Map(m).set(`${id}:pull`, v))}
-				empty={t.missing.length === 0}
-				size={bytes(t.pullSel)}
+				empty={pullCount === 0}
+				size={bytes(t.pullSel) + bytes(t.incomingSel)}
 				open={open.has(`${id}:pull`)}
 				onOpen={() => toggleOpen("pull")}
-				summary={
-					t.missing.length === 0 ? (
-						<span className="text-muted-foreground text-sm">Nothing to pull</span>
-					) : (
-						<span className="text-sm tabular-nums">
-							<span className="font-medium text-success">+{t.pullSel.length.toLocaleString()}</span>{" "}
-							<span className="text-muted-foreground">
-								of {t.missing.length.toLocaleString()} songs not in your library
-							</span>
-						</span>
-					)
-				}
+				summary={<PullSummary t={t} />}
 			>
+				<PullIncoming t={t} ui={ui} />
 				<PullList
 					missing={t.missing}
 					picked={(f) => pullPicked(id, f)}
@@ -285,19 +358,19 @@ function TargetBlock({
 				title="Push"
 				on={t.pushOn}
 				onToggle={(v) => setSwitched((m) => new Map(m).set(`${id}:push`, v))}
-				empty={t.plan.actions.length === 0 || t.plan.error !== null}
+				empty={t.pushActions.length === 0 || t.plan.error !== null}
 				size={bytes(t.pushSel.filter((a) => a.kind === "upload" || a.kind === "replace"))}
 				open={open.has(`${id}:push`)}
 				onOpen={() => toggleOpen("push")}
 				summary={
 					t.plan.error ? (
 						<span className="break-words text-destructive text-sm">{t.plan.error}</span>
-					) : t.plan.actions.length === 0 ? (
+					) : t.pushActions.length === 0 ? (
 						<span className="text-muted-foreground text-sm">Up to date</span>
 					) : (
 						<FilterTally
 							counts={countKinds(t.pushSel)}
-							totals={countKinds(t.plan.actions)}
+							totals={countKinds(t.pushActions)}
 							active={(open.get(`${id}:push`) as PushFilter | undefined) ?? null}
 							onPick={pickKind}
 						/>
@@ -307,13 +380,13 @@ function TargetBlock({
 				<PushList
 					filter={pushFilter}
 					onShowAll={() => setOpen((prev) => new Map(prev).set(`${id}:push`, "all"))}
-					plan={t.plan}
+					plan={{ ...t.plan, actions: t.pushActions }}
 					skipped={skippedPush}
 					onToggle={(aid) => setPushFlips((s) => flip(s, aid))}
 					onToggleAll={(aids, on) =>
 						setPushFlips((s) => {
 							let next = s;
-							for (const a of t.plan.actions.filter((x) => aids.includes(x.id))) {
+							for (const a of t.pushActions.filter((x) => aids.includes(x.id))) {
 								if (pushPicked(a) !== on) {
 									next = flip(next, a.id);
 								}
@@ -436,13 +509,21 @@ function Gather({
 	const [pushFlips, setPushFlips] = useState<ReadonlySet<number>>(new Set());
 	const [open, setOpen] = useState<ReadonlyMap<string, string>>(new Map());
 	const [understood, setUnderstood] = useState(false);
+	// What was chosen for merges and conflicts.
+	const [choices, setChoices] = useState<Choices>(new Map());
 
 	const isOn = (id: number, side: Side) =>
 		switched.get(`${id}:${side}`) ?? (mode === "both" || mode === side);
 	// Songs that only exist here in another format, and opt-in changes such as deletes, start unticked.
 	const pullPicked = (id: number, f: RemoteFile) =>
 		!f.otherFormat !== pullFlips.has(pullKey(id, f));
-	const pushPicked = (a: SyncAction) => !a.optional !== pushFlips.has(a.id);
+	// A merge or conflict only runs once its choices are made; unticking a ready merge is a flip.
+	const pushPicked = (a: SyncAction) => {
+		if (isIncoming(a)) {
+			return isSettled(a, choices.get(a.id)) && (a.kind === "conflict" || !pushFlips.has(a.id));
+		}
+		return !a.optional !== pushFlips.has(a.id);
+	};
 
 	const early = notReady({ phase, plan, scanned, progress, onRefresh, onClose, variant });
 	if (early || !plan.data) {
@@ -456,7 +537,10 @@ function Gather({
 		const pullOn = isOn(t.targetId, "pull");
 		const pushOn = isOn(t.targetId, "push") && !t.error;
 		const pullSel = missing.filter((f) => pullPicked(t.targetId, f));
-		const pushSel = t.actions.filter(pushPicked);
+		const pushActions = t.actions.filter(isPush);
+		const incoming = t.actions.filter(isIncoming);
+		const pushSel = pushActions.filter(pushPicked);
+		const incomingSel = incoming.filter(pushPicked);
 		return {
 			plan: t,
 			missing,
@@ -465,6 +549,10 @@ function Gather({
 			pushOn,
 			pullSel,
 			pull: pullOn ? pullSel : [],
+			incoming,
+			incomingSel,
+			incomingRun: pullOn ? incomingSel : [],
+			pushActions,
 			pushSel,
 			push: pushOn ? pushSel : [],
 		};
@@ -476,7 +564,16 @@ function Gather({
 	const remoteFiles = targets
 		.filter((t) => t.push.some((a) => a.kind === "delete"))
 		.reduce((n, t) => n + t.plan.remoteTotal, 0);
-	const total = pulls.reduce((n, t) => n + t.pull.length, 0) + pushIds.length;
+	const incomingRun = targets.flatMap((t) => t.incomingRun);
+	// Updates and merges run with the push: the plan applies them.
+	const applyIds = [...pushIds, ...incomingRun.map((a) => a.id)];
+	const resolutions: Record<number, Resolution> = Object.fromEntries(
+		incomingRun.flatMap((a) => {
+			const choice = choices.get(a.id);
+			return choice ? [[a.id, choice] as const] : [];
+		}),
+	);
+	const total = pulls.reduce((n, t) => n + t.pull.length, 0) + applyIds.length;
 	const busy = phase.step !== "review";
 
 	const run = async () => {
@@ -497,7 +594,9 @@ function Gather({
 			}
 			setPhase({ step: "pushing" });
 			const result =
-				pushIds.length > 0 ? await apply.mutateAsync({ planId, actionIds: pushIds }) : [];
+				applyIds.length > 0
+					? await apply.mutateAsync({ planId, actionIds: applyIds, resolutions })
+					: [];
 			setPhase({ step: "done", pulled, pushed: result });
 		} catch (e) {
 			setPhase({ step: "failed", error: String(e) });
@@ -524,6 +623,11 @@ function Gather({
 										label: "to pull",
 										count: pulls.reduce((n, t) => n + t.pull.length, 0),
 									},
+									{
+										tone: "change",
+										label: "to update your library",
+										count: incomingRun.length,
+									},
 									...KINDS.map((k) => ({
 										tone: LABEL[k].tone,
 										label: LABEL[k].label.toLowerCase(),
@@ -535,6 +639,7 @@ function Gather({
 							<span className="text-muted-foreground text-xs tabular-nums">
 								{formatBytes(
 									bytes(pulls.flatMap((t) => t.pull)) +
+										bytes(incomingRun) +
 										bytes(pushed.filter((a) => a.kind === "upload" || a.kind === "replace")),
 								)}
 							</span>
@@ -542,6 +647,7 @@ function Gather({
 						<ChangeBar
 							parts={[
 								{ tone: "add", count: pulls.reduce((n, t) => n + t.pull.length, 0) },
+								{ tone: "change", count: incomingRun.length },
 								...KINDS.map((k) => ({
 									tone: LABEL[k].tone,
 									count: pushed.filter((a) => a.kind === k).length,
@@ -578,7 +684,16 @@ function Gather({
 						t={t}
 						multi={ids.length > 1}
 						open={open}
-						ui={{ setOpen, setSwitched, setPullFlips, setPushFlips, pullPicked, pushPicked }}
+						ui={{
+							setOpen,
+							setSwitched,
+							setPullFlips,
+							setPushFlips,
+							setChoices,
+							choices,
+							pullPicked,
+							pushPicked,
+						}}
 					/>
 				))}
 			</div>

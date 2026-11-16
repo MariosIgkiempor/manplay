@@ -1,9 +1,10 @@
-import { CheckCircle2, FolderArchive, TriangleAlert } from "lucide-react";
+import { CheckCircle2, FolderArchive, Trash2, TriangleAlert } from "lucide-react";
 import { TONE, type Tone } from "#/components/diff-view.tsx";
 import { FailureList } from "#/components/failure-list.tsx";
 import { SyncShell } from "#/components/sync-shell.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import type { ApplySummary, PullOutcome } from "#/lib/api.ts";
+import { TRASH } from "#/lib/platform.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** One figure of the result: a big number in its tone's colour and what it counts. */
@@ -24,6 +25,7 @@ function Block({
 	title,
 	stats,
 	backupDir,
+	trashed,
 	failed,
 	failedTotal,
 	outcome,
@@ -31,6 +33,8 @@ function Block({
 	title: string;
 	stats: { tone: Tone; count: number; label: string }[];
 	backupDir?: string | null;
+	/** Library files replaced by the destination's copy, now in the Trash. */
+	trashed?: number;
 	failed: readonly string[];
 	failedTotal: number;
 	outcome?: string;
@@ -56,6 +60,13 @@ function Block({
 					</p>
 					<p className="break-all font-mono opacity-70">{backupDir}</p>
 				</div>
+			)}
+			{trashed !== undefined && trashed > 0 && (
+				<p className="flex items-center gap-1.5 text-muted-foreground text-xs">
+					<Trash2 className="size-3.5 shrink-0" />
+					{trashed.toLocaleString()} replaced {trashed === 1 ? "file is" : "files are"} in the{" "}
+					{TRASH}
+				</p>
 			)}
 			{failedTotal > 0 && <FailureList messages={failed} total={failedTotal} outcome={outcome} />}
 		</section>
@@ -122,10 +133,13 @@ export function SyncResult({
 							title={r.name}
 							stats={[
 								{ tone: "add", count: r.uploaded, label: "pushed" },
+								{ tone: "change", count: r.merged, label: "merged" },
+								{ tone: "change", count: r.updated, label: "updated in your library" },
 								{ tone: "move", count: r.moved, label: "moved" },
 								{ tone: "remove", count: r.deleted, label: "deleted" },
 							]}
 							backupDir={r.backupDir}
+							trashed={r.updated}
 							failed={r.failed}
 							failedTotal={r.failedTotal}
 							outcome="left unchanged"

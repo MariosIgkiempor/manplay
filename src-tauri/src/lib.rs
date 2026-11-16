@@ -1836,7 +1836,7 @@ async fn sync_plan(
     state: State<'_, AppState>,
     target_ids: Option<Vec<i64>>,
 ) -> Result<sync::Plan, Error> {
-    let (targets, items, known, synced, prints) = {
+    let (targets, items, known, synced, prints, bases) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let targets = db::get_targets(&conn, target_ids.as_deref())?;
         let synced = targets
@@ -1847,12 +1847,17 @@ async fn sync_plan(
             .iter()
             .map(|t| Ok((t.id, db::remote_prints(&conn, t.id)?)))
             .collect::<Result<HashMap<_, _>, Error>>()?;
+        let bases = targets
+            .iter()
+            .map(|t| Ok((t.id, db::synced_bases(&conn, t.id)?)))
+            .collect::<Result<HashMap<_, _>, Error>>()?;
         (
             targets,
             collect_items(&conn)?,
             collect_known(&conn)?,
             synced,
             prints,
+            bases,
         )
     };
     if targets.is_empty() {
@@ -1874,20 +1879,30 @@ async fn sync_plan(
     for target in &targets {
         let times = synced.get(&target.id).cloned().unwrap_or_default();
         let cached = prints.get(&target.id).cloned().unwrap_or_default();
-        let plan = sync::plan_target(
+        let target_bases = bases.get(&target.id).cloned().unwrap_or_default();
+        let mut plan = sync::plan_target(
             &app,
             &state.http,
             target,
-            &items,
-            &known,
-            &times,
-            &cached,
+            &sync::Inputs {
+                items: &items,
+                known: &known,
+                synced_at: &times,
+                cached: &cached,
+                bases: &target_bases,
+            },
             &mut next_id,
         )
         .await;
         if !plan.fresh_prints.is_empty() {
             let conn = state.db.lock().map_err(|_| Error::Lock)?;
             db::store_remote_prints(&conn, target.id, &plan.fresh_prints)?;
+        }
+        // Files found identical get a base now, so the next review knows who edits what.
+        let seeds = sync::seed_bases(std::mem::take(&mut plan.seeds)).await;
+        if !seeds.is_empty() {
+            let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
+            db::store_bases(&mut conn, target.id, &seeds)?;
         }
         plans.push(plan);
     }
@@ -1907,6 +1922,7 @@ async fn sync_apply(
     state: State<'_, AppState>,
     plan_id: String,
     action_ids: Vec<u32>,
+    resolutions: Option<HashMap<u32, sync::Resolution>>,
 ) -> Result<Vec<sync::ApplySummary>, Error> {
     let plan = {
         let mut slot = state.plan.lock().map_err(|_| Error::Lock)?;
@@ -1922,6 +1938,8 @@ async fn sync_apply(
     let _guard = SyncGuard(&state.syncing);
 
     let selected: HashSet<u32> = action_ids.into_iter().collect();
+    let resolutions = resolutions.unwrap_or_default();
+    let root = library_root(&state)?;
     let ids: Vec<i64> = plan.targets.iter().map(|t| t.target_id).collect();
     let targets = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
@@ -1946,14 +1964,19 @@ async fn sync_apply(
             continue;
         }
         let started_at = unix_now();
-        let applied =
-            sync::apply_target(&app, &state.http, target, tp, &selected, &backup_dir).await;
+        let review = sync::Review {
+            selected: &selected,
+            resolutions: &resolutions,
+            backup_dir: &backup_dir,
+            root: &root,
+        };
+        let applied = sync::apply_target(&app, &state.http, target, tp, &review).await;
         let s = &applied.summary;
         let record = db::RunRecord {
             target_id: target.id,
             started_at,
             finished_at: unix_now(),
-            uploaded: s.uploaded + s.moved,
+            uploaded: s.uploaded + s.moved + s.merged,
             skipped: tp.in_sync,
             failed: s.failed_total,
             deleted: s.deleted,
@@ -1970,6 +1993,10 @@ async fn sync_apply(
         summaries.push(applied.summary);
     }
 
+    // Library files rewritten by an update or merge: read them again.
+    if summaries.iter().any(|s| s.updated + s.merged > 0) {
+        scan_and_store(&state, root).await?;
+    }
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     purge_expired(&conn, &state.data_dir.join("backups"), unix_now())?;
     sync::prune_backups(&backups, unix_now(), SYNC_BACKUP_KEEP_SECS);
@@ -3452,7 +3479,13 @@ mod tests {
             errors: Vec::new(),
             batch: 0,
         };
-        db::record_run(&mut f.conn, &record, &[(ids[0], 1), (ids[1], 1)], &[]).expect("run");
+        db::record_run(
+            &mut f.conn,
+            &record,
+            &[db::Synced::kept(ids[0], 1), db::Synced::kept(ids[1], 1)],
+            &[],
+        )
+        .expect("run");
 
         f.apply(&f.scan_of(&["2"], 0)); // track 1 now missing, marked just now
         assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
@@ -3470,6 +3503,70 @@ mod tests {
         db::record_run(&mut f.conn, &record, &[], &[ids[0]]).expect("run");
         purge_expired(&f.conn, &f.dir.join("backups"), later).expect("purge");
         assert_eq!(db::missing_count(&f.conn).expect("count"), 0);
+    }
+
+    #[test]
+    fn a_sync_stores_replaces_keeps_and_clears_the_base_of_a_file() {
+        let mut f = Fixture::new("base");
+        f.apply(&f.scan_of(&["1"], 0));
+        let id = ids_by_title(&f)["1"];
+        let target = db::add_target(
+            &f.conn,
+            &db::NewTarget {
+                tailnet: "t".into(),
+                machine: "m".into(),
+                path: vec!["s".into()],
+            },
+        )
+        .expect("target");
+        let record = db::RunRecord {
+            target_id: target,
+            started_at: 0,
+            finished_at: 1,
+            uploaded: 0,
+            skipped: 0,
+            failed: 0,
+            deleted: 0,
+            first_error: None,
+            errors: Vec::new(),
+            batch: 0,
+        };
+        let base = |sig: &str| db::Base {
+            local_sig: sig.to_owned(),
+            remote_sig: sig.to_owned(),
+            tags: Some("{}".to_owned()),
+        };
+        let synced = |update| db::Synced {
+            track_id: id,
+            size: 1,
+            base: update,
+        };
+        db::record_run(
+            &mut f.conn,
+            &record,
+            &[synced(db::BaseUpdate::Set(base("a")))],
+            &[],
+        )
+        .expect("set");
+        assert_eq!(
+            db::synced_bases(&f.conn, target).expect("read")[&id],
+            base("a")
+        );
+        // A file nothing happened to keeps its base.
+        db::record_run(&mut f.conn, &record, &[synced(db::BaseUpdate::Keep)], &[]).expect("keep");
+        assert_eq!(
+            db::synced_bases(&f.conn, target).expect("read")[&id],
+            base("a")
+        );
+        // Seeding replaces it in place.
+        db::store_bases(&mut f.conn, target, &[(id, base("b"))]).expect("seed");
+        assert_eq!(
+            db::synced_bases(&f.conn, target).expect("read")[&id],
+            base("b")
+        );
+        // A file the sync may have left different forgets it: rows without a base fall back.
+        db::record_run(&mut f.conn, &record, &[synced(db::BaseUpdate::Clear)], &[]).expect("clear");
+        assert_eq!(db::synced_bases(&f.conn, target).expect("read").len(), 0);
     }
 
     fn ids_by_title(f: &Fixture) -> HashMap<String, i64> {
@@ -3558,7 +3655,7 @@ mod tests {
             errors: Vec::new(),
             batch: 0,
         };
-        db::record_run(&mut f.conn, &record, &[(id, 1)], &[]).expect("run");
+        db::record_run(&mut f.conn, &record, &[db::Synced::kept(id, 1)], &[]).expect("run");
         assert_eq!(db::list(&f.conn).expect("list")[0].synced_count, 1);
 
         f.apply(&f.scan_of(&["new/1", "2"], 0));

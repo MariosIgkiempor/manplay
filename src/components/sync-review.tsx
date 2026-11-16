@@ -11,10 +11,10 @@ import {
 } from "#/components/diff-view.tsx";
 import { TagDiffInline } from "#/components/tag-diff.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import type { SyncAction, TargetPlan } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
+import type { PushAction, PushPlan } from "#/lib/sync-choices.ts";
 
-type Kind = SyncAction["kind"];
+type Kind = PushAction["kind"];
 
 export const LABEL: Record<Kind, { tone: Tone; label: string }> = {
 	upload: { tone: "add", label: "Push" },
@@ -29,14 +29,14 @@ const STYLE = Object.fromEntries(
 
 const HUNKS_PER_PAGE = 40;
 const path = (rel: readonly string[]) => rel.join("/");
-const dirOf = (a: SyncAction) => path(a.rel.slice(0, -1)) || "(top level)";
-const nameOf = (a: SyncAction) => a.rel.at(-1) ?? "";
+const dirOf = (a: PushAction) => path(a.rel.slice(0, -1)) || "(top level)";
+const nameOf = (a: PushAction) => a.rel.at(-1) ?? "";
 
-const toHunks = (actions: readonly SyncAction[]) => groupByDir(actions, dirOf, nameOf);
+const toHunks = (actions: readonly PushAction[]) => groupByDir(actions, dirOf, nameOf);
 
 export type Counts = Partial<Record<Kind, number>>;
 
-export function countKinds(actions: readonly SyncAction[]): Counts {
+export function countKinds(actions: readonly PushAction[]): Counts {
 	const out: Counts = {};
 	for (const a of actions) {
 		out[a.kind] = (out[a.kind] ?? 0) + 1;
@@ -108,7 +108,7 @@ export function FilterTally({
 }
 
 /** The size on the right of a row; a changed file also shows by how much, in front of the new size. */
-function SizeOf({ action }: { action: SyncAction }) {
+function SizeOf({ action }: { action: PushAction }) {
 	const delta =
 		action.kind === "replace" && action.remoteSize !== null ? action.size - action.remoteSize : 0;
 	return (
@@ -141,7 +141,7 @@ function ActionRow({
 	picked,
 	onToggle,
 }: {
-	action: SyncAction;
+	action: PushAction;
 	picked: boolean;
 	onToggle: () => void;
 }) {
@@ -200,7 +200,7 @@ function Hunk({
 	onToggleAll,
 }: {
 	dir: string;
-	actions: SyncAction[];
+	actions: PushAction[];
 	skipped: ReadonlySet<number>;
 	onToggle: (id: number) => void;
 	onToggleAll: (ids: number[], on: boolean) => void;
@@ -243,7 +243,7 @@ export function PushList({
 	filter,
 	onShowAll,
 }: {
-	plan: TargetPlan;
+	plan: PushPlan;
 	filter: PushFilter;
 	onShowAll: () => void;
 	skipped: ReadonlySet<number>;

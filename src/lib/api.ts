@@ -438,10 +438,30 @@ export async function dismissActivity(ids: number[]): Promise<void> {
 	await invoke("dismiss_activity", { ids });
 }
 
+const sideSchema = z.enum(["mine", "theirs"]);
+export type Side = z.infer<typeof sideSchema>;
+
+/** One tag field a merge row shows: the common ancestor and both edits. */
+const fieldMergeSchema = z.object({
+	field: z.string(),
+	base: z.string().nullable(),
+	mine: z.string().nullable(),
+	theirs: z.string().nullable(),
+	/** Which side wins when only one changed the field; `null` when both did and someone must choose. */
+	side: sideSchema.nullable(),
+});
+export type FieldMerge = z.infer<typeof fieldMergeSchema>;
+
+/** What the user chose for a merge (per clashing field) or a conflict (which copy stays). */
+export interface Resolution {
+	keep?: Side;
+	fields: Record<string, Side>;
+}
+
 const actionSchema = z.object({
 	id: int,
 	targetId: int,
-	kind: z.enum(["upload", "replace", "move", "delete"]),
+	kind: z.enum(["upload", "replace", "move", "delete", "update", "merge", "conflict"]),
 	rel: z.array(z.string()),
 	from: z.array(z.string()).nullable(),
 	size: int,
@@ -451,6 +471,8 @@ const actionSchema = z.object({
 	tags: z
 		.array(z.object({ field: z.string(), from: z.string().nullable(), to: z.string().nullable() }))
 		.nullable(),
+	localSize: int.nullable(),
+	merge: z.array(fieldMergeSchema).nullable(),
 });
 export type SyncAction = z.infer<typeof actionSchema>;
 
@@ -483,15 +505,27 @@ const applySummarySchema = z.object({
 	uploaded: int,
 	moved: int,
 	deleted: int,
+	updated: int,
+	merged: int,
 	failed: z.array(z.string()),
 	failedTotal: int,
 	backupDir: z.string().nullable(),
 });
 export type ApplySummary = z.infer<typeof applySummarySchema>;
 
-/** Runs the confirmed actions of a plan. Overwritten and deleted files are backed up first. */
-export async function syncApply(planId: string, actionIds: number[]): Promise<ApplySummary[]> {
-	return z.array(applySummarySchema).parse(await invoke("sync_apply", { planId, actionIds }));
+/**
+ * Runs the confirmed actions of a plan. Overwritten and deleted files are backed up first, and a
+ * library file replaced by the destination's copy goes to the Trash. `resolutions` settles merges
+ * and conflicts by action id.
+ */
+export async function syncApply(
+	planId: string,
+	actionIds: number[],
+	resolutions: Record<number, Resolution> = {},
+): Promise<ApplySummary[]> {
+	return z
+		.array(applySummarySchema)
+		.parse(await invoke("sync_apply", { planId, actionIds, resolutions }));
 }
 
 const remoteFileSchema = z.object({ rel: z.array(z.string()), size: int });

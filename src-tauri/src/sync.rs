@@ -1,13 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use reqwest::Client;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::db::SyncTarget;
+use crate::db::{Base, BaseUpdate, SyncTarget, Synced};
 use crate::error::Error;
+use crate::fsops;
 use crate::r2::{self, R2};
+use crate::tags::{FieldMerge, Side};
 use crate::webdav;
 
 pub mod transfer;
@@ -197,6 +199,14 @@ pub enum Kind {
     Move,
     /// Remove a destination file that matches nothing in the library.
     Delete,
+    /// Only the destination copy was edited since the last sync: it replaces the library file
+    /// (which goes to the Trash first).
+    Update,
+    /// Both copies had their tags edited since the last sync: fields only one side changed are
+    /// combined, fields both changed need a choice. The merged file lands on both sides.
+    Merge,
+    /// Both copies changed in a way that cannot be combined (audio, artwork): keep one.
+    Conflict,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -222,14 +232,56 @@ pub struct Action {
     /// Replace only: tags that differ between the destination copy and the library file, from
     /// the destination's value to the library's. `None` when the destination's tags couldn't be read.
     pub tags: Option<Vec<crate::tags::Change>>,
+    /// Update, merge and conflict: size of the library file as reviewed.
+    pub local_size: Option<u64>,
+    /// Merge: every field the two copies disagree on.
+    pub merge: Option<Vec<FieldMerge>>,
     #[serde(skip)]
     pub track_id: Option<i64>,
     #[serde(skip)]
     pub local: Option<PathBuf>,
+    /// Update, merge and conflict: [`local_signature`] of the library file as reviewed. The action
+    /// is refused if the file changed since.
+    #[serde(skip)]
+    pub local_seen: Option<String>,
     /// Replace, move and delete: [`remote_signature`] of the destination file as reviewed. The
     /// action is refused if the file no longer matches it (or it could not be read).
     #[serde(skip)]
     pub seen: Option<String>,
+}
+
+impl Action {
+    fn new(target_id: i64, kind: Kind, rel: &[String]) -> Self {
+        Self {
+            id: 0,
+            target_id,
+            kind,
+            rel: rel.to_vec(),
+            from: None,
+            size: 0,
+            remote_size: None,
+            note: None,
+            optional: false,
+            tags: None,
+            local_size: None,
+            merge: None,
+            track_id: None,
+            local: None,
+            local_seen: None,
+            seen: None,
+        }
+    }
+}
+
+/// How the user settled an action that needed a choice.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resolution {
+    /// Conflict: which copy stays.
+    pub keep: Option<Side>,
+    /// Merge: the side chosen for each field both copies changed.
+    #[serde(default)]
+    pub fields: HashMap<String, Side>,
 }
 
 /// A destination file that is left alone on purpose.
@@ -257,6 +309,9 @@ pub struct TargetPlan {
     /// `(track id, size)` of library files already on the destination.
     #[serde(skip)]
     pub present: Vec<(i64, i64)>,
+    /// Identical files that have no base yet (or an outdated one): see [`seed_bases`].
+    #[serde(skip)]
+    pub seeds: Vec<Seed>,
     /// Fingerprints read from the destination this time: `(path, size, fingerprint)`, to cache.
     #[serde(skip)]
     pub fresh_prints: Vec<(String, u64, String)>,
@@ -363,18 +418,50 @@ fn is_audio_name(rel: &[String]) -> bool {
         .is_some_and(|n| !n.starts_with('.') && crate::scan::is_audio(Path::new(n)))
 }
 
+/// What [`plan_target`] compares the destination with.
+#[derive(Clone, Copy)]
+pub struct Inputs<'a> {
+    pub items: &'a [Item],
+    pub known: &'a HashMap<Vec<String>, Known>,
+    /// When each track was last confirmed on the destination.
+    pub synced_at: &'a HashMap<i64, i64>,
+    /// Fingerprints of destination files read on earlier runs, by `(path, size)`.
+    pub cached: &'a HashMap<(String, u64), String>,
+    /// How each file looked at its last sync.
+    pub bases: &'a HashMap<i64, Base>,
+}
+
+/// A library file and the destination copy at the same path.
+#[derive(Clone, Copy)]
+struct Pair<'a> {
+    item: &'a Item,
+    remote_size: u64,
+}
+
+/// A pair that differs, sorted by who edited it since the last sync.
+struct Differing<'a> {
+    pair: Pair<'a>,
+    /// [`remote_signature`] and [`local_signature`] as read during this review; `None` when the
+    /// pair was not compared (different sizes, no base to say who edited).
+    sigs: Option<(String, String)>,
+}
+
 /// Compares the destination with the library and lists what a sync would do. Reads only.
 #[allow(clippy::too_many_lines)]
 pub async fn plan_target(
     app: &AppHandle,
     client: &Client,
     target: &SyncTarget,
-    items: &[Item],
-    known: &HashMap<Vec<String>, Known>,
-    synced_at: &HashMap<i64, i64>,
-    cached: &HashMap<(String, u64), String>,
+    inputs: &Inputs<'_>,
     next_id: &mut u32,
 ) -> TargetPlan {
+    let Inputs {
+        items,
+        known,
+        synced_at,
+        cached,
+        bases,
+    } = *inputs;
     let mut plan = TargetPlan {
         target_id: target.id,
         name: target_name(target),
@@ -385,6 +472,7 @@ pub async fn plan_target(
         remote_total: 0,
         unchecked: 0,
         present: Vec::new(),
+        seeds: Vec::new(),
         fresh_prints: Vec::new(),
     };
     let remote = match list_remote(client, target).await {
@@ -396,13 +484,81 @@ pub async fn plan_target(
     };
     plan.remote_total = remote.len();
     let d = diff(items, &remote);
-    // Same path and size can still differ in tags or audio: every such file is compared.
-    let (retag, unreadable) = changed_content(app, client, target, &d.in_sync, synced_at).await;
-    plan.in_sync = d.in_sync.len() - retag.len();
-    plan.present = d
+    // Every same-size pair is compared: same path and size can still differ in tags or audio.
+    // Other pairs are only read when a base says who edited them.
+    let pairs: Vec<Pair> = d
         .in_sync
         .iter()
-        .filter(|i| !retag.contains_key(&i.track_id))
+        .map(|i| Pair {
+            item: i,
+            remote_size: i.size,
+        })
+        .chain(
+            d.replaces
+                .iter()
+                .filter(|(i, _)| bases.contains_key(&i.track_id))
+                .map(|(i, size)| Pair {
+                    item: i,
+                    remote_size: *size,
+                }),
+        )
+        .collect();
+    let (cmps, unreadable) = compare_pairs(app, client, target, &pairs).await;
+    let mut matching: Vec<&Item> = Vec::new();
+    let mut pushes: Vec<Differing> = Vec::new();
+    let mut updates: Vec<Differing> = Vec::new();
+    let mut boths: Vec<Differing> = Vec::new();
+    let mut legacy: Vec<Differing> = Vec::new();
+    for pair in &pairs {
+        let id = pair.item.track_id;
+        match cmps.get(&id) {
+            Some(Cmp::Same(sig)) => {
+                matching.push(pair.item);
+                if bases
+                    .get(&id)
+                    .is_none_or(|b| b.local_sig != *sig || b.remote_sig != *sig || b.tags.is_none())
+                {
+                    plan.seeds.push(Seed {
+                        track_id: id,
+                        local: pair.item.local.clone(),
+                        size: pair.item.size,
+                        sig: sig.clone(),
+                    });
+                }
+            }
+            Some(Cmp::Differs { local, remote }) => {
+                let sigs = Some((remote.clone(), local.clone()));
+                let row = Differing { pair: *pair, sigs };
+                match classify(bases.get(&id), local, remote) {
+                    Verdict::Push => pushes.push(row),
+                    Verdict::Update => updates.push(row),
+                    Verdict::Both => boths.push(row),
+                    Verdict::Unknown => legacy.push(row),
+                }
+            }
+            // Unreadable: a same-size file counts as matching, as before.
+            None if pair.remote_size == pair.item.size => matching.push(pair.item),
+            None => legacy.push(Differing {
+                pair: *pair,
+                sigs: None,
+            }),
+        }
+    }
+    legacy.extend(
+        d.replaces
+            .iter()
+            .filter(|(i, _)| !bases.contains_key(&i.track_id))
+            .map(|(i, size)| Differing {
+                pair: Pair {
+                    item: i,
+                    remote_size: *size,
+                },
+                sigs: None,
+            }),
+    );
+    plan.in_sync = matching.len();
+    plan.present = matching
+        .iter()
         .map(|i| (i.track_id, i64::try_from(i.size).unwrap_or(i64::MAX)))
         .collect();
 
@@ -458,106 +614,123 @@ pub async fn plan_target(
         .map(|r| (*r, by_rel.get(r.rel.as_slice()).cloned().flatten()))
         .collect();
     let matched = pair(items, &d.uploads, &extras);
+    let resolved = resolve_boths(app, client, target, &boths, bases).await;
 
-    let mut push =
-        |kind, rel: &[String], from, size, remote_size, note, track_id: Option<i64>, local| {
-            let optional = kind == Kind::Delete
-                || (kind == Kind::Replace
-                    && track_id.is_some_and(|t| retag.get(&t).is_some_and(|c| !c.edited_here)));
-            let id = *next_id;
-            *next_id += 1;
-            plan.actions.push(Action {
-                id,
-                target_id: target.id,
-                kind,
-                rel: rel.to_vec(),
-                from,
-                size,
-                remote_size,
-                note,
-                optional,
-                tags: None,
-                track_id,
-                local,
-                seen: None,
-            });
-        };
+    let mut add = |mut a: Action| {
+        a.id = *next_id;
+        *next_id += 1;
+        plan.actions.push(a);
+    };
+    let new = |kind, rel: &[String]| Action::new(target.id, kind, rel);
     for (file, item) in &matched.moves {
-        let note = None;
-        push(
-            Kind::Move,
-            &item.rel,
-            Some(file.rel.clone()),
-            file.size,
-            None,
-            note,
-            Some(item.track_id),
-            None,
-        );
+        add(Action {
+            from: Some(file.rel.clone()),
+            size: file.size,
+            track_id: Some(item.track_id),
+            local: Some(item.local.clone()),
+            ..new(Kind::Move, &item.rel)
+        });
     }
     for item in &matched.uploads {
-        push(
-            Kind::Upload,
-            &item.rel,
-            None,
-            item.size,
-            None,
-            None,
-            Some(item.track_id),
-            Some(item.local.clone()),
-        );
+        add(Action {
+            size: item.size,
+            track_id: Some(item.track_id),
+            local: Some(item.local.clone()),
+            ..new(Kind::Upload, &item.rel)
+        });
     }
-    for (item, remote_size) in &d.replaces {
-        let delta = item.size.abs_diff(*remote_size);
-        let note = (delta <= TAG_SIZED_DELTA).then(|| SIZE_NOTE.to_owned());
-        push(
-            Kind::Replace,
-            &item.rel,
-            None,
-            item.size,
-            Some(*remote_size),
-            note,
-            Some(item.track_id),
-            Some(item.local.clone()),
-        );
-    }
-    for item in &d.in_sync {
-        let Some(change) = retag.get(&item.track_id) else {
-            continue;
-        };
-        let note = if change.edited_here {
-            EDITED_HERE
+    for row in &legacy {
+        let item = row.pair.item;
+        let same_size = row.pair.remote_size == item.size;
+        let edited_here = synced_at
+            .get(&item.track_id)
+            .is_some_and(|t| item.modified > *t);
+        // Same size and nothing says we edited it: most likely the destination copy changed.
+        let note = if !same_size {
+            (item.size.abs_diff(row.pair.remote_size) <= TAG_SIZED_DELTA)
+                .then(|| SIZE_NOTE.to_owned())
+        } else if edited_here {
+            Some(EDITED_HERE.to_owned())
         } else {
-            "Edited on the destination. Tick to overwrite."
+            Some(NO_BASE_NOTE.to_owned())
         };
-        push(
-            Kind::Replace,
-            &item.rel,
-            None,
-            item.size,
-            Some(item.size),
-            Some(note.to_owned()),
-            Some(item.track_id),
-            Some(item.local.clone()),
-        );
+        add(Action {
+            size: item.size,
+            remote_size: Some(row.pair.remote_size),
+            note,
+            optional: same_size && !edited_here,
+            track_id: Some(item.track_id),
+            local: Some(item.local.clone()),
+            seen: row.sigs.as_ref().map(|(remote, _)| remote.clone()),
+            ..new(Kind::Replace, &item.rel)
+        });
+    }
+    for row in &pushes {
+        let item = row.pair.item;
+        add(Action {
+            size: item.size,
+            remote_size: Some(row.pair.remote_size),
+            track_id: Some(item.track_id),
+            local: Some(item.local.clone()),
+            seen: row.sigs.as_ref().map(|(remote, _)| remote.clone()),
+            ..new(Kind::Replace, &item.rel)
+        });
+    }
+    for row in &updates {
+        let item = row.pair.item;
+        add(Action {
+            size: row.pair.remote_size,
+            remote_size: Some(row.pair.remote_size),
+            local_size: Some(item.size),
+            track_id: Some(item.track_id),
+            local: Some(item.local.clone()),
+            seen: row.sigs.as_ref().map(|(remote, _)| remote.clone()),
+            local_seen: row.sigs.as_ref().map(|(_, local)| local.clone()),
+            ..new(Kind::Update, &item.rel)
+        });
+    }
+    for (row, how) in boths.iter().zip(resolved) {
+        let item = row.pair.item;
+        let base = Action {
+            size: item.size,
+            remote_size: Some(row.pair.remote_size),
+            local_size: Some(item.size),
+            track_id: Some(item.track_id),
+            local: Some(item.local.clone()),
+            seen: row.sigs.as_ref().map(|(remote, _)| remote.clone()),
+            local_seen: row.sigs.as_ref().map(|(_, local)| local.clone()),
+            ..new(Kind::Conflict, &item.rel)
+        };
+        add(match how {
+            Resolved::Merge(fields) => Action {
+                kind: Kind::Merge,
+                optional: fields.iter().any(|f| f.side.is_none()),
+                merge: Some(fields),
+                ..base
+            },
+            Resolved::Conflict(note) => Action {
+                optional: true,
+                note: Some(note),
+                ..base
+            },
+            Resolved::Unknown => Action {
+                kind: Kind::Replace,
+                optional: true,
+                note: Some(BOTH_NOTE.to_owned()),
+                local_size: None,
+                local_seen: None,
+                ..base
+            },
+        });
     }
     for (file, note) in &matched.deletes {
-        push(
-            Kind::Delete,
-            &file.rel,
-            None,
-            file.size,
-            None,
-            note.clone(),
-            known.get(&file.rel).map(|k| k.track_id),
-            None,
-        );
-    }
-    // Retagged files were read just now; applying checks the destination still matches that.
-    for a in plan.actions.iter_mut().filter(|a| a.kind == Kind::Replace) {
-        if let Some(change) = a.track_id.and_then(|t| retag.get(&t)) {
-            a.seen = Some(change.remote.clone());
-        }
+        add(Action {
+            size: file.size,
+            note: note.clone(),
+            optional: true,
+            track_id: known.get(&file.rel).map(|k| k.track_id),
+            ..new(Kind::Delete, &file.rel)
+        });
     }
     record_tag_changes(app, client, target, &mut plan.actions).await;
     record_seen(app, client, target, &mut plan.actions).await;
@@ -565,6 +738,8 @@ pub async fn plan_target(
 }
 
 const EDITED_HERE: &str = "Edited here";
+const NO_BASE_NOTE: &str = "Differs from the destination (no earlier sync to compare with)";
+const BOTH_NOTE: &str = "Changed on both sides, nothing earlier to merge from";
 
 /// Replaces compared tag by tag at most; past this the review shows only the size.
 const MAX_TAG_DIFFS: usize = 500;
@@ -584,7 +759,9 @@ async fn record_tag_changes(
     let base = base_of(target);
     let mut replaces: Vec<&mut Action> = actions
         .iter_mut()
-        .filter(|a| a.kind == Kind::Replace && a.local.is_some() && safe_rel(&a.rel))
+        .filter(|a| {
+            matches!(a.kind, Kind::Replace | Kind::Update) && a.local.is_some() && safe_rel(&a.rel)
+        })
         .take(MAX_TAG_DIFFS)
         .collect();
     let jobs: Vec<(Vec<String>, u64, Option<PathBuf>)> = replaces
@@ -629,23 +806,34 @@ async fn record_tag_changes(
             && !c.is_empty()
             && a.note
                 .as_deref()
-                .is_some_and(|n| n == EDITED_HERE || n == SIZE_NOTE)
+                .is_some_and(|n| n == EDITED_HERE || n == SIZE_NOTE || n == NO_BASE_NOTE)
         {
             a.note = None;
         }
-        a.tags = changes;
+        // An update shows what the library file becomes: from its tags to the destination's.
+        a.tags = if a.kind == Kind::Update {
+            changes.map(|cs| {
+                cs.into_iter()
+                    .map(|c| crate::tags::Change {
+                        field: c.field,
+                        from: c.to,
+                        to: c.from,
+                    })
+                    .collect()
+            })
+        } else {
+            changes
+        };
     }
 }
 
-/// Tag differences from the destination file to the library file, or `None` if either can't be read.
-async fn tag_changes(
+/// The primary tag of a destination file, read from its first and last bytes only.
+async fn read_remote_tag(
     backend: &Backend<'_>,
     dest: &[String],
     size: u64,
-    local: Option<PathBuf>,
-) -> Option<Vec<crate::tags::Change>> {
+) -> Option<lofty::tag::Tag> {
     use crate::tag_region::{FIRST_HEAD, MAX_HEAD, TAIL, head_needed};
-    use lofty::file::TaggedFileExt;
     let mut head = backend
         .get_range(dest, 0, size.min(FIRST_HEAD))
         .await
@@ -669,7 +857,18 @@ async fn tag_changes(
         let len = TAIL.min(size - have);
         backend.get_range(dest, size - len, len).await.ok()?
     };
-    let remote = crate::tag_region::read(size, head, tail)?;
+    crate::tag_region::read(size, head, tail)
+}
+
+/// Tag differences from the destination file to the library file, or `None` if either can't be read.
+async fn tag_changes(
+    backend: &Backend<'_>,
+    dest: &[String],
+    size: u64,
+    local: Option<PathBuf>,
+) -> Option<Vec<crate::tags::Change>> {
+    use lofty::file::TaggedFileExt;
+    let remote = read_remote_tag(backend, dest, size).await?;
     let local = local?;
     tauri::async_runtime::spawn_blocking(move || {
         let file = lofty::read_from_path(&local).ok()?;
@@ -807,35 +1006,98 @@ const EDGE: u64 = 64 * 1024;
 /// Destination files compared at once while reviewing.
 const COMPARE_AT_ONCE: usize = 8;
 
-/// An in-sync file (same path and size) whose destination copy has other tags or audio.
-struct Changed {
-    /// [`remote_signature`] of the destination copy as read during this review.
-    remote: String,
-    /// The library file was modified since its last sync, so the difference is our own edit.
-    /// Otherwise someone else most likely changed the destination copy.
-    edited_here: bool,
+/// An identical file with no (or an outdated) base: the sync records one so the next review knows
+/// who edited what.
+#[derive(Debug, Clone)]
+pub struct Seed {
+    pub track_id: i64,
+    pub local: PathBuf,
+    pub size: u64,
+    /// [`local_signature`] as compared with the destination copy.
+    pub sig: String,
 }
 
-/// Compares the tags region and audio samples of every in-sync file with its destination copy.
-/// Returns the files that differ, and how many could not be compared.
-async fn changed_content(
+/// Reads the tags of each seed's file into a [`Base`]. A file that changed since it was compared
+/// gets none.
+pub async fn seed_bases(seeds: Vec<Seed>) -> Vec<(i64, Base)> {
+    let mut out = Vec::new();
+    for s in seeds {
+        if local_signature(&s.local, s.size).await.ok().as_deref() != Some(s.sig.as_str()) {
+            continue;
+        }
+        let path = s.local.clone();
+        let tags = tauri::async_runtime::spawn_blocking(move || crate::tags::fields_json(&path))
+            .await
+            .ok()
+            .flatten();
+        out.push((
+            s.track_id,
+            Base {
+                local_sig: s.sig.clone(),
+                remote_sig: s.sig,
+                tags,
+            },
+        ));
+    }
+    out
+}
+
+/// What reading both copies of a pair showed.
+enum Cmp {
+    /// Same bytes where it counts (tags and audio samples): the signature.
+    Same(String),
+    Differs {
+        local: String,
+        remote: String,
+    },
+}
+
+/// Who changed a pair that differs, judged against its base.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    /// Only the library file changed since the last sync.
+    Push,
+    /// Only the destination copy changed.
+    Update,
+    /// Both changed.
+    Both,
+    /// No base to judge by.
+    Unknown,
+}
+
+/// Decides who edited a pair whose copies differ. `local` and `remote` are their signatures now.
+fn classify(base: Option<&Base>, local: &str, remote: &str) -> Verdict {
+    let Some(base) = base else {
+        return Verdict::Unknown;
+    };
+    match (base.local_sig != local, base.remote_sig != remote) {
+        (true, false) => Verdict::Push,
+        (false, true) => Verdict::Update,
+        (true, true) => Verdict::Both,
+        // The base was taken when both were identical: this cannot happen for a differing pair.
+        (false, false) => Verdict::Unknown,
+    }
+}
+
+/// Compares the tags region and audio samples of every pair. Returns what each showed (a pair
+/// that could not be read is missing) and how many could not be read.
+async fn compare_pairs(
     app: &AppHandle,
     client: &Client,
     target: &SyncTarget,
-    in_sync: &[&Item],
-    synced_at: &HashMap<i64, i64>,
-) -> (HashMap<i64, Changed>, usize) {
+    pairs: &[Pair<'_>],
+) -> (HashMap<i64, Cmp>, usize) {
     use futures_util::stream::{FuturesUnordered, StreamExt};
     let mut out = HashMap::new();
     let Ok(backend) = Backend::for_target(client, target) else {
-        return (out, in_sync.len());
+        return (out, pairs.len());
     };
     let base = base_of(target);
-    let total = in_sync.len();
-    let mut queue = in_sync.iter().copied();
+    let total = pairs.len();
+    let mut queue = pairs.iter().copied();
     let mut running = FuturesUnordered::new();
-    for item in queue.by_ref().take(COMPARE_AT_ONCE) {
-        running.push(compare_one(&backend, &base, item));
+    for pair in queue.by_ref().take(COMPARE_AT_ONCE) {
+        running.push(compare_one(&backend, &base, pair));
     }
     let (mut done, mut unreadable) = (0, 0);
     while let Some((item, result)) = running.next().await {
@@ -853,38 +1115,135 @@ async fn changed_content(
             },
         );
         match result {
-            Ok(Some(remote)) => {
-                let edited_here = synced_at
-                    .get(&item.track_id)
-                    .is_some_and(|t| item.modified > *t);
-                out.insert(
-                    item.track_id,
-                    Changed {
-                        remote,
-                        edited_here,
-                    },
-                );
+            Ok(cmp) => {
+                out.insert(item.track_id, cmp);
             }
-            Ok(None) => {}
             Err(_) => unreadable += 1,
         }
     }
     (out, unreadable)
 }
 
-/// The destination copy's [`remote_signature`] if it differs from the library file.
 async fn compare_one<'i>(
     backend: &Backend<'_>,
     base: &[String],
-    item: &'i Item,
-) -> (&'i Item, Result<Option<String>, Error>) {
+    pair: Pair<'i>,
+) -> (&'i Item, Result<Cmp, Error>) {
     let result = async {
-        let remote = remote_signature(backend, &dest_of(base, &item.rel), item.size).await?;
-        let differs = local_signature(&item.local, item.size).await? != remote;
-        Ok(differs.then_some(remote))
+        let item = pair.item;
+        let remote = remote_signature(backend, &dest_of(base, &item.rel), pair.remote_size).await?;
+        let local = local_signature(&item.local, item.size).await?;
+        Ok(if local == remote {
+            Cmp::Same(local)
+        } else {
+            Cmp::Differs { local, remote }
+        })
     }
     .await;
-    (item, result)
+    (pair.item, result)
+}
+
+/// What two edited copies of one file come to.
+enum Resolved {
+    /// Tags only: every field either side changed, with who wins where only one did.
+    Merge(Vec<FieldMerge>),
+    /// Cannot be combined; the note says why.
+    Conflict(String),
+    /// Could not be read or has no base tags.
+    Unknown,
+}
+
+/// Looks inside every pair both sides edited: tag edits to the same audio merge, anything else is
+/// a conflict.
+async fn resolve_boths(
+    app: &AppHandle,
+    client: &Client,
+    target: &SyncTarget,
+    rows: &[Differing<'_>],
+    bases: &HashMap<i64, Base>,
+) -> Vec<Resolved> {
+    let Ok(backend) = Backend::for_target(client, target) else {
+        return rows.iter().map(|_| Resolved::Unknown).collect();
+    };
+    let base = base_of(target);
+    let mut out = Vec::new();
+    for (n, row) in rows.iter().enumerate() {
+        let item = row.pair.item;
+        let _ = app.emit(
+            "pull-progress",
+            PullProgress {
+                done: n,
+                total: rows.len(),
+                current: &item.rel.join("/"),
+            },
+        );
+        let tags = bases
+            .get(&item.track_id)
+            .and_then(|b| b.tags.as_deref())
+            .and_then(crate::tags::parse_fields);
+        out.push(match tags {
+            Some(tags) => resolve_both(&backend, &dest_of(&base, &item.rel), row.pair, &tags).await,
+            None => Resolved::Unknown,
+        });
+    }
+    out
+}
+
+async fn resolve_both(
+    backend: &Backend<'_>,
+    dest: &[String],
+    pair: Pair<'_>,
+    base_tags: &BTreeMap<String, String>,
+) -> Resolved {
+    let Some(remote_tag) = read_remote_tag(backend, dest, pair.remote_size).await else {
+        return Resolved::Unknown;
+    };
+    let theirs = crate::tags::field_values(Some(&remote_tag));
+    let local = pair.item.local.clone();
+    let Some(mine) = tauri::async_runtime::spawn_blocking(move || crate::tags::file_fields(&local))
+        .await
+        .ok()
+        .flatten()
+    else {
+        return Resolved::Unknown;
+    };
+    if mine == theirs {
+        return Resolved::Conflict("Artwork or other tag data differs on both sides".to_owned());
+    }
+    if !same_audio(backend, dest, pair).await {
+        return Resolved::Conflict("The audio differs on both sides".to_owned());
+    }
+    Resolved::Merge(crate::tags::merge(base_tags, &mine, &theirs))
+}
+
+/// Whether the library file and the destination copy hold the same audio (tags aside). The
+/// destination copy is downloaded to compare; anything unreadable counts as different.
+async fn same_audio(backend: &Backend<'_>, dest: &[String], pair: Pair<'_>) -> bool {
+    let ext = pair
+        .item
+        .local
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin");
+    let tmp = std::env::temp_dir().join(format!(
+        "manplay-audio-{}-{}.{ext}",
+        std::process::id(),
+        pair.item.track_id
+    ));
+    let local = pair.item.local.clone();
+    let result = async {
+        backend.get(dest, &tmp).await?;
+        let (theirs, mine) = (tmp.clone(), local);
+        tauri::async_runtime::spawn_blocking(move || {
+            let a = crate::audioprint::audio_print_path(&theirs)?;
+            Some(a == crate::audioprint::audio_print_path(&mine)?)
+        })
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))
+    }
+    .await;
+    let _ = tokio::fs::remove_file(&tmp).await;
+    matches!(result, Ok(Some(true)))
 }
 
 // ---- applying a confirmed plan -------------------------------------------------
@@ -897,6 +1256,10 @@ pub struct ApplySummary {
     pub uploaded: usize,
     pub moved: usize,
     pub deleted: usize,
+    /// Library files replaced by the destination's copy.
+    pub updated: usize,
+    /// Files whose tags were merged and pushed.
+    pub merged: usize,
     pub failed: Vec<String>,
     pub failed_total: usize,
     /// Where copies of every overwritten or removed file were saved first.
@@ -905,8 +1268,8 @@ pub struct ApplySummary {
 
 pub struct Applied {
     pub summary: ApplySummary,
-    /// `(track id, size)` of every library file now confirmed on the destination.
-    pub present: Vec<(i64, i64)>,
+    /// Every library file now confirmed on the destination.
+    pub present: Vec<Synced>,
     /// Track ids whose destination copy is now gone.
     pub removed: Vec<i64>,
 }
@@ -937,15 +1300,41 @@ fn dest_of(base: &[String], rel: &[String]) -> Vec<String> {
     base.iter().chain(rel.iter()).cloned().collect()
 }
 
+/// What the user chose in the review, and where things go.
+pub struct Review<'a> {
+    pub selected: &'a HashSet<u32>,
+    pub resolutions: &'a HashMap<u32, Resolution>,
+    /// Where copies of everything overwritten or removed are saved first.
+    pub backup_dir: &'a Path,
+    /// The library folder: files replaced by an update are moved to the Trash from here.
+    pub root: &'a Path,
+}
+
+/// A selected action with the choice that settles it.
+struct Job<'a> {
+    a: &'a Action,
+    /// What it does: a conflict is a push or an update once a side is kept.
+    kind: Kind,
+    res: Option<&'a Resolution>,
+}
+
+/// What a finished action leaves behind for the next review.
+struct Done {
+    /// Size of the library file now.
+    size: u64,
+    base: BaseUpdate,
+}
+
 /// Executes the chosen actions of a reviewed plan. A file is only overwritten or removed after a
-/// copy of it was saved under `backup_dir`; if that copy fails, the file is left alone.
+/// copy of it was saved under `backup_dir` (a replaced library file goes to the Trash); if that
+/// fails, the file is left alone.
+#[allow(clippy::too_many_lines)]
 pub async fn apply_target(
     app: &AppHandle,
     client: &Client,
     target: &SyncTarget,
     plan: &TargetPlan,
-    selected: &HashSet<u32>,
-    backup_dir: &Path,
+    review: &Review<'_>,
 ) -> Applied {
     let mut out = Applied {
         summary: ApplySummary {
@@ -953,15 +1342,35 @@ pub async fn apply_target(
             name: plan.name.clone(),
             ..ApplySummary::default()
         },
-        present: plan.present.clone(),
+        present: plan
+            .present
+            .iter()
+            .map(|(id, size)| Synced::kept(*id, *size))
+            .collect(),
         removed: Vec::new(),
     };
-    let actions: Vec<&Action> = plan
+    let mut jobs: Vec<Job> = Vec::new();
+    for a in plan
         .actions
         .iter()
-        .filter(|a| selected.contains(&a.id))
-        .collect();
-    let total = actions.len();
+        .filter(|a| review.selected.contains(&a.id))
+    {
+        let res = review.resolutions.get(&a.id);
+        let kind = match (a.kind, res.and_then(|r| r.keep)) {
+            (Kind::Conflict, Some(Side::Mine)) => Kind::Replace,
+            (Kind::Conflict, Some(Side::Theirs)) => Kind::Update,
+            (Kind::Conflict, None) => {
+                out.summary.fail(format!(
+                    "{}: not changed, choose which copy to keep",
+                    a.rel.join("/")
+                ));
+                continue;
+            }
+            (k, _) => k,
+        };
+        jobs.push(Job { a, kind, res });
+    }
+    let total = jobs.len();
     let base = base_of(target);
     let backend = match Backend::for_target(client, target) {
         Ok(b) => b,
@@ -986,9 +1395,10 @@ pub async fn apply_target(
     let mut done = 0;
     // 1. Save a copy of everything that will be overwritten or removed.
     let mut backed_up: HashSet<u32> = HashSet::new();
-    let target_backup = backup_dir.join(format!("target-{}", target.id));
-    for a in &actions {
-        if !matches!(a.kind, Kind::Delete | Kind::Replace) {
+    let target_backup = review.backup_dir.join(format!("target-{}", target.id));
+    for job in &jobs {
+        let a = job.a;
+        if !matches!(job.kind, Kind::Delete | Kind::Replace | Kind::Merge) {
             continue;
         }
         let label = a.rel.join("/");
@@ -1006,7 +1416,7 @@ pub async fn apply_target(
         {
             Ok(()) => {
                 backed_up.insert(a.id);
-                out.summary.backup_dir = Some(backup_dir.to_string_lossy().into_owned());
+                out.summary.backup_dir = Some(review.backup_dir.to_string_lossy().into_owned());
             }
             Err(e) => out
                 .summary
@@ -1014,19 +1424,29 @@ pub async fn apply_target(
         }
     }
 
-    // 2. Renames, uploads, then removals.
+    // 2. Renames, uploads, updates, then removals.
     let mut made: HashSet<Vec<String>> = HashSet::new();
-    let order = [Kind::Move, Kind::Upload, Kind::Replace, Kind::Delete];
+    let order = [
+        Kind::Move,
+        Kind::Upload,
+        Kind::Update,
+        Kind::Replace,
+        Kind::Merge,
+        Kind::Delete,
+    ];
     for kind in order {
-        for a in actions.iter().filter(|a| a.kind == kind) {
+        for job in jobs.iter().filter(|j| j.kind == kind) {
+            let a = job.a;
             let label = a.rel.join("/");
             emit(app, target.id, done, total, &label);
             done += 1;
-            if matches!(kind, Kind::Delete | Kind::Replace) && !backed_up.contains(&a.id) {
+            if matches!(kind, Kind::Delete | Kind::Replace | Kind::Merge)
+                && !backed_up.contains(&a.id)
+            {
                 continue; // already reported above
             }
-            match run_action(&backend, &base, a, &mut made).await {
-                Ok(()) => record_done(&mut out, a),
+            match run_action(&backend, &base, job, &mut made, review, &target_backup).await {
+                Ok(d) => record_done(&mut out, job, d),
                 Err(e) => out.summary.fail(format!("{label}: {e}")),
             }
         }
@@ -1035,20 +1455,34 @@ pub async fn apply_target(
     out
 }
 
-fn record_done(out: &mut Applied, a: &Action) {
-    let size = i64::try_from(a.size).unwrap_or(i64::MAX);
-    match a.kind {
+fn record_done(out: &mut Applied, job: &Job<'_>, done: Done) {
+    let a = job.a;
+    let size = i64::try_from(done.size).unwrap_or(i64::MAX);
+    let confirm = |out: &mut Applied| {
+        if let Some(id) = a.track_id {
+            out.present.push(Synced {
+                track_id: id,
+                size,
+                base: done.base.clone(),
+            });
+        }
+    };
+    match job.kind {
         Kind::Upload | Kind::Replace => {
             out.summary.uploaded += 1;
-            if let Some(id) = a.track_id {
-                out.present.push((id, size));
-            }
+            confirm(out);
+        }
+        Kind::Merge => {
+            out.summary.merged += 1;
+            confirm(out);
+        }
+        Kind::Update => {
+            out.summary.updated += 1;
+            confirm(out);
         }
         Kind::Move => {
             out.summary.moved += 1;
-            if let Some(id) = a.track_id {
-                out.present.push((id, size));
-            }
+            confirm(out);
         }
         Kind::Delete => {
             out.summary.deleted += 1;
@@ -1056,41 +1490,74 @@ fn record_done(out: &mut Applied, a: &Action) {
                 out.removed.push(id);
             }
         }
+        Kind::Conflict => {}
     }
+}
+
+/// The base to store after a library file and its destination copy were made identical:
+/// `sig` is the file's signature before the transfer, and the file must still have it after.
+async fn base_after(local: &Path, size: u64, sig: Option<String>) -> BaseUpdate {
+    let Some(sig) = sig else {
+        return BaseUpdate::Clear;
+    };
+    if local_signature(local, size).await.ok().as_deref() != Some(sig.as_str()) {
+        return BaseUpdate::Clear;
+    }
+    let path = local.to_path_buf();
+    let tags = tauri::async_runtime::spawn_blocking(move || crate::tags::fields_json(&path))
+        .await
+        .ok()
+        .flatten();
+    BaseUpdate::Set(Base {
+        local_sig: sig.clone(),
+        remote_sig: sig,
+        tags,
+    })
 }
 
 async fn run_action(
     backend: &Backend<'_>,
     base: &[String],
-    a: &Action,
+    job: &Job<'_>,
     made: &mut HashSet<Vec<String>>,
-) -> Result<(), Error> {
+    review: &Review<'_>,
+    backups: &Path,
+) -> Result<Done, Error> {
+    let a = job.a;
     if !safe_rel(&a.rel) || a.from.as_deref().is_some_and(|f| !safe_rel(f)) {
         return Err(Error::Msg("unsafe path".to_owned()));
     }
     let dest = dest_of(base, &a.rel);
-    match a.kind {
+    let plain = |size| Done {
+        size,
+        base: BaseUpdate::Keep,
+    };
+    match job.kind {
         Kind::Upload | Kind::Replace => {
             let local = a
                 .local
                 .as_deref()
                 .ok_or_else(|| Error::Msg("no local file".to_owned()))?;
             let current = backend.remote_size(&dest).await?;
+            let before = local_signature(local, a.size).await.ok();
             // The destination must still look as it did when it was reviewed.
-            if let (Kind::Upload, Some(size)) = (a.kind, current) {
+            if let (Kind::Upload, Some(size)) = (job.kind, current) {
                 // Only an identical copy (same tags and audio) counts as already uploaded.
                 let same = size == a.size
                     && remote_signature(backend, &dest, size).await?
                         == local_signature(local, a.size).await?;
                 return if same {
-                    Ok(())
+                    Ok(Done {
+                        size: a.size,
+                        base: base_after(local, a.size, before).await,
+                    })
                 } else {
                     Err(Error::Msg(
                         "appeared on the destination since review".to_owned(),
                     ))
                 };
             }
-            if a.kind == Kind::Replace {
+            if job.kind == Kind::Replace {
                 if current != a.remote_size {
                     return Err(Error::Msg(
                         "changed on the destination since review".to_owned(),
@@ -1100,7 +1567,11 @@ async fn run_action(
                 ensure_unchanged(backend, &dest, size, a.seen.as_deref()).await?;
             }
             ensure_dirs(backend, base, &dest, made).await?;
-            backend.put(&dest, local).await
+            backend.put(&dest, local).await?;
+            Ok(Done {
+                size: a.size,
+                base: base_after(local, a.size, before).await,
+            })
         }
         Kind::Move => {
             let from = dest_of(base, a.from.as_deref().unwrap_or_default());
@@ -1112,19 +1583,198 @@ async fn run_action(
                 return Err(Error::Msg("destination path already exists".to_owned()));
             }
             ensure_dirs(backend, base, &dest, made).await?;
-            backend.rename(&from, &dest).await
+            backend.rename(&from, &dest).await?;
+            // The moved copy is the reviewed one; it is a base only if the library file matches it.
+            let state = match a.local.as_deref() {
+                Some(local) => {
+                    let sig = local_signature(local, a.size).await.ok();
+                    if sig.is_some() && sig.as_deref() == a.seen.as_deref() {
+                        base_after(local, a.size, sig).await
+                    } else {
+                        BaseUpdate::Clear
+                    }
+                }
+                None => BaseUpdate::Clear,
+            };
+            Ok(Done {
+                size: a.size,
+                base: state,
+            })
         }
         Kind::Delete => match backend.remote_size(&dest).await? {
-            None => Ok(()),
+            None => Ok(plain(a.size)),
             Some(size) if size == a.size => {
                 ensure_unchanged(backend, &dest, size, a.seen.as_deref()).await?;
-                backend.delete(&dest).await
+                backend.delete(&dest).await?;
+                Ok(plain(a.size))
             }
             Some(_) => Err(Error::Msg(
                 "changed on the destination since review".to_owned(),
             )),
         },
+        Kind::Update => update_library(backend, &dest, a, review.root).await,
+        Kind::Merge => merge_library(backend, &dest, job, &backups.join("library")).await,
+        Kind::Conflict => Err(Error::Msg("choose which copy to keep".to_owned())),
     }
+}
+
+/// Fails unless the library file is still the one that was reviewed.
+async fn ensure_local_unchanged(a: &Action) -> Result<PathBuf, Error> {
+    let local = a
+        .local
+        .clone()
+        .ok_or_else(|| Error::Msg("no local file".to_owned()))?;
+    let size = tokio::fs::metadata(&local).await?.len();
+    let unchanged = Some(size) == a.local_size
+        && local_signature(&local, size).await.ok().as_deref() == a.local_seen.as_deref()
+        && a.local_seen.is_some();
+    if unchanged {
+        Ok(local)
+    } else {
+        Err(Error::Msg(
+            "changed in your library since review: review again".to_owned(),
+        ))
+    }
+}
+
+/// Fails unless the destination copy still has the size and signature that were reviewed.
+async fn ensure_remote_unchanged(
+    backend: &Backend<'_>,
+    dest: &[String],
+    a: &Action,
+) -> Result<u64, Error> {
+    let size = a.remote_size.unwrap_or(a.size);
+    if backend.remote_size(dest).await? != Some(size) {
+        return Err(Error::Msg(
+            "changed on the destination since review".to_owned(),
+        ));
+    }
+    ensure_unchanged(backend, dest, size, a.seen.as_deref()).await?;
+    Ok(size)
+}
+
+/// Replaces the library file with the destination copy. The new file is downloaded beside the old
+/// one and checked against the review first; the old one goes to the Trash before it is swapped in.
+async fn update_library(
+    backend: &Backend<'_>,
+    dest: &[String],
+    a: &Action,
+    root: &Path,
+) -> Result<Done, Error> {
+    let local = ensure_local_unchanged(a).await?;
+    let size = ensure_remote_unchanged(backend, dest, a).await?;
+    let tmp = part_path(&local);
+    let root = root.to_path_buf();
+    let installed = async {
+        backend.get(dest, &tmp).await?;
+        install_update(&local, &tmp, size, a.seen.as_deref(), move |old| {
+            fsops::trash(&root, &[old.to_path_buf()])
+        })
+        .await
+    }
+    .await;
+    if let Err(e) = installed {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    Ok(Done {
+        size,
+        base: base_after(&local, size, a.seen.clone()).await,
+    })
+}
+
+/// Checks the downloaded `tmp` is the copy that was reviewed (`size`, signature `seen`), then
+/// moves the library file `local` to the Trash and puts `tmp` in its place.
+async fn install_update(
+    local: &Path,
+    tmp: &Path,
+    size: u64,
+    seen: Option<&str>,
+    trash: impl FnOnce(&Path) -> Result<(), Error> + Send + 'static,
+) -> Result<(), Error> {
+    let got = tokio::fs::metadata(tmp).await?.len();
+    if got != size || seen.is_none() || local_signature(tmp, got).await.ok().as_deref() != seen {
+        return Err(Error::Msg("download differs from review".to_owned()));
+    }
+    let (old, new) = (local.to_path_buf(), tmp.to_path_buf());
+    tauri::async_runtime::spawn_blocking(move || replace_library_file(&old, &new, trash))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+/// Swaps `new` in for the library file `old`. `old` is first handed to `trash`; if that fails
+/// nothing is changed.
+fn replace_library_file(
+    old: &Path,
+    new: &Path,
+    trash: impl FnOnce(&Path) -> Result<(), Error>,
+) -> Result<(), Error> {
+    trash(old)?;
+    std::fs::rename(new, old).map_err(|e| {
+        Error::Msg(format!(
+            "the old file is in the Trash; the new one stays at {}: {e}",
+            new.display()
+        ))
+    })
+}
+
+/// A hidden download name beside `file`.
+fn part_path(file: &Path) -> PathBuf {
+    let mut name = file.as_os_str().to_owned();
+    name.push(".part");
+    PathBuf::from(name)
+}
+
+/// The edits that bring the library file's tags to the merged result: the fields whose winning
+/// side is the destination's. A field both sides changed needs a choice in `res`.
+fn merge_edits(
+    fields: &[FieldMerge],
+    res: Option<&Resolution>,
+) -> Result<BTreeMap<String, String>, Error> {
+    let mut edits = BTreeMap::new();
+    for f in fields {
+        let side = f
+            .side
+            .or_else(|| res.and_then(|r| r.fields.get(&f.field).copied()))
+            .ok_or_else(|| Error::Msg(format!("choose a value for {}", f.field)))?;
+        if side == Side::Theirs {
+            edits.insert(f.field.clone(), f.theirs.clone().unwrap_or_default());
+        }
+    }
+    Ok(edits)
+}
+
+/// Writes the fields taken from the destination into the library file, then pushes it. A copy
+/// of the library file is saved under `library_backup` first.
+async fn merge_library(
+    backend: &Backend<'_>,
+    dest: &[String],
+    job: &Job<'_>,
+    library_backup: &Path,
+) -> Result<Done, Error> {
+    let a = job.a;
+    let local = ensure_local_unchanged(a).await?;
+    ensure_remote_unchanged(backend, dest, a).await?;
+    let edits = merge_edits(a.merge.as_deref().unwrap_or_default(), job.res)?;
+    let copy = a
+        .rel
+        .iter()
+        .fold(library_backup.to_path_buf(), |p, s| p.join(s));
+    if let Some(parent) = copy.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::copy(&local, &copy).await?;
+    let file = local.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::tags::write_file(&file, &edits))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    let size = tokio::fs::metadata(&local).await?.len();
+    let sig = local_signature(&local, size).await.ok();
+    backend.put(dest, &local).await?;
+    Ok(Done {
+        size,
+        base: base_after(&local, size, sig).await,
+    })
 }
 
 /// Creates each parent folder below the target folder once.
@@ -1564,6 +2214,122 @@ mod tests {
         let m = pair(&items, &[], &[(&audio, None), (&art, None)]);
         assert_eq!(m.deletes[0].1.as_deref(), Some("Not compared"));
         assert_eq!(m.deletes[1].1, None);
+    }
+
+    fn base(sig: &str) -> Base {
+        Base {
+            local_sig: sig.to_owned(),
+            remote_sig: sig.to_owned(),
+            tags: None,
+        }
+    }
+
+    #[test]
+    fn who_edited_is_judged_against_the_base() {
+        let b = base("old");
+        // Only here: push. Only there: update. Both: look inside.
+        assert_eq!(classify(Some(&b), "mine", "old"), Verdict::Push);
+        assert_eq!(classify(Some(&b), "old", "theirs"), Verdict::Update);
+        assert_eq!(classify(Some(&b), "mine", "theirs"), Verdict::Both);
+        // Without a base the old two-way rules apply.
+        assert_eq!(classify(None, "mine", "theirs"), Verdict::Unknown);
+        // Identical copies never reach here, but an impossible base is not trusted.
+        assert_eq!(classify(Some(&b), "old", "old"), Verdict::Unknown);
+    }
+
+    #[tokio::test]
+    async fn an_update_puts_the_old_library_file_in_the_trash_and_the_new_one_in_place() {
+        let dir = std::env::temp_dir().join(format!("manplay-update-{}", std::process::id()));
+        let trash_dir = dir.join("trash");
+        std::fs::create_dir_all(&trash_dir).expect("mkdir");
+        let lib = dir.join("song.flac");
+        let new = part_path(&lib);
+        std::fs::write(&lib, b"mine").expect("old");
+        std::fs::write(&new, b"theirs").expect("new");
+        let seen = local_signature(&new, 6).await.expect("sig");
+        let to_trash = trash_dir.join("song.flac");
+        install_update(&lib, &new, 6, Some(&seen), move |old| {
+            std::fs::rename(old, to_trash).map_err(Error::from)
+        })
+        .await
+        .expect("update");
+        assert_eq!(std::fs::read(&lib).expect("lib"), b"theirs");
+        assert_eq!(
+            std::fs::read(trash_dir.join("song.flac")).expect("trash"),
+            b"mine"
+        );
+        assert!(!new.exists());
+        // The base written for it describes the new file.
+        assert_eq!(
+            base_after(&lib, 6, Some(seen.clone())).await,
+            BaseUpdate::Set(Base {
+                local_sig: seen.clone(),
+                remote_sig: seen,
+                tags: None,
+            })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_download_that_is_not_the_reviewed_copy_leaves_the_library_file_alone() {
+        let dir = std::env::temp_dir().join(format!("manplay-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let lib = dir.join("song.flac");
+        let new = part_path(&lib);
+        std::fs::write(&lib, b"mine").expect("old");
+        std::fs::write(&new, b"theirs").expect("new");
+        let reviewed = local_signature(&lib, 4).await.expect("sig");
+        let result = install_update(&lib, &new, 6, Some(&reviewed), |_| {
+            Err(Error::Msg("must not trash".to_owned()))
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&lib).expect("lib"), b"mine");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_takes_the_destinations_fields_and_needs_a_choice_for_clashes() {
+        let field = |name: &str, side| FieldMerge {
+            field: name.to_owned(),
+            base: None,
+            mine: Some("m".to_owned()),
+            theirs: Some("t".to_owned()),
+            side,
+        };
+        let fields = [
+            field("genre", Some(Side::Theirs)),
+            field("year", Some(Side::Mine)),
+            field("label", None),
+        ];
+        assert!(merge_edits(&fields, None).is_err());
+        let res = Resolution {
+            keep: None,
+            fields: HashMap::from([("label".to_owned(), Side::Theirs)]),
+        };
+        let edits = merge_edits(&fields, Some(&res)).expect("edits");
+        assert_eq!(
+            edits,
+            BTreeMap::from([
+                ("genre".to_owned(), "t".to_owned()),
+                ("label".to_owned(), "t".to_owned())
+            ])
+        );
+    }
+
+    #[test]
+    fn nothing_changes_when_the_old_file_cannot_be_trashed() {
+        let dir = std::env::temp_dir().join(format!("manplay-notrash-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let lib = dir.join("song.flac");
+        let new = part_path(&lib);
+        std::fs::write(&lib, b"mine").expect("old");
+        std::fs::write(&new, b"theirs").expect("new");
+        let result = replace_library_file(&lib, &new, |_| Err(Error::Msg("no trash".to_owned())));
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&lib).expect("lib"), b"mine");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

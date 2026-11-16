@@ -366,6 +366,10 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "tracks", "added_at", "INTEGER")?;
     // Fingerprint of the audio alone (see `audioprint`), filled in as imports need it.
     add_column(&conn, "tracks", "audio_fp", "TEXT")?;
+    // What each side of a destination looked like at the last successful sync (see `Base`).
+    add_column(&conn, "synced_files", "local_sig", "TEXT")?;
+    add_column(&conn, "synced_files", "remote_sig", "TEXT")?;
+    add_column(&conn, "synced_files", "base_tags", "TEXT")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
          CREATE TABLE IF NOT EXISTS import_cache (
@@ -1049,6 +1053,94 @@ pub fn synced_times(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// A file as it was at its last successful sync with a destination: the common ancestor that
+/// tells whose edit is whose. Only stored when both copies were identical.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Base {
+    /// `sync::local_signature` of the library file, equal to `remote_sig`.
+    pub local_sig: String,
+    pub remote_sig: String,
+    /// JSON of the tag fields (`tags::fields_json`); `None` when they could not be read.
+    pub tags: Option<String>,
+}
+
+/// What a finished sync does to a file's base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseUpdate {
+    /// The file was not touched; keep what is stored.
+    Keep,
+    Set(Base),
+    /// The copies may differ now: forget the base.
+    Clear,
+}
+
+/// A library file confirmed on a destination by a sync.
+#[derive(Debug, Clone)]
+pub struct Synced {
+    pub track_id: i64,
+    pub size: i64,
+    pub base: BaseUpdate,
+}
+
+impl Synced {
+    /// A file confirmed on the destination whose base stays as it is.
+    pub fn kept(track_id: i64, size: i64) -> Self {
+        Self {
+            track_id,
+            size,
+            base: BaseUpdate::Keep,
+        }
+    }
+}
+
+/// `track id -> base` for every synced file of a destination that has one.
+pub fn synced_bases(
+    conn: &Connection,
+    target_id: i64,
+) -> Result<std::collections::HashMap<i64, Base>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT track_id, local_sig, remote_sig, base_tags FROM synced_files
+         WHERE target_id = ?1 AND local_sig IS NOT NULL AND remote_sig IS NOT NULL",
+    )?;
+    let rows = stmt.query_map(params![target_id], |r| {
+        Ok((
+            r.get(0)?,
+            Base {
+                local_sig: r.get(1)?,
+                remote_sig: r.get(2)?,
+                tags: r.get(3)?,
+            },
+        ))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Stores bases for files that are already recorded as synced.
+pub fn store_bases(
+    conn: &mut Connection,
+    target_id: i64,
+    bases: &[(i64, Base)],
+) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "UPDATE synced_files SET local_sig = ?3, remote_sig = ?4, base_tags = ?5
+             WHERE target_id = ?1 AND track_id = ?2",
+        )?;
+        for (track_id, b) in bases {
+            stmt.execute(params![
+                target_id,
+                track_id,
+                b.local_sig,
+                b.remote_sig,
+                b.tags
+            ])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Fingerprints of destination files read on earlier runs, keyed by `(path, size)`.
 pub fn remote_prints(
     conn: &Connection,
@@ -1385,7 +1477,7 @@ pub struct RunRecord {
 pub fn record_run(
     conn: &mut Connection,
     run: &RunRecord,
-    synced: &[(i64, i64)],
+    synced: &[Synced],
     deleted_tracks: &[i64],
 ) -> Result<(), Error> {
     let tx = conn.transaction()?;
@@ -1397,13 +1489,31 @@ pub fn record_run(
     }
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO synced_files (target_id, track_id, size, synced_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO synced_files
+                 (target_id, track_id, size, synced_at, local_sig, remote_sig, base_tags)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(target_id, track_id) DO UPDATE SET
-                 size = excluded.size, synced_at = excluded.synced_at",
+                 size = excluded.size, synced_at = excluded.synced_at,
+                 local_sig = IIF(?8, excluded.local_sig, local_sig),
+                 remote_sig = IIF(?8, excluded.remote_sig, remote_sig),
+                 base_tags = IIF(?8, excluded.base_tags, base_tags)",
         )?;
-        for (track_id, size) in synced {
-            stmt.execute(params![run.target_id, track_id, size, run.finished_at])?;
+        for s in synced {
+            let (sigs, replace) = match &s.base {
+                BaseUpdate::Keep => (None, false),
+                BaseUpdate::Set(b) => (Some(b), true),
+                BaseUpdate::Clear => (None, true),
+            };
+            stmt.execute(params![
+                run.target_id,
+                s.track_id,
+                s.size,
+                run.finished_at,
+                sigs.map(|b| &b.local_sig),
+                sigs.map(|b| &b.remote_sig),
+                sigs.and_then(|b| b.tags.as_ref()),
+                replace
+            ])?;
         }
     }
     tx.execute(
