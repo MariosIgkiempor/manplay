@@ -2226,11 +2226,82 @@ fn smart_local_tags(
     ))
 }
 
-/// Switches library data (tags, playlists) on or off for one destination. Switching on writes
-/// ops for what the library holds now.
+/// What a destination holds: a shared library with its members, or none.
 #[tauri::command]
-fn set_target_libsync(state: State<'_, AppState>, id: i64, enabled: bool) -> Result<(), Error> {
-    with_db!(state, |c| db::set_target_libsync(c, id, enabled))
+async fn libsync_inspect(
+    state: State<'_, AppState>,
+    target_id: i64,
+) -> Result<Option<libsync::membership::Found>, Error> {
+    let target = shared_target(&state, target_id)?;
+    sync::inspect_library(&state.http, &target, &state.db).await
+}
+
+/// How many tags, playlists and smart playlists "Join and replace mine" would drop.
+#[tauri::command]
+fn libsync_replace_count(state: State<'_, AppState>) -> Result<i64, Error> {
+    with_db!(state, |c| libsync::membership::replace_count(c))
+}
+
+/// Joins the shared library on a destination, or starts one there, and syncs it once.
+#[tauri::command]
+async fn libsync_join(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: i64,
+    choice: libsync::membership::JoinChoice,
+) -> Result<sync::LibraryOutcome, Error> {
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    let target = shared_target(&state, target_id)?;
+    state.wf_misses.clear();
+    let out = sync::join_library(&state.http, &target, &state.db, choice).await?;
+    let target = shared_target(&state, target_id)?;
+    tauri::async_runtime::spawn(fill_waveforms(app, target));
+    Ok(out)
+}
+
+/// Leaves the shared library. `sync` sends and receives one last time first.
+#[tauri::command]
+async fn libsync_leave(
+    state: State<'_, AppState>,
+    choice: libsync::membership::LeaveChoice,
+    sync: bool,
+) -> Result<(), Error> {
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    let target = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::list_targets(&conn)?.into_iter().find(|t| t.libsync)
+    }
+    .ok_or_else(|| Error::Msg("This device is not in a shared library.".to_owned()))?;
+    sync::leave_library(&state.http, &target, &state.db, choice, sync).await
+}
+
+fn shared_target(state: &AppState, id: i64) -> Result<db::SyncTarget, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::list_targets(&conn)?
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| Error::Msg("That destination no longer exists.".to_owned()))
+}
+
+/// The name other members see this device as.
+#[tauri::command]
+fn get_device_name(state: State<'_, AppState>) -> Result<String, Error> {
+    with_db!(state, |c| libsync::membership::device_name(c))
+}
+
+/// Names this device; an empty name goes back to the machine's own.
+#[tauri::command]
+fn set_device_name(state: State<'_, AppState>, name: String) -> Result<String, Error> {
+    with_db!(state, |c| {
+        libsync::membership::set_device_name(c, &name)?;
+        libsync::membership::device_name(c)
+    })
 }
 
 /// Shares library data with the destinations that have it switched on: sends this device's
@@ -3429,7 +3500,12 @@ pub fn run() {
             add_sync_target,
             add_r2_target,
             update_sync_target,
-            set_target_libsync,
+            libsync_inspect,
+            libsync_replace_count,
+            libsync_join,
+            libsync_leave,
+            get_device_name,
+            set_device_name,
             list_clashes,
             clash_combine_preview,
             resolve_clash,

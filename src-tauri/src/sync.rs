@@ -281,6 +281,50 @@ impl libsync::ChunkStore for LogStore<'_, '_> {
         sent
     }
 
+    async fn read_meta(&self, path: &str) -> Result<Option<Vec<u8>>, Error> {
+        let full = self.meta_path(path)?;
+        if self.backend.remote_size(&full).await?.is_none() {
+            return Ok(None);
+        }
+        let tmp = Self::meta_tmp("get");
+        let got = self.backend.get(&full, &tmp).await;
+        let bytes = match got {
+            Ok(()) => tokio::fs::read(&tmp).await.map(Some).map_err(Error::from),
+            Err(e) => Err(e),
+        };
+        let _ = tokio::fs::remove_file(&tmp).await;
+        bytes
+    }
+
+    async fn write_meta(&self, path: &str, bytes: Vec<u8>) -> Result<(), Error> {
+        let full = self.meta_path(path)?;
+        for depth in self.base.len() + 1..full.len() {
+            self.backend.mkdir(&full[..depth]).await?;
+        }
+        let tmp = Self::meta_tmp("put");
+        tokio::fs::write(&tmp, &bytes).await?;
+        let sent = self.backend.put(&full, &tmp).await;
+        let _ = tokio::fs::remove_file(&tmp).await;
+        sent
+    }
+
+    async fn delete_meta(&self, path: &str) -> Result<(), Error> {
+        let full = self.meta_path(path)?;
+        self.backend.delete(&full).await
+    }
+
+    async fn list_meta(&self, dir: &str) -> Result<Vec<String>, Error> {
+        let full = self.meta_path(dir)?;
+        let files = self.backend.list(&full).await?;
+        Ok(files
+            .into_iter()
+            .filter_map(|f| match f.rel.as_slice() {
+                [name] if plain_segment(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect())
+    }
+
     async fn waveform_exists(&self, w: &libsync::waveforms::WaveformRef) -> Result<bool, Error> {
         let (_, path) = self.waveform_path(w)?;
         Ok(self.backend.remote_size(&path).await?.is_some())
@@ -354,6 +398,28 @@ impl libsync::ChunkStore for LogStore<'_, '_> {
 }
 
 impl LogStore<'_, '_> {
+    /// Full path of a small file under `.manplay/`, from its `/`-separated path there.
+    fn meta_path(&self, path: &str) -> Result<Vec<String>, Error> {
+        let mut full = self.base.clone();
+        full.push(libsync::remote::DIR.to_owned());
+        for seg in path.split('/') {
+            if seg.is_empty() || seg == ".." || seg.contains('\\') {
+                return Err(Error::Msg(format!("unsafe path under .manplay: {path}")));
+            }
+            full.push(seg.to_owned());
+        }
+        Ok(full)
+    }
+
+    fn meta_tmp(what: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        std::env::temp_dir().join(format!(
+            "manplay-meta-{}-{}-{what}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ))
+    }
+
     /// The folder and the full path of a waveform file.
     fn waveform_path(
         &self,
@@ -433,7 +499,7 @@ pub async fn run_library_data(
         backend: &backend,
         base,
     };
-    let summary = libsync::run(db, &store).await;
+    let summary = libsync::membership::run_joined(db, &store, &target_name(target)).await;
     out.sent = summary.sent;
     out.received = summary.received;
     out.unreadable = summary.unreadable;
@@ -445,6 +511,95 @@ pub async fn run_library_data(
         }
     }
     out
+}
+
+/// Checks that the destination folder is there and the machine answers, for the join and leave
+/// flows that talk to it directly.
+async fn reachable(backend: &Backend<'_>, base: &[String]) -> Result<(), Error> {
+    match backend.exists(base).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(Error::Msg(
+            "destination folder not found (is the machine online?)".to_owned(),
+        )),
+        Err(e) => Err(Error::Msg(format!("destination unreachable: {e}"))),
+    }
+}
+
+/// What a destination holds: a shared library (its name, members, last change) or none. Reads
+/// `.manplay/library.json` and `devices/`; writes nothing.
+pub async fn inspect_library(
+    client: &Client,
+    target: &SyncTarget,
+    db: &std::sync::Mutex<rusqlite::Connection>,
+) -> Result<Option<libsync::membership::Found>, Error> {
+    let backend = Backend::for_target(client, target)?;
+    let base = base_of(target);
+    reachable(&backend, &base).await?;
+    libsync::membership::inspect(
+        db,
+        &LogStore {
+            backend: &backend,
+            base,
+        },
+    )
+    .await
+}
+
+/// Joins the library on a destination (or starts one there) and does the first sync.
+pub async fn join_library(
+    client: &Client,
+    target: &SyncTarget,
+    db: &std::sync::Mutex<rusqlite::Connection>,
+    choice: libsync::membership::JoinChoice,
+) -> Result<LibraryOutcome, Error> {
+    let backend = Backend::for_target(client, target)?;
+    let base = base_of(target);
+    reachable(&backend, &base).await?;
+    let store = LogStore {
+        backend: &backend,
+        base,
+    };
+    let name = target_name(target);
+    let summary = libsync::membership::join(db, target.id, &store, choice, &name).await?;
+    let mut out = LibraryOutcome {
+        target_id: target.id,
+        name,
+        sent: summary.sent,
+        received: summary.received,
+        unreadable: summary.unreadable,
+        waveforms_sent: 0,
+        error: summary.error,
+    };
+    if out.error.is_none() {
+        match libsync::waveforms::push(db, &store, WAVEFORMS_PER_RUN).await {
+            Ok(pushed) => out.waveforms_sent = pushed.sent,
+            Err(e) => out.error = Some(format!("waveforms: {e}")),
+        }
+    }
+    Ok(out)
+}
+
+/// Leaves the library on a destination. With `sync` it first sends and receives one last time
+/// and stops if that fails; without it (the destination is out of reach) it leaves at once.
+pub async fn leave_library(
+    client: &Client,
+    target: &SyncTarget,
+    db: &std::sync::Mutex<rusqlite::Connection>,
+    choice: libsync::membership::LeaveChoice,
+    sync: bool,
+) -> Result<(), Error> {
+    let backend = Backend::for_target(client, target)?;
+    let base = base_of(target);
+    let store = LogStore {
+        backend: &backend,
+        base: base.clone(),
+    };
+    if sync {
+        reachable(&backend, &base).await?;
+        return libsync::membership::leave(db, &store, choice, true).await;
+    }
+    // Out of reach: leaving does not wait for it, and the member file is removed if it answers.
+    libsync::membership::leave(db, &store, choice, false).await
 }
 
 /// Downloads the waveforms of songs other devices analysed, in the background after a sync.

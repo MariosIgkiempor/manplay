@@ -1,5 +1,5 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, CloudUpload, Download, Loader2, RefreshCw, Tags } from "lucide-react";
+import { ChevronRight, CloudUpload, Download, Loader2, RefreshCw } from "lucide-react";
 import {
 	type Dispatch,
 	type ReactNode,
@@ -8,9 +8,9 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { ClashList } from "#/components/clashes.tsx";
 import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
 import { PullList } from "#/components/pull-review.tsx";
+import { SharedLibraryRow } from "#/components/shared-library.tsx";
 import { IncomingList } from "#/components/sync-incoming.tsx";
 import { SyncResult } from "#/components/sync-result.tsx";
 import {
@@ -41,7 +41,7 @@ import {
 	type TargetPlan,
 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
-import { useSetLibsync, useSyncApply, useSyncPlan, useSyncTargets } from "#/lib/queries.ts";
+import { useSyncApply, useSyncPlan, useSyncTargets } from "#/lib/queries.ts";
 import {
 	type Choices,
 	type IncomingAction,
@@ -275,45 +275,6 @@ function PullIncoming({ t, ui }: { t: Row; ui: Ui }) {
 	);
 }
 
-/**
- * Whether tags and playlists are shared through a destination. The choice applies at once; the
- * edits travel with the next sync.
- */
-function LibraryDataRow({ id }: { id: number }) {
-	const targets = useSyncTargets();
-	const setLibsync = useSetLibsync();
-	const on = targets.data?.find((t) => t.id === id)?.libsync ?? false;
-	return (
-		<>
-			<div className="border-b first:border-t">
-				<div className="flex h-12 items-center gap-3 px-[var(--diff-inset)]">
-					<Switch
-						checked={on}
-						disabled={!targets.data || setLibsync.isPending}
-						onChange={(v) => setLibsync.mutate({ id, enabled: v })}
-						label="Library data"
-					/>
-					<span className="flex shrink-0 items-center gap-1.5 font-medium text-sm [&_svg]:size-4">
-						<Tags />
-						Library data
-					</span>
-					<span className="min-w-0 truncate text-muted-foreground text-sm">
-						{on
-							? "Tags and playlists sync with this destination"
-							: "Tags and playlists stay on this device"}
-					</span>
-				</div>
-				{setLibsync.isError && (
-					<p className="break-words px-[var(--diff-inset)] pb-2 text-destructive text-sm">
-						{String(setLibsync.error)}
-					</p>
-				)}
-			</div>
-			{on && <ClashList />}
-		</>
-	);
-}
-
 /** One destination: how much already matches, then its pull and its push. */
 function TargetBlock({
 	t,
@@ -362,7 +323,7 @@ function TargetBlock({
 			{t.pullError && (
 				<p className="break-words px-[var(--diff-inset)] text-destructive text-sm">{t.pullError}</p>
 			)}
-			<LibraryDataRow id={id} />
+			<SharedLibraryRow id={id} />
 			<Section
 				icon={<Download />}
 				title="Pull"

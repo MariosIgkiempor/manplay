@@ -12,6 +12,7 @@ pub mod clashes;
 pub mod clock;
 pub mod entities;
 pub mod frac;
+pub mod membership;
 pub mod ops;
 pub mod remote;
 pub mod schema;
@@ -21,7 +22,9 @@ pub mod state;
 pub mod waveforms;
 pub mod write;
 
-pub use remote::{ChunkRef, ChunkStore, run};
+#[cfg(test)]
+pub use remote::run;
+pub use remote::{ChunkRef, ChunkStore};
 pub use write::{Batch, default_scope, new_uid};
 
 #[cfg(test)]

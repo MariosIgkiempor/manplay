@@ -15,6 +15,7 @@ import {
 	fsMove,
 	fsRename,
 	fsTrash,
+	getDeviceName,
 	getLibraryRoot,
 	getLibraryView,
 	getPanelTabs,
@@ -22,7 +23,11 @@ import {
 	getUiSetting,
 	itunesImport,
 	itunesPending,
+	type JoinChoice,
+	type LeaveChoice,
 	libraryStatus,
+	libsyncJoin,
+	libsyncLeave,
 	listClashes,
 	listDuplicates,
 	listMissing,
@@ -39,11 +44,11 @@ import {
 	saveAnalysisToFiles,
 	serviceFlags,
 	setAnalysisSettings,
+	setDeviceName,
 	setLibraryView,
 	setPanelTabs,
 	setServiceEnabled,
 	setTagClipboard,
-	setTargetLibsync,
 	setUiSetting,
 	syncApply,
 	syncHistory,
@@ -110,14 +115,42 @@ export function useRefreshItems() {
 	};
 }
 
-/** Switches sharing of tags and playlists through a destination on or off. */
-export function useSetLibsync() {
+/** Joins or starts a shared library on a destination. Everything shared changes in the lists. */
+export function useJoinLibrary() {
 	const queryClient = useQueryClient();
+	const refresh = useRefreshItems();
 	return useMutation({
-		mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
-			setTargetLibsync(id, enabled),
-		onSettled: () => queryClient.invalidateQueries({ queryKey: ["sync-targets"] }),
+		mutationFn: ({ id, choice }: { id: number; choice: JoinChoice }) => libsyncJoin(id, choice),
+		onSettled: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
+			await refresh();
+		},
 	});
+}
+
+/** Leaves the shared library; the lists drop or keep the shared items. */
+export function useLeaveLibrary() {
+	const queryClient = useQueryClient();
+	const refresh = useRefreshItems();
+	return useMutation({
+		mutationFn: ({ choice, sync }: { choice: LeaveChoice; sync: boolean }) =>
+			libsyncLeave(choice, sync),
+		onSettled: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
+			await refresh();
+		},
+	});
+}
+
+/** This device's name as other members of a shared library see it. */
+export function useDeviceName() {
+	const queryClient = useQueryClient();
+	const name = useQuery({ queryKey: ["device-name"], queryFn: getDeviceName });
+	const save = useMutation({
+		mutationFn: setDeviceName,
+		onSuccess: (next) => queryClient.setQueryData(["device-name"], next),
+	});
+	return { name, save };
 }
 
 export const SYNC_KEY = ["sync-run"] as const;

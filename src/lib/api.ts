@@ -383,8 +383,10 @@ export type NewTarget = z.infer<typeof newTargetSchema>;
 const targetSchema = newTargetSchema.extend({
 	id: int,
 	syncedTracks: int,
-	/** Tags and playlists are shared through this destination. */
+	/** This device's shared library lives on this destination (the others are files only). */
 	libsync: z.boolean(),
+	/** The shared library's name, once known. */
+	libraryName: z.string().nullable(),
 });
 
 export type SyncTarget = z.infer<typeof targetSchema>;
@@ -395,6 +397,11 @@ export async function listSyncTargets(): Promise<SyncTarget[]> {
 
 export async function addSyncTarget(target: NewTarget): Promise<number> {
 	return int.parse(await invoke("add_sync_target", { target }));
+}
+
+/** A destination as people read it: the machine and its folder. */
+export function targetName(target: SyncTarget): string {
+	return [target.machine, ...target.path].join(" / ");
 }
 
 export function isR2(target: SyncTarget): boolean {
@@ -428,15 +435,6 @@ export async function updateSyncTarget(t: {
 	});
 }
 
-/**
- * Switches sharing of library data (tags, playlists, smart playlists, BPM, key and beat grids,
- * waveforms) through one destination. Only one destination shares it at a time; switching on
- * sends everything the library holds.
- */
-export async function setTargetLibsync(id: number, enabled: boolean): Promise<void> {
-	await invoke("set_target_libsync", { id, enabled });
-}
-
 const libraryOutcomeSchema = z.object({
 	targetId: int,
 	name: z.string(),
@@ -454,6 +452,55 @@ export type LibraryOutcome = z.infer<typeof libraryOutcomeSchema>;
  */
 export async function libsyncRun(targetIds: number[]): Promise<LibraryOutcome[]> {
 	return z.array(libraryOutcomeSchema).parse(await invoke("libsync_run", { targetIds }));
+}
+
+const foundLibrarySchema = z.object({
+	libraryId: z.string(),
+	name: z.string(),
+	createdAt: int,
+	members: z.array(z.object({ name: z.string(), lastSeen: int, mine: z.boolean() })),
+	/** When a member last synced (Unix seconds). */
+	lastChange: int.nullable(),
+});
+export type FoundLibrary = z.infer<typeof foundLibrarySchema>;
+
+/** What a destination holds: a shared library with its members, or null. Writes nothing. */
+export async function libsyncInspect(targetId: number): Promise<FoundLibrary | null> {
+	return foundLibrarySchema.nullable().parse(await invoke("libsync_inspect", { targetId }));
+}
+
+/** How many tags, playlists and smart playlists "replace mine" would drop. */
+export async function libsyncReplaceCount(): Promise<number> {
+	return int.parse(await invoke("libsync_replace_count"));
+}
+
+/**
+ * What happens to what this device has when it joins: `merge` shares it (same names become
+ * clashes), `keepLocal` makes it local, `replace` drops it, `start` begins a library there.
+ */
+export type JoinChoice = "merge" | "keepLocal" | "replace" | "start";
+
+/** Joins (or starts) the shared library on a destination and syncs it once. */
+export async function libsyncJoin(targetId: number, choice: JoinChoice): Promise<LibraryOutcome> {
+	return libraryOutcomeSchema.parse(await invoke("libsync_join", { targetId, choice }));
+}
+
+/** What happens to the shared items on this device when it leaves: keep them as local or drop them. */
+export type LeaveChoice = "keepCopy" | "keepLocal";
+
+/** Leaves the shared library; `sync` sends and receives one last time first. */
+export async function libsyncLeave(choice: LeaveChoice, sync: boolean): Promise<void> {
+	await invoke("libsync_leave", { choice, sync });
+}
+
+/** The name other members see this device as. */
+export async function getDeviceName(): Promise<string> {
+	return z.string().parse(await invoke("get_device_name"));
+}
+
+/** Names this device (blank goes back to the machine's name); returns the name now in use. */
+export async function setDeviceName(name: string): Promise<string> {
+	return z.string().parse(await invoke("set_device_name", { name }));
 }
 
 export async function removeSyncTarget(id: number): Promise<void> {

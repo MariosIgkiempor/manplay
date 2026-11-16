@@ -2023,8 +2023,11 @@ pub struct SyncTarget {
     pub machine: String,
     pub path: Vec<String>,
     pub synced_tracks: i64,
-    /// Library data (tags, playlists) is shared through this destination.
+    /// This device's shared library lives on this destination.
     pub libsync: bool,
+    /// Name of that library, once known (a device that shared before libraries existed learns it
+    /// at its next sync).
+    pub library_name: Option<String>,
 }
 
 fn parse_path(raw: &str) -> Vec<String> {
@@ -2054,11 +2057,9 @@ pub fn set_target_path(conn: &mut Connection, id: i64, path: &[String]) -> Resul
         params![id, raw],
     )?;
     if changed > 0 {
-        // Another place has none of the library data: it has to be switched on there again.
-        tx.execute(
-            "UPDATE sync_targets SET libsync = 0 WHERE id = ?1",
-            params![id],
-        )?;
+        // Another place has none of the library data: this device leaves the library it had
+        // here (keeping a copy) and can join again from the new folder.
+        crate::libsync::membership::detach_target(&tx, id)?;
         tx.execute("DELETE FROM synced_files WHERE target_id = ?1", params![id])?;
         tx.execute("DELETE FROM stale_remote WHERE target_id = ?1", params![id])?;
     }
@@ -2096,8 +2097,10 @@ pub fn set_target_libsync(conn: &mut Connection, id: i64, enabled: bool) -> Resu
 }
 
 pub fn remove_target(conn: &Connection, id: i64) -> Result<(), Error> {
-    conn.execute("DELETE FROM sync_targets WHERE id = ?1", params![id])?;
-    Ok(())
+    let tx = conn.unchecked_transaction()?;
+    crate::libsync::membership::detach_target(&tx, id)?;
+    tx.execute("DELETE FROM sync_targets WHERE id = ?1", params![id])?;
+    Ok(tx.commit()?)
 }
 
 pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
@@ -2117,9 +2120,17 @@ pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
             path: parse_path(&raw),
             synced_tracks: r.get(4)?,
             libsync: r.get(5)?,
+            library_name: None,
         })
     })?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    let mut targets = rows.collect::<Result<Vec<_>, _>>()?;
+    if targets.iter().any(|t| t.libsync) {
+        let name = crate::libsync::membership::library_name(conn)?;
+        for t in targets.iter_mut().filter(|t| t.libsync) {
+            t.library_name.clone_from(&name);
+        }
+    }
+    Ok(targets)
 }
 
 /// The services a user can switch on or off.

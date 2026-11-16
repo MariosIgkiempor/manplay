@@ -73,6 +73,19 @@ pub trait ChunkStore {
         waveform: &WaveformRef,
         bytes: Vec<u8>,
     ) -> impl Future<Output = Result<(), Error>> + Send;
+    /// A small file under `.manplay/` (`library.json`, `devices/<id>.json`, `.ignore`), by its
+    /// `/`-separated path there; `None` when it is not there.
+    fn read_meta(&self, path: &str) -> impl Future<Output = Result<Option<Vec<u8>>, Error>> + Send;
+    /// Writes (or replaces) a small file under `.manplay/`.
+    fn write_meta(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
+    /// Removes a small file under `.manplay/`; one that is already gone counts as removed.
+    fn delete_meta(&self, path: &str) -> impl Future<Output = Result<(), Error>> + Send;
+    /// The names of the files directly inside a folder of `.manplay/`; empty when it is missing.
+    fn list_meta(&self, dir: &str) -> impl Future<Output = Result<Vec<String>, Error>> + Send;
 }
 
 pub fn encode(ops: &[Op]) -> Result<Vec<u8>, Error> {

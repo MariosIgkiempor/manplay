@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::apply::{apply_ops, materialize_pending};
 use super::clock::{self, Hlc};
 use super::frac;
+use super::membership::{self, JoinChoice, LeaveChoice};
 use super::ops::{FORMAT, Op};
 use super::remote::{self, ChunkRef, ChunkStore};
 use super::waveforms::{self, Misses, WaveformRef};
@@ -556,9 +557,21 @@ struct Memory {
     chunks: Mutex<BTreeMap<ChunkRef, Vec<u8>>>,
     waves: Mutex<BTreeMap<String, Vec<u8>>>,
     wave_writes: std::sync::atomic::AtomicUsize,
+    /// Small files under `.manplay/`, by path.
+    meta: Mutex<BTreeMap<String, Vec<u8>>>,
+    /// Every call of any kind, so a test can show a destination was never talked to.
+    calls: std::sync::atomic::AtomicUsize,
 }
 
 impl Memory {
+    fn touch(&self) {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     fn wave_key(w: &WaveformRef) -> Result<String, Error> {
         let (dir, name) = w
             .rel()
@@ -570,10 +583,12 @@ impl Memory {
 #[allow(clippy::unused_async_trait_impl)] // the trait is async; memory never waits
 impl ChunkStore for Memory {
     async fn list_chunks(&self) -> Result<Vec<ChunkRef>, Error> {
+        self.touch();
         Ok(self.chunks.lock().expect("lock").keys().cloned().collect())
     }
 
     async fn read_chunk(&self, chunk: &ChunkRef) -> Result<Vec<u8>, Error> {
+        self.touch();
         self.chunks
             .lock()
             .expect("lock")
@@ -583,6 +598,7 @@ impl ChunkStore for Memory {
     }
 
     async fn write_chunk(&self, chunk: &ChunkRef, bytes: Vec<u8>) -> Result<(), Error> {
+        self.touch();
         let mut chunks = self.chunks.lock().expect("lock");
         if chunks.contains_key(chunk) {
             return Err(Error::Msg("exists".into()));
@@ -592,6 +608,7 @@ impl ChunkStore for Memory {
     }
 
     async fn waveform_exists(&self, w: &WaveformRef) -> Result<bool, Error> {
+        self.touch();
         Ok(self
             .waves
             .lock()
@@ -600,6 +617,7 @@ impl ChunkStore for Memory {
     }
 
     async fn read_waveform(&self, w: &WaveformRef) -> Result<Option<Vec<u8>>, Error> {
+        self.touch();
         Ok(self
             .waves
             .lock()
@@ -609,6 +627,7 @@ impl ChunkStore for Memory {
     }
 
     async fn write_waveform(&self, w: &WaveformRef, bytes: Vec<u8>) -> Result<(), Error> {
+        self.touch();
         self.waves
             .lock()
             .expect("lock")
@@ -617,6 +636,40 @@ impl ChunkStore for Memory {
         self.wave_writes
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
+    }
+
+    async fn read_meta(&self, path: &str) -> Result<Option<Vec<u8>>, Error> {
+        self.touch();
+        Ok(self.meta.lock().expect("lock").get(path).cloned())
+    }
+
+    async fn write_meta(&self, path: &str, bytes: Vec<u8>) -> Result<(), Error> {
+        self.touch();
+        self.meta
+            .lock()
+            .expect("lock")
+            .insert(path.to_owned(), bytes);
+        Ok(())
+    }
+
+    async fn delete_meta(&self, path: &str) -> Result<(), Error> {
+        self.touch();
+        self.meta.lock().expect("lock").remove(path);
+        Ok(())
+    }
+
+    async fn list_meta(&self, dir: &str) -> Result<Vec<String>, Error> {
+        self.touch();
+        let prefix = format!("{dir}/");
+        Ok(self
+            .meta
+            .lock()
+            .expect("lock")
+            .keys()
+            .filter_map(|k| k.strip_prefix(&prefix))
+            .filter(|rest| !rest.contains('/'))
+            .map(str::to_owned)
+            .collect())
     }
 }
 
@@ -1915,4 +1968,485 @@ async fn same_named_smart_playlists_clash_and_combine() {
     assert_eq!(smart_shown(&a), smart_shown(&b));
     assert_eq!(smart_shown(&a).lines().count(), 1, "{}", smart_shown(&a));
     assert_eq!(clashes::count(&b.lock().expect("lock")).expect("count"), 0);
+}
+
+// ---- joining and leaving -------------------------------------------------------
+
+/// A device that is in no library: a destination exists, library data is off.
+fn unjoined(songs: usize) -> (Mutex<Connection>, i64) {
+    let conn = open();
+    library(&conn, songs);
+    conn.execute(
+        "INSERT INTO sync_targets (tailnet, machine, path) VALUES ('t', 'm', '[]')",
+        [],
+    )
+    .expect("target");
+    let id = conn.last_insert_rowid();
+    (Mutex::new(conn), id)
+}
+
+fn scopes(db: &Mutex<Connection>, table: &str) -> String {
+    let conn = db.lock().expect("lock");
+    let mut stmt = conn
+        .prepare(&format!("SELECT name, scope FROM {table} ORDER BY name"))
+        .expect("stmt");
+    stmt.query_map([], |r| {
+        Ok(format!(
+            "{}:{}",
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?
+        ))
+    })
+    .expect("rows")
+    .map(|r| r.expect("row"))
+    .collect::<Vec<_>>()
+    .join(",")
+}
+
+fn rename_device(db: &Mutex<Connection>, name: &str) {
+    membership::set_device_name(&db.lock().expect("lock"), name).expect("name");
+}
+
+fn is_joined(db: &Mutex<Connection>) -> bool {
+    super::write::active(&db.lock().expect("lock")).expect("active")
+}
+
+/// A destination whose library was started by device A with tags `House` and `Peak`.
+async fn started(store: &Memory) -> (Mutex<Connection>, i64) {
+    let (a, id) = unjoined(3);
+    rename_device(&a, "Studio");
+    tag(&a, "House", &[1]);
+    tag(&a, "Peak", &[2]);
+    let sum = membership::join(&a, id, store, JoinChoice::Start, "Our crates")
+        .await
+        .expect("start");
+    assert!(sum.error.is_none(), "{:?}", sum.error);
+    (a, id)
+}
+
+#[tokio::test]
+async fn starting_a_library_writes_its_files_and_shares_what_is_there() {
+    let store = Memory::default();
+    let (a, _) = started(&store).await;
+    assert!(is_joined(&a));
+    {
+        let meta = store.meta.lock().expect("lock");
+        assert!(meta.contains_key("library.json"));
+        assert!(meta.contains_key(".ignore"));
+        assert!(meta.keys().any(|k| k.starts_with("devices/")));
+    }
+    assert_eq!(scopes(&a, "tags"), "House:shared,Peak:shared");
+    // The destination now describes itself to the next device.
+    let (b, _) = unjoined(3);
+    let found = membership::inspect(&b, &store)
+        .await
+        .expect("inspect")
+        .expect("found");
+    assert_eq!(found.name, "Our crates");
+    assert_eq!(found.members.len(), 1);
+    assert_eq!(found.members[0].name, "Studio");
+    assert!(!found.members[0].mine);
+    assert!(found.last_change.is_some());
+    // Another device cannot start one where there already is one.
+    let err = membership::join(&b, 1, &store, JoinChoice::Start, "Other").await;
+    assert!(err.is_err());
+    assert!(!is_joined(&b));
+}
+
+#[tokio::test]
+async fn joining_with_merge_shares_mine_and_lists_same_names_as_clashes() {
+    let store = Memory::default();
+    let (a, _) = started(&store).await;
+    let (b, id) = unjoined(3);
+    tag(&b, "House", &[3]);
+    tag(&b, "Deep", &[3]);
+    let sum = membership::join(&b, id, &store, JoinChoice::Merge, "")
+        .await
+        .expect("join");
+    assert!(sum.error.is_none(), "{:?}", sum.error);
+    assert!(is_joined(&b));
+    assert!(run_both(&a, &b, &store).await);
+    // Mine are shared; their Peak arrived; House exists on both sides, so one is held.
+    let tags = scopes(&b, "tags");
+    assert!(tags.contains("Deep:shared"), "{tags}");
+    assert!(tags.contains("Peak:shared"), "{tags}");
+    assert_eq!(clashes::count(&b.lock().expect("lock")).expect("count"), 1);
+    assert_eq!(clashes::count(&a.lock().expect("lock")).expect("count"), 1);
+    // The member list has both devices.
+    rename_device(&b, "Laptop");
+    assert!(run_both(&a, &b, &store).await);
+    let found = membership::inspect(&b, &store)
+        .await
+        .expect("inspect")
+        .expect("found");
+    let mut names: Vec<&str> = found.members.iter().map(|m| m.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["Laptop", "Studio"]);
+    assert_eq!(found.members.iter().filter(|m| m.mine).count(), 1);
+}
+
+async fn run_both(a: &Mutex<Connection>, b: &Mutex<Connection>, store: &Memory) -> bool {
+    let mut ok = true;
+    for _ in 0..2 {
+        ok &= membership::run_joined(a, store, "x").await.error.is_none();
+        ok &= membership::run_joined(b, store, "x").await.error.is_none();
+    }
+    ok
+}
+
+#[tokio::test]
+async fn joining_and_keeping_mine_local_makes_mine_local_and_receives_theirs() {
+    let store = Memory::default();
+    let (a, _) = started(&store).await;
+    let (b, id) = unjoined(3);
+    tag(&b, "Mine", &[3]);
+    tag(&b, "House", &[3]);
+    let pl = playlist(&b, "Warmup", &[1, 2]);
+    assert!(pl > 0);
+    let sum = membership::join(&b, id, &store, JoinChoice::KeepLocal, "")
+        .await
+        .expect("join");
+    assert!(sum.error.is_none(), "{:?}", sum.error);
+    assert!(run_both(&a, &b, &store).await);
+    let tags = scopes(&b, "tags");
+    assert!(tags.contains("Mine:local"), "{tags}");
+    assert!(tags.contains("House:local"), "{tags}");
+    assert!(tags.contains("Peak:shared"), "{tags}");
+    assert_eq!(scopes(&b, "playlists"), "Warmup:local");
+    // Nothing of mine reached the others.
+    assert!(!scopes(&a, "tags").contains("Mine"));
+    assert!(!scopes(&a, "playlists").contains("Warmup"));
+}
+
+#[tokio::test]
+async fn joining_and_replacing_mine_drops_mine_and_takes_theirs() {
+    let store = Memory::default();
+    let (a, _) = started(&store).await;
+    let (b, id) = unjoined(3);
+    tag(&b, "Mine", &[3]);
+    playlist(&b, "Warmup", &[1]);
+    assert!(membership::replace_count(&b.lock().expect("lock")).expect("count") >= 2);
+    let sum = membership::join(&b, id, &store, JoinChoice::Replace, "")
+        .await
+        .expect("join");
+    assert!(sum.error.is_none(), "{:?}", sum.error);
+    assert!(run_both(&a, &b, &store).await);
+    assert_eq!(scopes(&b, "tags"), "House:shared,Peak:shared");
+    assert_eq!(scopes(&b, "playlists"), "");
+    assert_eq!(clashes::count(&b.lock().expect("lock")).expect("count"), 0);
+    assert_eq!(shown(&a), shown(&b));
+}
+
+#[tokio::test]
+async fn files_only_never_touches_the_destination() {
+    let store = Memory::default();
+    let (a, _) = unjoined(2);
+    tag(&a, "House", &[1]);
+    // A device that is not in a library: a sync does nothing there and writes no ops.
+    let sum = membership::run_joined(&a, &store, "x").await;
+    assert!(sum.error.is_none());
+    assert_eq!(store.calls(), 0);
+    assert_eq!(count_ops(&a.lock().expect("lock")), 0);
+    // Reading what a destination holds is the only thing the join dialog does before a choice.
+    assert!(
+        membership::inspect(&a, &store)
+            .await
+            .expect("inspect")
+            .is_none()
+    );
+    assert!(store.meta.lock().expect("lock").is_empty());
+    assert!(store.chunks.lock().expect("lock").is_empty());
+}
+
+#[tokio::test]
+async fn a_device_in_one_library_cannot_join_another() {
+    let store = Memory::default();
+    let (a, _) = started(&store).await;
+    let other = Memory::default();
+    a.lock()
+        .expect("lock")
+        .execute(
+            "INSERT INTO sync_targets (tailnet, machine, path) VALUES ('t', 'n', '[]')",
+            [],
+        )
+        .expect("target");
+    let second: i64 = a
+        .lock()
+        .expect("lock")
+        .query_row("SELECT id FROM sync_targets WHERE machine = 'n'", [], |r| {
+            r.get(0)
+        })
+        .expect("id");
+    let err = membership::join(&a, second, &other, JoinChoice::Start, "Two").await;
+    assert!(err.is_err());
+    assert_eq!(
+        other.calls(),
+        0,
+        "refused before it looked at the destination"
+    );
+    assert!(other.meta.lock().expect("lock").is_empty());
+}
+
+#[tokio::test]
+async fn leaving_with_a_copy_keeps_every_item_as_local() {
+    let store = Memory::default();
+    let (a, _) = started(&store).await;
+    let (b, bid) = unjoined(3);
+    tag(&b, "Deep", &[3]);
+    playlist(&b, "Warmup", &[1, 2]);
+    smart(&b, "Housey", &["Deep"]);
+    membership::join(&b, bid, &store, JoinChoice::Merge, "")
+        .await
+        .expect("join");
+    assert!(run_both(&a, &b, &store).await);
+    let before = shown(&b);
+    membership::leave(&b, &store, LeaveChoice::KeepCopy, true)
+        .await
+        .expect("leave");
+    assert!(!is_joined(&b));
+    // Same names and songs, all local now.
+    assert_eq!(scopes(&b, "tags"), "Deep:local,House:local,Peak:local");
+    assert_eq!(scopes(&b, "playlists"), "Warmup:local");
+    assert_eq!(scopes(&b, "smart_playlists"), "Housey:local");
+    let strip = |s: &str| -> Vec<String> {
+        s.lines()
+            .map(|l| {
+                let w: Vec<&str> = l.split(' ').collect();
+                // Drop the uid column; it changes on purpose.
+                if w[0] == "tag" || w[0] == "playlist" {
+                    format!("{} {}", w[0], w[2..].join(" "))
+                } else {
+                    l.to_owned()
+                }
+            })
+            .collect()
+    };
+    let mut was = strip(&before);
+    let mut now = strip(&shown(&b));
+    was.sort();
+    now.sort();
+    assert_eq!(
+        was.iter()
+            .map(|l| l.replace(" shared", ""))
+            .collect::<Vec<_>>(),
+        now.iter()
+            .map(|l| l.replace(" local", ""))
+            .collect::<Vec<_>>()
+    );
+    // The smart playlist still finds its tag.
+    let rules = smart_shown(&b);
+    assert!(!rules.contains('?'), "{rules}");
+    // Stopped reading and writing: new edits write no ops and the destination lost the member.
+    let calls = store.calls();
+    tag(&b, "After", &[1]);
+    assert_eq!(count_ops(&b.lock().expect("lock")), 0);
+    assert!(
+        membership::run_joined(&b, &store, "x")
+            .await
+            .error
+            .is_none()
+    );
+    assert_eq!(store.calls(), calls);
+    let found = membership::inspect(&a, &store)
+        .await
+        .expect("inspect")
+        .expect("found");
+    assert_eq!(found.members.len(), 1, "{:?}", found.members);
+    // The others keep everything, and the log stays for them.
+    assert!(run_both_one(&a, &store).await);
+    assert!(scopes(&a, "tags").contains("Deep:shared"));
+}
+
+async fn run_both_one(a: &Mutex<Connection>, store: &Memory) -> bool {
+    membership::run_joined(a, store, "x").await.error.is_none()
+}
+
+#[tokio::test]
+async fn rejoining_after_leaving_meets_the_kept_copies_as_clashes() {
+    let store = Memory::default();
+    let (_a, _) = started(&store).await;
+    let (b, bid) = unjoined(3);
+    membership::join(&b, bid, &store, JoinChoice::Merge, "")
+        .await
+        .expect("join");
+    membership::leave(&b, &store, LeaveChoice::KeepCopy, true)
+        .await
+        .expect("leave");
+    membership::join(&b, bid, &store, JoinChoice::Merge, "")
+        .await
+        .expect("rejoin");
+    // The kept copies stay local; the shared ones come back beside them.
+    let conn = b.lock().expect("lock");
+    assert_eq!(clashes::count(&conn).expect("count"), 2);
+}
+
+#[tokio::test]
+async fn leaving_and_keeping_only_local_items_removes_the_shared_ones() {
+    let store = Memory::default();
+    let (_a, _) = started(&store).await;
+    let (b, bid) = unjoined(3);
+    db::set_setting(&b.lock().expect("lock"), "default_scope", Some("local")).expect("scope");
+    tag(&b, "Mine", &[3]);
+    db::set_setting(&b.lock().expect("lock"), "default_scope", None).expect("scope");
+    membership::join(&b, bid, &store, JoinChoice::Merge, "")
+        .await
+        .expect("join");
+    assert!(run_both_one(&b, &store).await);
+    assert!(scopes(&b, "tags").contains("House:shared"));
+    membership::leave(&b, &store, LeaveChoice::KeepLocal, true)
+        .await
+        .expect("leave");
+    assert_eq!(scopes(&b, "tags"), "Mine:local");
+    assert_eq!(
+        count_ops(&b.lock().expect("lock")),
+        0,
+        "the sync state of the library is gone"
+    );
+}
+
+#[tokio::test]
+async fn leaving_waits_for_a_reachable_destination_unless_told_not_to() {
+    struct Down;
+    #[allow(clippy::unused_async_trait_impl)]
+    impl ChunkStore for Down {
+        async fn list_chunks(&self) -> Result<Vec<ChunkRef>, Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn read_chunk(&self, _: &ChunkRef) -> Result<Vec<u8>, Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn write_chunk(&self, _: &ChunkRef, _: Vec<u8>) -> Result<(), Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn waveform_exists(&self, _: &WaveformRef) -> Result<bool, Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn read_waveform(&self, _: &WaveformRef) -> Result<Option<Vec<u8>>, Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn write_waveform(&self, _: &WaveformRef, _: Vec<u8>) -> Result<(), Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn read_meta(&self, _: &str) -> Result<Option<Vec<u8>>, Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn write_meta(&self, _: &str, _: Vec<u8>) -> Result<(), Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn delete_meta(&self, _: &str) -> Result<(), Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn list_meta(&self, _: &str) -> Result<Vec<String>, Error> {
+            Err(Error::Msg("offline".into()))
+        }
+    }
+    let store = Memory::default();
+    let (a, _) = started(&store).await;
+    assert!(
+        membership::leave(&a, &Down, LeaveChoice::KeepCopy, true)
+            .await
+            .is_err()
+    );
+    assert!(is_joined(&a), "a failed last sync does not leave half-way");
+    membership::leave(&a, &Down, LeaveChoice::KeepCopy, false)
+        .await
+        .expect("leave anyway");
+    assert!(!is_joined(&a));
+    assert_eq!(scopes(&a, "tags"), "House:local,Peak:local");
+}
+
+#[tokio::test]
+async fn a_device_that_shared_before_libraries_existed_carries_over_as_joined() {
+    let store = Memory::default();
+    // Library data was on, and nothing was written under `.manplay/` except the log.
+    let a = device(2);
+    let b = device(2);
+    tag(&a, "House", &[1]);
+    assert!(
+        membership::run_joined(&a, &store, "Old share")
+            .await
+            .error
+            .is_none()
+    );
+    {
+        let meta = store.meta.lock().expect("lock");
+        assert!(meta.contains_key("library.json"));
+        assert!(meta.contains_key(".ignore"));
+    }
+    // The next device finds the file and adopts it instead of making another.
+    assert!(
+        membership::run_joined(&b, &store, "Other name")
+            .await
+            .error
+            .is_none()
+    );
+    let id = |db: &Mutex<Connection>| {
+        db::get_setting(&db.lock().expect("lock"), "library_id").expect("setting")
+    };
+    assert!(id(&a).is_some());
+    assert_eq!(id(&a), id(&b));
+    assert_eq!(
+        membership::library_name(&b.lock().expect("lock")).expect("name"),
+        Some("Old share".to_owned())
+    );
+    assert_eq!(shown(&a), shown(&b));
+}
+
+#[tokio::test]
+async fn a_destination_holding_another_library_stops_the_sync() {
+    let store = Memory::default();
+    let (a, _) = started(&store).await;
+    replace_library_file(&store);
+    let sum = membership::run_joined(&a, &store, "x").await;
+    assert!(
+        sum.error
+            .is_some_and(|e| e.contains("another shared library"))
+    );
+}
+
+fn replace_library_file(store: &Memory) {
+    let file = membership::LibraryFile {
+        format: 1,
+        library_id: "someone-else".into(),
+        name: "Elsewhere".into(),
+        created_at: 1,
+    };
+    store.meta.lock().expect("lock").insert(
+        membership::LIBRARY_FILE.to_owned(),
+        serde_json::to_vec(&file).expect("json"),
+    );
+}
+
+#[test]
+fn the_device_name_defaults_to_the_machine_and_can_be_set() {
+    let conn = open();
+    let machine = membership::device_name(&conn).expect("name");
+    assert_ne!(machine, "");
+    membership::set_device_name(&conn, "  Booth laptop ").expect("set");
+    assert_eq!(
+        membership::device_name(&conn).expect("name"),
+        "Booth laptop"
+    );
+    membership::set_device_name(&conn, "  ").expect("clear");
+    assert_eq!(membership::device_name(&conn).expect("name"), machine);
+}
+
+#[test]
+fn removing_the_destination_of_a_library_leaves_it_with_a_copy() {
+    let mut conn = open();
+    library(&conn, 2);
+    share(&mut conn);
+    let ids: Vec<i64> = vec![1];
+    db::tag_tracks(&mut conn, "House", &ids).expect("tag");
+    let target: i64 = conn
+        .query_row("SELECT id FROM sync_targets", [], |r| r.get(0))
+        .expect("id");
+    db::remove_target(&conn, target).expect("remove");
+    assert!(!super::write::active(&conn).expect("active"));
+    let scope: String = conn
+        .query_row("SELECT scope FROM tags WHERE name = 'House'", [], |r| {
+            r.get(0)
+        })
+        .expect("tag");
+    assert_eq!(scope, "local");
 }
