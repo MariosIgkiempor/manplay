@@ -267,7 +267,27 @@ export async function playableUrl(path: string): Promise<string> {
 
 // ---- playlists ------------------------------------------------------------
 
-const playlistSchema = z.object({ id: int, name: z.string(), trackCount: int });
+/** Whether an item is shared with everyone on the destination or stays on this device. */
+const scopeSchema = z.enum(["shared", "local"]);
+
+export type Scope = z.infer<typeof scopeSchema>;
+
+/** What the sidebar knows about a tag, playlist or smart playlist beyond its name. */
+const sharingFields = {
+	/** Absent counts as shared. */
+	scope: scopeSchema.optional(),
+	/** Hidden on this device only. */
+	hidden: z.boolean().optional(),
+	/** Shown under a held name because another item has the name (see Clashes). */
+	held: z.boolean().optional(),
+};
+
+const playlistSchema = z.object({
+	id: int,
+	name: z.string(),
+	trackCount: int,
+	...sharingFields,
+});
 
 export type Playlist = z.infer<typeof playlistSchema>;
 
@@ -301,7 +321,7 @@ export async function playlistTracks(playlistId: number): Promise<Track[]> {
 
 // ---- tags -----------------------------------------------------------------
 
-const tagSchema = z.object({ id: int, name: z.string(), trackCount: int });
+const tagSchema = z.object({ id: int, name: z.string(), trackCount: int, ...sharingFields });
 
 export type Tag = z.infer<typeof tagSchema>;
 
@@ -803,7 +823,12 @@ const smartRulesSchema = z.object({
 /** What a song needs to be in a smart playlist; parts left empty are ignored. */
 export type SmartRules = z.infer<typeof smartRulesSchema>;
 
-const smartPlaylistSchema = z.object({ id: int, name: z.string(), rules: smartRulesSchema });
+const smartPlaylistSchema = z.object({
+	id: int,
+	name: z.string(),
+	rules: smartRulesSchema,
+	...sharingFields,
+});
 
 /** A rule-based playlist that belongs to one export destination, never to the library. */
 export type SmartPlaylist = z.infer<typeof smartPlaylistSchema>;
@@ -819,6 +844,103 @@ export async function saveSmartPlaylist(playlist: SmartPlaylist): Promise<SmartP
 
 export async function deleteSmartPlaylist(id: number): Promise<void> {
 	await invoke("smart_playlist_delete", { id });
+}
+
+// ---- sharing: clashes, share, make private, hide ----------------------------
+
+/** What an item is: how the backend names the three kinds that can be shared. */
+export type ItemKind = "tag" | "playlist" | "smart_playlist";
+
+const localTagUseSchema = z.object({ id: int, tag: z.string(), songs: int });
+
+/** A local tag that a shared smart playlist would use. */
+export type LocalTagUse = z.infer<typeof localTagUseSchema>;
+
+export type TagChoice = "share" | "remove";
+
+const sharePreviewSchema = z.object({
+	name: z.string(),
+	songs: int,
+	localTags: z.array(localTagUseSchema),
+});
+
+export type SharePreview = z.infer<typeof sharePreviewSchema>;
+
+/** What sharing a local item would send; nothing leaves the device before the user confirms. */
+export async function sharePreview(kind: ItemKind, id: number): Promise<SharePreview> {
+	return sharePreviewSchema.parse(await invoke("share_preview", { kind, id }));
+}
+
+/** Makes a local item shared. `tags` says what to do with each local tag a smart playlist uses. */
+export async function shareItem(
+	kind: ItemKind,
+	id: number,
+	tags: Record<string, TagChoice> = {},
+): Promise<void> {
+	await invoke("share_item", { kind, id, tags });
+}
+
+const privatePreviewSchema = z.object({ name: z.string(), usedBy: z.array(z.string()) });
+
+export type PrivatePreview = z.infer<typeof privatePreviewSchema>;
+
+export async function privatePreview(kind: ItemKind, id: number): Promise<PrivatePreview> {
+	return privatePreviewSchema.parse(await invoke("private_preview", { kind, id }));
+}
+
+/** Everyone else loses the item; this device keeps a local copy. */
+export async function makePrivate(kind: ItemKind, id: number, removeRules: boolean): Promise<void> {
+	await invoke("make_private", { kind, id, removeRules });
+}
+
+export async function setItemHidden(kind: ItemKind, id: number, hidden: boolean): Promise<void> {
+	await invoke("set_item_hidden", { kind, id, hidden });
+}
+
+/** Local tags the rules use, for a smart playlist that is shared. */
+export async function smartLocalTags(rules: SmartRules): Promise<LocalTagUse[]> {
+	return z.array(localTagUseSchema).parse(await invoke("smart_local_tags", { rules }));
+}
+
+const clashSideSchema = z.object({
+	uid: z.string(),
+	id: int,
+	scope: scopeSchema,
+	name: z.string(),
+	songs: int,
+});
+
+const clashSchema = z.object({
+	id: int,
+	kind: z.enum(["tag", "playlist", "smart_playlist"]),
+	name: z.string(),
+	keeps: clashSideSchema,
+	held: clashSideSchema,
+});
+
+/** Two items with one name: the one that has the name, and the one shown under a held name. */
+export type Clash = z.infer<typeof clashSchema>;
+
+export async function listClashes(): Promise<Clash[]> {
+	return z.array(clashSchema).parse(await invoke("list_clashes"));
+}
+
+const combinePreviewSchema = z.object({ sharesLocal: z.boolean(), songs: int, name: z.string() });
+
+export type CombinePreview = z.infer<typeof combinePreviewSchema>;
+
+export async function clashCombinePreview(id: number): Promise<CombinePreview> {
+	return combinePreviewSchema.parse(await invoke("clash_combine_preview", { id }));
+}
+
+export type ClashChoice = "combine" | "renameKeeps" | "renameHeld";
+
+export async function resolveClash(
+	id: number,
+	choice: ClashChoice,
+	newName?: string,
+): Promise<void> {
+	await invoke("resolve_clash", { id, choice, newName: newName ?? null });
 }
 
 const smartPreviewSchema = z.object({

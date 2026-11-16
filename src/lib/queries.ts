@@ -23,6 +23,7 @@ import {
 	itunesImport,
 	itunesPending,
 	libraryStatus,
+	listClashes,
 	listDuplicates,
 	listMissing,
 	listSyncTargets,
@@ -78,6 +79,35 @@ export function useActivity(source: ActivitySource) {
 
 export function useSyncTargets() {
 	return useQuery({ queryKey: ["sync-targets"], queryFn: listSyncTargets });
+}
+
+/** Whether some destination shares library data: until then nothing is sent to anyone. */
+export function useSharingOn() {
+	return (useSyncTargets().data ?? []).some((t) => t.libsync);
+}
+
+export const CLASHES_KEY = ["clashes"] as const;
+
+/** Two items with one name, waiting for the user (tags, playlists, smart playlists). */
+export function useClashes() {
+	return useQuery({ queryKey: CLASHES_KEY, queryFn: listClashes });
+}
+
+/** Everything a share, a make-private, a hide or a clash choice can change in the lists. */
+export function useRefreshItems() {
+	const queryClient = useQueryClient();
+	return async () => {
+		await Promise.all(
+			[
+				CLASHES_KEY,
+				["tags"],
+				["playlists"],
+				["smart-playlists"],
+				["tracks"],
+				["playlist-tracks"],
+			].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+		);
+	};
 }
 
 /** Switches sharing of tags and playlists through a destination on or off. */

@@ -1448,8 +1448,8 @@ fn chosen_smart(conn: &Connection, ids: &[i64]) -> Result<Vec<db::ExportPlaylist
 
 /// Every smart playlist in the library.
 #[tauri::command]
-fn smart_playlists(state: State<'_, AppState>) -> Result<Vec<smart::SmartPlaylist>, Error> {
-    with_db!(state, |c| db::smart_playlists(c))
+fn smart_playlists(state: State<'_, AppState>) -> Result<Vec<db::SmartListing>, Error> {
+    with_db!(state, |c| db::smart_listing(c))
 }
 
 /// Adds (`id` 0) or changes a smart playlist. Only its rules are kept; its songs are worked out
@@ -2124,6 +2124,106 @@ async fn sync_apply(
     purge_expired(&conn, &state.data_dir.join("backups"), unix_now())?;
     sync::prune_backups(&backups, unix_now(), SYNC_BACKUP_KEEP_SECS);
     Ok(summaries)
+}
+
+/// Clashes waiting for the user: two items with one name.
+#[tauri::command]
+fn list_clashes(state: State<'_, AppState>) -> Result<Vec<libsync::clashes::Clash>, Error> {
+    with_db!(state, |c| libsync::clashes::list(c))
+}
+
+/// What combining the two sides of a clash would share and remove.
+#[tauri::command]
+fn clash_combine_preview(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<libsync::clashes::CombinePreview, Error> {
+    with_db!(state, |c| libsync::clashes::combine_preview(c, id))
+}
+
+/// Settles a clash: combine the two, or rename one side (`new_name`).
+#[tauri::command]
+fn resolve_clash(
+    state: State<'_, AppState>,
+    id: i64,
+    choice: libsync::clashes::Choice,
+    new_name: Option<String>,
+) -> Result<(), Error> {
+    with_db!(state, |c| libsync::clashes::resolve(
+        c,
+        id,
+        choice,
+        new_name.as_deref()
+    ))
+}
+
+/// What sharing a local tag, playlist or smart playlist would send.
+#[tauri::command]
+fn share_preview(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+) -> Result<libsync::share::SharePreview, Error> {
+    with_db!(state, |c| libsync::share::share_preview(c, &kind, id))
+}
+
+/// Makes a local item shared. `tags` says what to do with each local tag a smart playlist uses.
+#[tauri::command]
+fn share_item(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    tags: std::collections::BTreeMap<String, libsync::share::TagChoice>,
+) -> Result<(), Error> {
+    with_db!(state, |c| libsync::share::share(c, &kind, id, &tags))
+}
+
+/// Which shared smart playlists would lose a rule if the tag became private.
+#[tauri::command]
+fn private_preview(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+) -> Result<libsync::share::PrivatePreview, Error> {
+    with_db!(state, |c| libsync::share::private_preview(c, &kind, id))
+}
+
+/// Makes a shared item private: others lose it, this device keeps a local copy.
+#[tauri::command]
+fn make_private(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    remove_rules: bool,
+) -> Result<(), Error> {
+    with_db!(state, |c| libsync::share::make_private(
+        c,
+        &kind,
+        id,
+        remove_rules
+    ))
+}
+
+/// Hides an item on this device only, or shows it again.
+#[tauri::command]
+fn set_item_hidden(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    hidden: bool,
+) -> Result<(), Error> {
+    with_db!(state, |c| libsync::share::set_hidden(c, &kind, id, hidden))
+}
+
+/// Local tags the rules (as the editor shows them) use, for a smart playlist that is shared.
+#[tauri::command]
+fn smart_local_tags(
+    state: State<'_, AppState>,
+    rules: smart::Rules,
+) -> Result<Vec<libsync::share::LocalTagUse>, Error> {
+    with_db!(state, |c| libsync::share::local_tags_of_editor_rules(
+        c, &rules
+    ))
 }
 
 /// Switches library data (tags, playlists) on or off for one destination. Switching on writes
@@ -3330,6 +3430,15 @@ pub fn run() {
             add_r2_target,
             update_sync_target,
             set_target_libsync,
+            list_clashes,
+            clash_combine_preview,
+            resolve_clash,
+            share_preview,
+            share_item,
+            private_preview,
+            make_private,
+            set_item_hidden,
+            smart_local_tags,
             libsync_run,
             remove_sync_target,
             sync_history,

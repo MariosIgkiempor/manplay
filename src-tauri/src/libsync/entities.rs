@@ -13,8 +13,10 @@ use super::ops::{
 use super::state;
 use crate::error::Error;
 
-/// Brings the row of one smart playlist in line with its registers. A local one is never touched.
-pub fn materialize_smart(conn: &Connection, uid: &str) -> Result<(), Error> {
+/// Sets the rules of one smart playlist's row from its register, with every tag that was merged
+/// into another replaced by what it became. The row itself (its name) is `apply::materialize_item`.
+/// A local playlist is never touched.
+pub fn materialize_smart_rules(conn: &Connection, uid: &str) -> Result<(), Error> {
     let existing: Option<(i64, String)> = conn
         .query_row(
             "SELECT id, scope FROM smart_playlists WHERE uid = ?1",
@@ -22,34 +24,63 @@ pub fn materialize_smart(conn: &Connection, uid: &str) -> Result<(), Error> {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-    if existing
-        .as_ref()
-        .is_some_and(|(_, scope)| scope != "shared")
-    {
-        return Ok(());
-    }
-    let name = state::get_str(conn, "smart_playlist", uid, F_NAME)?;
-    let Some(name) = name.filter(|_| !state::is_dead(conn, "smart_playlist", uid).unwrap_or(true))
-    else {
-        if let Some((id, _)) = existing {
-            conn.execute("DELETE FROM smart_playlists WHERE id = ?1", params![id])?;
-        }
+    let Some((id, scope)) = existing else {
         return Ok(());
     };
-    let rules = state::get(conn, "smart_playlist", uid, F_RULES)?
-        .filter(Value::is_object)
-        .map_or_else(|| "{}".to_owned(), |v| v.to_string());
-    match existing {
-        Some((id, _)) => {
-            conn.execute(
-                "UPDATE smart_playlists SET name = ?2, rules = ?3 WHERE id = ?1",
-                params![id, name, rules],
-            )?;
+    if scope != "shared" {
+        return Ok(());
+    }
+    let Some(rules) = state::get(conn, "smart_playlist", uid, F_RULES)?.filter(Value::is_object)
+    else {
+        return Ok(());
+    };
+    let rules: crate::smart::Rules = serde_json::from_value(rules).unwrap_or_default();
+    let mut failure = None;
+    let moved = rules.map_tags(|entry| {
+        if !crate::smart::is_uid(entry) {
+            return entry.to_owned();
         }
-        None => {
+        state::merge_target(conn, "tag", entry).unwrap_or_else(|e| {
+            failure = Some(e);
+            entry.to_owned()
+        })
+    });
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    let json = serde_json::to_string(&moved).map_err(|e| Error::Msg(e.to_string()))?;
+    conn.execute(
+        "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
+        params![id, json],
+    )?;
+    Ok(())
+}
+
+/// Smart playlists (of any scope) that used tag `from` use `to`: the tag was merged into it.
+/// Changes only this device's rows; shared playlists reach the same result on every device
+/// because `materialize_smart_rules` follows merges.
+pub fn repoint_rules(conn: &Connection, from: &str, to: &str) -> Result<(), Error> {
+    if from.is_empty() || to.is_empty() || from == to {
+        return Ok(());
+    }
+    let rows: Vec<(i64, String)> = conn
+        .prepare("SELECT id, rules FROM smart_playlists WHERE instr(rules, ?1) > 0")?
+        .query_map(params![from], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (id, rules) in rows {
+        let old: crate::smart::Rules = serde_json::from_str(&rules).unwrap_or_default();
+        let moved = old.map_tags(|t| {
+            if t == from {
+                to.to_owned()
+            } else {
+                t.to_owned()
+            }
+        });
+        if moved != old {
+            let json = serde_json::to_string(&moved).map_err(|e| Error::Msg(e.to_string()))?;
             conn.execute(
-                "INSERT INTO smart_playlists (name, rules, uid, scope) VALUES (?1, ?2, ?3, 'shared')",
-                params![name, rules, uid],
+                "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
+                params![id, json],
             )?;
         }
     }

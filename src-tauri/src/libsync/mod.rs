@@ -8,6 +8,7 @@
 //! matters. See `docs/plans/shared-library/02-op-log.md`.
 
 pub mod apply;
+pub mod clashes;
 pub mod clock;
 pub mod entities;
 pub mod frac;
@@ -15,6 +16,7 @@ pub mod ops;
 pub mod remote;
 pub mod schema;
 pub mod seed;
+pub mod share;
 pub mod state;
 pub mod waveforms;
 pub mod write;

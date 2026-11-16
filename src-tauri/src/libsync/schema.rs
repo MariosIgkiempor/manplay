@@ -34,10 +34,22 @@ pub fn create(conn: &Connection) -> Result<(), Error> {
              PRIMARY KEY (e, id, f)
          );
          CREATE INDEX IF NOT EXISTS op_state_ref ON op_state(e, ref);
+         -- What was merged into what: tiny, and what member lookups ask for every time.
+         CREATE INDEX IF NOT EXISTS op_state_merge ON op_state(e, val) WHERE f = '_merge';
          -- Ops written by a newer version of the format: kept as they came.
          CREATE TABLE IF NOT EXISTS op_unknown (
              clock TEXT PRIMARY KEY,
              op    TEXT NOT NULL
+         );
+         -- Two items of one kind with the same name, waiting for the user (see `clashes.rs`).
+         -- `keeps` has the name in the library; `held` is shown under a held name until resolved.
+         CREATE TABLE IF NOT EXISTS clashes (
+             id    INTEGER PRIMARY KEY,
+             kind  TEXT NOT NULL,
+             name  TEXT NOT NULL,
+             keeps TEXT NOT NULL,
+             held  TEXT NOT NULL,
+             UNIQUE (kind, held)
          );",
     )?;
     Ok(())

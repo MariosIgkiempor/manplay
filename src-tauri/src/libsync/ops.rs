@@ -32,8 +32,10 @@ pub const A_KEY_EDITED: &str = "key_edited";
 pub const A_GRID_EDITED: &str = "grid_edited";
 /// Tombstone: the entity is gone. Wins over every edit, earlier or later.
 pub const F_DELETE: &str = "_delete";
-// `_merge` (`val` is the uid the entity was merged into) is part of the format but not written
-// yet: such an op is stored like any other and has no effect on the tables.
+/// The entity was merged into another of its kind (`val` is that uid). It is gone like a
+/// tombstone, and everything that pointed at it (memberships, smart playlist rules) points at the
+/// target instead, on every device.
+pub const F_MERGE: &str = "_merge";
 
 /// What an op is about. Entities this build does not know are kept as `Other` (stored and
 /// forwarded, never applied) so a newer device's data is not lost.

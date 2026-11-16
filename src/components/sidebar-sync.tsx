@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { CloudUpload, Download, FolderOpen, RefreshCw, Upload } from "lucide-react";
+import { CloudUpload, Download, FolderOpen, RefreshCw, TriangleAlert, Upload } from "lucide-react";
 import type { ReactNode } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { useDownloadsEnabled } from "#/components/downloads-source.tsx";
@@ -12,7 +12,7 @@ import { type SyncKind, useSyncActions } from "#/context/sync-actions-context.ts
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { isR2 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
-import { useSyncTargets } from "#/lib/queries.ts";
+import { useClashes, useSyncTargets } from "#/lib/queries.ts";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
@@ -193,6 +193,33 @@ function ExportItems() {
 	);
 }
 
+/** Items with the same name on two sides, with their count; opens the destination's Sync tab. */
+function ClashesRow() {
+	const detail = useDetail();
+	const count = useClashes().data?.length ?? 0;
+	const target = useSyncTargets().data?.find((t) => t.libsync);
+	if (!target || count === 0) {
+		return null;
+	}
+	return (
+		<div className={rowClass(isView(detail.view, { kind: "target", id: target.id }))}>
+			<button
+				type="button"
+				onClick={() => detail.open({ kind: "target", id: target.id })}
+				className={cn(rowBase, "text-left outline-none")}
+				style={{ paddingLeft: "8px" }}
+			>
+				<TriangleAlert className="size-4 shrink-0 text-warning" />
+				<span className="truncate">Clashes</span>
+				<span className="ml-auto rounded-full bg-warning/15 px-1.5 text-warning text-xs tabular-nums">
+					{count}
+				</span>
+			</button>
+			<span className="size-5 shrink-0" />
+		</div>
+	);
+}
+
 /**
  * Import and Export with their sources and destinations folded under them, and pull, push and
  * sync on the heading. Choosing a source or destination opens it in the side panel.
@@ -204,6 +231,7 @@ export function SidebarSync() {
 	return (
 		<section className="space-y-0.5">
 			<SectionLabel action={<QuickActions />}>Sync</SectionLabel>
+			<ClashesRow />
 			<GroupHeading
 				to="/import"
 				label="Import"

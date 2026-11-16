@@ -13,6 +13,7 @@ use super::frac;
 use super::ops::{FORMAT, Op};
 use super::remote::{self, ChunkRef, ChunkStore};
 use super::waveforms::{self, Misses, WaveformRef};
+use super::{clashes, share};
 use super::{run, seed, state};
 use crate::db;
 use crate::error::Error;
@@ -363,7 +364,7 @@ fn unknown_entities_are_kept_and_newer_formats_set_aside() {
 }
 
 #[test]
-fn name_clash_merges_into_the_lowest_uid() {
+fn same_name_from_two_devices_is_a_clash_and_nothing_merges() {
     let a = [
         op(10, DEV_A, "tag", "u-2", "name", json!("House")),
         op(11, DEV_A, "track_tag", "u-2/fp1", "present", json!(true)),
@@ -374,13 +375,95 @@ fn name_clash_merges_into_the_lowest_uid() {
     ];
     let both: Vec<Op> = a.iter().chain(&b).cloned().collect();
     let expected = replay(&both);
-    assert_eq!(expected.matches("tag u-").count(), 1, "{expected}");
-    assert!(expected.contains("tag u-1 house"), "{expected}");
-    assert!(expected.contains("tagged house fp1"), "{expected}");
+    // Two tags: the lower uid has the name, the other is held under another.
+    assert_eq!(expected.matches("tag u-").count(), 2, "{expected}");
+    assert!(expected.contains("tag u-1 house shared"), "{expected}");
+    assert!(
+        expected.contains("tag u-2 House (shared) shared"),
+        "{expected}"
+    );
     assert!(expected.contains("tagged house fp2"), "{expected}");
+    assert!(expected.contains("tagged House (shared) fp1"), "{expected}");
     for seed in 1..20 {
         assert_eq!(replay(&shuffled(&both, seed)), expected, "seed {seed}");
     }
+}
+
+#[test]
+fn a_local_tag_meeting_a_shared_one_of_the_same_name_is_a_clash() {
+    let mut conn = open();
+    library(&conn, 2);
+    share(&mut conn);
+    db::set_setting(&conn, "default_scope", Some("local")).expect("setting");
+    let ids: Vec<i64> = vec![1];
+    db::tag_tracks(&mut conn, "Techno", &ids).expect("tag");
+    let tx = conn.transaction().expect("tx");
+    apply_ops(
+        &tx,
+        &[
+            op(10, DEV_B, "tag", "shared-1", "name", json!("Techno")),
+            op(
+                11,
+                DEV_B,
+                "track_tag",
+                "shared-1/fp2",
+                "present",
+                json!(true),
+            ),
+        ],
+    )
+    .expect("apply");
+    tx.commit().expect("commit");
+    let text = dump(&conn);
+    assert!(
+        text.contains("tag shared-1 Techno (shared) shared"),
+        "{text}"
+    );
+    assert!(
+        text.contains("tagged Techno fp1"),
+        "mine stays mine: {text}"
+    );
+    assert!(
+        text.contains("tagged Techno (shared) fp2"),
+        "nothing merged: {text}"
+    );
+    let clashes = clashes::list(&conn).expect("list");
+    assert_eq!(clashes.len(), 1);
+    assert_eq!(clashes[0].keeps.scope, "local");
+    assert_eq!(clashes[0].held.scope, "shared");
+    assert_eq!(clashes[0].name, "Techno");
+}
+
+#[test]
+fn a_held_item_takes_its_name_when_the_other_is_renamed_or_removed() {
+    let mut conn = open();
+    library(&conn, 2);
+    share(&mut conn);
+    db::set_setting(&conn, "default_scope", Some("local")).expect("setting");
+    db::create_playlist(&conn, "Warmup").expect("playlist");
+    let tx = conn.transaction().expect("tx");
+    apply_ops(
+        &tx,
+        &[op(10, DEV_B, "playlist", "p-1", "name", json!("Warmup"))],
+    )
+    .expect("apply");
+    tx.commit().expect("commit");
+    assert_eq!(clashes::count(&conn).expect("count"), 1);
+    let id: i64 = conn
+        .query_row("SELECT id FROM playlists WHERE scope = 'local'", [], |r| {
+            r.get(0)
+        })
+        .expect("id");
+    db::rename_playlist(&conn, id, "Warmup old").expect("rename");
+    assert_eq!(clashes::count(&conn).expect("count"), 0, "the name is free");
+    let names: Vec<String> = conn
+        .prepare("SELECT name FROM playlists ORDER BY name")
+        .expect("stmt")
+        .query_map([], |r| r.get(0))
+        .expect("rows")
+        .map(|r| r.expect("row"))
+        .collect();
+    assert_eq!(names, vec!["Warmup", "Warmup old"]);
 }
 
 #[test]
@@ -662,7 +745,7 @@ async fn devices_that_edit_at_once_converge() {
 }
 
 #[tokio::test]
-async fn both_devices_creating_the_same_tag_end_with_one() {
+async fn both_devices_creating_the_same_tag_end_with_a_clash_they_agree_on() {
     let store = Memory::default();
     let a = device(3);
     let b = device(3);
@@ -676,12 +759,104 @@ async fn both_devices_creating_the_same_tag_end_with_one() {
     let text = shown(&a);
     assert_eq!(
         text.lines().filter(|l| l.starts_with("tag ")).count(),
+        2,
+        "{text}"
+    );
+    assert_eq!(clashes::count(&a.lock().expect("lock")).expect("count"), 1);
+    assert_eq!(clashes::count(&b.lock().expect("lock")).expect("count"), 1);
+}
+
+#[tokio::test]
+async fn combining_two_shared_tags_converges_on_both_devices() {
+    let store = Memory::default();
+    let a = device(4);
+    let b = device(4);
+    tag(&a, "House", &[1]);
+    tag(&b, "House", &[2]);
+    // A rule over the tag that will be merged away, on the device that does not combine.
+    smart(&a, "Mine", &["House"]);
+    smart(&b, "Theirs", &["House"]);
+    for _ in 0..2 {
+        assert!(run(&a, &store).await.error.is_none());
+        assert!(run(&b, &store).await.error.is_none());
+    }
+    // Only A resolves it.
+    let id = clashes::list(&a.lock().expect("lock")).expect("list")[0].id;
+    clashes::resolve(&a.lock().expect("lock"), id, clashes::Choice::Combine, None)
+        .expect("combine");
+    // B adds a song to the tag that is merged away, before it hears about the merge.
+    for _ in 0..3 {
+        assert!(run(&a, &store).await.error.is_none());
+        assert!(run(&b, &store).await.error.is_none());
+    }
+    assert_eq!(shown(&a), shown(&b));
+    let text = shown(&a);
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("tag ")).count(),
         1,
         "{text}"
     );
     assert!(
         text.contains("tagged House fp1") && text.contains("tagged House fp2"),
-        "{text}"
+        "both sets of memberships: {text}"
+    );
+    assert_eq!(clashes::count(&a.lock().expect("lock")).expect("count"), 0);
+    assert_eq!(clashes::count(&b.lock().expect("lock")).expect("count"), 0);
+    // Rules on both devices point at the one tag, and match both songs.
+    assert_eq!(smart_shown(&a), smart_shown(&b));
+    let rules = smart_shown(&b);
+    assert!(rules.contains("\"fp1\", \"fp2\""), "{rules}");
+    assert!(!rules.contains('?'), "no unknown tag: {rules}");
+}
+
+#[tokio::test]
+async fn a_late_edit_of_a_merged_tag_lands_on_the_one_it_became() {
+    let store = Memory::default();
+    let a = device(4);
+    let b = device(4);
+    tag(&a, "House", &[1]);
+    tag(&b, "House", &[2]);
+    for _ in 0..2 {
+        assert!(run(&a, &store).await.error.is_none());
+        assert!(run(&b, &store).await.error.is_none());
+    }
+    let id = clashes::list(&a.lock().expect("lock")).expect("list")[0].id;
+    clashes::resolve(&a.lock().expect("lock"), id, clashes::Choice::Combine, None)
+        .expect("combine");
+    // B has not heard of the merge: it tags song 3 on what it knows as the other uid.
+    tag(&b, "House (shared)", &[3]);
+    tag(&b, "House", &[4]);
+    for _ in 0..3 {
+        assert!(run(&a, &store).await.error.is_none());
+        assert!(run(&b, &store).await.error.is_none());
+    }
+    assert_eq!(shown(&a), shown(&b));
+    let text = shown(&a);
+    for fp in ["fp1", "fp2", "fp4"] {
+        assert!(text.contains(&format!("tagged House {fp}")), "{text}");
+    }
+}
+
+#[tokio::test]
+async fn renaming_a_tag_moves_rules_on_a_device_that_had_not_heard() {
+    let store = Memory::default();
+    let a = device(3);
+    let b = device(3);
+    tag(&a, "Old", &[1]);
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    // B writes a rule over Old while A renames it.
+    smart(&b, "Rule", &["Old"]);
+    db::migrate_tags(&mut a.lock().expect("lock"), &["Old".into()], Some("New")).expect("move");
+    for _ in 0..3 {
+        assert!(run(&a, &store).await.error.is_none());
+        assert!(run(&b, &store).await.error.is_none());
+    }
+    assert_eq!(smart_shown(&a), smart_shown(&b));
+    let rules = smart_shown(&b);
+    assert!(
+        rules.contains("[\"New\"]") && !rules.contains('?'),
+        "{rules}"
     );
 }
 
@@ -1017,13 +1192,39 @@ async fn a_local_smart_playlist_and_a_tag_this_device_lacks_stay_safe() {
     assert!(run(&b, &store).await.error.is_none());
     assert_eq!(smart_shown(&b), "", "local items are not sent");
 
-    // A shared playlist over a tag that is local to A: B cannot name the tag, and the rule
-    // keeps its uid when B saves it again.
+    // A shared playlist over a tag that is local to A is refused: B could not name the tag.
     a.lock()
         .expect("lock")
         .execute("DELETE FROM settings WHERE key = 'default_scope'", [])
         .expect("scope");
-    smart(&a, "Shared", &["Mine"]);
+    let refused = db::save_smart_playlist(
+        &a.lock().expect("lock"),
+        &crate::smart::SmartPlaylist {
+            id: 0,
+            name: "Shared".into(),
+            rules: crate::smart::Rules {
+                all_tags: vec!["Mine".into()],
+                ..crate::smart::Rules::default()
+            },
+        },
+    );
+    assert!(
+        refused.is_err_and(|e| e.to_string().contains("local tags")),
+        "blocked until the tag is shared or dropped"
+    );
+
+    // A tag deleted on A while B still has a rule on it: B cannot name the tag, and the rule
+    // keeps its uid when B saves it again.
+    tag(&a, "Pub", &[1]);
+    smart(&a, "Shared", &["Pub"]);
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    let pub_id: i64 = a
+        .lock()
+        .expect("lock")
+        .query_row("SELECT id FROM tags WHERE name = 'Pub'", [], |r| r.get(0))
+        .expect("tag");
+    db::delete_tag(&a.lock().expect("lock"), pub_id).expect("delete");
     assert!(run(&a, &store).await.error.is_none());
     assert!(run(&b, &store).await.error.is_none());
     let seen = db::smart_playlists(&b.lock().expect("lock"))
@@ -1342,4 +1543,376 @@ fn count_ops(conn: &Connection) -> i64 {
 
 fn tag_direct(conn: &mut Connection, name: &str, song: i64) {
     db::tag_tracks(conn, name, &[song]).expect("tag");
+}
+
+// ---- clashes, sharing and making private ---------------------------------------
+
+fn local_device(songs: usize) -> Mutex<Connection> {
+    let d = device(songs);
+    db::set_setting(&d.lock().expect("lock"), "default_scope", Some("local")).expect("scope");
+    d
+}
+
+fn row_id(db: &Mutex<Connection>, table: &str, name: &str) -> i64 {
+    db.lock()
+        .expect("lock")
+        .query_row(
+            &format!("SELECT id FROM {table} WHERE name = ?1"),
+            params![name],
+            |r| r.get(0),
+        )
+        .expect("row")
+}
+
+#[tokio::test]
+async fn combining_a_local_tag_into_a_shared_one_shares_its_songs() {
+    let store = Memory::default();
+    let a = device(4);
+    let b = local_device(4);
+    tag(&a, "Techno", &[1]);
+    tag(&b, "Techno", &[2, 3]);
+    for _ in 0..2 {
+        assert!(run(&a, &store).await.error.is_none());
+        assert!(run(&b, &store).await.error.is_none());
+    }
+    {
+        let conn = b.lock().expect("lock");
+        let id = clashes::list(&conn).expect("list")[0].id;
+        let preview = clashes::combine_preview(&conn, id).expect("preview");
+        assert!(preview.shares_local);
+        assert_eq!(preview.songs, 2);
+        clashes::resolve(&conn, id, clashes::Choice::Combine, None).expect("combine");
+    }
+    for _ in 0..2 {
+        assert!(run(&b, &store).await.error.is_none());
+        assert!(run(&a, &store).await.error.is_none());
+    }
+    assert_eq!(shown(&a), shown(&b));
+    let text = shown(&a);
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("tag ")).count(),
+        1,
+        "{text}"
+    );
+    for fp in ["fp1", "fp2", "fp3"] {
+        assert!(text.contains(&format!("tagged Techno {fp}")), "{text}");
+    }
+}
+
+#[tokio::test]
+async fn renaming_either_side_of_a_clash_settles_it() {
+    let store = Memory::default();
+    let a = device(3);
+    let b = local_device(3);
+    playlist(&a, "Warmup", &[1]);
+    // Local to B, same name.
+    {
+        let mut conn = b.lock().expect("lock");
+        let id = db::create_playlist(&conn, "Warmup").expect("playlist");
+        let ids = [track_in(&conn, 2)];
+        db::add_to_playlist(&mut conn, id, &ids).expect("add");
+    }
+    for _ in 0..2 {
+        assert!(run(&a, &store).await.error.is_none());
+        assert!(run(&b, &store).await.error.is_none());
+    }
+    {
+        let conn = b.lock().expect("lock");
+        let c = clashes::list(&conn).expect("list").remove(0);
+        assert_eq!(c.held.name, "Warmup (shared)");
+        // Rename shared: everyone gets the new name, mine keeps "Warmup".
+        clashes::resolve(&conn, c.id, clashes::Choice::RenameHeld, Some("Warmup 2"))
+            .expect("rename");
+        assert_eq!(clashes::count(&conn).expect("count"), 0);
+    }
+    for _ in 0..2 {
+        assert!(run(&b, &store).await.error.is_none());
+        assert!(run(&a, &store).await.error.is_none());
+    }
+    let names = |d: &Mutex<Connection>| -> Vec<String> {
+        d.lock()
+            .expect("lock")
+            .prepare("SELECT name FROM playlists ORDER BY name")
+            .expect("stmt")
+            .query_map([], |r| r.get(0))
+            .expect("rows")
+            .map(|r| r.expect("row"))
+            .collect()
+    };
+    assert_eq!(names(&a), vec!["Warmup 2"]);
+    assert_eq!(names(&b), vec!["Warmup", "Warmup 2"]);
+}
+
+fn track_in(conn: &Connection, n: usize) -> i64 {
+    conn.query_row(
+        "SELECT id FROM tracks WHERE audio_fp = ?1",
+        params![format!("fp{n}")],
+        |r| r.get(0),
+    )
+    .expect("track")
+}
+
+#[tokio::test]
+async fn renaming_mine_keeps_its_scope_and_moves_its_subtags() {
+    let b = local_device(3);
+    tag(&b, "Techno/Dark", &[1]);
+    let tx = b.lock().expect("lock");
+    tx.execute_batch("BEGIN").expect("begin");
+    apply_ops(&tx, &[op(10, DEV_A, "tag", "s-1", "name", json!("Techno"))]).expect("apply");
+    tx.execute_batch("COMMIT").expect("commit");
+    let c = clashes::list(&tx).expect("list").remove(0);
+    assert_eq!(c.keeps.scope, "local");
+    clashes::resolve(&tx, c.id, clashes::Choice::RenameKeeps, Some("Tech")).expect("rename");
+    drop(tx);
+    let text = shown(&b);
+    assert!(!text.contains("Tech shared"), "{text}");
+    assert!(text.contains(" Tech local"), "{text}");
+    assert!(text.contains(" Tech/Dark local"), "{text}");
+    assert!(
+        text.contains(" Techno shared"),
+        "the shared one has its name now: {text}"
+    );
+}
+
+#[tokio::test]
+async fn a_stopgap_alias_comes_back_as_a_clash_once() {
+    let mut conn = open();
+    library(&conn, 2);
+    // What step 2 left: two uids with one name in the registers, a row for the lower one.
+    let tx = conn.transaction().expect("tx");
+    for (clk, uid, fp) in [(10, "u-2", "fp1"), (11, "u-1", "fp2")] {
+        for o in [
+            op(clk, DEV_A, "tag", uid, "name", json!("House")),
+            op(
+                clk + 2,
+                DEV_A,
+                "track_tag",
+                &format!("{uid}/{fp}"),
+                "present",
+                json!(true),
+            ),
+        ] {
+            state::put(&tx, &o).expect("put");
+        }
+    }
+    tx.execute(
+        "INSERT INTO tags (uid, name, scope) VALUES ('u-1', 'House', 'shared')",
+        [],
+    )
+    .expect("row");
+    tx.execute(
+        "INSERT INTO track_tags (track_id, tag_id) SELECT id, 1 FROM tracks",
+        [],
+    )
+    .expect("members");
+    tx.execute("DELETE FROM settings WHERE key = 'libsync_clashes'", [])
+        .expect("reset");
+    tx.commit().expect("commit");
+    clashes::migrate(&conn).expect("migrate");
+    assert_eq!(clashes::count(&conn).expect("count"), 1);
+    let again = clashes::migrate(&conn);
+    assert!(again.is_ok());
+    assert_eq!(clashes::count(&conn).expect("count"), 1, "only once");
+}
+
+#[tokio::test]
+async fn sharing_an_item_writes_creates_for_it_and_its_songs() {
+    let store = Memory::default();
+    let a = local_device(3);
+    let b = device(3);
+    tag(&a, "Mine", &[1, 2]);
+    playlist(&a, "Set", &[3, 1]);
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert_eq!(shown(&b), "", "private until shared");
+    {
+        let conn = a.lock().expect("lock");
+        let tag_id = row_id_conn(&conn, "tags", "Mine");
+        let pl_id = row_id_conn(&conn, "playlists", "Set");
+        let preview = share::share_preview(&conn, "tag", tag_id).expect("preview");
+        assert_eq!(preview.songs, 2);
+        share::share(&conn, "tag", tag_id, &BTreeMap::new()).expect("share tag");
+        share::share(&conn, "playlist", pl_id, &BTreeMap::new()).expect("share playlist");
+    }
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert_eq!(shown(&a), shown(&b));
+    let text = shown(&b);
+    assert!(
+        text.contains("tagged Mine fp1") && text.contains("tagged Mine fp2"),
+        "{text}"
+    );
+    assert!(text.contains("Set [fp3,fp1]"), "{text}");
+}
+
+fn row_id_conn(conn: &Connection, table: &str, name: &str) -> i64 {
+    conn.query_row(
+        &format!("SELECT id FROM {table} WHERE name = ?1"),
+        params![name],
+        |r| r.get(0),
+    )
+    .expect("row")
+}
+
+#[tokio::test]
+async fn making_private_removes_it_for_others_and_keeps_a_local_copy() {
+    let store = Memory::default();
+    let a = device(3);
+    let b = device(3);
+    tag(&a, "Gone", &[1, 2]);
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert!(shown(&b).contains("tagged Gone fp1"));
+    let old_uid: String = {
+        let conn = a.lock().expect("lock");
+        let id = row_id_conn(&conn, "tags", "Gone");
+        let old = conn
+            .query_row("SELECT uid FROM tags WHERE id = ?1", params![id], |r| {
+                r.get(0)
+            })
+            .expect("uid");
+        share::make_private(&conn, "tag", id, false).expect("private");
+        old
+    };
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    let (scope, uid): (String, String) = a
+        .lock()
+        .expect("lock")
+        .query_row("SELECT scope, uid FROM tags WHERE name = 'Gone'", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .expect("copy");
+    assert_eq!(scope, "local");
+    assert_ne!(uid, old_uid, "a new uid");
+    assert!(shown(&a).contains("tagged Gone fp1"), "songs stay here");
+    assert!(!shown(&b).contains("Gone"), "gone for everyone else");
+    // The copy is private: editing it sends nothing.
+    let before = count_ops(&a.lock().expect("lock"));
+    tag(&a, "Gone", &[3]);
+    assert_eq!(count_ops(&a.lock().expect("lock")), before);
+}
+
+#[tokio::test]
+async fn a_shared_smart_playlist_and_a_local_tag_need_a_choice() {
+    let a = device(3);
+    {
+        let mut conn = a.lock().expect("lock");
+        db::set_setting(&conn, "default_scope", Some("local")).expect("scope");
+        let ids = [track_in(&conn, 1)];
+        db::tag_tracks(&mut conn, "Mine", &ids).expect("tag");
+        db::set_setting(&conn, "default_scope", None).expect("scope");
+    }
+    // A local smart playlist over a local tag is fine; sharing it asks.
+    db::set_setting(&a.lock().expect("lock"), "default_scope", Some("local")).expect("scope");
+    let sid = smart(&a, "Playlist", &["Mine"]);
+    let conn = a.lock().expect("lock");
+    let preview = share::share_preview(&conn, "smart_playlist", sid).expect("preview");
+    assert_eq!(preview.local_tags.len(), 1);
+    assert_eq!(preview.local_tags[0].tag, "Mine");
+    let blocked = share::share(&conn, "smart_playlist", sid, &BTreeMap::new());
+    assert!(blocked.is_err(), "blocked until resolved");
+    // Remove rule: the playlist is shared without it.
+    let choice = BTreeMap::from([("Mine".to_owned(), share::TagChoice::Remove)]);
+    share::share(&conn, "smart_playlist", sid, &choice).expect("share");
+    let rules: String = conn
+        .query_row("SELECT rules FROM smart_playlists", [], |r| r.get(0))
+        .expect("rules");
+    assert!(!rules.contains("Mine") && !rules.contains('-'), "{rules}");
+    let scope: String = conn
+        .query_row("SELECT scope FROM tags WHERE name = 'Mine'", [], |r| {
+            r.get(0)
+        })
+        .expect("scope");
+    assert_eq!(scope, "local", "the tag stayed private");
+}
+
+#[tokio::test]
+async fn share_tag_too_shares_the_tag_with_the_playlist() {
+    let store = Memory::default();
+    let a = local_device(3);
+    let b = device(3);
+    tag(&a, "Mine", &[1]);
+    let sid = smart(&a, "Playlist", &["Mine"]);
+    {
+        let conn = a.lock().expect("lock");
+        let choice = BTreeMap::from([("Mine".to_owned(), share::TagChoice::Share)]);
+        share::share(&conn, "smart_playlist", sid, &choice).expect("share");
+    }
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert!(shown(&b).contains("tagged Mine fp1"));
+    assert_eq!(smart_shown(&a), smart_shown(&b));
+    assert!(
+        smart_shown(&b).contains("[\"Mine\"]"),
+        "{}",
+        smart_shown(&b)
+    );
+}
+
+#[tokio::test]
+async fn making_a_tag_private_is_refused_while_a_shared_smart_playlist_uses_it() {
+    let store = Memory::default();
+    let a = device(3);
+    let b = device(3);
+    tag(&a, "Used", &[1]);
+    smart(&a, "Playlist", &["Used"]);
+    {
+        let conn = a.lock().expect("lock");
+        let id = row_id_conn(&conn, "tags", "Used");
+        let preview = share::private_preview(&conn, "tag", id).expect("preview");
+        assert_eq!(preview.used_by, vec!["Playlist"]);
+        assert!(share::make_private(&conn, "tag", id, false).is_err());
+        share::make_private(&conn, "tag", id, true).expect("with the rule removed");
+    }
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    assert!(!smart_shown(&b).contains('?'), "{}", smart_shown(&b));
+    assert!(smart_shown(&b).contains("[]"), "{}", smart_shown(&b));
+}
+
+#[tokio::test]
+async fn hiding_is_local_and_survives_replay() {
+    let store = Memory::default();
+    let a = device(2);
+    let b = device(2);
+    tag(&a, "Quiet", &[1]);
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    let id = row_id(&b, "tags", "Quiet");
+    share::set_hidden(&b.lock().expect("lock"), "tag", id, true).expect("hide");
+    tag(&a, "Quiet", &[2]);
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    let tags = db::list_tags(&b.lock().expect("lock")).expect("list");
+    assert!(
+        tags.iter()
+            .any(|t| t.name == "Quiet" && t.hidden && t.track_count == 2)
+    );
+    let a_tags = db::list_tags(&a.lock().expect("lock")).expect("list");
+    assert!(a_tags.iter().all(|t| !t.hidden));
+}
+
+#[tokio::test]
+async fn same_named_smart_playlists_clash_and_combine() {
+    let store = Memory::default();
+    let a = device(2);
+    let b = device(2);
+    smart(&a, "Peak", &[]);
+    smart(&b, "Peak", &[]);
+    for _ in 0..2 {
+        assert!(run(&a, &store).await.error.is_none());
+        assert!(run(&b, &store).await.error.is_none());
+    }
+    assert_eq!(clashes::count(&a.lock().expect("lock")).expect("count"), 1);
+    let id = clashes::list(&a.lock().expect("lock")).expect("list")[0].id;
+    clashes::resolve(&a.lock().expect("lock"), id, clashes::Choice::Combine, None)
+        .expect("combine");
+    for _ in 0..3 {
+        assert!(run(&a, &store).await.error.is_none());
+        assert!(run(&b, &store).await.error.is_none());
+    }
+    assert_eq!(smart_shown(&a), smart_shown(&b));
+    assert_eq!(smart_shown(&a).lines().count(), 1, "{}", smart_shown(&a));
+    assert_eq!(clashes::count(&b.lock().expect("lock")).expect("count"), 0);
 }

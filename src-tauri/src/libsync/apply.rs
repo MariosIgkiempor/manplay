@@ -1,29 +1,30 @@
-//! Replay: turns winning ops into rows of `tags`, `track_tags`, `playlists` and
-//! `playlist_tracks`.
+//! Replay: turns winning ops into rows of `tags`, `track_tags`, `playlists`, `playlist_tracks`
+//! and `smart_playlists`.
 //!
 //! Applying never reads the tables it writes to decide *what* is true, only the register store
 //! (`op_state`), so any order of the same ops ends in the same rows. The one local choice is two
-//! shared items with the same name: they are the same item, and the row keeps the lowest uid.
+//! items with one name: the name stays with one of them and the other is applied under a held
+//! name, with a row in `clashes` for the user to settle (see `clashes.rs`).
 
 use std::collections::BTreeSet;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::entities;
-use super::ops::{Entity, F_NAME, F_POS, F_PRESENT, FORMAT, Op, member_id};
+use super::ops::{Entity, F_MERGE, F_NAME, F_POS, F_PRESENT, FORMAT, Op, member_id};
 use super::state;
 use crate::error::Error;
 
 #[derive(Clone, Copy)]
-struct Kind {
-    table: &'static str,
-    entity: &'static str,
-    member_entity: &'static str,
-    member_table: &'static str,
-    member_col: &'static str,
+pub struct Kind {
+    pub table: &'static str,
+    pub entity: &'static str,
+    pub member_entity: &'static str,
+    pub member_table: &'static str,
+    pub member_col: &'static str,
 }
 
-const TAGS: Kind = Kind {
+pub const TAGS: Kind = Kind {
     table: "tags",
     entity: "tag",
     member_entity: "track_tag",
@@ -31,7 +32,7 @@ const TAGS: Kind = Kind {
     member_col: "tag_id",
 };
 
-const PLAYLISTS: Kind = Kind {
+pub const PLAYLISTS: Kind = Kind {
     table: "playlists",
     entity: "playlist",
     member_entity: "playlist_track",
@@ -39,14 +40,54 @@ const PLAYLISTS: Kind = Kind {
     member_col: "playlist_id",
 };
 
-struct Row {
-    id: i64,
-    uid: String,
-    name: String,
-    scope: String,
+/// Smart playlists have a name and rules but no members.
+pub const SMARTS: Kind = Kind {
+    table: "smart_playlists",
+    entity: "smart_playlist",
+    member_entity: "",
+    member_table: "",
+    member_col: "",
+};
+
+impl Kind {
+    /// The name `clashes.kind` uses.
+    pub fn label(self) -> &'static str {
+        self.entity
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        [TAGS, PLAYLISTS, SMARTS]
+            .into_iter()
+            .find(|k| k.entity == label)
+    }
+
+    fn has_members(self) -> bool {
+        !self.member_entity.is_empty()
+    }
 }
 
-fn find(conn: &Connection, kind: Kind, column: &str, value: &str) -> Result<Option<Row>, Error> {
+pub struct Row {
+    pub id: i64,
+    pub uid: String,
+    pub name: String,
+    pub scope: String,
+}
+
+fn row_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
+    Ok(Row {
+        id: r.get(0)?,
+        uid: r.get(1)?,
+        name: r.get(2)?,
+        scope: r.get(3)?,
+    })
+}
+
+pub fn find(
+    conn: &Connection,
+    kind: Kind,
+    column: &str,
+    value: &str,
+) -> Result<Option<Row>, Error> {
     Ok(conn
         .query_row(
             &format!(
@@ -54,24 +95,16 @@ fn find(conn: &Connection, kind: Kind, column: &str, value: &str) -> Result<Opti
                 kind.table
             ),
             params![value],
-            |r| {
-                Ok(Row {
-                    id: r.get(0)?,
-                    uid: r.get(1)?,
-                    name: r.get(2)?,
-                    scope: r.get(3)?,
-                })
-            },
+            row_from,
         )
         .optional()?)
 }
 
 /// Applies ops read from other devices. Run it inside a transaction.
 pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
-    let mut tags = BTreeSet::new();
-    let mut playlists = BTreeSet::new();
+    let mut items: BTreeSet<(&'static str, String)> = BTreeSet::new();
+    let mut merges: BTreeSet<(&'static str, String)> = BTreeSet::new();
     let mut members: BTreeSet<(Entity, String, String)> = BTreeSet::new();
-    let mut smarts = BTreeSet::new();
     let mut customs = BTreeSet::new();
     let mut analyses = BTreeSet::new();
     let mut won = 0;
@@ -91,19 +124,21 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
         }
         won += 1;
         match op.entity() {
-            Entity::Tag => {
-                tags.insert(op.id.clone());
-            }
-            Entity::Playlist => {
-                playlists.insert(op.id.clone());
+            e @ (Entity::Tag | Entity::Playlist | Entity::SmartPlaylist) => {
+                let kind = match e {
+                    Entity::Tag => TAGS,
+                    Entity::Playlist => PLAYLISTS,
+                    _ => SMARTS,
+                };
+                items.insert((kind.entity, op.id.clone()));
+                if op.f == F_MERGE {
+                    merges.insert((kind.entity, op.id.clone()));
+                }
             }
             e @ (Entity::TrackTag | Entity::PlaylistTrack) => {
                 if let Some((parent, fp)) = op.id.split_once('/') {
                     members.insert((e, parent.to_owned(), fp.to_owned()));
                 }
-            }
-            Entity::SmartPlaylist => {
-                smarts.insert(op.id.clone());
             }
             Entity::TagCustom => {
                 customs.insert(op.id.clone());
@@ -114,9 +149,6 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
             Entity::Other(_) => {}
         }
     }
-    for uid in &smarts {
-        entities::materialize_smart(conn, uid)?;
-    }
     for id in &customs {
         entities::materialize_custom(conn, id)?;
     }
@@ -124,11 +156,18 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
         entities::materialize_analysis(conn, fp)?;
     }
     let mut touched = BTreeSet::new();
-    for uid in &tags {
-        materialize_item(conn, TAGS, uid, true, &mut touched)?;
+    for (entity, uid) in &items {
+        if let Some(kind) = Kind::from_label(entity) {
+            materialize_item(conn, kind, uid, &mut touched)?;
+            if kind.entity == SMARTS.entity {
+                entities::materialize_smart_rules(conn, uid)?;
+            }
+        }
     }
-    for uid in &playlists {
-        materialize_item(conn, PLAYLISTS, uid, true, &mut touched)?;
+    for (entity, uid) in &merges {
+        if let Some(kind) = Kind::from_label(entity) {
+            merged(conn, kind, uid, &mut touched)?;
+        }
     }
     for (entity, parent, fp) in &members {
         let kind = if *entity == Entity::TrackTag {
@@ -138,53 +177,161 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
         };
         materialize_member(conn, kind, parent, fp, &mut touched)?;
     }
+    settle(conn, &mut touched)?;
     for id in touched {
         renumber(conn, id)?;
     }
     Ok(won)
 }
 
-/// Brings the row of one tag or playlist in line with its registers.
-fn materialize_item(
+/// What an item is called according to the registers: `None` when it is gone (deleted or merged
+/// away) or was never named.
+fn live_name(conn: &Connection, kind: Kind, uid: &str) -> Result<Option<String>, Error> {
+    if state::is_dead(conn, kind.entity, uid)? {
+        return Ok(None);
+    }
+    state::get_str(conn, kind.entity, uid, F_NAME)
+}
+
+/// The row that has `name` and is not `uid` itself.
+fn holder_of(conn: &Connection, kind: Kind, name: &str, uid: &str) -> Result<Option<Row>, Error> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT id, COALESCE(uid, ''), name, scope FROM {}
+                 WHERE name = ?1 AND COALESCE(uid, '') <> ?2
+                 ORDER BY scope = 'local' DESC, uid LIMIT 1",
+                kind.table
+            ),
+            params![name, uid],
+            row_from,
+        )
+        .optional()?)
+}
+
+/// `<name> (shared)`, or with a number when that is taken.
+fn held_name(conn: &Connection, kind: Kind, name: &str) -> Result<String, Error> {
+    let mut n = 1;
+    loop {
+        let candidate = if n == 1 {
+            format!("{name} (shared)")
+        } else {
+            format!("{name} (shared {n})")
+        };
+        if find(conn, kind, "name", &candidate)?.is_none() {
+            return Ok(candidate);
+        }
+        n += 1;
+    }
+}
+
+/// Drops an item's row and its clash entry. Whoever it held the name against is promoted by the
+/// next `settle`.
+fn remove_row(conn: &Connection, kind: Kind, row: &Row) -> Result<(), Error> {
+    conn.execute(
+        &format!("DELETE FROM {} WHERE id = ?1", kind.table),
+        params![row.id],
+    )?;
+    conn.execute(
+        "DELETE FROM clashes WHERE kind = ?1 AND held = ?2",
+        params![kind.label(), row.uid],
+    )?;
+    Ok(())
+}
+
+fn record_clash(
+    conn: &Connection,
+    kind: Kind,
+    name: &str,
+    keeps: &str,
+    held: &str,
+) -> Result<(), Error> {
+    conn.execute(
+        "INSERT INTO clashes (kind, name, keeps, held) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(kind, held) DO UPDATE SET name = excluded.name, keeps = excluded.keeps",
+        params![kind.label(), name, keeps, held],
+    )?;
+    Ok(())
+}
+
+/// Puts `row` (which has the contested `name`) under a held name, against `keeps`.
+fn hold(conn: &Connection, kind: Kind, row: &Row, name: &str, keeps: &str) -> Result<(), Error> {
+    let already: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM clashes WHERE kind = ?1 AND held = ?2 AND name = ?3)",
+        params![kind.label(), row.uid, name],
+        |r| r.get(0),
+    )?;
+    if !already {
+        let held = held_name(conn, kind, name)?;
+        conn.execute(
+            &format!("UPDATE {} SET name = ?1 WHERE id = ?2", kind.table),
+            params![held, row.id],
+        )?;
+    }
+    record_clash(conn, kind, name, keeps, &row.uid)
+}
+
+/// Brings the row of one tag, playlist or smart playlist in line with its registers. A name
+/// someone else already has is not taken: see `hold`.
+pub fn materialize_item(
     conn: &Connection,
     kind: Kind,
     uid: &str,
-    follow: bool,
     touched: &mut BTreeSet<i64>,
 ) -> Result<(), Error> {
     let existing = find(conn, kind, "uid", uid)?;
     if existing.as_ref().is_some_and(|r| r.scope != "shared") {
         return Ok(());
     }
-    let name = state::get_str(conn, kind.entity, uid, F_NAME)?;
-    let name = match name {
-        Some(name) if !state::is_dead(conn, kind.entity, uid)? => name,
-        _ => {
-            if let Some(r) = existing {
-                conn.execute(
-                    &format!("DELETE FROM {} WHERE id = ?1", kind.table),
-                    params![r.id],
-                )?;
-                if follow {
-                    reconsider(conn, kind, &r.name, touched)?;
-                }
-            }
-            return Ok(());
+    let Some(name) = live_name(conn, kind, uid)? else {
+        if let Some(r) = existing {
+            remove_row(conn, kind, &r)?;
         }
+        return Ok(());
     };
-    let same_name = find(conn, kind, "name", &name)?;
-    match (existing, same_name) {
-        (Some(r), _) if r.name == name => {}
-        (Some(r), other) if other.as_ref().is_none_or(|o| o.id == r.id) => {
+    let holder = holder_of(conn, kind, &name, uid)?;
+    // Between two shared items the lower uid keeps the name, so every device lists the same one
+    // as held.
+    let takes_name = holder
+        .as_ref()
+        .is_none_or(|h| h.scope == "shared" && h.uid.as_str() > uid);
+    if let Some(h) = holder.as_ref().filter(|_| takes_name) {
+        hold(conn, kind, h, &name, uid)?;
+        conn.execute(
+            "UPDATE clashes SET keeps = ?3 WHERE kind = ?1 AND keeps = ?2",
+            params![kind.label(), h.uid, uid],
+        )?;
+    }
+    if !takes_name {
+        let keeps = holder.as_ref().map(|h| h.uid.clone()).unwrap_or_default();
+        if let Some(r) = existing {
+            hold(conn, kind, &r, &name, &keeps)?;
+        } else {
+            conn.execute(
+                &format!(
+                    "INSERT INTO {} (uid, name, scope) VALUES (?1, ?2, 'shared')",
+                    kind.table
+                ),
+                params![uid, held_name(conn, kind, &name)?],
+            )?;
+            record_clash(conn, kind, &name, &keeps, uid)?;
+            rematerialize_members(conn, kind, uid, touched)?;
+        }
+        return Ok(());
+    }
+    conn.execute(
+        "DELETE FROM clashes WHERE kind = ?1 AND held = ?2",
+        params![kind.label(), uid],
+    )?;
+    match existing {
+        Some(r) if r.name == name => {}
+        Some(r) => {
             conn.execute(
                 &format!("UPDATE {} SET name = ?1 WHERE id = ?2", kind.table),
                 params![name, r.id],
             )?;
-            if follow {
-                reconsider(conn, kind, &r.name, touched)?;
-            }
         }
-        (None, None) => {
+        None => {
             conn.execute(
                 &format!(
                     "INSERT INTO {} (uid, name, scope) VALUES (?1, ?2, 'shared')",
@@ -194,156 +341,176 @@ fn materialize_item(
             )?;
             rematerialize_members(conn, kind, uid, touched)?;
         }
-        (this, Some(other)) => {
-            clash(conn, kind, this, &other, uid, &name, touched)?;
-            rematerialize_members(conn, kind, uid, touched)?;
-        }
-        // Not reachable: a row with no other holder of the name is renamed above.
-        (Some(_), None) => {}
     }
     Ok(())
 }
 
-/// Two uids with one name: the lower uid keeps the row and the other becomes an alias of it.
-fn clash(
+/// Re-examines every held item: one whose name is free again (the other item was renamed,
+/// deleted, merged or made private) takes it, and a clash entry whose item is gone is dropped.
+pub fn settle(conn: &Connection, touched: &mut BTreeSet<i64>) -> Result<(), Error> {
+    for _ in 0..8 {
+        let before = clash_signature(conn)?;
+        if before.is_empty() {
+            return Ok(());
+        }
+        let held: Vec<(String, String)> = conn
+            .prepare("SELECT kind, held FROM clashes ORDER BY id")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (kind, uid) in held {
+            let Some(kind) = Kind::from_label(&kind) else {
+                continue;
+            };
+            if find(conn, kind, "uid", &uid)?.is_none() {
+                conn.execute(
+                    "DELETE FROM clashes WHERE kind = ?1 AND held = ?2",
+                    params![kind.label(), uid],
+                )?;
+            } else {
+                materialize_item(conn, kind, &uid, touched)?;
+            }
+        }
+        if clash_signature(conn)? == before {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn clash_signature(conn: &Connection) -> Result<Vec<(String, String, String, String)>, Error> {
+    Ok(conn
+        .prepare("SELECT kind, name, keeps, held FROM clashes ORDER BY kind, held")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<Result<_, _>>()?)
+}
+
+/// `from` was merged into another item: its row goes, everything that pointed at it points at
+/// the target (memberships here, smart playlist rules for tags).
+pub fn merged(
     conn: &Connection,
     kind: Kind,
-    this: Option<Row>,
-    other: &Row,
-    uid: &str,
-    name: &str,
+    from: &str,
     touched: &mut BTreeSet<i64>,
 ) -> Result<(), Error> {
-    // A local item is never merged into; step 4 gives the user a say.
-    if other.scope != "shared" {
+    materialize_item(conn, kind, from, touched)?;
+    let to = state::merge_target(conn, kind.entity, from)?;
+    if to == from {
         return Ok(());
     }
-    if other.uid.as_str() < uid {
-        if let Some(r) = this {
-            move_members(conn, kind, r.id, other.id)?;
-            conn.execute(
-                &format!("DELETE FROM {} WHERE id = ?1", kind.table),
-                params![r.id],
-            )?;
-            touched.insert(other.id);
-        }
-    } else if let Some(r) = this {
-        move_members(conn, kind, other.id, r.id)?;
-        conn.execute(
-            &format!("DELETE FROM {} WHERE id = ?1", kind.table),
-            params![other.id],
-        )?;
-        conn.execute(
-            &format!("UPDATE {} SET name = ?1 WHERE id = ?2", kind.table),
-            params![name, r.id],
-        )?;
-        touched.insert(r.id);
-    } else {
-        conn.execute(
-            &format!("UPDATE {} SET uid = ?1 WHERE id = ?2", kind.table),
-            params![uid, other.id],
-        )?;
+    if kind.has_members() {
+        rematerialize_members(conn, kind, &to, touched)?;
     }
-    Ok(())
-}
-
-fn move_members(conn: &Connection, kind: Kind, from: i64, to: i64) -> Result<(), Error> {
     if kind.table == "tags" {
-        conn.execute(
-            "INSERT OR IGNORE INTO track_tags (track_id, tag_id)
-             SELECT track_id, ?1 FROM track_tags WHERE tag_id = ?2",
-            params![to, from],
-        )?;
-    } else {
-        conn.execute(
-            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position, pos)
-             SELECT ?1, track_id, position, pos FROM playlist_tracks WHERE playlist_id = ?2",
-            params![to, from],
-        )?;
+        entities::repoint_rules(conn, from, &to)?;
     }
     Ok(())
 }
 
-/// A name was freed (renamed or deleted): another live uid that has it may now take the row.
-fn reconsider(
-    conn: &Connection,
-    kind: Kind,
-    name: &str,
-    touched: &mut BTreeSet<i64>,
-) -> Result<(), Error> {
-    let mut stmt =
-        conn.prepare("SELECT id, val FROM op_state WHERE e = ?1 AND f = ?2 ORDER BY id")?;
-    let rows = stmt.query_map(params![kind.entity, F_NAME], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-    })?;
-    let mut candidates = Vec::new();
-    for row in rows {
-        let (uid, val) = row?;
-        let same = serde_json::from_str::<String>(&val).is_ok_and(|v| {
-            if kind.table == "tags" {
-                v.eq_ignore_ascii_case(name)
-            } else {
-                v == name
-            }
-        });
-        if same {
-            candidates.push(uid);
+/// Makes every shared tag, playlist and smart playlist the registers name have its row, as after
+/// replaying everything again. Used once for libraries that merged same-named items by name
+/// before clashes existed: the item that lost then comes back as a clash to settle.
+pub fn rematerialize_all(conn: &Connection) -> Result<(), Error> {
+    let mut touched = BTreeSet::new();
+    for kind in [TAGS, PLAYLISTS, SMARTS] {
+        let uids: Vec<String> = conn
+            .prepare("SELECT DISTINCT id FROM op_state WHERE e = ?1 AND f = ?2 ORDER BY id")?
+            .query_map(params![kind.entity, F_NAME], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        for uid in uids {
+            materialize_item(conn, kind, &uid, &mut touched)?;
         }
     }
-    drop(stmt);
-    for uid in candidates {
-        materialize_item(conn, kind, &uid, false, touched)?;
+    settle(conn, &mut touched)?;
+    for id in touched {
+        renumber(conn, id)?;
     }
     Ok(())
 }
 
-/// The row an item's memberships go to: its own, or for a uid that lost a name clash, the row
-/// that took its name.
+/// The row an item's memberships go to: its own, or for a merged one the row of what it was
+/// merged into.
 fn resolve(conn: &Connection, kind: Kind, uid: &str) -> Result<Option<Row>, Error> {
-    if state::is_dead(conn, kind.entity, uid)? {
+    let target = state::merge_target(conn, kind.entity, uid)?;
+    if state::is_dead(conn, kind.entity, &target)? {
         return Ok(None);
     }
-    if let Some(r) = find(conn, kind, "uid", uid)? {
-        return Ok((r.scope == "shared").then_some(r));
-    }
-    let Some(name) = state::get_str(conn, kind.entity, uid, F_NAME)? else {
-        return Ok(None);
-    };
-    Ok(find(conn, kind, "name", &name)?.filter(|r| r.scope == "shared"))
+    Ok(find(conn, kind, "uid", &target)?.filter(|r| r.scope == "shared"))
 }
 
-/// Every membership op of one item, applied to its row (it was just created or took over a name).
+/// Every membership op of one item and of what was merged into it, applied to its row (it was
+/// just created or took a merge).
 fn rematerialize_members(
     conn: &Connection,
     kind: Kind,
     uid: &str,
     touched: &mut BTreeSet<i64>,
 ) -> Result<(), Error> {
+    if !kind.has_members() {
+        return Ok(());
+    }
+    let mut parents = vec![uid.to_owned()];
+    parents.extend(state::merge_sources(conn, kind.entity, uid)?);
     let mut stmt =
         conn.prepare("SELECT id FROM op_state WHERE e = ?1 AND f = ?2 AND id >= ?3 AND id < ?4")?;
-    let ids: Vec<String> = stmt
-        .query_map(
-            params![
-                kind.member_entity,
-                F_PRESENT,
-                format!("{uid}/"),
-                format!("{uid}0")
-            ],
-            |r| r.get(0),
-        )?
-        .collect::<Result<_, _>>()?;
+    let mut fps = BTreeSet::new();
+    for parent in &parents {
+        let ids: Vec<String> = stmt
+            .query_map(
+                params![
+                    kind.member_entity,
+                    F_PRESENT,
+                    format!("{parent}/"),
+                    format!("{parent}0")
+                ],
+                |r| r.get(0),
+            )?
+            .collect::<Result<_, _>>()?;
+        fps.extend(
+            ids.iter()
+                .filter_map(|id| id.split_once('/'))
+                .map(|(_, fp)| fp.to_owned()),
+        );
+    }
     drop(stmt);
-    for id in ids {
-        if let Some((_, fp)) = id.split_once('/') {
-            materialize_member(conn, kind, uid, fp, touched)?;
-        }
+    for fp in fps {
+        materialize_member(conn, kind, uid, &fp, touched)?;
     }
     Ok(())
 }
 
+/// Whether a song is in an item and where, from the newest register among the item and
+/// everything merged into it: an edit on the target wins over the copy a merge made, and a late
+/// edit of a merged item (from a device that had not heard of the merge) still lands on the target.
+fn member_state(
+    conn: &Connection,
+    kind: Kind,
+    target: &str,
+    audio_fp: &str,
+) -> Result<(bool, Option<String>), Error> {
+    let mut parents = vec![target.to_owned()];
+    parents.extend(state::merge_sources(conn, kind.entity, target)?);
+    let mut present: Option<(String, bool)> = None;
+    let mut pos: Option<(String, String)> = None;
+    for parent in &parents {
+        let id = member_id(parent, audio_fp);
+        if let Some((clock, v)) = state::get_clocked(conn, kind.member_entity, &id, F_PRESENT)?
+            && present.as_ref().is_none_or(|(c, _)| clock > *c)
+        {
+            present = Some((clock, v.as_bool() == Some(true)));
+        }
+        if let Some((clock, v)) = state::get_clocked(conn, kind.member_entity, &id, F_POS)?
+            && let Some(v) = v.as_str()
+            && pos.as_ref().is_none_or(|(c, _)| clock > *c)
+        {
+            pos = Some((clock, v.to_owned()));
+        }
+    }
+    Ok((present.is_some_and(|(_, p)| p), pos.map(|(_, p)| p)))
+}
+
 /// Makes the rows for one membership match its registers, for every track with that audio.
 /// Nothing happens for a track the library does not have: the register waits.
-fn materialize_member(
+pub fn materialize_member(
     conn: &Connection,
     kind: Kind,
     parent: &str,
@@ -353,9 +520,7 @@ fn materialize_member(
     let Some(row) = resolve(conn, kind, parent)? else {
         return Ok(());
     };
-    let id = member_id(parent, audio_fp);
-    let present = state::get_bool(conn, kind.member_entity, &id, F_PRESENT)? == Some(true);
-    let pos = state::get_str(conn, kind.member_entity, &id, F_POS)?;
+    let (present, pos) = member_state(conn, kind, &row.uid, audio_fp)?;
     let tracks: Vec<i64> = conn
         .prepare_cached("SELECT id FROM tracks WHERE audio_fp = ?1")?
         .query_map(params![audio_fp], |r| r.get(0))?

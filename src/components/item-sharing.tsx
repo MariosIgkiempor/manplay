@@ -1,0 +1,302 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { EyeOff, Lock, TriangleAlert, Users } from "lucide-react";
+import { useState } from "react";
+import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { RowMenu } from "#/components/menu.tsx";
+import { CHILD_PAD, rowBase } from "#/components/sidebar-row.ts";
+import {
+	type ItemKind,
+	type LocalTagUse,
+	makePrivate,
+	privatePreview,
+	type Scope,
+	shareItem,
+	sharePreview,
+	type TagChoice,
+} from "#/lib/api.ts";
+import { useSharingOn } from "#/lib/queries.ts";
+import { cn } from "#/lib/utils.ts";
+
+/** What an item's menu needs to know about it. */
+export interface Shareable {
+	kind: ItemKind;
+	id: number;
+	name: string;
+	scope: Scope;
+}
+
+const KIND_WORD: Record<ItemKind, string> = {
+	tag: "tag",
+	playlist: "playlist",
+	smart_playlist: "smart playlist",
+};
+
+const songs = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
+
+/**
+ * A small mark after an item's name: a warning when it waits in Clashes, a lock when it is only
+ * on this device, people when everyone on the destination has it. Marks of scope show only while
+ * some destination shares library data.
+ */
+export function ScopeMark({ scope, held }: { scope: Scope; held: boolean }) {
+	const sharing = useSharingOn();
+	if (held) {
+		return (
+			<span title="Same name as another item: settle it in Clashes (Sync tab)" role="img">
+				<TriangleAlert className="size-3.5 shrink-0 text-warning" aria-label="Name clash" />
+			</span>
+		);
+	}
+	if (!sharing) {
+		return null;
+	}
+	return scope === "local" ? (
+		<span title="Only on this device" role="img">
+			<Lock className="size-3 shrink-0 opacity-60" aria-label="Only on this device" />
+		</span>
+	) : (
+		<span title="Shared with everyone on the destination" role="img">
+			<Users className="size-3 shrink-0 opacity-60" aria-label="Shared" />
+		</span>
+	);
+}
+
+/** One choice per local tag a smart playlist uses. */
+function TagChoices({
+	tags,
+	choices,
+	onChoose,
+}: {
+	tags: readonly LocalTagUse[];
+	choices: Record<string, TagChoice>;
+	onChoose: (tag: string, choice: TagChoice) => void;
+}) {
+	return (
+		<ul className="mt-2 space-y-2">
+			{tags.map((t) => (
+				<li key={t.tag} className="rounded-md border p-2 text-foreground">
+					<div className="font-medium text-sm">
+						{t.tag} <span className="font-normal text-muted-foreground">({songs(t.songs)})</span>
+					</div>
+					<div className="mt-1 flex gap-4 text-sm">
+						{(["share", "remove"] as const).map((c) => (
+							<label key={c} className="flex items-center gap-1.5">
+								<input
+									type="radio"
+									name={`choice-${t.tag}`}
+									checked={choices[t.tag] === c}
+									onChange={() => onChoose(t.tag, c)}
+								/>
+								{c === "share" ? "Share tag too" : "Remove rule"}
+							</label>
+						))}
+					</div>
+				</li>
+			))}
+		</ul>
+	);
+}
+
+/**
+ * The dialog for a smart playlist that would be shared while its rules use local tags: each tag
+ * is shared along or dropped from the rules, or the whole thing is cancelled.
+ */
+export function LocalTagsDialog({
+	title,
+	tags,
+	confirmLabel,
+	busy,
+	onCancel,
+	onConfirm,
+}: {
+	title: string;
+	tags: readonly LocalTagUse[];
+	confirmLabel: string;
+	busy?: boolean;
+	onCancel: () => void;
+	onConfirm: (choices: Record<string, TagChoice>) => void;
+}) {
+	const [choices, setChoices] = useState<Record<string, TagChoice>>({});
+	const complete = tags.every((t) => choices[t.tag]);
+	const shared = tags.filter((t) => choices[t.tag] === "share");
+	return (
+		<ConfirmDialog
+			title={title}
+			confirmLabel={confirmLabel}
+			busy={(busy ?? false) || !complete}
+			onCancel={onCancel}
+			onConfirm={() => onConfirm(choices)}
+		>
+			Other devices cannot see local tags. Choose what happens to each one used by the rules.
+			<TagChoices
+				tags={tags}
+				choices={choices}
+				onChoose={(t, c) => setChoices((m) => ({ ...m, [t]: c }))}
+			/>
+			{shared.length > 0 && (
+				<p className="mt-2">
+					Sharing {shared.map((t) => `“${t.tag}”`).join(", ")} shows{" "}
+					{songs(shared.reduce((n, t) => n + t.songs, 0))} with it to everyone.
+				</p>
+			)}
+		</ConfirmDialog>
+	);
+}
+
+export function ShareDialog({
+	item,
+	onClose,
+	onDone,
+}: {
+	item: Shareable;
+	onClose: () => void;
+	onDone: () => Promise<void>;
+}) {
+	const preview = useQuery({
+		queryKey: ["share-preview", item.kind, item.id],
+		queryFn: () => sharePreview(item.kind, item.id),
+		gcTime: 0,
+	});
+	const share = useMutation({
+		mutationFn: (tags: Record<string, TagChoice>) => shareItem(item.kind, item.id, tags),
+		onSuccess: async () => {
+			await onDone();
+			onClose();
+		},
+	});
+	const data = preview.data;
+	if (!data) {
+		return preview.isError ? (
+			<ConfirmDialog
+				title="Could not read it"
+				confirmLabel="Close"
+				onCancel={onClose}
+				onConfirm={onClose}
+			>
+				{String(preview.error)}
+			</ConfirmDialog>
+		) : null;
+	}
+	const error = share.isError ? (
+		<p className="mt-2 break-words text-destructive">{String(share.error)}</p>
+	) : null;
+	if (data.localTags.length > 0) {
+		return (
+			<LocalTagsDialog
+				title={`Share smart playlist “${data.name}”?`}
+				tags={data.localTags}
+				confirmLabel="Share smart playlist"
+				busy={share.isPending}
+				onCancel={onClose}
+				onConfirm={(choices) => share.mutate(choices)}
+			/>
+		);
+	}
+	return (
+		<ConfirmDialog
+			title={`Share ${KIND_WORD[item.kind]} “${data.name}”?`}
+			confirmLabel="Share"
+			busy={share.isPending}
+			onCancel={onClose}
+			onConfirm={() => share.mutate({})}
+		>
+			{item.kind === "smart_playlist"
+				? "Everyone on the destination gets its rules."
+				: `Everyone on the destination gets it${data.songs > 0 ? `, and it shows ${songs(data.songs)} to them` : ""}. They can change it, and changes come back to you.`}
+			{error}
+		</ConfirmDialog>
+	);
+}
+
+export function PrivateDialog({
+	item,
+	onClose,
+	onDone,
+}: {
+	item: Shareable;
+	onClose: () => void;
+	onDone: () => Promise<void>;
+}) {
+	const preview = useQuery({
+		queryKey: ["private-preview", item.kind, item.id],
+		queryFn: () => privatePreview(item.kind, item.id),
+		gcTime: 0,
+	});
+	const priv = useMutation({
+		mutationFn: (removeRules: boolean) => makePrivate(item.kind, item.id, removeRules),
+		onSuccess: async () => {
+			await onDone();
+			onClose();
+		},
+	});
+	const data = preview.data;
+	if (!data) {
+		return null;
+	}
+	return (
+		<ConfirmDialog
+			title={`Make ${KIND_WORD[item.kind]} “${data.name}” private?`}
+			confirmLabel="Make private"
+			destructive
+			busy={priv.isPending}
+			onCancel={onClose}
+			onConfirm={() => priv.mutate(data.usedBy.length > 0)}
+		>
+			This removes it for everyone else. You keep a copy that stays on this device.
+			{data.usedBy.length > 0 && (
+				<p className="mt-2">
+					The shared smart {data.usedBy.length === 1 ? "playlist" : "playlists"}{" "}
+					{data.usedBy.map((n) => `“${n}”`).join(", ")} use it: the rule is removed from{" "}
+					{data.usedBy.length === 1 ? "it" : "them"}.
+				</p>
+			)}
+			{priv.isError && <p className="mt-2 break-words text-destructive">{String(priv.error)}</p>}
+		</ConfirmDialog>
+	);
+}
+
+/**
+ * Items hidden on this device, folded under a group: one line to open the list, and each item's
+ * menu brings it back.
+ */
+export function HiddenItems({
+	items,
+	onUnhide,
+}: {
+	items: readonly { key: string; name: string; item: Shareable }[];
+	onUnhide: (item: Shareable) => void;
+}) {
+	const [open, setOpen] = useState(false);
+	if (items.length === 0) {
+		return null;
+	}
+	return (
+		<div>
+			<button
+				type="button"
+				aria-expanded={open}
+				onClick={() => setOpen(!open)}
+				className={cn(rowBase, "text-left text-xs outline-none")}
+				style={{ paddingLeft: CHILD_PAD }}
+			>
+				<EyeOff className="size-3.5 shrink-0" />
+				{items.length} hidden
+			</button>
+			{open &&
+				items.map((h) => (
+					<RowMenu
+						key={h.key}
+						label={h.name}
+						items={[{ label: "Unhide", icon: <EyeOff />, onSelect: () => onUnhide(h.item) }]}
+					>
+						<div
+							className={cn(rowBase, "pr-2 text-xs opacity-70")}
+							style={{ paddingLeft: CHILD_PAD + 14 }}
+						>
+							<span className="truncate">{h.name}</span>
+						</div>
+					</RowMenu>
+				))}
+		</div>
+	);
+}

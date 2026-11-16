@@ -86,6 +86,26 @@ impl Rules {
     }
 }
 
+impl Rules {
+    /// The same rules without any entry equal to `tag`.
+    pub fn without_tag(&self, tag: &str) -> Self {
+        let keep = |names: &[String]| names.iter().filter(|n| *n != tag).cloned().collect();
+        Self {
+            all_tags: keep(&self.all_tags),
+            any_tags: keep(&self.any_tags),
+            none_tags: keep(&self.none_tags),
+            ..self.clone()
+        }
+    }
+
+    /// Whether any tag entry equals `tag`.
+    pub fn uses_tag(&self, tag: &str) -> bool {
+        [&self.all_tags, &self.any_tags, &self.none_tags]
+            .iter()
+            .any(|names| names.iter().any(|n| n == tag))
+    }
+}
+
 /// Whether a stored tag entry is a tag's uid (rules are kept by uid, so renaming a tag leaves
 /// them intact) rather than a name from before rules were kept by uid.
 pub fn is_uid(entry: &str) -> bool {

@@ -3,11 +3,13 @@ import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
 import { Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { HiddenItems, ScopeMark } from "#/components/item-sharing.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { AddButton } from "#/components/sidebar-create.tsx";
 import { GroupHeading } from "#/components/sidebar-parts.tsx";
 import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
 import { deleteSmartPlaylist, type SmartPlaylist } from "#/lib/api.ts";
+import { useItemSharing } from "#/lib/use-item-sharing.tsx";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 import { SMART_KEY, useCreateSmartPlaylist, useSmartPlaylists } from "#/lib/use-smart.ts";
 
@@ -31,7 +33,16 @@ export function SidebarSmartPlaylists() {
 			}
 		},
 	});
-	const error = create.error ?? remove.error;
+	const sharing = useItemSharing();
+	const error = create.error ?? remove.error ?? sharing.error;
+	const everything = list.data ?? [];
+	const visible = everything.filter((p) => !p.hidden);
+	const itemOf = (p: SmartPlaylist) => ({
+		kind: "smart_playlist" as const,
+		id: p.id,
+		name: p.name,
+		scope: p.scope ?? "shared",
+	});
 
 	return (
 		<div className="space-y-0.5">
@@ -51,16 +62,18 @@ export function SidebarSmartPlaylists() {
 					/>
 				}
 			/>
-			{!closed && (list.data ?? []).length === 0 && (
+			{!closed && everything.length === 0 && (
 				<p className="py-1 pr-2 text-muted-foreground text-xs" style={{ paddingLeft: CHILD_PAD }}>
 					Playlists that fill themselves from tags and filters.
 				</p>
 			)}
-			{(closed ? [] : (list.data ?? [])).map((p) => (
+			{(closed ? [] : visible).map((p) => (
 				<RowMenu
 					key={p.id}
 					label={p.name}
 					items={[
+						...sharing.entries(itemOf(p)),
+						"separator",
 						{
 							label: "Delete…",
 							icon: <Trash2 />,
@@ -78,11 +91,21 @@ export function SidebarSmartPlaylists() {
 						>
 							<Sparkles className="size-4 shrink-0" />
 							<span className="truncate">{p.name}</span>
+							<ScopeMark scope={p.scope ?? "shared"} held={p.held ?? false} />
 						</Link>
 						<span className="size-5 shrink-0" />
 					</div>
 				</RowMenu>
 			))}
+			{!closed && (
+				<HiddenItems
+					items={everything
+						.filter((p) => p.hidden)
+						.map((p) => ({ key: String(p.id), name: p.name, item: itemOf(p) }))}
+					onUnhide={sharing.unhide}
+				/>
+			)}
+			{sharing.dialogs}
 			{error && <p className="px-2 text-destructive text-xs">{String(error)}</p>}
 			{deleting && (
 				<ConfirmDialog

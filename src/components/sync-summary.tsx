@@ -8,6 +8,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { ClashList } from "#/components/clashes.tsx";
 import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
 import { PullList } from "#/components/pull-review.tsx";
 import { IncomingList } from "#/components/sync-incoming.tsx";
@@ -283,30 +284,33 @@ function LibraryDataRow({ id }: { id: number }) {
 	const setLibsync = useSetLibsync();
 	const on = targets.data?.find((t) => t.id === id)?.libsync ?? false;
 	return (
-		<div className="border-b first:border-t">
-			<div className="flex h-12 items-center gap-3 px-[var(--diff-inset)]">
-				<Switch
-					checked={on}
-					disabled={!targets.data || setLibsync.isPending}
-					onChange={(v) => setLibsync.mutate({ id, enabled: v })}
-					label="Library data"
-				/>
-				<span className="flex shrink-0 items-center gap-1.5 font-medium text-sm [&_svg]:size-4">
-					<Tags />
-					Library data
-				</span>
-				<span className="min-w-0 truncate text-muted-foreground text-sm">
-					{on
-						? "Tags and playlists sync with this destination"
-						: "Tags and playlists stay on this device"}
-				</span>
+		<>
+			<div className="border-b first:border-t">
+				<div className="flex h-12 items-center gap-3 px-[var(--diff-inset)]">
+					<Switch
+						checked={on}
+						disabled={!targets.data || setLibsync.isPending}
+						onChange={(v) => setLibsync.mutate({ id, enabled: v })}
+						label="Library data"
+					/>
+					<span className="flex shrink-0 items-center gap-1.5 font-medium text-sm [&_svg]:size-4">
+						<Tags />
+						Library data
+					</span>
+					<span className="min-w-0 truncate text-muted-foreground text-sm">
+						{on
+							? "Tags and playlists sync with this destination"
+							: "Tags and playlists stay on this device"}
+					</span>
+				</div>
+				{setLibsync.isError && (
+					<p className="break-words px-[var(--diff-inset)] pb-2 text-destructive text-sm">
+						{String(setLibsync.error)}
+					</p>
+				)}
 			</div>
-			{setLibsync.isError && (
-				<p className="break-words px-[var(--diff-inset)] pb-2 text-destructive text-sm">
-					{String(setLibsync.error)}
-				</p>
-			)}
-		</div>
+			{on && <ClashList />}
+		</>
 	);
 }
 
@@ -457,7 +461,14 @@ async function exchangeLibraryData(
 	}
 	const outcomes = await libsyncRun(ids);
 	if (outcomes.some((l) => l.received > 0)) {
-		for (const key of ["tracks", "playlists", "playlist-tracks", "tags"]) {
+		for (const key of [
+			"tracks",
+			"playlists",
+			"playlist-tracks",
+			"tags",
+			"smart-playlists",
+			"clashes",
+		]) {
 			await queryClient.invalidateQueries({ queryKey: [key] });
 		}
 	}

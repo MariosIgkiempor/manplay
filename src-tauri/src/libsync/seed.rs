@@ -56,7 +56,8 @@ pub fn catch_up(conn: &Connection) -> Result<(), Error> {
 fn seed_basics(tx: &Connection, batch: &mut Batch) -> Result<(), Error> {
     for (table, entity) in [("tags", "tag"), ("playlists", "playlist")] {
         let mut stmt = tx.prepare(&format!(
-            "SELECT uid, name FROM {table} WHERE scope = 'shared' AND uid IS NOT NULL"
+            "SELECT uid, name FROM {table} WHERE scope = 'shared' AND uid IS NOT NULL
+             AND uid NOT IN (SELECT held FROM clashes)"
         ))?;
         let rows: Vec<(String, String)> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -115,7 +116,8 @@ fn seed_more(tx: &Connection, batch: &mut Batch) -> Result<(), Error> {
 
 fn seed_smart(tx: &Connection, batch: &mut Batch) -> Result<(), Error> {
     let mut stmt = tx.prepare(
-        "SELECT uid, name, rules FROM smart_playlists WHERE scope = 'shared' AND uid IS NOT NULL",
+        "SELECT uid, name, rules FROM smart_playlists WHERE scope = 'shared' AND uid IS NOT NULL
+         AND uid NOT IN (SELECT held FROM clashes)",
     )?;
     let rows: Vec<(String, String, String)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?

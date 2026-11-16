@@ -244,7 +244,7 @@ pub fn set_export_selection(
 
 /// Rules as the editor sees them (tag names) turned into what is stored and shared (tag uids).
 /// A name that is no tag here stays as typed; an unknown-tag marker goes back to its uid.
-fn rules_to_stored(
+pub(crate) fn rules_to_stored(
     conn: &Connection,
     rules: &crate::smart::Rules,
 ) -> Result<crate::smart::Rules, Error> {
@@ -306,7 +306,7 @@ fn rules_from_stored(
     failure.map_or(Ok(out), |e| Err(e.into()))
 }
 
-fn rules_json(rules: &crate::smart::Rules) -> Result<serde_json::Value, Error> {
+pub(crate) fn rules_json(rules: &crate::smart::Rules) -> Result<serde_json::Value, Error> {
     serde_json::to_value(rules).map_err(|e| Error::Msg(e.to_string()))
 }
 
@@ -336,6 +336,38 @@ pub fn smart_playlists(conn: &Connection) -> Result<Vec<crate::smart::SmartPlayl
     Ok(out)
 }
 
+/// A smart playlist as the sidebar lists it, with where it is shared and whether it is hidden or
+/// held under another name.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartListing {
+    #[serde(flatten)]
+    pub playlist: crate::smart::SmartPlaylist,
+    pub scope: String,
+    pub hidden: bool,
+    pub held: bool,
+}
+
+pub fn smart_listing(conn: &Connection) -> Result<Vec<SmartListing>, Error> {
+    let mut out = Vec::new();
+    for playlist in smart_playlists(conn)? {
+        let (scope, hidden, held): (String, bool, bool) = conn.query_row(
+            "SELECT scope, hidden,
+                    EXISTS (SELECT 1 FROM clashes c WHERE c.kind = 'smart_playlist' AND c.held = uid)
+             FROM smart_playlists WHERE id = ?1",
+            params![playlist.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        out.push(SmartListing {
+            playlist,
+            scope,
+            hidden,
+            held,
+        });
+    }
+    Ok(out)
+}
+
 /// Adds a smart playlist (`id` 0) or changes one; returns it as stored. Shared ones also write
 /// their ops.
 pub fn save_smart_playlist(
@@ -350,6 +382,9 @@ pub fn save_smart_playlist(
     let id = if playlist.id == 0 {
         let uid = crate::libsync::new_uid();
         let scope = crate::libsync::default_scope(&tx)?;
+        if scope == "shared" {
+            crate::libsync::share::refuse_local_tags(&tx, &stored)?;
+        }
         tx.execute(
             "INSERT INTO smart_playlists (name, rules, uid, scope) VALUES (?1, ?2, ?3, ?4)",
             params![playlist.name, rules, uid, scope],
@@ -369,6 +404,9 @@ pub fn save_smart_playlist(
         let Some((uid, scope, old_name, old_rules)) = old else {
             return Err(Error::Msg("That smart playlist no longer exists.".into()));
         };
+        if scope == "shared" {
+            crate::libsync::share::refuse_local_tags(&tx, &stored)?;
+        }
         tx.execute(
             "UPDATE smart_playlists SET name = ?2, rules = ?3 WHERE id = ?1",
             params![playlist.id, playlist.name, rules],
@@ -387,6 +425,7 @@ pub fn save_smart_playlist(
         playlist.id
     };
     ops.commit(&tx)?;
+    crate::libsync::clashes::refresh(&tx)?;
     tx.commit()?;
     Ok(crate::smart::SmartPlaylist {
         id,
@@ -412,13 +451,14 @@ pub fn delete_smart_playlist(conn: &Connection, id: i64) -> Result<(), Error> {
         ops.smart_playlist_deleted(&uid);
         ops.commit(&tx)?;
     }
+    crate::libsync::clashes::refresh(&tx)?;
     tx.commit()?;
     Ok(())
 }
 
 /// A tag moved to another tag (rename or merge): smart playlists that used its uid use the new
 /// one, so the rules keep working.
-fn repoint_smart_rules(
+pub(crate) fn repoint_smart_rules(
     conn: &Connection,
     from: &str,
     to: &str,
@@ -643,6 +683,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     create_export_selections(&conn)?;
     prepare_smart_sharing(&conn)?;
     crate::libsync::seed::catch_up(&conn)?;
+    crate::libsync::clashes::migrate(&conn)?;
     Ok(conn)
 }
 
@@ -1053,6 +1094,12 @@ pub struct Playlist {
     pub id: i64,
     pub name: String,
     pub track_count: i64,
+    /// `shared` (everyone on the destination has it) or `local` (this device only).
+    pub scope: String,
+    /// Hidden on this device only.
+    pub hidden: bool,
+    /// Shown under a held name because another playlist has the name (see Clashes).
+    pub held: bool,
 }
 
 /// Extra condition for queries over `playlist_tracks pt JOIN tracks t`: a song whose audio
@@ -1065,7 +1112,8 @@ const ONE_PER_AUDIO: &str = "AND NOT EXISTS (
 
 pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT p.id, p.name, COUNT(t.id)
+        "SELECT p.id, p.name, COUNT(t.id), p.scope, p.hidden,
+                EXISTS (SELECT 1 FROM clashes c WHERE c.kind = 'playlist' AND c.held = p.uid)
          FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
          LEFT JOIN tracks t ON t.id = pt.track_id AND t.missing_since IS NULL
              AND NOT EXISTS (
@@ -1079,6 +1127,9 @@ pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>, Error> {
             id: r.get(0)?,
             name: r.get(1)?,
             track_count: r.get(2)?,
+            scope: r.get(3)?,
+            hidden: r.get(4)?,
+            held: r.get(5)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1131,6 +1182,7 @@ pub fn rename_playlist(conn: &Connection, id: i64, name: &str) -> Result<(), Err
         }
         ops.commit(&tx)?;
     }
+    crate::libsync::clashes::refresh(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -1146,6 +1198,7 @@ pub fn delete_playlist(conn: &Connection, id: i64) -> Result<(), Error> {
         }
         ops.commit(&tx)?;
     }
+    crate::libsync::clashes::refresh(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -1271,6 +1324,12 @@ pub struct Tag {
     pub name: String,
     /// Songs tagged with this tag or any tag below it.
     pub track_count: i64,
+    /// `shared` (everyone on the destination has it) or `local` (this device only).
+    pub scope: String,
+    /// Hidden on this device only.
+    pub hidden: bool,
+    /// Shown under a held name because another tag has the name (see Clashes).
+    pub held: bool,
 }
 
 /// Tidies a tag path: trims each level and drops empty ones (`" a / /b "` becomes `a/b`).
@@ -1335,7 +1394,8 @@ const IN_SUBTREE: &str =
 
 pub fn list_tags(conn: &Connection) -> Result<Vec<Tag>, Error> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT g.id, g.name, COUNT(DISTINCT t.id)
+        "SELECT g.id, g.name, COUNT(DISTINCT t.id), g.scope, g.hidden,
+                EXISTS (SELECT 1 FROM clashes k WHERE k.kind = 'tag' AND k.held = g.uid)
          FROM tags g
          JOIN tags c ON {IN_SUBTREE}
          LEFT JOIN track_tags tt ON tt.tag_id = c.id
@@ -1347,6 +1407,9 @@ pub fn list_tags(conn: &Connection) -> Result<Vec<Tag>, Error> {
             id: r.get(0)?,
             name: r.get(1)?,
             track_count: r.get(2)?,
+            scope: r.get(3)?,
+            hidden: r.get(4)?,
+            held: r.get(5)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1478,7 +1541,13 @@ fn move_tag(
     }
     repoint_smart_rules(tx, &uid, &target_uid, ops)?;
     if shared {
-        ops.tag_deleted(&uid);
+        // Merged, not deleted, so devices that still have rules or songs under the old uid
+        // follow it to the new one.
+        if target_scope == "shared" {
+            ops.tag_merged(&uid, &target_uid);
+        } else {
+            ops.tag_deleted(&uid);
+        }
     }
     Ok(())
 }
@@ -1531,6 +1600,7 @@ pub fn migrate_tags(conn: &mut Connection, from: &[String], to: Option<&str>) ->
     }
     restore_tag_parents(&tx, &mut ops)?;
     ops.commit(&tx)?;
+    crate::libsync::clashes::refresh(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -1552,6 +1622,7 @@ pub fn delete_tag(conn: &Connection, id: i64) -> Result<(), Error> {
         ops.tag_deleted(&uid);
         ops.commit(&tx)?;
     }
+    crate::libsync::clashes::refresh(&tx)?;
     tx.commit()?;
     Ok(())
 }

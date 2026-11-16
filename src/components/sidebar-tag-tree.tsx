@@ -4,19 +4,38 @@ import { ChevronRight, PencilLine, Play, Tag, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
+import { HiddenItems, ScopeMark } from "#/components/item-sharing.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
 import { GroupHeading, RowCount } from "#/components/sidebar-parts.tsx";
 import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
 import { usePlayer } from "#/context/player-context.ts";
-import { listTags, migrateLibraryTags, tagTracks } from "#/lib/api.ts";
+import { listTags, migrateLibraryTags, type Tag as TagItem, tagTracks } from "#/lib/api.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { buildTagTree, TAG_SEP, type TagNode, tagWithin, trackHasTag } from "#/lib/tag-tree.ts";
+import { useItemSharing } from "#/lib/use-item-sharing.tsx";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** A rename or delete waiting for a yes: `to` is the new full name, `null` deletes. */
 type Ask = { from: string; to: string | null; count: number };
+
+/** Merging a local tag into a shared one shows its songs to everyone. */
+function sharesPrivate(tags: readonly TagItem[], from: string, to: string): boolean {
+	const find = (name: string) => tags.find((t) => t.name.toLowerCase() === name.toLowerCase());
+	return find(from)?.scope === "local" && (find(to)?.scope ?? "shared") === "shared";
+}
+
+/** What a rename or delete in the sidebar tells the user before it runs. */
+function askBody(ask: Ask, tags: readonly TagItem[]): string {
+	if (ask.to === null) {
+		return `${ask.count} ${ask.count === 1 ? "song loses" : "songs lose"} it, subtags too. The songs stay in your library.`;
+	}
+	const note = sharesPrivate(tags, ask.from, ask.to)
+		? ` “${ask.from}” is only on this device: its ${ask.count} ${ask.count === 1 ? "song becomes" : "songs become"} visible to everyone on the destination.`
+		: "";
+	return `“${ask.to}” already exists, so its songs and these become one tag.${note}`;
+}
 
 const nonBlank = (v: string) => {
 	const t = v.trim();
@@ -98,7 +117,9 @@ function ExpandButton({
 
 export function SidebarTagTree() {
 	const tags = useQuery({ queryKey: ["tags"], queryFn: listTags });
-	const tree = useMemo(() => buildTagTree(tags.data ?? []), [tags.data]);
+	const sharing = useItemSharing();
+	const hiddenTags = useMemo(() => (tags.data ?? []).filter((t) => t.hidden), [tags.data]);
+	const tree = useMemo(() => buildTagTree((tags.data ?? []).filter((t) => !t.hidden)), [tags.data]);
 	const [open, setOpen] = useState(loadOpen);
 	const matchRoute = useMatchRoute();
 	const player = usePlayer();
@@ -179,6 +200,10 @@ export function SidebarTagTree() {
 							},
 							"separator",
 							{ label: "Rename", icon: <PencilLine />, onSelect: () => setRenaming(key) },
+							...(n.id === null
+								? []
+								: sharing.entries({ kind: "tag", id: n.id, name: n.name, scope: n.scope })),
+							"separator",
 							{
 								label: "Delete…",
 								icon: <Trash2 />,
@@ -212,6 +237,7 @@ export function SidebarTagTree() {
 								>
 									<Tag className="size-4 shrink-0" />
 									<span className="truncate">{n.label}</span>
+									<ScopeMark scope={n.scope} held={n.held} />
 									{/* On hover the count gives way to + (new subtag), so every row's count lines up. */}
 									<RowCount
 										n={n.trackCount}
@@ -253,6 +279,17 @@ export function SidebarTagTree() {
 			/>
 			{!closed && adding === "" && newTagRow(undefined, 0)}
 			{!closed && rows(tree, 0)}
+			{!closed && (
+				<HiddenItems
+					items={hiddenTags.map((t) => ({
+						key: String(t.id),
+						name: t.name,
+						item: { kind: "tag", id: t.id, name: t.name, scope: t.scope ?? "shared" },
+					}))}
+					onUnhide={sharing.unhide}
+				/>
+			)}
+			{sharing.dialogs}
 			{move.isError && <p className="px-2 text-destructive text-xs">{String(move.error)}</p>}
 			{ask && (
 				<ConfirmDialog
@@ -268,9 +305,7 @@ export function SidebarTagTree() {
 						setAsk(null);
 					}}
 				>
-					{ask.to === null
-						? `${ask.count} ${ask.count === 1 ? "song loses" : "songs lose"} it, subtags too. The songs stay in your library.`
-						: `“${ask.to}” already exists, so its songs and these become one tag.`}
+					{askBody(ask, tags.data ?? [])}
 				</ConfirmDialog>
 			)}
 		</div>

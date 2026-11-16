@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 
 use super::clock;
-use super::ops::{F_DELETE, F_NAME, F_POS, F_PRESENT, F_RULES, FORMAT, Op, member_id};
+use super::ops::{F_DELETE, F_MERGE, F_NAME, F_POS, F_PRESENT, F_RULES, FORMAT, Op, member_id};
 use super::state;
 use crate::db;
 use crate::error::Error;
@@ -101,6 +101,19 @@ impl Batch {
         self.push("tag", uid, F_DELETE, Value::Null);
     }
 
+    /// A tag was merged into another: it is gone and its uid means `into` from now on.
+    pub fn tag_merged(&mut self, uid: &str, into: &str) {
+        self.push("tag", uid, F_MERGE, json!(into));
+    }
+
+    pub fn playlist_merged(&mut self, uid: &str, into: &str) {
+        self.push("playlist", uid, F_MERGE, json!(into));
+    }
+
+    pub fn smart_playlist_merged(&mut self, uid: &str, into: &str) {
+        self.push("smart_playlist", uid, F_MERGE, json!(into));
+    }
+
     pub fn track_tag(&mut self, tag_uid: &str, audio_fp: &str, present: bool) {
         if !audio_fp.is_empty() {
             self.push(
@@ -144,6 +157,11 @@ impl Batch {
     pub fn smart_playlist(&mut self, uid: &str, name: &str, rules: &Value) {
         self.push("smart_playlist", uid, F_NAME, json!(name));
         self.push("smart_playlist", uid, F_RULES, rules.clone());
+    }
+
+    /// Only the name of a smart playlist changed.
+    pub fn smart_playlist_name(&mut self, uid: &str, name: &str) {
+        self.push("smart_playlist", uid, F_NAME, json!(name));
     }
 
     pub fn smart_playlist_rules(&mut self, uid: &str, rules: &Value) {

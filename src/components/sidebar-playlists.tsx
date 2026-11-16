@@ -4,6 +4,7 @@ import { Copy, ListMusic, PencilLine, Play, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
+import { HiddenItems, ScopeMark } from "#/components/item-sharing.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
 import { GroupHeading, RowCount } from "#/components/sidebar-parts.tsx";
@@ -18,6 +19,7 @@ import {
 	playlistTracks,
 	renamePlaylist,
 } from "#/lib/api.ts";
+import { useItemSharing } from "#/lib/use-item-sharing.tsx";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 
 const nonBlank = (v: string) => (v.trim() === "" ? null : v.trim());
@@ -84,10 +86,21 @@ export function SidebarPlaylists() {
 	const [adding, setAdding] = useState(false);
 	const [deleting, setDeleting] = useState<Playlist | null>(null);
 	const [closed, setClosed] = useStoredFlag("manplay.sidebar.playlistsClosed");
-	const all = playlists.data ?? [];
+	const sharing = useItemSharing();
+	const everything = playlists.data ?? [];
+	const all = everything.filter((p) => !p.hidden);
+	const hidden = everything.filter((p) => p.hidden);
 	const m = matchRoute({ to: "/playlists/$id" });
 	const active = m ? Number(m.id) : null;
-	const error = [actions.rename, actions.duplicate, actions.remove].find((x) => x.isError)?.error;
+	const error =
+		[actions.rename, actions.duplicate, actions.remove].find((x) => x.isError)?.error ??
+		sharing.error;
+	const itemOf = (p: Playlist) => ({
+		kind: "playlist" as const,
+		id: p.id,
+		name: p.name,
+		scope: p.scope ?? "shared",
+	});
 
 	return (
 		<div className="space-y-0.5">
@@ -139,8 +152,10 @@ export function SidebarPlaylists() {
 								label: "Duplicate",
 								icon: <Copy />,
 								disabled: actions.duplicate.isPending,
-								onSelect: () => actions.duplicate.mutate({ p, all }),
+								onSelect: () => actions.duplicate.mutate({ p, all: everything }),
 							},
+							"separator",
+							...sharing.entries(itemOf(p)),
 							"separator",
 							{
 								label: "Delete…",
@@ -178,6 +193,7 @@ export function SidebarPlaylists() {
 								>
 									<ListMusic className="size-4 shrink-0" />
 									<span className="truncate">{p.name}</span>
+									<ScopeMark scope={p.scope ?? "shared"} held={p.held ?? false} />
 									<RowCount n={p.trackCount} />
 								</Link>
 							)}
@@ -185,6 +201,13 @@ export function SidebarPlaylists() {
 						</div>
 					</RowMenu>
 				))}
+			{!closed && (
+				<HiddenItems
+					items={hidden.map((p) => ({ key: String(p.id), name: p.name, item: itemOf(p) }))}
+					onUnhide={sharing.unhide}
+				/>
+			)}
+			{sharing.dialogs}
 			{error && <p className="px-2 text-destructive text-xs">{String(error)}</p>}
 			{deleting && (
 				<ConfirmDialog
