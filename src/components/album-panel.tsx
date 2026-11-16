@@ -14,13 +14,11 @@ import { albumKey, groupAlbums, syncState } from "#/lib/albums.ts";
 import { songFacts } from "#/lib/panel-facts.tsx";
 import { usePanelTabs, useSyncTargets, useTracks } from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
-import { useTagConfirm } from "#/lib/use-tag-confirm.tsx";
 
 export function AlbumPanel({ albumKey: key }: { albumKey: string }) {
 	const tracks = useTracks();
 	const targets = useSyncTargets();
 	const { replace } = useDetail();
-	const tagConfirm = useTagConfirm();
 	const { tabs, setTab } = usePanelTabs();
 	const album = useMemo(
 		() => groupAlbums(tracks.data ?? []).find((a) => a.key === key),
@@ -90,12 +88,7 @@ export function AlbumPanel({ albumKey: key }: { albumKey: string }) {
 					hideAlbum
 				/>
 			) : (
-				target && (
-					<>
-						<TagEditor key={paths.join("\n")} target={target} confirm={tagConfirm.ask} embedded />
-						{tagConfirm.dialog}
-					</>
-				)
+				target && <TagEditor key={paths.join("\n")} target={target} embedded />
 			)}
 		</div>
 	);

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 const FIELDS = "input:not([type=file]), select";
 
@@ -34,54 +34,91 @@ function isField(el: EventTarget | null): el is HTMLElement {
 	return el instanceof HTMLInputElement || el instanceof HTMLSelectElement;
 }
 
+/** Escape in a field hands focus to the panel itself, remembering the field. */
+function leaveField(
+	ev: globalThis.KeyboardEvent,
+	field: HTMLElement,
+	panel: HTMLElement,
+	last: { current: HTMLElement | null },
+) {
+	if (ev.key === "Escape" && !ev.defaultPrevented) {
+		last.current = field;
+		panel.focus();
+	}
+}
+
+/** A key pressed with the panel itself focused (no field), when it is one of the panel's keys. */
+function runPanelKey(
+	ev: globalThis.KeyboardEvent,
+	panel: HTMLElement,
+	last: { current: HTMLElement | null },
+	focusFiles: () => void,
+) {
+	if (ev.metaKey || ev.ctrlKey || ev.altKey) {
+		return;
+	}
+	const run = panelKeys(panel, last, focusFiles)[ev.key];
+	if (run) {
+		ev.preventDefault();
+		ev.stopPropagation();
+		run();
+	}
+}
+
+/** The app's side panel, where the tag editor shows. */
+const getPanel = () => document.querySelector<HTMLElement>("[data-detail-panel]");
+
 /**
- * Vim-style hand-off between the file list and the tag panel. `L` in the list focuses the panel;
- * there `j`/`k` pick a field, `i`/Enter edit it, Esc leaves the field, and `h`/Esc go back to the list.
+ * Vim-style hand-off between the file list and the tag editor in the side panel. `L` in the list
+ * focuses the panel; there `j`/`k` pick a field, `i`/Enter edit it, Esc leaves the field, and
+ * `h`/Esc go back to the list. `enabled` is true while the panel shows the tag editor.
  */
 export function useTagPanelNav({
 	root,
 	hasTarget,
 	activePane,
 	open,
+	enabled,
 }: {
 	root: React.RefObject<HTMLElement | null>;
 	hasTarget: boolean;
 	activePane: number;
 	open: () => void;
+	enabled: boolean;
 }) {
-	const panel = useRef<HTMLElement>(null);
 	/** Field last focused, so `j`/`k` continue from there. */
 	const last = useRef<HTMLElement | null>(null);
 
 	const focusTags = useCallback(() => {
 		if (hasTarget) {
 			open();
-			requestAnimationFrame(() => panel.current?.focus());
+			// The panel may only just have opened: wait for it to render.
+			requestAnimationFrame(() => requestAnimationFrame(() => getPanel()?.focus()));
 		}
 	}, [hasTarget, open]);
 
-	const focusFiles = () =>
-		root.current?.querySelectorAll<HTMLElement>("[data-file-pane]")[activePane]?.focus();
-
-	const onKeyDown = (ev: KeyboardEvent) => {
-		const t = ev.target;
-		if (isField(t)) {
-			if (ev.key === "Escape" && !ev.defaultPrevented) {
-				last.current = t;
-				panel.current?.focus();
+	useEffect(() => {
+		if (!enabled) {
+			return;
+		}
+		const focusFiles = () =>
+			root.current?.querySelectorAll<HTMLElement>("[data-file-pane]")[activePane]?.focus();
+		// Capture phase, so Escape here does not also close the panel.
+		const onKeyDown = (ev: globalThis.KeyboardEvent) => {
+			const panel = getPanel();
+			const t = ev.target;
+			if (!panel || !(t instanceof Node) || !panel.contains(t)) {
+				return;
 			}
-			return;
-		}
-		if (t !== panel.current || ev.metaKey || ev.ctrlKey || ev.altKey) {
-			return;
-		}
-		const keys = panelKeys(panel.current, last, focusFiles);
-		const run = keys[ev.key];
-		if (run) {
-			ev.preventDefault();
-			run();
-		}
-	};
+			if (isField(t)) {
+				leaveField(ev, t, panel, last);
+			} else if (t === panel) {
+				runPanelKey(ev, panel, last, focusFiles);
+			}
+		};
+		window.addEventListener("keydown", onKeyDown, true);
+		return () => window.removeEventListener("keydown", onKeyDown, true);
+	}, [enabled, root, activePane]);
 
-	return { panel, focusTags, onKeyDown };
+	return { focusTags };
 }

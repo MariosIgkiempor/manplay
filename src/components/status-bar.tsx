@@ -23,8 +23,8 @@ export function Stat({ label, value }: { label: string; value: number | string }
 }
 
 /**
- * Puts a view's figures in the window's status bar, while the area it is in (the page, the split
- * or the drawer) is the one last clicked or focused.
+ * Puts a view's figures in the window's status bar, while the area it is in (the page or the side
+ * panel) is the one last clicked or focused.
  */
 export function StatusBar({ children, leading }: { children: ReactNode; leading?: ReactNode }) {
 	const slot = useContext(StatusSlotContext);
@@ -117,31 +117,19 @@ export function StatusBarHost({
 }
 
 /**
- * Tracks which area (page, split, drawer) is in use, for the status bar. Opening the split or the
- * drawer makes it the one in use; closing it hands back to the page.
+ * Tracks which area (page or side panel) is in use, for the status bar. Opening the panel makes it
+ * the one in use; closing it hands back to the page.
  */
 export function StatusScopeProvider({ children }: { children: ReactNode }) {
 	const detail = useDetail();
 	const [chosen, setActive] = useState<StatusScope>("main");
-	const splitKey = detail.split.view ? JSON.stringify(detail.split.view) : null;
-	const drawerOpen = detail.view !== null;
+	const panelKey = detail.view ? JSON.stringify(detail.view) : null;
 	useEffect(() => {
-		if (splitKey !== null) {
-			setActive("split");
+		if (panelKey !== null) {
+			setActive("panel");
 		}
-	}, [splitKey]);
-	useEffect(() => {
-		if (drawerOpen) {
-			setActive("drawer");
-		}
-	}, [drawerOpen]);
-	let active = chosen;
-	if (active === "drawer" && !drawerOpen) {
-		active = splitKey === null ? "main" : "split";
-	}
-	if (active === "split" && splitKey === null) {
-		active = "main";
-	}
+	}, [panelKey]);
+	const active = chosen === "panel" && panelKey === null ? "main" : chosen;
 	const value = useMemo(() => ({ active, setActive }), [active]);
 	return <ActiveStatusContext.Provider value={value}>{children}</ActiveStatusContext.Provider>;
 }

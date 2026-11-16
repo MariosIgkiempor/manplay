@@ -21,8 +21,7 @@ import { HistoryList } from "#/components/history-list.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
-import { PullButton, SyncButton } from "#/components/sync-flow.tsx";
-import { SyncReviewButton } from "#/components/sync-review.tsx";
+import { PullButton, PushButton, SyncButton } from "#/components/sync-flow.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
@@ -290,7 +289,7 @@ export function TargetDetail({ id, onRemoved }: { id: number; onRemoved: () => v
 					<>
 						<SyncButton ids={[target.id]} disabled={busy} />
 						<PullButton ids={[target.id]} disabled={busy} />
-						<SyncReviewButton ids={[target.id]} variant="outline" disabled={busy} />
+						<PushButton ids={[target.id]} variant="outline" disabled={busy} />
 					</>
 				}
 				tabs={

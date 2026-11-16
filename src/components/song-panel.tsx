@@ -28,7 +28,6 @@ import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
 import { usePanelTabs, useSyncTargets, useTracks } from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
-import { useTagConfirm } from "#/lib/use-tag-confirm.tsx";
 
 /**
  * One song in the left split, with its beat grid and cues on one tab and its metadata on the
@@ -129,17 +128,11 @@ export function SongPanel({
 }
 
 function SongMetadata({ track }: { track: Track }) {
-	const tagConfirm = useTagConfirm();
 	const target = useMemo(() => tagTargetFor([track]), [track]);
 	if (!target) {
 		return null;
 	}
-	return (
-		<>
-			<TagEditor key={track.path} target={target} confirm={tagConfirm.ask} embedded />
-			{tagConfirm.dialog}
-		</>
-	);
+	return <TagEditor key={track.path} target={target} embedded />;
 }
 
 /**
@@ -176,10 +169,9 @@ function TrackNav({
 		detail.replace({ kind: "song", trackId: next, list });
 	};
 
-	// Not while a drawer is open over the split.
-	const drawerOpen = detail.view !== null;
+	// Only while the panel still shows a song.
 	const enabled = useRef(false);
-	enabled.current = !drawerOpen;
+	enabled.current = detail.view?.kind === "song";
 	useEffect(() => {
 		const onKey = (e: globalThis.KeyboardEvent) => {
 			if (enabled.current && (e.key === "[" || e.key === "]") && !busyKey(e)) {

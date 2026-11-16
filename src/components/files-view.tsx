@@ -4,9 +4,10 @@ import { FilePane } from "#/components/file-pane.tsx";
 import { type FixNotice, HealthBar } from "#/components/library-health.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TagCopyDialog } from "#/components/tag-copy-dialog.tsx";
-import { TagEditor, type TagTarget } from "#/components/tag-editor.tsx";
+import type { TagTarget } from "#/components/tag-editor.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
+import { useDetail } from "#/context/detail-context.ts";
 import { useUndo } from "#/context/undo-context.ts";
 import { confirmFix, type FixReport } from "#/lib/api.ts";
 import { describeFixes, fixablePaths, indexIssues } from "#/lib/audit.ts";
@@ -90,7 +91,11 @@ export function FilesView() {
 	const [active, setActive] = useState<0 | 1>(0);
 	const [notice, setNotice] = useState<FixNotice | null>(null);
 	const [tagTarget, setTagTarget] = useState<TagTarget | null>(null);
-	const [tagsOpen, setTagsOpen] = useState(false);
+	const detail = useDetail();
+	const detailRef = useRef(detail);
+	detailRef.current = detail;
+	// The editor lives in the app's side panel, shared with songs, albums and artists.
+	const tagsOpen = detail.view?.kind === "edit";
 	const { clip: tagClip, setClip: setTagClip } = useTagClipboard();
 	const tagConfirm = useTagConfirm();
 	const [copying, setCopying] = useState<TagTarget | null>(null);
@@ -100,23 +105,29 @@ export function FilesView() {
 	const selectTarget = useCallback(
 		(t: TagTarget) => {
 			setTagTarget(t);
-			if (autoOpen) {
-				setTagsOpen(true);
+			const { view, open } = detailRef.current;
+			if (autoOpen || view?.kind === "edit") {
+				open({ kind: "edit", target: t });
 			}
 		},
 		[autoOpen],
 	);
 	const editTags = useCallback((t: TagTarget) => {
 		setTagTarget(t);
-		setTagsOpen(true);
+		detailRef.current.open({ kind: "edit", target: t });
 	}, []);
 	const rootRef = useRef<HTMLDivElement>(null);
-	const openTags = useCallback(() => setTagsOpen(true), []);
+	const openTags = useCallback(() => {
+		if (tagTarget) {
+			detailRef.current.open({ kind: "edit", target: tagTarget });
+		}
+	}, [tagTarget]);
 	const tagNav = useTagPanelNav({
 		root: rootRef,
 		hasTarget: tagTarget !== null,
 		activePane: active,
 		open: openTags,
+		enabled: tagsOpen,
 	});
 	// Per-pane folder; `null` means "the library root".
 	const [paths, setPaths] = useState<[string | null, string | null]>([null, null]);
@@ -195,7 +206,7 @@ export function FilesView() {
 				<Button
 					variant={tagsOpen ? "secondary" : "outline"}
 					size="sm"
-					onClick={() => setTagsOpen(!tagsOpen)}
+					onClick={() => (tagsOpen ? detail.close() : openTags())}
 					disabled={tagTarget === null}
 				>
 					<Tags />
@@ -227,22 +238,6 @@ export function FilesView() {
 						onFocusTags={tagNav.focusTags}
 					/>
 				))}
-				{tagsOpen && tagTarget && (
-					<aside
-						ref={tagNav.panel}
-						tabIndex={-1}
-						onKeyDown={tagNav.onKeyDown}
-						className="flex w-[26rem] shrink-0 flex-col border-l outline-none"
-						aria-label="Metadata"
-					>
-						<TagEditor
-							key={tagTarget.path}
-							target={tagTarget}
-							onClose={() => setTagsOpen(false)}
-							confirm={tagConfirm.ask}
-						/>
-					</aside>
-				)}
 			</div>
 			{copying && (
 				<TagCopyDialog target={copying} onCopy={setTagClip} onClose={() => setCopying(null)} />

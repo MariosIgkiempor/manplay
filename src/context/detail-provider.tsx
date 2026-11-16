@@ -1,12 +1,5 @@
 import { type ReactNode, useCallback, useMemo, useState } from "react";
-import {
-	type DetailApi,
-	DetailContext,
-	type DetailView,
-	type DrawerView,
-	isSplitView,
-	type SplitView,
-} from "#/context/detail-context.ts";
+import { type DetailApi, DetailContext, type DetailView } from "#/context/detail-context.ts";
 import { useUnsavedGuard } from "#/lib/unsaved.tsx";
 
 function same(a: DetailView | undefined, b: DetailView): boolean {
@@ -34,47 +27,25 @@ function usePane<V extends DetailView>() {
 }
 
 export function DetailProvider({ children }: { children: ReactNode }) {
-	const drawer = usePane<DrawerView>();
-	const split = usePane<SplitView>();
-
-	const open = useCallback(
-		(view: DetailView) => (isSplitView(view) ? split.open(view) : drawer.open(view)),
-		[split.open, drawer.open],
-	);
-	const push = useCallback(
-		(view: DetailView) => (isSplitView(view) ? split.push(view) : drawer.push(view)),
-		[split.push, drawer.push],
-	);
-	const replace = useCallback(
-		(view: DetailView) => (isSplitView(view) ? split.replace(view) : drawer.replace(view)),
-		[split.replace, drawer.replace],
-	);
-
+	const pane = usePane<DetailView>();
+	const { stack } = pane;
 	const value = useMemo<DetailApi>(
 		() => ({
-			view: drawer.stack.at(-1) ?? null,
-			canGoBack: drawer.stack.length > 1,
-			back: drawer.back,
-			close: drawer.close,
-			UnsavedScope: drawer.Provider,
-			split: {
-				view: split.stack.at(-1) ?? null,
-				canGoBack: split.stack.length > 1,
-				back: split.back,
-				close: split.close,
-				UnsavedScope: split.Provider,
-			},
-			open,
-			push,
-			replace,
+			view: stack.at(-1) ?? null,
+			canGoBack: stack.length > 1,
+			back: pane.back,
+			close: pane.close,
+			UnsavedScope: pane.Provider,
+			open: pane.open,
+			push: pane.push,
+			replace: pane.replace,
 		}),
-		[drawer, split, open, push, replace],
+		[pane, stack],
 	);
 	return (
 		<DetailContext.Provider value={value}>
 			{children}
-			{drawer.dialog}
-			{split.dialog}
+			{pane.dialog}
 		</DetailContext.Provider>
 	);
 }

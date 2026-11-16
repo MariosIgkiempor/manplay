@@ -9,7 +9,6 @@ import {
 	TONE,
 	type Tone,
 } from "#/components/diff-view.tsx";
-import { Drawer } from "#/components/drawer.tsx";
 import { TagChanges } from "#/components/tag-diff.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
@@ -541,41 +540,4 @@ export function ReviewBody({ ids, onClose }: { ids: number[] | undefined; onClos
 		);
 	}
 	return <div className="space-y-5">{content}</div>;
-}
-
-/** Button that opens the review: nothing reaches a destination until the changes are confirmed. */
-export function SyncReviewButton({
-	ids,
-	label = "Review push",
-	size,
-	variant,
-	disabled,
-}: {
-	ids?: number[];
-	label?: string;
-	size?: "sm" | "default";
-	variant?: "default" | "outline";
-	disabled?: boolean;
-}) {
-	const [open, setOpen] = useState(false);
-	const [session, setSession] = useState(0);
-	return (
-		<>
-			<Button
-				size={size}
-				variant={variant}
-				disabled={disabled}
-				title="See what will be sent, renamed or deleted before anything changes."
-				onClick={() => {
-					setSession((n) => n + 1);
-					setOpen(true);
-				}}
-			>
-				<CloudUpload /> {label}
-			</Button>
-			<Drawer open={open} onClose={() => setOpen(false)} title="Review push" width="w-[44rem]">
-				{open && <ReviewBody key={session} ids={ids} onClose={() => setOpen(false)} />}
-			</Drawer>
-		</>
-	);
 }

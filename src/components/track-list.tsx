@@ -428,7 +428,7 @@ function TrackRow({
 	const player = usePlayer();
 	const go = useDetailNav();
 	const order = useContext(TrackOrderContext);
-	const splitView = useDetail().split.view;
+	const splitView = useDetail().view;
 	const isOpen = splitView?.kind === "song" && splitView.trackId === track.id;
 	const isCurrent = player.current?.id === track.id;
 	const isSelected = selection?.selected.has(track.id) ?? false;
@@ -510,7 +510,7 @@ export function TrackList({ tracks, selection, empty, rowKey, ...rest }: Props) 
 	if (tracks.length === 0) {
 		return empty ?? <EmptyState title="No songs" />;
 	}
-	// The split and drawer are too narrow for tag chips; the right-click menu still manages tags.
+	// The side panel is too narrow for tag chips; the right-click menu still manages tags.
 	const layout: Layout = { tags: !inPanel };
 	const menuTracksFor = (track: Track): readonly Track[] =>
 		selection?.selected.has(track.id) && selection.selected.size > 1

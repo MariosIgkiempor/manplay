@@ -10,6 +10,7 @@ import { StatusSlotContext } from "#/context/detail-context.ts";
 import { DetailProvider } from "#/context/detail-provider.tsx";
 import { PlayerProvider } from "#/context/player-provider.tsx";
 import { SaveSlotContext } from "#/context/status-context.ts";
+import { SyncActionsProvider } from "#/context/sync-actions-provider.tsx";
 import { SyncProgressProvider } from "#/context/sync-progress-provider.tsx";
 import { UndoProvider } from "#/context/undo-provider.tsx";
 import appCss from "../styles.css?url";
@@ -44,31 +45,33 @@ function RootDocument({ children }: { children: ReactNode }) {
 						<SyncProgressProvider>
 							<UndoProvider>
 								<DetailProvider>
-									<StatusScopeProvider>
-										<StatusSlotContext.Provider value={statusSlot}>
-											<SaveSlotContext.Provider value={saveSlot}>
-												<AutoRefresh />
-												<Shell
-													missingOpen={missingOpen}
-													issuesOpen={issuesOpen}
-													setMissingOpen={setMissingOpen}
-													setIssuesOpen={setIssuesOpen}
-												>
-													{children}
-												</Shell>
-												<StatusBarHost
-													setSlot={setStatusSlot}
-													setSaveSlot={setSaveSlot}
-													notices={
-														<>
-															<IssuesIndicator onClick={() => setIssuesOpen(true)} />
-															<MissingIndicator onClick={() => setMissingOpen(true)} />
-														</>
-													}
-												/>
-											</SaveSlotContext.Provider>
-										</StatusSlotContext.Provider>
-									</StatusScopeProvider>
+									<SyncActionsProvider>
+										<StatusScopeProvider>
+											<StatusSlotContext.Provider value={statusSlot}>
+												<SaveSlotContext.Provider value={saveSlot}>
+													<AutoRefresh />
+													<Shell
+														missingOpen={missingOpen}
+														issuesOpen={issuesOpen}
+														setMissingOpen={setMissingOpen}
+														setIssuesOpen={setIssuesOpen}
+													>
+														{children}
+													</Shell>
+													<StatusBarHost
+														setSlot={setStatusSlot}
+														setSaveSlot={setSaveSlot}
+														notices={
+															<>
+																<IssuesIndicator onClick={() => setIssuesOpen(true)} />
+																<MissingIndicator onClick={() => setMissingOpen(true)} />
+															</>
+														}
+													/>
+												</SaveSlotContext.Provider>
+											</StatusSlotContext.Provider>
+										</StatusScopeProvider>
+									</SyncActionsProvider>
 								</DetailProvider>
 							</UndoProvider>
 						</SyncProgressProvider>

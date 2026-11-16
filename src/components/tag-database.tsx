@@ -2,20 +2,31 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import {
 	ArrowDown,
 	ArrowUp,
+	AudioLines,
+	Building2,
+	Database,
+	Disc3,
+	Languages,
+	Layers,
 	ListMusic,
 	Merge,
+	Mic2,
 	Pencil,
+	PenLine,
 	Play,
 	Plus,
 	Search,
+	Shuffle,
+	Smile,
+	Tags,
 	Trash2,
 } from "lucide-react";
-import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
-import { EmptyState } from "#/components/page.tsx";
+import { EmptyState, Page } from "#/components/page.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -24,6 +35,7 @@ import { usePlayer } from "#/context/player-context.ts";
 import { type FixReport, listTags, tagValues } from "#/lib/api.ts";
 import { useTagDatabaseOps, useTracks } from "#/lib/queries.ts";
 import { trackHasValue, VALUE_FIELDS, type ValueField } from "#/lib/track-fields.ts";
+import { typeScale } from "#/lib/type-scale.ts";
 import { cn } from "#/lib/utils.ts";
 
 interface Item {
@@ -46,6 +58,7 @@ const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLow
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const byName = (a: Item, b: Item) => a.value.localeCompare(b.value);
 
+const FIELD_IDS = VALUE_FIELDS.map((f) => f.id);
 const FILE_FIELDS = VALUE_FIELDS.filter((f) => f.id !== "library");
 
 type Lists = Record<ValueField, { items: Item[]; loading: boolean }>;
@@ -101,11 +114,12 @@ export function TagDatabase() {
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [editing, setEditing] = useState<string | null>(null);
 	const [pending, setPending] = useState<Pending | null>(null);
+	const [creating, setCreating] = useState(false);
 	const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 	const busy = ops.migrate.isPending || ops.create.isPending;
 	const isLibrary = source === "library";
 	const unit = isLibrary ? "songs tagged" : "songs";
-	const field = VALUE_FIELDS.find((f) => f.id === source);
+	const label = VALUE_FIELDS.find((f) => f.id === source)?.label ?? "Values";
 	const songsWith = (value: string) =>
 		(tracks.data ?? []).filter((t) => trackHasValue(t, source, value));
 
@@ -115,6 +129,7 @@ export function TagDatabase() {
 		setSelected(new Set());
 		setEditing(null);
 		setPending(null);
+		setCreating(false);
 		setSearch("");
 		setNotice(null);
 	}, [source]);
@@ -127,6 +142,7 @@ export function TagDatabase() {
 	const countOf = (names: string[]) =>
 		items.filter((i) => names.some((n) => same(n, i.value))).reduce((sum, i) => sum + i.count, 0);
 	const openValue = detail.view?.kind === "value" ? detail.view : null;
+	const maxCount = useMemo(() => Math.max(1, ...items.map((i) => i.count)), [items]);
 
 	const toggle = (value: string) =>
 		setSelected((s) => {
@@ -146,6 +162,7 @@ export function TagDatabase() {
 		setNotice(null);
 		try {
 			await ops.create.mutateAsync(name);
+			setCreating(false);
 			setNotice({ ok: true, text: `Created “${name}”.` });
 		} catch (e) {
 			setNotice({ ok: false, text: String(e) });
@@ -185,142 +202,168 @@ export function TagDatabase() {
 		}
 	};
 
+	const totalValues = FIELD_IDS.reduce((sum, id) => sum + all[id].items.length, 0);
 	return (
-		<div className="grid gap-6 md:grid-cols-[11rem_minmax(0,1fr)]">
-			<DatabaseStats
-				label={field?.label ?? "Values"}
-				total={items.length}
-				shown={shown.length}
-				search={search}
-				selected={selected.size}
-			/>
-			<FieldNav all={all} source={source} onPick={setSource} />
+		<Page
+			title="Metadata"
+			icon={<Database />}
+			meta={
+				<>
+					<span>{plural(VALUE_FIELDS.length, "field", "fields")}</span>
+					<span>{plural(totalValues, "value", "values")}</span>
+				</>
+			}
+		>
+			<div className="grid gap-8 md:grid-cols-[12rem_minmax(0,1fr)]">
+				<DatabaseStats
+					label={label}
+					total={items.length}
+					shown={shown.length}
+					search={search}
+					selected={selected.size}
+				/>
+				<FieldNav all={all} source={source} onPick={setSource} />
 
-			<div className="min-w-0 space-y-3">
-				<div className="flex flex-wrap items-center gap-2">
-					<div className="relative min-w-48 flex-1">
-						<Search className="pointer-events-none absolute top-2 left-2.5 size-4 text-muted-foreground" />
-						<Input
-							value={search}
-							onChange={(e) => setSearch(e.target.value)}
-							placeholder={`Search ${field?.label.toLowerCase() ?? "values"}`}
-							aria-label="Search values"
-							className="pl-8"
-						/>
+				<div className="min-w-0 space-y-4">
+					<FieldHeading label={label} items={items} loading={loading} isLibrary={isLibrary} />
+					<Notices notice={notice} error={ops.migrate.error ?? ops.create.error} />
+
+					<div className="overflow-clip rounded-lg border bg-card">
+						<div className="sticky top-0 z-10 bg-card">
+							<div className="flex flex-wrap items-center gap-2 border-b p-3">
+								<div className="relative min-w-48 flex-1">
+									<Search className="pointer-events-none absolute top-2 left-2.5 size-4 text-muted-foreground" />
+									<Input
+										value={search}
+										onChange={(e) => setSearch(e.target.value)}
+										placeholder={`Search ${label.toLowerCase()}`}
+										aria-label="Search values"
+										className="pl-8"
+									/>
+								</div>
+								<Button
+									variant="outline"
+									disabled={busy || creating}
+									onClick={() => setCreating(true)}
+								>
+									<Plus /> Create
+								</Button>
+							</div>
+
+							{selected.size > 0 && (
+								<MigrateBar
+									selected={[...selected]}
+									items={items}
+									busy={busy}
+									onClear={() => setSelected(new Set())}
+									onMigrate={(to) => setPending({ from: [...selected], to })}
+								/>
+							)}
+
+							<div className="grid h-9 grid-cols-[1.75rem_minmax(0,1fr)_9rem_4rem] items-center gap-2 border-b bg-card px-3 font-medium text-muted-foreground text-xs">
+								<input
+									type="checkbox"
+									checked={allShownSelected}
+									onChange={toggleAll}
+									disabled={shown.length === 0}
+									aria-label="Select all shown"
+									className="size-3.5 accent-primary"
+								/>
+								<SortHeader
+									label="Name"
+									active={order.by === "value"}
+									order={order}
+									onClick={() => sortBy("value")}
+								/>
+								<SortHeader
+									label="Songs"
+									active={order.by === "count"}
+									order={order}
+									onClick={() => sortBy("count")}
+									right
+								/>
+								<span />
+							</div>
+						</div>
+						{loading && <EmptyState title="Loading…" />}
+						{!loading && shown.length === 0 && (
+							<NoValues label={label} isLibrary={isLibrary} searching={items.length > 0} />
+						)}
+						<div className="divide-y">
+							{creating && (
+								<NewValueRow
+									existing={items}
+									label={label}
+									onCreate={create}
+									onCancel={() => setCreating(false)}
+								/>
+							)}
+							{shown.map((item) => (
+								<RowMenu
+									key={item.value}
+									label={item.value}
+									items={[
+										{
+											label: "Show songs",
+											icon: <ListMusic />,
+											onSelect: () =>
+												detail.open({ kind: "value", field: source, value: item.value }),
+										},
+										{
+											label: "Play",
+											icon: <Play />,
+											disabled: item.count === 0,
+											onSelect: () => player.play(songsWith(item.value), 0),
+										},
+										"separator",
+										{
+											label: "Rename",
+											icon: <Pencil />,
+											disabled: busy,
+											onSelect: () => setEditing(item.value),
+										},
+										{
+											label: "Delete…",
+											icon: <Trash2 />,
+											destructive: true,
+											disabled: busy,
+											onSelect: () => setPending({ from: [item.value], to: null }),
+										},
+									]}
+								>
+									<Row
+										item={item}
+										unit={unit}
+										checked={selected.has(item.value)}
+										max={maxCount}
+										open={openValue?.field === source && same(openValue.value, item.value)}
+										editing={editing === item.value}
+										busy={busy}
+										onOpen={() => detail.open({ kind: "value", field: source, value: item.value })}
+										onToggle={() => toggle(item.value)}
+										onEdit={() => setEditing(item.value)}
+										onCancel={() => setEditing(null)}
+										onRename={(to) => rename(item, to)}
+										onDelete={() => setPending({ from: [item.value], to: null })}
+									/>
+								</RowMenu>
+							))}
+						</div>
 					</div>
-					<NewValue busy={busy} existing={items} onCreate={create} />
 				</div>
 
-				{selected.size > 0 && (
-					<MigrateBar
-						selected={[...selected]}
+				{pending && (
+					<Confirm
+						pending={pending}
+						affected={countOf(pending.from)}
 						items={items}
-						busy={busy}
-						onClear={() => setSelected(new Set())}
-						onMigrate={(to) => setPending({ from: [...selected], to })}
+						rewritesFiles={!isLibrary}
+						onCancel={() => setPending(null)}
+						onConfirm={() => run(pending)}
 					/>
 				)}
-
-				<Notices notice={notice} error={ops.migrate.error ?? ops.create.error} />
-
-				<div className="overflow-hidden rounded-lg border">
-					<div className="grid h-8 grid-cols-[1.75rem_minmax(0,1fr)_6rem_4rem] items-center gap-2 border-b bg-muted/30 px-3 font-medium text-muted-foreground text-xs">
-						<input
-							type="checkbox"
-							checked={allShownSelected}
-							onChange={toggleAll}
-							disabled={shown.length === 0}
-							aria-label="Select all shown"
-							className="size-3.5 accent-primary"
-						/>
-						<SortHeader
-							label="Name"
-							active={order.by === "value"}
-							order={order}
-							onClick={() => sortBy("value")}
-						/>
-						<SortHeader
-							label="Songs"
-							active={order.by === "count"}
-							order={order}
-							onClick={() => sortBy("count")}
-							right
-						/>
-						<span />
-					</div>
-					{loading && <EmptyState title="Loading…" />}
-					{!loading && shown.length === 0 && (
-						<NoValues
-							label={field?.label ?? "values"}
-							isLibrary={isLibrary}
-							searching={items.length > 0}
-						/>
-					)}
-					<div className="divide-y">
-						{shown.map((item) => (
-							<RowMenu
-								key={item.value}
-								label={item.value}
-								items={[
-									{
-										label: "Show songs",
-										icon: <ListMusic />,
-										onSelect: () =>
-											detail.open({ kind: "value", field: source, value: item.value }),
-									},
-									{
-										label: "Play",
-										icon: <Play />,
-										disabled: item.count === 0,
-										onSelect: () => player.play(songsWith(item.value), 0),
-									},
-									"separator",
-									{
-										label: "Rename",
-										icon: <Pencil />,
-										disabled: busy,
-										onSelect: () => setEditing(item.value),
-									},
-									{
-										label: "Delete…",
-										icon: <Trash2 />,
-										destructive: true,
-										disabled: busy,
-										onSelect: () => setPending({ from: [item.value], to: null }),
-									},
-								]}
-							>
-								<Row
-									item={item}
-									unit={unit}
-									checked={selected.has(item.value)}
-									open={openValue?.field === source && same(openValue.value, item.value)}
-									editing={editing === item.value}
-									busy={busy}
-									onOpen={() => detail.open({ kind: "value", field: source, value: item.value })}
-									onToggle={() => toggle(item.value)}
-									onEdit={() => setEditing(item.value)}
-									onCancel={() => setEditing(null)}
-									onRename={(to) => rename(item, to)}
-									onDelete={() => setPending({ from: [item.value], to: null })}
-								/>
-							</RowMenu>
-						))}
-					</div>
-				</div>
 			</div>
-
-			{pending && (
-				<Confirm
-					pending={pending}
-					affected={countOf(pending.from)}
-					items={items}
-					rewritesFiles={!isLibrary}
-					onCancel={() => setPending(null)}
-					onConfirm={() => run(pending)}
-				/>
-			)}
-		</div>
+		</Page>
 	);
 }
 
@@ -366,29 +409,117 @@ function FieldNav({
 	source: ValueField;
 	onPick: (f: ValueField) => void;
 }) {
+	const groups = [
+		{ title: "In the audio files", fields: VALUE_FIELDS.filter((f) => f.id !== "library") },
+		{ title: "In manplay", fields: VALUE_FIELDS.filter((f) => f.id === "library") },
+	];
 	return (
-		<nav aria-label="Fields" className="flex flex-wrap gap-0.5 md:flex-col">
-			{VALUE_FIELDS.map((f) => (
-				<button
-					key={f.id}
-					type="button"
-					onClick={() => onPick(f.id)}
-					aria-current={source === f.id ? "true" : undefined}
-					className={cn(
-						"flex items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors",
-						source === f.id
-							? "bg-muted font-medium text-foreground"
-							: "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-						f.id === "library" && "md:mt-3",
-					)}
-				>
-					<span className="truncate">{f.label}</span>
-					<span className="text-muted-foreground text-xs tabular-nums">
-						{all[f.id].loading ? "" : all[f.id].items.length}
-					</span>
-				</button>
+		<nav
+			aria-label="Fields"
+			className="flex flex-wrap gap-x-4 gap-y-3 md:sticky md:top-6 md:flex-col md:flex-nowrap md:gap-y-4 md:self-start"
+		>
+			{groups.map((g) => (
+				<div key={g.title} className="space-y-0.5">
+					<h2 className={cn(typeScale.label, "px-2.5 pb-1")}>{g.title}</h2>
+					<div className="flex flex-wrap gap-0.5 md:flex-col">
+						{g.fields.map((f) => (
+							<FieldButton
+								key={f.id}
+								icon={FIELD_ICONS[f.id]}
+								label={f.label}
+								count={all[f.id].loading ? null : all[f.id].items.length}
+								active={source === f.id}
+								onClick={() => onPick(f.id)}
+							/>
+						))}
+					</div>
+				</div>
 			))}
 		</nav>
+	);
+}
+
+const FIELD_ICONS: Record<ValueField, ReactNode> = {
+	artist: <Mic2 />,
+	albumArtist: <Disc3 />,
+	genre: <AudioLines />,
+	label: <Building2 />,
+	grouping: <Layers />,
+	composer: <PenLine />,
+	remixer: <Shuffle />,
+	mood: <Smile />,
+	language: <Languages />,
+	library: <Tags />,
+};
+
+function FieldButton({
+	icon,
+	label,
+	count,
+	active,
+	onClick,
+}: {
+	icon: ReactNode;
+	label: string;
+	count: number | null;
+	active: boolean;
+	onClick: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			aria-current={active ? "true" : undefined}
+			className={cn(
+				"relative flex items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
+				active
+					? "bg-muted font-medium text-foreground"
+					: "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+			)}
+		>
+			{active && (
+				<span
+					aria-hidden="true"
+					className="absolute top-1.5 bottom-1.5 left-0 w-0.5 rounded-full bg-primary"
+				/>
+			)}
+			<span className="flex min-w-0 items-center gap-2">
+				<span aria-hidden="true" className={cn("[&_svg]:size-4", active && "text-primary")}>
+					{icon}
+				</span>
+				<span className="truncate">{label}</span>
+			</span>
+			<span className="text-muted-foreground text-xs tabular-nums">{count ?? ""}</span>
+		</button>
+	);
+}
+
+/** What the list is, how much is in it, and what changing a value does. */
+function FieldHeading({
+	label,
+	items,
+	loading,
+	isLibrary,
+}: {
+	label: string;
+	items: Item[];
+	loading: boolean;
+	isLibrary: boolean;
+}) {
+	const unused = items.filter((i) => i.count === 0).length;
+	return (
+		<header className="space-y-1">
+			<h2 className={typeScale.panelTitle}>{label}</h2>
+			<div className="flex flex-wrap gap-x-4 text-muted-foreground text-xs tabular-nums">
+				{!loading && <span>{plural(items.length, "value", "values")}</span>}
+				{unused > 0 && <span>{unused} unused</span>}
+			</div>
+			<p className={typeScale.description}>
+				{isLibrary
+					? "Tags you make in manplay. Audio files are not changed."
+					: "Renaming or merging rewrites the tag inside every audio file that uses it."}
+			</p>
+		</header>
 	);
 }
 
@@ -465,40 +596,34 @@ function SortHeader({
 	);
 }
 
-function NewValue({
-	busy,
+/** A temporary row at the top of the list, named in place: Enter creates it, Escape drops it. */
+function NewValueRow({
 	existing,
+	label,
 	onCreate,
+	onCancel,
 }: {
-	busy: boolean;
 	existing: Item[];
+	label: string;
 	onCreate: (name: string) => void;
+	onCancel: () => void;
 }) {
-	const [name, setName] = useState("");
-	const trimmed = name.trim();
-	const taken = existing.some((i) => same(i.value, trimmed));
-	const submit = (e: FormEvent) => {
-		e.preventDefault();
-		if (trimmed !== "" && !taken) {
-			onCreate(trimmed);
-			setName("");
-		}
-	};
 	return (
-		<form onSubmit={submit} className="flex gap-2">
-			<Input
-				value={name}
-				onChange={(e) => setName(e.target.value)}
-				placeholder="New value"
-				aria-label="New value"
-				aria-invalid={taken || undefined}
-				title={taken ? "That value already exists" : undefined}
-				className="w-44"
+		<div className="grid h-12 grid-cols-[1.75rem_minmax(0,1fr)_9rem_4rem] items-center gap-2 bg-primary/5 px-3 text-sm">
+			<Plus className="size-3.5 text-primary" aria-hidden="true" />
+			<InlineInput
+				initial=""
+				label={`New ${label.toLowerCase()} value`}
+				parse={(v) => {
+					const name = v.trim();
+					return existing.some((i) => same(i.value, name)) ? null : name;
+				}}
+				onCommit={onCreate}
+				onCancel={onCancel}
 			/>
-			<Button type="submit" variant="outline" disabled={busy || trimmed === "" || taken}>
-				<Plus /> Create
-			</Button>
-		</form>
+			<span className="text-right text-muted-foreground text-xs">New</span>
+			<span />
+		</div>
 	);
 }
 
@@ -519,7 +644,7 @@ function MigrateBar({
 	const [target, setTarget] = useState("");
 	const to = target.trim();
 	return (
-		<div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-2">
+		<div className="flex flex-wrap items-center gap-2 border-b bg-primary/5 px-3 py-2">
 			<span className="px-1 font-medium text-sm tabular-nums">{selected.length} selected</span>
 			<Input
 				value={target}
@@ -553,6 +678,7 @@ function Row({
 	item,
 	unit,
 	checked,
+	max,
 	open,
 	editing,
 	busy,
@@ -566,7 +692,9 @@ function Row({
 	item: Item;
 	unit: string;
 	checked: boolean;
-	/** Its songs are showing in the slide-over. */
+	/** The most songs any value in this list has, so bars share one scale. */
+	max: number;
+	/** Its songs are showing in the side panel. */
 	open: boolean;
 	editing: boolean;
 	busy: boolean;
@@ -580,7 +708,7 @@ function Row({
 	return (
 		<div
 			className={cn(
-				"group grid h-10 grid-cols-[1.75rem_minmax(0,1fr)_6rem_4rem] items-center gap-2 px-3 text-sm",
+				"group grid h-12 grid-cols-[1.75rem_minmax(0,1fr)_9rem_4rem] items-center gap-2 px-3 text-sm",
 				checked ? "bg-primary/10" : open ? "bg-muted" : "hover:bg-muted/50",
 			)}
 		>
@@ -605,16 +733,29 @@ function Row({
 					onClick={onOpen}
 					onDoubleClick={busy ? undefined : onEdit}
 					title={`Show songs with “${item.value}”. Double-click to rename.`}
-					className="min-w-0 truncate rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60"
+					className={cn(
+						"min-w-0 truncate rounded-sm text-left font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60",
+						item.count === 0 && "font-normal text-muted-foreground",
+					)}
 				>
 					{item.value}
 				</button>
 			)}
 			<span
-				className="text-right text-muted-foreground text-xs tabular-nums"
+				className="flex items-center justify-end gap-2 text-muted-foreground text-xs tabular-nums"
 				title={`${item.count} ${unit}`}
 			>
-				{item.count === 0 ? "Unused" : item.count}
+				{item.count > 0 && (
+					<span aria-hidden="true" className="h-1 w-16 overflow-hidden rounded-full bg-muted">
+						<span
+							className="block h-full rounded-full bg-primary/60"
+							style={{ width: `${Math.max(6, (item.count / max) * 100)}%` }}
+						/>
+					</span>
+				)}
+				<span className={cn("min-w-9 text-right", item.count === 0 && "italic")}>
+					{item.count === 0 ? "Unused" : item.count}
+				</span>
 			</span>
 			<div className="flex justify-end gap-0.5 opacity-0 focus-within:opacity-100 group-hover:opacity-100">
 				<Button

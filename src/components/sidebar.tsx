@@ -12,8 +12,8 @@ import {
 } from "lucide-react";
 import { createContext, type ReactNode, useContext, useEffect } from "react";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
-import { SidebarDrives } from "#/components/sidebar-drives.tsx";
 import { SidebarPlaylists } from "#/components/sidebar-playlists.tsx";
+import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
@@ -76,6 +76,21 @@ function NavLink({
 	);
 }
 
+/** Folded away, Import and Export are plain icons; otherwise they live in the Sync section. */
+function RailSyncLinks({ syncing }: { syncing: boolean }) {
+	return (
+		<>
+			<NavLink to="/import" label="Import" icon={<Download />} />
+			<NavLink
+				to="/export"
+				label="Export"
+				icon={<Upload />}
+				badge={syncing && <span className="ml-auto size-2 animate-pulse rounded-full bg-primary" />}
+			/>
+		</>
+	);
+}
+
 /** ⌘\ folds the sidebar away and back. */
 function useToggleKey(toggle: () => void) {
 	useEffect(() => {
@@ -91,7 +106,7 @@ function useToggleKey(toggle: () => void) {
 }
 
 /**
- * The app's left column: pages, drives, playlists and tags. Drag its edge to resize it; fold it to
+ * The app's left column: pages, sync, playlists and tags. Drag its edge to resize it; fold it to
  * an icon rail with the button at the top, by dragging it narrow, or with ⌘\.
  */
 export function Sidebar() {
@@ -142,21 +157,13 @@ export function Sidebar() {
 					<NavLink to="/" label="Library" icon={<Library />} />
 					<NavLink to="/files" label="Files" icon={<FolderTree />} />
 					<NavLink to="/metadata" label="Metadata" icon={<Database />} />
-					<NavLink to="/import" label="Import" icon={<Download />} />
-					<NavLink
-						to="/export"
-						label="Export"
-						icon={<Upload />}
-						badge={
-							syncing && <span className="ml-auto size-2 animate-pulse rounded-full bg-primary" />
-						}
-					/>
+					{collapsed && <RailSyncLinks syncing={syncing} />}
 				</nav>
 				{collapsed ? (
 					<div className="flex-1" />
 				) : (
 					<div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
-						<SidebarDrives />
+						<SidebarSync />
 						<SidebarPlaylists />
 						<SidebarTagTree />
 					</div>

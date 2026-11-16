@@ -8,15 +8,12 @@ export type DestinationService = "tailscale" | "r2" | "rekordbox" | "usb";
 /** The two tabs of a song's view. */
 export type SongTab = "grid" | "metadata";
 
-/** What the left split shows: one song, album or artist, with history behind it. */
-export type SplitView =
+/** What the side panel shows, with history behind it. */
+export type DetailView =
 	/** A song: its grid and cues or its metadata; `list` is the songs the grid steps through. */
 	| { kind: "song"; trackId: number; tab?: SongTab; list?: readonly number[] | undefined }
 	| { kind: "album"; key: string }
-	| { kind: "artist"; name: string };
-
-/** What the right-hand drawer shows. */
-export type DrawerView =
+	| { kind: "artist"; name: string }
 	/** Tag editor for several songs (a selection or a value's songs). */
 	| { kind: "edit"; target: TagTarget }
 	| { kind: "service"; service: ServiceId }
@@ -29,32 +26,19 @@ export type DrawerView =
 	/** Songs holding one value of a tag field, e.g. every song in the genre "House". */
 	| { kind: "value"; field: string; value: string };
 
-export type DetailView = SplitView | DrawerView;
-
-const SPLIT_KINDS = new Set<string>(["song", "album", "artist"]);
-
-export function isSplitView(view: DetailView): view is SplitView {
-	return SPLIT_KINDS.has(view.kind);
-}
-
-/** One pane's navigation: the view on show and the history behind it. */
-export interface PaneApi<V> {
-	view: V | null;
+/** The side panel's navigation: the view on show and the history behind it. */
+export interface DetailApi {
+	view: DetailView | null;
 	canGoBack: boolean;
 	back: () => void;
 	close: () => void;
-	/** Wraps the pane's content so its unsaved changes are saved or confirmed on leaving. */
+	/** Wraps the panel's content so its unsaved changes are saved or confirmed on leaving. */
 	UnsavedScope: ComponentType<{ children: ReactNode }>;
-}
-
-export interface DetailApi extends PaneApi<DrawerView> {
-	/** The left split, which holds songs, albums and artists. */
-	split: PaneApi<SplitView>;
-	/** Show a view fresh in its pane (split or drawer), discarding that pane's history. */
+	/** Show a view fresh in the panel, discarding its history. */
 	open: (view: DetailView) => void;
-	/** Navigate deeper from inside a pane, keeping back-history. */
+	/** Navigate deeper from inside the panel, keeping back-history. */
 	push: (view: DetailView) => void;
-	/** Swap the current view of its pane for another, keeping the history behind it. */
+	/** Swap the current view of the panel for another, keeping the history behind it. */
 	replace: (view: DetailView) => void;
 }
 
@@ -63,11 +47,8 @@ export const DetailContext = createContext<DetailApi | null>(null);
 /** Element at the bottom edge of the current view where track lists pin their status bar. */
 export const StatusSlotContext = createContext<HTMLElement | null>(null);
 
-/** True for components rendered inside the slide-over drawer or the left split. */
+/** True for components rendered inside the side panel. */
 export const PanelScopeContext = createContext(false);
-
-/** True for components rendered inside the left split. */
-export const SplitScopeContext = createContext(false);
 
 export function useDetail(): DetailApi {
 	const ctx = useContext(DetailContext);
@@ -77,19 +58,9 @@ export function useDetail(): DetailApi {
 	return ctx;
 }
 
-/**
- * Navigation that pushes inside the pane the view belongs to, and opens fresh from anywhere else
- * (the main page, or the other pane).
- */
+/** Navigation that pushes inside the panel, and opens fresh from the main page. */
 export function useDetailNav(): (view: DetailView) => void {
 	const { open, push } = useDetail();
 	const inPanel = useContext(PanelScopeContext);
-	const inSplit = useContext(SplitScopeContext);
-	return useCallback(
-		(view) => {
-			const here = isSplitView(view) ? inSplit : inPanel && !inSplit;
-			return here ? push(view) : open(view);
-		},
-		[inPanel, inSplit, open, push],
-	);
+	return useCallback((view) => (inPanel ? push(view) : open(view)), [inPanel, open, push]);
 }

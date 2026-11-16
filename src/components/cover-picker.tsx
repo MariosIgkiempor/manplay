@@ -1,5 +1,6 @@
 import { ImagePlus, LoaderCircle } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { SaveState } from "#/components/save-state.tsx";
 import { bumpArt } from "#/lib/art-version.ts";
 import { useTagsSetCover } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
@@ -8,7 +9,8 @@ const COVER_TYPES = ["image/jpeg", "image/png"];
 
 /**
  * Cover art you can replace: click it to choose an image file, or press ⌘V with an image copied.
- * The new cover is written to the song, or every song of the album, straight away.
+ * The new cover is written to the song, or every song of the album, straight away; the status
+ * bar says "Saving…", then "Saved".
  */
 export function CoverPicker({
 	paths,
@@ -74,6 +76,7 @@ export function CoverPicker({
 	const busy = setCover.isPending;
 	return (
 		<>
+			<SaveState status={busy ? "saving" : error ? "error" : "saved"} error={error} />
 			<button
 				type="button"
 				aria-label={`Replace the cover of ${name}`}

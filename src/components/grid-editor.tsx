@@ -412,9 +412,9 @@ function useGridKeys(actions: Partial<Record<GridAction, (alt: boolean) => void>
 	const detail = useDetail();
 	const latest = useRef(actions);
 	latest.current = actions;
-	// Not while a drawer is open over the split.
+	// Only while the panel still shows a song.
 	const showing = useRef(false);
-	showing.current = detail.view === null;
+	showing.current = detail.view?.kind === "song";
 	useEffect(() => {
 		const onKey = (e: globalThis.KeyboardEvent) => {
 			const name = gridAction(e);

@@ -21,8 +21,7 @@ import { useArtVersion } from "#/lib/art-version.ts";
 import { useTagsRead, useTagsWrite, useTagValues } from "#/lib/queries.ts";
 import { TAG_GROUPS, type TagField, type TagGroup } from "#/lib/tag-fields.ts";
 import { fillFromPath } from "#/lib/tag-fill.ts";
-import { type SaveStatus, useAutosave, useUnsaved } from "#/lib/unsaved.tsx";
-import type { TagConfirmRequest } from "#/lib/use-tag-confirm.tsx";
+import { type SaveStatus, useAutosave } from "#/lib/unsaved.tsx";
 import { cn } from "#/lib/utils.ts";
 
 export interface TagTarget {
@@ -48,29 +47,22 @@ const sameDraft = (a: Draft, b: Draft) => {
 	return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
 };
 
-/** What a tag write did, when worth saying: failures, and for many songs how many were saved. */
-function noticeFor(
-	report: { fixed: number; failed: readonly { error: string }[] },
-	bulk: boolean,
-): { ok: boolean; text: string } | null {
+/** What a tag write did, when worth saying: only failures. */
+function noticeFor(report: {
+	fixed: number;
+	failed: readonly { error: string }[];
+}): { ok: boolean; text: string } | null {
 	const failed = report.failed.length;
-	if (failed > 0) {
-		return {
-			ok: false,
-			text: `${report.fixed} saved, ${failed} failed: ${report.failed[0]?.error ?? ""}`,
-		};
+	if (failed === 0) {
+		return null;
 	}
-	return bulk ? { ok: true, text: `Saved to ${plural(report.fixed, "song", "songs")}.` } : null;
+	return {
+		ok: false,
+		text: `${report.fixed} saved, ${failed} failed: ${report.failed[0]?.error ?? ""}`,
+	};
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-
-function confirmTitle(target: TagTarget, count: number): string {
-	if (target.paths) {
-		return `Apply to ${plural(count, "song", "songs")} of "${target.name}"`;
-	}
-	return target.isDir ? `Apply to all songs in "${target.name}"` : `Apply to "${target.name}"`;
-}
 
 /** Groups opened by default; the rest open when they hold something or on demand. */
 const OPEN_BY_DEFAULT = new Set(["Core", "Numbering", "DJ"]);
@@ -82,13 +74,11 @@ const OPEN_BY_DEFAULT = new Set(["Core", "Numbering", "DJ"]);
 export function TagEditor({
 	target,
 	onClose,
-	confirm,
 	embedded = false,
 }: {
 	target: TagTarget;
 	/** Shows a close button in the header, where nothing around the editor closes it. */
 	onClose?: (() => void) | undefined;
-	confirm: (req: TagConfirmRequest) => Promise<boolean>;
 	/** Sits inside a page that scrolls and names the song: no header or own scrolling. */
 	embedded?: boolean;
 }) {
@@ -98,7 +88,6 @@ export function TagEditor({
 	const [draft, setDraft] = useState<Draft>({});
 	const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
 	const count = view.data?.count ?? 0;
-	const edited = Object.keys(draft);
 
 	const edit = (id: string, value: string) => {
 		setNotice(null);
@@ -110,9 +99,7 @@ export function TagEditor({
 			return rest;
 		});
 
-	// One song saves on its own a second after the last edit. A folder or a group of songs
-	// saves only on Save, after showing what will change, since one slip rewrites many files.
-	const bulk = target.isDir || target.paths !== undefined;
+	// Edits save on their own a second after the last one, for one song or many.
 	const writeNow = async (edits: Draft) => {
 		setNotice(null);
 		const report = await write.mutateAsync({ path: where(target), edits });
@@ -124,57 +111,25 @@ export function TagEditor({
 		setDraft((d) =>
 			Object.fromEntries(Object.entries(d).filter(([id, value]) => edits[id] !== value)),
 		);
-		setNotice(noticeFor(report, bulk));
+		setNotice(noticeFor(report));
 	};
 	const autosave = useAutosave({
 		label: `Metadata of "${target.name}"`,
-		value: bulk ? {} : draft,
+		value: draft,
 		saved: {},
 		equal: sameDraft,
 		save: writeNow,
 	});
-	useUnsaved({
-		dirty: bulk && edited.length > 0,
-		label: `Metadata of "${target.name}"`,
-		autosave: false,
-		save: async () => {
-			try {
-				await writeNow(draft);
-				return true;
-			} catch {
-				return false;
-			}
-		},
-	});
 
-	const save = async () => {
-		if (!bulk) {
-			await autosave.flush();
-			return;
-		}
-		if (edited.length === 0 || write.isPending) {
-			return;
-		}
-		const ok = await confirm({
-			title: confirmTitle(target, count),
-			subtitle: target.isDir && !target.paths ? "Includes subfolders" : undefined,
-			items: [{ path: where(target), name: target.name, edits: draft }],
-		});
-		if (ok) {
-			await writeNow(draft).catch(() => undefined);
-		}
-	};
-
+	// Cmd+S, or Cmd+Enter in a field, saves right away instead of waiting out the second.
 	const onKeyDown = (ev: KeyboardEvent) => {
 		if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
 			ev.preventDefault();
-			void save();
+			void autosave.flush();
 		}
 	};
-
-	// Cmd+S saves from anywhere while the editor is open, even with focus in the file list.
-	const saveRef = useRef(save);
-	saveRef.current = save;
+	const flushRef = useRef(autosave.flush);
+	flushRef.current = autosave.flush;
 	useEffect(() => {
 		const onKey = (ev: globalThis.KeyboardEvent) => {
 			if (ev.key.toLowerCase() !== "s" || !(ev.metaKey || ev.ctrlKey) || ev.shiftKey) {
@@ -182,7 +137,7 @@ export function TagEditor({
 			}
 			ev.preventDefault();
 			if (!document.querySelector("[role=dialog]")) {
-				void saveRef.current();
+				void flushRef.current();
 			}
 		};
 		window.addEventListener("keydown", onKey);
@@ -199,89 +154,27 @@ export function TagEditor({
 			<div className={cn(!embedded && "min-h-0 flex-1 overflow-y-auto")}>
 				<Body view={view} target={target} draft={draft} onEdit={edit} onRevert={revert} />
 			</div>
-			<Footer
-				embedded={embedded}
-				bulk={bulk}
-				edited={edited.length}
-				pending={write.isPending}
-				error={write.isError ? String(write.error) : null}
-				notice={notice}
-				autosave={autosave}
-				onDiscard={() => setDraft({})}
-				onSave={save}
-			/>
+			<Footer notice={notice} autosave={autosave} />
 		</div>
 	);
 }
 
-/** Save and Discard for many songs; for one song, only a failed write (it saves on its own). */
-function Footer(p: {
-	embedded: boolean;
-	bulk: boolean;
-	edited: number;
-	pending: boolean;
-	error: string | null;
+/** Where saving stands; the status bar says when. Only a failed write shows here. */
+function Footer({
+	notice,
+	autosave,
+}: {
 	notice: { ok: boolean; text: string } | null;
 	autosave: { status: SaveStatus; error: string | null };
-	onDiscard: () => void;
-	onSave: () => void;
 }) {
-	if (!p.bulk) {
-		// One song saves on its own; the status bar says when. Only a failed write shows here.
-		return (
-			<>
-				<SaveState status={p.autosave.status} error={p.autosave.error} />
-				{p.notice && !p.notice.ok && (
-					<p className="border-t px-3 py-2.5 text-destructive text-xs">{p.notice.text}</p>
-				)}
-			</>
-		);
-	}
 	return (
-		<footer
-			className={cn(
-				"flex items-center gap-2 border-t bg-background px-3 py-2.5",
-				// On a scrolling page the bar stays at the pane's bottom edge until the end.
-				p.embedded && "sticky bottom-0 z-10",
+		<>
+			<SaveState status={autosave.status} error={autosave.error} />
+			{notice && !notice.ok && (
+				<p className="border-t px-3 py-2.5 text-destructive text-xs">{notice.text}</p>
 			)}
-		>
-			<Status error={p.error} notice={p.notice} edited={p.edited} />
-			<Button variant="ghost" onClick={p.onDiscard} disabled={p.edited === 0}>
-				Discard
-			</Button>
-			<Button onClick={p.onSave} disabled={p.edited === 0 || p.pending}>
-				{p.pending ? "Saving…" : "Save"}
-			</Button>
-		</footer>
+		</>
 	);
-}
-
-function Status({
-	error,
-	notice,
-	edited,
-}: {
-	error: string | null;
-	notice: { ok: boolean; text: string } | null;
-	edited: number;
-}) {
-	let body: React.ReactNode;
-	if (error) {
-		body = <ErrorText message={error} className="text-destructive" />;
-	} else if (notice) {
-		body = (
-			<span className={notice.ok ? "text-muted-foreground" : "text-destructive"}>
-				{notice.text}
-			</span>
-		);
-	} else {
-		body = (
-			<span className="text-muted-foreground">
-				{edited === 0 ? "No changes" : plural(edited, "change", "changes")}
-			</span>
-		);
-	}
-	return <div className="min-w-0 flex-1 text-xs">{body}</div>;
 }
 
 /** The shared header for the editor in the drawer: cover (click to replace), name, what it holds. */

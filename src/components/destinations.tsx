@@ -84,7 +84,7 @@ function Row({ brand, name, where, whereTitle, fill, status, action, open, menu 
 				</button>
 				{fill}
 				<div className="min-w-0 truncate text-muted-foreground text-xs">{status}</div>
-				{/* The action's own drawers live in here; right-clicks there are theirs, not the row's. */}
+				{/* Right-clicks on the action are its own, not the row's. */}
 				<fieldset
 					aria-label={`${name} actions`}
 					className="flex min-w-0 justify-end"

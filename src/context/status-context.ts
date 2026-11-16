@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 
-/** Where a status bar's figures come from: the page, the right-hand split, or the drawer. */
-export type StatusScope = "main" | "split" | "drawer";
+/** Where a status bar's figures come from: the page or the side panel. */
+export type StatusScope = "main" | "panel";
 
 /** The scope components render in. */
 export const StatusScopeContext = createContext<StatusScope>("main");
