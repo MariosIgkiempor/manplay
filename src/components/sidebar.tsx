@@ -12,7 +12,9 @@ import {
 } from "lucide-react";
 import { createContext, type ReactNode, useContext, useEffect } from "react";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
+import { SectionLabel } from "#/components/sidebar-parts.tsx";
 import { SidebarPlaylists } from "#/components/sidebar-playlists.tsx";
+import { SidebarSmartPlaylists } from "#/components/sidebar-smart-playlists.tsx";
 import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
@@ -164,8 +166,12 @@ export function Sidebar() {
 				) : (
 					<div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
 						<SidebarSync />
-						<SidebarPlaylists />
-						<SidebarTagTree />
+						<section className="mt-4 space-y-0.5">
+							<SectionLabel>Organise</SectionLabel>
+							<SidebarPlaylists />
+							<SidebarSmartPlaylists />
+							<SidebarTagTree />
+						</section>
 					</div>
 				)}
 				<nav className={cn("border-t pt-2", collapsed && "flex w-full justify-center")}>

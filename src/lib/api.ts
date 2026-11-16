@@ -647,31 +647,91 @@ export async function rekordboxLibrary(): Promise<RekordboxLibrary | null> {
 	return rekordboxLibrarySchema.parse(await invoke("rekordbox_library"));
 }
 
-const rekordboxSelectionSchema = z.object({
-	/** Every playlist is exported except these. */
-	excludedPlaylists: z.array(int),
+const exportSelectionSchema = z.object({
+	/** Library playlists, by id. */
+	playlists: z.array(int),
 	/** Tags exported as playlists (a tag includes the songs of the tags below it). */
 	tags: z.array(z.string()),
+	/** Smart playlists, by id. */
+	smart: z.array(int).default([]),
+	/** USB drives: what happens to the playlists and songs already there. */
+	usbMode: z.enum(["add", "replacePlaylists", "replaceAll"]).default("add"),
 });
 
-export type RekordboxSelection = z.infer<typeof rekordboxSelectionSchema>;
+export type UsbMode = ExportSelection["usbMode"];
 
-export async function rekordboxSelection(): Promise<RekordboxSelection> {
-	return rekordboxSelectionSchema.parse(await invoke("rekordbox_selection"));
+/** What a destination gets; saved each time it is exported to, so it is what it holds. */
+export type ExportSelection = z.infer<typeof exportSelectionSchema>;
+
+export async function rekordboxSelection(): Promise<ExportSelection> {
+	return exportSelectionSchema.parse(await invoke("rekordbox_selection"));
 }
 
-/** Saves the selection and rewrites the rekordbox file with it. */
-/** Saves what goes into the rekordbox file, without writing it. */
-export async function saveRekordboxSelection(
-	selection: RekordboxSelection,
-): Promise<RekordboxSelection> {
-	return rekordboxSelectionSchema.parse(await invoke("rekordbox_save_selection", { selection }));
+/** Saves what goes into the rekordbox file and writes it. */
+export async function setRekordboxSelection(selection: ExportSelection): Promise<ExportSelection> {
+	return exportSelectionSchema.parse(await invoke("rekordbox_set_selection", { selection }));
 }
 
-export async function setRekordboxSelection(
-	selection: RekordboxSelection,
-): Promise<RekordboxSelection> {
-	return rekordboxSelectionSchema.parse(await invoke("rekordbox_set_selection", { selection }));
+// ---- smart playlists -----------------------------------------------------
+
+const addedRuleSchema = z.discriminatedUnion("kind", [
+	/** On or after this day (unix seconds of its start). */
+	z.object({ kind: z.literal("after"), date: int }),
+	/** Before this day (unix seconds of its start). */
+	z.object({ kind: z.literal("before"), date: int }),
+	/** In the last `amount` units, counted back from each export. */
+	z.object({
+		kind: z.literal("within"),
+		amount: int,
+		unit: z.enum(["days", "weeks", "months"]),
+	}),
+]);
+
+export type AddedRule = z.infer<typeof addedRuleSchema>;
+
+const smartRulesSchema = z.object({
+	allTags: z.array(z.string()).default([]),
+	anyTags: z.array(z.string()).default([]),
+	noneTags: z.array(z.string()).default([]),
+	added: addedRuleSchema.nullable().default(null),
+	bpmMin: z.number().nullable().default(null),
+	bpmMax: z.number().nullable().default(null),
+});
+
+/** What a song needs to be in a smart playlist; parts left empty are ignored. */
+export type SmartRules = z.infer<typeof smartRulesSchema>;
+
+const smartPlaylistSchema = z.object({ id: int, name: z.string(), rules: smartRulesSchema });
+
+/** A rule-based playlist that belongs to one export destination, never to the library. */
+export type SmartPlaylist = z.infer<typeof smartPlaylistSchema>;
+
+export async function smartPlaylists(): Promise<SmartPlaylist[]> {
+	return z.array(smartPlaylistSchema).parse(await invoke("smart_playlists"));
+}
+
+/** Adds (id 0) or changes a smart playlist. Only its rules are kept; its songs stay live. */
+export async function saveSmartPlaylist(playlist: SmartPlaylist): Promise<SmartPlaylist> {
+	return smartPlaylistSchema.parse(await invoke("smart_playlist_save", { playlist }));
+}
+
+export async function deleteSmartPlaylist(id: number): Promise<void> {
+	await invoke("smart_playlist_delete", { id });
+}
+
+const smartPreviewSchema = z.object({
+	trackIds: z.array(int),
+	durationMs: int,
+	bytes: int,
+	/** Songs that match everything else but have no added date. */
+	undated: int,
+});
+
+export type SmartPreview = z.infer<typeof smartPreviewSchema>;
+
+/** The songs a rule set picks right now. */
+export async function smartPlaylistPreview(rules: SmartRules): Promise<SmartPreview> {
+	return smartPreviewSchema.parse(await invoke("smart_playlist_preview", { rules }));
 }
 
 // ---- iTunes import --------------------------------------------------------
@@ -1148,6 +1208,8 @@ export function onImportProgress(handler: (p: ImportProgress) => void): Promise<
 // ---- CDJ USB drives ---------------------------------------------------------
 
 const usbDriveSchema = z.object({
+	/** Stays the same when the drive is renamed or plugged in again. */
+	id: z.string(),
 	name: z.string(),
 	mount: z.string(),
 	filesystem: z.string(),
@@ -1311,6 +1373,11 @@ const usbExportReportSchema = z.object({
 	/** Songs already on the drive whose edited beat grid was written again. */
 	regridded: int.default(0),
 	playlists: int,
+	/** Playlists and folders taken off the drive because they were not exported. */
+	playlistsRemoved: int.default(0),
+	/** Songs deleted because no playlist on the drive held them any more. */
+	songsDeleted: int.default(0),
+	bytesFreed: int.default(0),
 	libraryTracks: int,
 	/** Folder on the drive with copies of both previous databases. */
 	backup: z.string().nullable(),
@@ -1327,14 +1394,62 @@ export type UsbExportReport = z.infer<typeof usbExportReportSchema>;
  * Copies playlists and their songs onto a drive and rewrites its rekordbox library. Each tag in
  * `tagNames` becomes a top-level playlist of the songs tagged with it or anything below it.
  */
+/** What was last exported to a drive; null before its first export. */
+export async function usbExportSelection(driveId: string): Promise<ExportSelection | null> {
+	return exportSelectionSchema.nullable().parse(await invoke("usb_export_selection", { driveId }));
+}
+
 export async function exportToUsb(
 	mount: string,
-	playlistIds: number[],
-	tagNames: string[],
+	selection: ExportSelection,
 ): Promise<UsbExportReport> {
-	return usbExportReportSchema.parse(
-		await invoke("export_to_usb", { mount, playlistIds, tagNames }),
-	);
+	return usbExportReportSchema.parse(await invoke("export_to_usb", { mount, selection }));
+}
+
+const songRefSchema = z.object({
+	title: z.string(),
+	artist: z.string(),
+	album: z.string().default(""),
+	bpm: z.number().nullable().default(null),
+	key: z.string().nullable().default(null),
+	durationSecs: int.nullable().default(null),
+	/** The library song, when there is one (for its artwork). */
+	trackId: int.nullable().default(null),
+	/** The file on the drive, for a song only the drive has. */
+	file: z.string().nullable().default(null),
+});
+
+export type SongRef = z.infer<typeof songRefSchema>;
+
+const usbDiffSchema = z.object({
+	playlists: z.array(
+		z.object({
+			name: z.string(),
+			change: z.enum(["added", "updated", "unchanged", "removed"]),
+			/** Songs in it afterwards (before, for a removed one). */
+			songs: int,
+			added: z.array(songRefSchema),
+			removed: z.array(songRefSchema),
+			/** Every song in it afterwards, in order (before, for a removed one). */
+			tracks: z.array(songRefSchema).default([]),
+		}),
+	),
+	/** Songs new to the drive. */
+	copy: z.array(songRefSchema),
+	copyBytes: int,
+	/** Songs deleted from the drive. */
+	delete: z.array(songRefSchema),
+	deleteBytes: int,
+});
+
+/** What an export would change on a drive, worked out without writing. */
+export type UsbDiff = z.infer<typeof usbDiffSchema>;
+
+export async function usbExportPreview(
+	mount: string,
+	selection: ExportSelection,
+): Promise<UsbDiff> {
+	return usbDiffSchema.parse(await invoke("usb_export_preview", { mount, selection }));
 }
 
 export function onUsbExportProgress(handler: (p: UsbExportProgress) => void): Promise<() => void> {

@@ -6,8 +6,8 @@ import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
-import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
-import { rowBase, rowClass } from "#/components/sidebar-row.ts";
+import { GroupHeading, RowCount } from "#/components/sidebar-parts.tsx";
+import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import {
 	addToPlaylist,
@@ -18,6 +18,7 @@ import {
 	playlistTracks,
 	renamePlaylist,
 } from "#/lib/api.ts";
+import { useStoredFlag } from "#/lib/use-pane-width.ts";
 
 const nonBlank = (v: string) => (v.trim() === "" ? null : v.trim());
 
@@ -82,19 +83,34 @@ export function SidebarPlaylists() {
 	const [renaming, setRenaming] = useState<number | null>(null);
 	const [adding, setAdding] = useState(false);
 	const [deleting, setDeleting] = useState<Playlist | null>(null);
+	const [closed, setClosed] = useStoredFlag("manplay.sidebar.playlistsClosed");
 	const all = playlists.data ?? [];
 	const m = matchRoute({ to: "/playlists/$id" });
 	const active = m ? Number(m.id) : null;
 	const error = [actions.rename, actions.duplicate, actions.remove].find((x) => x.isError)?.error;
 
 	return (
-		<section className="space-y-0.5">
-			<SectionLabel action={<AddButton label="New playlist" onClick={() => setAdding(true)} />}>
-				Playlists
-			</SectionLabel>
-			{adding && (
+		<div className="space-y-0.5">
+			<GroupHeading
+				label="Playlists"
+				icon={<ListMusic />}
+				open={!closed}
+				onToggle={() => setClosed(!closed)}
+				action={
+					<AddButton
+						label="New playlist"
+						className={HOVER_ACTION}
+						onClick={() => {
+							setClosed(false);
+							setAdding(true);
+						}}
+					/>
+				}
+			/>
+			{!closed && adding && (
 				<NewRow
 					icon={<ListMusic />}
+					indent={CHILD_PAD}
 					placeholder="Playlist name"
 					parse={(v) => v.trim() || null}
 					onCancel={() => setAdding(false)}
@@ -105,65 +121,70 @@ export function SidebarPlaylists() {
 					}}
 				/>
 			)}
-			{all.map((p) => (
-				<RowMenu
-					key={p.id}
-					label={p.name}
-					items={[
-						{
-							label: "Play",
-							icon: <Play />,
-							disabled: p.trackCount === 0,
-							onSelect: () => void actions.play(p),
-						},
-						"separator",
-						{ label: "Rename", icon: <PencilLine />, onSelect: () => setRenaming(p.id) },
-						{
-							label: "Duplicate",
-							icon: <Copy />,
-							disabled: actions.duplicate.isPending,
-							onSelect: () => actions.duplicate.mutate({ p, all }),
-						},
-						"separator",
-						{
-							label: "Delete…",
-							icon: <Trash2 />,
-							destructive: true,
-							onSelect: () => setDeleting(p),
-						},
-					]}
-				>
-					<div className={rowClass(active === p.id)}>
-						{renaming === p.id ? (
-							<div className="flex min-w-0 flex-1 items-center gap-2 py-0.5 pl-2">
-								<ListMusic className="size-4 shrink-0 text-muted-foreground" />
-								<InlineInput
-									initial={p.name}
-									label={`Rename ${p.name}`}
-									parse={nonBlank}
-									onCancel={() => setRenaming(null)}
-									onCommit={(name) => {
-										setRenaming(null);
-										actions.rename.mutate({ id: p.id, name });
-									}}
-								/>
-							</div>
-						) : (
-							<Link
-								to="/playlists/$id"
-								params={{ id: String(p.id) }}
-								className={rowBase}
-								onDoubleClick={() => setRenaming(p.id)}
-							>
-								<ListMusic className="size-4 shrink-0" />
-								<span className="truncate">{p.name}</span>
-								<RowCount n={p.trackCount} />
-							</Link>
-						)}
-						<span className="size-5 shrink-0" />
-					</div>
-				</RowMenu>
-			))}
+			{!closed &&
+				all.map((p) => (
+					<RowMenu
+						key={p.id}
+						label={p.name}
+						items={[
+							{
+								label: "Play",
+								icon: <Play />,
+								disabled: p.trackCount === 0,
+								onSelect: () => void actions.play(p),
+							},
+							"separator",
+							{ label: "Rename", icon: <PencilLine />, onSelect: () => setRenaming(p.id) },
+							{
+								label: "Duplicate",
+								icon: <Copy />,
+								disabled: actions.duplicate.isPending,
+								onSelect: () => actions.duplicate.mutate({ p, all }),
+							},
+							"separator",
+							{
+								label: "Delete…",
+								icon: <Trash2 />,
+								destructive: true,
+								onSelect: () => setDeleting(p),
+							},
+						]}
+					>
+						<div className={rowClass(active === p.id)}>
+							{renaming === p.id ? (
+								<div
+									className="flex min-w-0 flex-1 items-center gap-2 py-0.5"
+									style={{ paddingLeft: CHILD_PAD }}
+								>
+									<ListMusic className="size-4 shrink-0 text-muted-foreground" />
+									<InlineInput
+										initial={p.name}
+										label={`Rename ${p.name}`}
+										parse={nonBlank}
+										onCancel={() => setRenaming(null)}
+										onCommit={(name) => {
+											setRenaming(null);
+											actions.rename.mutate({ id: p.id, name });
+										}}
+									/>
+								</div>
+							) : (
+								<Link
+									to="/playlists/$id"
+									params={{ id: String(p.id) }}
+									className={rowBase}
+									style={{ paddingLeft: CHILD_PAD }}
+									onDoubleClick={() => setRenaming(p.id)}
+								>
+									<ListMusic className="size-4 shrink-0" />
+									<span className="truncate">{p.name}</span>
+									<RowCount n={p.trackCount} />
+								</Link>
+							)}
+							<span className="size-5 shrink-0" />
+						</div>
+					</RowMenu>
+				))}
 			{error && <p className="px-2 text-destructive text-xs">{String(error)}</p>}
 			{deleting && (
 				<ConfirmDialog
@@ -182,6 +203,6 @@ export function SidebarPlaylists() {
 					The songs stay in your library.
 				</ConfirmDialog>
 			)}
-		</section>
+		</div>
 	);
 }

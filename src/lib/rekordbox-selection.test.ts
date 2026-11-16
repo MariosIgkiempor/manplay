@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sameSelection, setTagTree, tagCheck } from "#/lib/rekordbox-selection.ts";
+import { setTagTree, tagCheck } from "#/lib/rekordbox-selection.ts";
 import { buildTagTree } from "#/lib/tag-tree.ts";
 
 const tree = buildTagTree([
@@ -33,16 +33,5 @@ describe("tagCheck", () => {
 		expect(tagCheck([], genre)).toBe("off");
 		expect(tagCheck(["Genre/House"], genre)).toBe("some");
 		expect(tagCheck(["Genre", "Genre/House", "Genre/House/Deep"], genre)).toBe("on");
-	});
-});
-
-describe("sameSelection", () => {
-	it("ignores order and case", () => {
-		expect(
-			sameSelection(
-				{ excludedPlaylists: [2, 1], tags: ["B", "a"] },
-				{ excludedPlaylists: [1, 2], tags: ["A", "b"] },
-			),
-		).toBe(true);
 	});
 });

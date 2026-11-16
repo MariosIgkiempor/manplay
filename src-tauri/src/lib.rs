@@ -15,6 +15,7 @@ mod pdb;
 mod r2;
 mod rekordbox;
 mod scan;
+mod smart;
 mod stream;
 mod sync;
 mod tag_region;
@@ -1264,15 +1265,203 @@ async fn usb_library(mount: PathBuf) -> Result<pdb::Library, Error> {
     .map_err(Error::Msg)
 }
 
-/// Copies the given playlists and their songs onto a USB drive and rewrites its rekordbox
-/// library, keeping what rekordbox put there. Emits `usb-export-progress`.
+/// What was last exported to a drive (by its `Drive::id`); `None` before its first export.
+#[tauri::command]
+fn usb_export_selection(
+    state: State<'_, AppState>,
+    drive_id: String,
+) -> Result<Option<db::ExportSelection>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::export_selection(&conn, &format!("usb:{drive_id}"))
+}
+
+/// The drive now holds this choice, so the next export to it starts from it.
+fn remember_usb_selection(
+    state: &AppState,
+    drive_id: &str,
+    selection: db::ExportSelection,
+) -> Result<(), String> {
+    let conn = state
+        .db
+        .lock()
+        .map_err(|_| "database lock poisoned".to_owned())?;
+    db::set_export_selection(&conn, &format!("usb:{drive_id}"), &selection)
+        .map_err(|e| e.to_string())
+}
+
+/// What goes onto a drive: the chosen library playlists, then tags and smart playlists as
+/// top-level playlists (tags named as in the rekordbox file, "Genre › House"). Empty ones are left out.
+fn usb_playlists(
+    conn: &Connection,
+    lists: &[db::ExportPlaylist],
+    selection: &db::ExportSelection,
+) -> Result<Vec<usb_export::SourcePlaylist>, Error> {
+    let library = selection
+        .playlists
+        .iter()
+        .filter_map(|id| lists.iter().find(|p| p.id == Some(*id)))
+        .map(|p| usb_export::SourcePlaylist {
+            name: p.name.clone(),
+            track_ids: p.track_ids.clone(),
+        });
+    let tags = db::export_tag_playlists(conn, &selection.tags)?
+        .into_iter()
+        .filter(|p| !p.track_ids.is_empty())
+        .map(|p| usb_export::SourcePlaylist {
+            name: p.name.replace('/', " › "),
+            track_ids: p.track_ids,
+        });
+    let smart =
+        chosen_smart(conn, &selection.smart)?
+            .into_iter()
+            .map(|p| usb_export::SourcePlaylist {
+                name: p.name,
+                track_ids: p.track_ids,
+            });
+    Ok(library.chain(tags).chain(smart).collect())
+}
+
+/// The chosen smart playlists with the songs their rules pick now. Empty ones are left out, as
+/// empty tag playlists are.
+fn chosen_smart(conn: &Connection, ids: &[i64]) -> Result<Vec<db::ExportPlaylist>, Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tracks = db::list(conn)?;
+    let now = unix_now();
+    Ok(db::smart_playlists(conn)?
+        .into_iter()
+        .filter(|p| ids.contains(&p.id))
+        .map(|p| db::ExportPlaylist {
+            id: None,
+            track_ids: smart::resolve(&p.rules, &tracks, now),
+            name: p.name,
+        })
+        .filter(|p| !p.track_ids.is_empty())
+        .collect())
+}
+
+/// Every smart playlist in the library.
+#[tauri::command]
+fn smart_playlists(state: State<'_, AppState>) -> Result<Vec<smart::SmartPlaylist>, Error> {
+    with_db!(state, |c| db::smart_playlists(c))
+}
+
+/// Adds (`id` 0) or changes a smart playlist. Only its rules are kept; its songs are worked out
+/// whenever it is shown or exported.
+#[tauri::command]
+fn smart_playlist_save(
+    state: State<'_, AppState>,
+    playlist: smart::SmartPlaylist,
+) -> Result<smart::SmartPlaylist, Error> {
+    let name = playlist.name.trim();
+    if name.is_empty() {
+        return Err(Error::Msg("Give the smart playlist a name.".into()));
+    }
+    let playlist = smart::SmartPlaylist {
+        name: name.to_owned(),
+        ..playlist
+    };
+    with_db!(state, |c| db::save_smart_playlist(c, &playlist))
+}
+
+#[tauri::command]
+fn smart_playlist_delete(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
+    with_db!(state, |c| db::delete_smart_playlist(c, id))
+}
+
+/// The songs a rule set picks right now.
+#[tauri::command]
+fn smart_playlist_preview(
+    state: State<'_, AppState>,
+    rules: smart::Rules,
+) -> Result<smart::Preview, Error> {
+    with_db!(state, |c| Ok(smart::preview(
+        &rules,
+        &db::list(c)?,
+        unix_now()
+    )))
+}
+
+/// The library's songs and the chosen playlists, as a USB export or its preview takes them.
+fn usb_inputs(
+    state: &AppState,
+    selection: &db::ExportSelection,
+) -> Result<
+    (
+        Vec<usb_export::Source>,
+        Vec<usb_export::SourcePlaylist>,
+        bool,
+    ),
+    Error,
+> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    let camelot = analysis_settings_of(&conn)?.key_format == KeyFormat::Camelot;
+    let (tracks, lists) = db::export_data(&conn)?;
+    let sources: Vec<usb_export::Source> = tracks
+        .into_iter()
+        .map(|t| usb_export::Source {
+            id: t.id,
+            path: PathBuf::from(&t.path),
+            artist: t.artist,
+            album: t.album,
+            title: t.title,
+            size: u64::try_from(t.size).unwrap_or(0),
+            duration_ms: t.duration_ms,
+            bitrate: t.bitrate,
+            sample_rate: t.sample_rate,
+            bpm: t.bpm,
+            key: t.key.map(|k| {
+                if camelot {
+                    analysis::camelot(&k).unwrap_or(k)
+                } else {
+                    k
+                }
+            }),
+            cues: t
+                .fingerprint
+                .as_deref()
+                .and_then(|fp| db::cues_of(&conn, fp).ok().flatten()),
+            fingerprint: t.fingerprint,
+            grid_edited: t.grid_edited,
+        })
+        .collect();
+    let playlists = usb_playlists(&conn, &lists, selection)?;
+    if playlists.is_empty() {
+        return Err(Error::Msg(
+            "Choose at least one playlist, tag or smart playlist with songs.".into(),
+        ));
+    }
+    Ok((sources, playlists, camelot))
+}
+
+/// What exporting `selection` would change on the drive: playlists added, changed and removed,
+/// and songs copied and deleted. Nothing is written.
+#[tauri::command]
+async fn usb_export_preview(
+    app: AppHandle,
+    mount: PathBuf,
+    selection: db::ExportSelection,
+) -> Result<usb_export::Diff, Error> {
+    tauri::async_runtime::spawn_blocking(move || {
+        usb::check_mount(&mount).map_err(Error::Msg)?;
+        let state = app.state::<AppState>();
+        let (sources, playlists, _) = usb_inputs(&state, &selection)?;
+        usb_export::preview(&mount, &sources, &playlists, selection.usb_mode).map_err(Error::Msg)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+/// Copies the chosen playlists and their songs onto a USB drive and rewrites its rekordbox
+/// library; `selection.usb_mode` says what happens to what is already there. Emits
+/// `usb-export-progress`.
 #[tauri::command]
 async fn export_to_usb(
     app: AppHandle,
     state: State<'_, AppState>,
     mount: PathBuf,
-    playlist_ids: Vec<i64>,
-    tag_names: Vec<String>,
+    selection: db::ExportSelection,
 ) -> Result<usb_export::Report, Error> {
     if state.usb_exporting.swap(true, Ordering::SeqCst) {
         return Err(Error::Msg(
@@ -1280,61 +1469,7 @@ async fn export_to_usb(
         ));
     }
     let _guard = SyncGuard(&state.usb_exporting);
-    let (sources, playlists, camelot) = {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        let camelot = analysis_settings_of(&conn)?.key_format == KeyFormat::Camelot;
-        let (tracks, lists) = db::export_data(&conn)?;
-        let sources: Vec<usb_export::Source> = tracks
-            .into_iter()
-            .map(|t| usb_export::Source {
-                id: t.id,
-                path: PathBuf::from(&t.path),
-                artist: t.artist,
-                album: t.album,
-                title: t.title,
-                size: u64::try_from(t.size).unwrap_or(0),
-                duration_ms: t.duration_ms,
-                bitrate: t.bitrate,
-                sample_rate: t.sample_rate,
-                bpm: t.bpm,
-                key: t.key.map(|k| {
-                    if camelot {
-                        analysis::camelot(&k).unwrap_or(k)
-                    } else {
-                        k
-                    }
-                }),
-                cues: t
-                    .fingerprint
-                    .as_deref()
-                    .and_then(|fp| db::cues_of(&conn, fp).ok().flatten()),
-                fingerprint: t.fingerprint,
-                grid_edited: t.grid_edited,
-            })
-            .collect();
-        let mut playlists: Vec<usb_export::SourcePlaylist> = playlist_ids
-            .iter()
-            .filter_map(|id| lists.iter().find(|p| p.id == Some(*id)))
-            .map(|p| usb_export::SourcePlaylist {
-                name: p.name.clone(),
-                track_ids: p.track_ids.clone(),
-            })
-            .collect();
-        // Tags become top-level playlists, named as in the rekordbox XML export ("Genre › House").
-        playlists.extend(
-            db::export_tag_playlists(&conn, &tag_names)?
-                .into_iter()
-                .filter(|p| !p.track_ids.is_empty())
-                .map(|p| usb_export::SourcePlaylist {
-                    name: p.name.replace('/', " › "),
-                    track_ids: p.track_ids,
-                }),
-        );
-        (sources, playlists, camelot)
-    };
-    if playlists.is_empty() {
-        return Err(Error::Msg("Choose at least one playlist or tag.".into()));
-    }
+    let (sources, playlists, camelot) = usb_inputs(&state, &selection)?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let drive = usb::list()
@@ -1359,10 +1494,13 @@ async fn export_to_usb(
             free_bytes: drive.free_bytes,
             store: Some(&state.db),
             camelot,
+            mode: selection.usb_mode,
         };
-        usb_export::export(&mount, &sources, &playlists, &opts, |p| {
+        let report = usb_export::export(&mount, &sources, &playlists, &opts, |p| {
             let _ = app.emit("usb-export-progress", p);
-        })
+        })?;
+        remember_usb_selection(&state, &drive.id, selection)?;
+        Ok(report)
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))?
@@ -2412,22 +2550,21 @@ async fn import_run(
 
 const SETTING_RB_PATH: &str = "rekordbox_xml_path";
 const SETTING_RB_LAST: &str = "rekordbox_last_export";
-const SETTING_RB_SELECTION: &str = "rekordbox_selection";
 
-/// What goes into the playlists part of the file. Every playlist is exported unless it is listed
-/// in `excluded_playlists`, so new playlists appear in rekordbox without a visit to this menu.
-/// Tags are opt-in: each name in `tags` becomes a playlist.
-#[derive(serde::Serialize, serde::Deserialize, Default, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", default)]
-struct RekordboxSelection {
-    excluded_playlists: Vec<i64>,
-    tags: Vec<String>,
-}
-
-fn rekordbox_selection_of(conn: &Connection) -> Result<RekordboxSelection, Error> {
-    Ok(db::get_setting(conn, SETTING_RB_SELECTION)?
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default())
+/// What goes into the playlists part of the file: the chosen playlists, and each chosen tag as a
+/// playlist. Before the first choice is saved, a file that exists holds every playlist (as manplay
+/// used to export), so that is what it starts with.
+fn rekordbox_selection_of(conn: &Connection) -> Result<db::ExportSelection, Error> {
+    if let Some(saved) = db::export_selection(conn, db::RB_DESTINATION)? {
+        return Ok(saved);
+    }
+    if db::get_setting(conn, SETTING_RB_PATH)?.is_none() {
+        return Ok(db::ExportSelection::default());
+    }
+    Ok(db::ExportSelection {
+        playlists: db::playlist_ids(conn)?,
+        ..db::ExportSelection::default()
+    })
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
@@ -2466,7 +2603,7 @@ fn store_last(conn: &Connection, last: &RekordboxLast) -> Result<(), Error> {
 /// half-written library. `Ok(false)` when no file is configured. `record_ok` adds successful runs to the history; failures are always recorded.
 fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
     let started_at = unix_now();
-    let (path, tracks, playlists, tag_playlists) = {
+    let (path, tracks, playlists, tag_playlists, smart_playlists) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let Some(path) = db::get_setting(&conn, SETTING_RB_PATH)? else {
             return Ok(false);
@@ -2493,13 +2630,18 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
                     })
                 });
         }
-        playlists.retain(|p| {
-            p.id.is_none_or(|id| !selection.excluded_playlists.contains(&id))
-        });
+        playlists.retain(|p| p.id.is_none_or(|id| selection.playlists.contains(&id)));
         let tag_playlists = db::export_tag_playlists(&conn, &selection.tags)?;
-        (PathBuf::from(path), tracks, playlists, tag_playlists)
+        let smart_playlists = chosen_smart(&conn, &selection.smart)?;
+        (
+            PathBuf::from(path),
+            tracks,
+            playlists,
+            tag_playlists,
+            smart_playlists,
+        )
     };
-    let xml = rekordbox::build_xml(&tracks, &playlists, &tag_playlists);
+    let xml = rekordbox::build_xml(&tracks, &playlists, &tag_playlists, &smart_playlists);
     let tmp = path.with_extension("xml.tmp");
     let written = std::fs::write(&tmp, xml).and_then(|()| std::fs::rename(&tmp, &path));
 
@@ -2509,7 +2651,7 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
         Ok(()) => {
             last = RekordboxLast {
                 exported_at: Some(unix_now()),
-                playlists: playlists.len() + tag_playlists.len(),
+                playlists: playlists.len() + tag_playlists.len() + smart_playlists.len(),
                 tracks: tracks.len(),
                 error: None,
             };
@@ -2525,7 +2667,7 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
                         items: vec![format!(
                             "{} tracks · {} playlists",
                             tracks.len(),
-                            playlists.len() + tag_playlists.len()
+                            playlists.len() + tag_playlists.len() + smart_playlists.len()
                         )],
                         ..db::Activity::default()
                     },
@@ -2604,33 +2746,20 @@ fn rekordbox_library(state: State<'_, AppState>) -> Result<Option<rekordbox::Lib
 }
 
 #[tauri::command]
-fn rekordbox_selection(state: State<'_, AppState>) -> Result<RekordboxSelection, Error> {
+fn rekordbox_selection(state: State<'_, AppState>) -> Result<db::ExportSelection, Error> {
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     rekordbox_selection_of(&conn)
-}
-
-/// Saves what to export, without writing the file.
-#[tauri::command]
-fn rekordbox_save_selection(
-    state: State<'_, AppState>,
-    selection: RekordboxSelection,
-) -> Result<RekordboxSelection, Error> {
-    let conn = state.db.lock().map_err(|_| Error::Lock)?;
-    let raw = serde_json::to_string(&selection).map_err(|e| Error::Msg(e.to_string()))?;
-    db::set_setting(&conn, SETTING_RB_SELECTION, Some(&raw))?;
-    Ok(selection)
 }
 
 /// Saves what to export and writes the file (recorded in the history).
 #[tauri::command]
 fn rekordbox_set_selection(
     state: State<'_, AppState>,
-    selection: RekordboxSelection,
-) -> Result<RekordboxSelection, Error> {
+    selection: db::ExportSelection,
+) -> Result<db::ExportSelection, Error> {
     {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        let raw = serde_json::to_string(&selection).map_err(|e| Error::Msg(e.to_string()))?;
-        db::set_setting(&conn, SETTING_RB_SELECTION, Some(&raw))?;
+        db::set_export_selection(&conn, db::RB_DESTINATION, &selection)?;
     }
     export_inner(&state, true)?;
     Ok(selection)
@@ -2796,8 +2925,18 @@ impl ArtTarget {
 }
 
 /// The audio file whose artwork represents `path` (itself, or the first track inside a folder).
-/// Only paths inside the library folder qualify.
+/// Only paths inside the library folder qualify, and songs on a mounted drive (for the review of
+/// an export, which lists songs only the drive has).
 fn fs_art_source(state: &AppState, path: &Path) -> Option<String> {
+    if path.starts_with("/Volumes")
+        && !path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        && scan::is_audio(path)
+        && path.is_file()
+    {
+        return path.to_str().map(str::to_owned);
+    }
     let root = library_root(state).ok()?;
     let resolved = fsops::inside(&root, path).ok()?;
     let track = if resolved.is_dir() {
@@ -2964,8 +3103,13 @@ pub fn run() {
             rekordbox_export,
             rekordbox_library,
             rekordbox_selection,
+            usb_export_selection,
+            smart_playlists,
+            smart_playlist_save,
+            smart_playlist_delete,
+            smart_playlist_preview,
+            usb_export_preview,
             rekordbox_set_selection,
-            rekordbox_save_selection,
             itunes_status,
             itunes_set_path,
             itunes_import,
@@ -3445,7 +3589,7 @@ mod tests {
     }
 
     #[test]
-    fn export_honours_excluded_playlists_and_tag_selection() {
+    fn export_honours_chosen_playlists_and_tag_selection() {
         let mut f = Fixture::new("rekordbox-select");
         f.apply(&f.scan_of(&["1", "2", "3"], 0));
         let ids: Vec<i64> = db::list(&f.conn)
@@ -3463,16 +3607,37 @@ mod tests {
         let out = f.dir.join("out").join("rekordbox.xml");
         std::fs::create_dir_all(out.parent().expect("parent")).expect("mkdir");
         db::set_setting(&f.conn, SETTING_RB_PATH, out.to_str()).expect("setting");
-        let selection = RekordboxSelection {
-            excluded_playlists: vec![skip],
-            tags: vec!["genre/house".to_owned(), "Nope".to_owned()],
-        };
-        db::set_setting(
+        let deep = db::save_smart_playlist(
             &f.conn,
-            SETTING_RB_SELECTION,
-            Some(&serde_json::to_string(&selection).expect("json")),
+            &smart::SmartPlaylist {
+                id: 0,
+                name: "Deep cuts".to_owned(),
+                rules: smart::Rules {
+                    all_tags: vec!["Genre/House/Deep".to_owned()],
+                    ..smart::Rules::default()
+                },
+            },
         )
-        .expect("setting");
+        .expect("smart");
+        let nothing = db::save_smart_playlist(
+            &f.conn,
+            &smart::SmartPlaylist {
+                id: 0,
+                name: "Matches nothing".to_owned(),
+                rules: smart::Rules {
+                    all_tags: vec!["Nope".to_owned()],
+                    ..smart::Rules::default()
+                },
+            },
+        )
+        .expect("smart");
+        let selection = db::ExportSelection {
+            playlists: vec![keep],
+            tags: vec!["genre/house".to_owned(), "Nope".to_owned()],
+            smart: vec![deep.id, nothing.id],
+            ..db::ExportSelection::default()
+        };
+        db::set_export_selection(&f.conn, db::RB_DESTINATION, &selection).expect("selection");
 
         let dir = f.dir.clone();
         let conn = std::mem::replace(&mut f.conn, Connection::open_in_memory().expect("mem"));
@@ -3501,8 +3666,10 @@ mod tests {
             [
                 ("manplay".to_owned(), "Keep".to_owned(), 1),
                 ("manplay/Tags".to_owned(), "Genre › House".to_owned(), 3),
+                ("manplay/Smart".to_owned(), "Deep cuts".to_owned(), 1),
             ],
-            "Skip is excluded, the tag includes songs from tags below it, unknown tags vanish"
+            "Skip is not chosen, the tag includes songs from tags below it, unknown tags and \
+             empty smart playlists vanish"
         );
     }
 

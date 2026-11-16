@@ -13,6 +13,8 @@ pub const ONE_LIBRARY_PATH: &str = "PIONEER/rekordbox/exportLibrary.db";
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Drive {
+    /// Stays the same across renames and remounts: the volume's UUID, else `name:<name>`.
+    pub id: String,
     pub name: String,
     pub mount: PathBuf,
     pub filesystem: String,
@@ -98,7 +100,12 @@ fn drive(mount: PathBuf, info: &DiskInfo) -> Drive {
         .or_else(|| mount.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
     let rekordbox = mount.join("PIONEER/rekordbox");
+    let id = info
+        .get("VolumeUUID")
+        .filter(|u| !u.is_empty())
+        .map_or_else(|| format!("name:{name}"), str::to_owned);
     Drive {
+        id,
         name,
         filesystem: info.get("FilesystemType").unwrap_or_default().to_owned(),
         total_bytes: info.number("TotalSize"),

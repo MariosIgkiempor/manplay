@@ -78,6 +78,219 @@ fn prepare_tags(conn: &Connection) -> Result<(), Error> {
     restore_tag_parents(conn)
 }
 
+// ---- export selections -------------------------------------------------------
+
+/// What a destination gets: library playlists by id, and tags that become playlists. Saved when
+/// the destination is exported to, so it is what the destination holds.
+#[derive(Serialize, serde::Deserialize, Default, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ExportSelection {
+    pub playlists: Vec<i64>,
+    pub tags: Vec<String>,
+    /// Smart playlists (see `smart_playlists`), by id.
+    pub smart: Vec<i64>,
+    /// USB drives: what happens to the playlists and songs already there.
+    pub usb_mode: crate::usb_export::Mode,
+}
+
+fn mode_text(mode: crate::usb_export::Mode) -> String {
+    serde_json::to_value(mode)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+fn mode_from(text: &str) -> crate::usb_export::Mode {
+    serde_json::from_value(serde_json::Value::String(text.to_owned())).unwrap_or_default()
+}
+
+/// The settings key the rekordbox choice lived under before it moved to `export_selections`.
+const LEGACY_RB_SELECTION: &str = "rekordbox_selection";
+
+/// The destination key of the rekordbox XML file. USB drives are `usb:<volume id>`.
+pub const RB_DESTINATION: &str = "rekordbox";
+
+fn create_export_selections(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS export_selections (
+             destination TEXT PRIMARY KEY,
+             playlists   TEXT NOT NULL DEFAULT '[]',
+             tags        TEXT NOT NULL DEFAULT '[]'
+         );
+         -- Rule-based playlists. Only the rules are kept; the songs are worked out when needed.
+         CREATE TABLE IF NOT EXISTS smart_playlists (
+             id    INTEGER PRIMARY KEY,
+             name  TEXT NOT NULL,
+             rules TEXT NOT NULL DEFAULT '{}'
+         );",
+    )?;
+    // Smart playlists briefly belonged to one export destination; they are the library's now.
+    if has_column(conn, "smart_playlists", "destination")? {
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS smart_playlists_destination;
+             ALTER TABLE smart_playlists DROP COLUMN destination;",
+        )?;
+    }
+    add_column(
+        conn,
+        "export_selections",
+        "smart",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    add_column(
+        conn,
+        "export_selections",
+        "usb_mode",
+        "TEXT NOT NULL DEFAULT 'add'",
+    )?;
+    migrate_rekordbox_selection(conn)
+}
+
+/// The old rekordbox choice exported every playlist except `excludedPlaylists`. It becomes the
+/// list of playlists that were going into the file, so new playlists now stay out until chosen.
+fn migrate_rekordbox_selection(conn: &Connection) -> Result<(), Error> {
+    #[derive(serde::Deserialize, Default)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Legacy {
+        excluded_playlists: Vec<i64>,
+        tags: Vec<String>,
+    }
+    let Some(raw) = get_setting(conn, LEGACY_RB_SELECTION)? else {
+        return Ok(());
+    };
+    let legacy: Legacy = serde_json::from_str(&raw).unwrap_or_default();
+    if export_selection(conn, RB_DESTINATION)?.is_none() {
+        let playlists = playlist_ids(conn)?
+            .into_iter()
+            .filter(|id| !legacy.excluded_playlists.contains(id))
+            .collect();
+        set_export_selection(
+            conn,
+            RB_DESTINATION,
+            &ExportSelection {
+                playlists,
+                tags: legacy.tags,
+                ..ExportSelection::default()
+            },
+        )?;
+    }
+    set_setting(conn, LEGACY_RB_SELECTION, None)
+}
+
+/// Every library playlist's id.
+pub fn playlist_ids(conn: &Connection) -> Result<Vec<i64>, Error> {
+    let mut stmt = conn.prepare("SELECT id FROM playlists ORDER BY id")?;
+    let ids = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<Vec<i64>, _>>()?;
+    Ok(ids)
+}
+
+/// What was last exported to a destination; `None` before its first export.
+pub fn export_selection(
+    conn: &Connection,
+    destination: &str,
+) -> Result<Option<ExportSelection>, Error> {
+    let row: Option<(String, String, String, String)> = conn
+        .query_row(
+            "SELECT playlists, tags, smart, usb_mode FROM export_selections
+             WHERE destination = ?1",
+            params![destination],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?;
+    Ok(
+        row.map(|(playlists, tags, smart, usb_mode)| ExportSelection {
+            playlists: serde_json::from_str(&playlists).unwrap_or_default(),
+            tags: serde_json::from_str(&tags).unwrap_or_default(),
+            smart: serde_json::from_str(&smart).unwrap_or_default(),
+            usb_mode: mode_from(&usb_mode),
+        }),
+    )
+}
+
+pub fn set_export_selection(
+    conn: &Connection,
+    destination: &str,
+    selection: &ExportSelection,
+) -> Result<(), Error> {
+    let playlists =
+        serde_json::to_string(&selection.playlists).map_err(|e| Error::Msg(e.to_string()))?;
+    let tags = serde_json::to_string(&selection.tags).map_err(|e| Error::Msg(e.to_string()))?;
+    let smart = serde_json::to_string(&selection.smart).map_err(|e| Error::Msg(e.to_string()))?;
+    conn.execute(
+        "INSERT INTO export_selections (destination, playlists, tags, smart, usb_mode)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(destination) DO UPDATE SET
+             playlists = excluded.playlists, tags = excluded.tags, smart = excluded.smart,
+             usb_mode = excluded.usb_mode",
+        params![
+            destination,
+            playlists,
+            tags,
+            smart,
+            mode_text(selection.usb_mode)
+        ],
+    )?;
+    Ok(())
+}
+
+/// Every smart playlist, by name.
+pub fn smart_playlists(conn: &Connection) -> Result<Vec<crate::smart::SmartPlaylist>, Error> {
+    let mut stmt =
+        conn.prepare("SELECT id, name, rules FROM smart_playlists ORDER BY name COLLATE NOCASE")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, name, rules) = row?;
+        out.push(crate::smart::SmartPlaylist {
+            id,
+            name,
+            rules: serde_json::from_str(&rules).unwrap_or_default(),
+        });
+    }
+    Ok(out)
+}
+
+/// Adds a smart playlist (`id` 0) or changes one; returns it as stored.
+pub fn save_smart_playlist(
+    conn: &Connection,
+    playlist: &crate::smart::SmartPlaylist,
+) -> Result<crate::smart::SmartPlaylist, Error> {
+    let rules = serde_json::to_string(&playlist.rules).map_err(|e| Error::Msg(e.to_string()))?;
+    let id = if playlist.id == 0 {
+        conn.execute(
+            "INSERT INTO smart_playlists (name, rules) VALUES (?1, ?2)",
+            params![playlist.name, rules],
+        )?;
+        conn.last_insert_rowid()
+    } else {
+        let changed = conn.execute(
+            "UPDATE smart_playlists SET name = ?2, rules = ?3 WHERE id = ?1",
+            params![playlist.id, playlist.name, rules],
+        )?;
+        if changed == 0 {
+            return Err(Error::Msg("That smart playlist no longer exists.".into()));
+        }
+        playlist.id
+    };
+    Ok(crate::smart::SmartPlaylist {
+        id,
+        ..playlist.clone()
+    })
+}
+
+pub fn delete_smart_playlist(conn: &Connection, id: i64) -> Result<(), Error> {
+    conn.execute("DELETE FROM smart_playlists WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn open(path: &Path) -> Result<Connection, Error> {
     let conn = Connection::open(path)?;
@@ -257,16 +470,20 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
         "cues_edited",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
-    prepare_tags(&conn).map(|()| conn)
+    prepare_tags(&conn)?;
+    create_export_selections(&conn).map(|()| conn)
 }
 
-fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), Error> {
-    let exists = conn
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, Error> {
+    Ok(conn
         .prepare(&format!("PRAGMA table_info({table})"))?
         .query_map([], |r| r.get::<_, String>(1))?
         .filter_map(Result::ok)
-        .any(|name| name == column);
-    if !exists {
+        .any(|name| name == column))
+}
+
+fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), Error> {
+    if !has_column(conn, table, column)? {
         conn.execute(
             &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
             [],
@@ -2151,5 +2368,42 @@ mod tests {
         let a = tracks.iter().find(|t| t.path == "/a.mp3").expect("a");
         assert!(a.analyzed, "analysis follows the new fingerprint");
         assert_eq!(a.key.as_deref(), Some("Am"));
+    }
+
+    #[test]
+    fn old_rekordbox_choice_becomes_the_list_of_exported_playlists() {
+        let conn = open(Path::new(":memory:")).expect("db");
+        let a = create_playlist(&conn, "A").expect("a");
+        let b = create_playlist(&conn, "B").expect("b");
+        let c = create_playlist(&conn, "C").expect("c");
+        assert_eq!(export_selection(&conn, RB_DESTINATION).expect("none"), None);
+        set_setting(
+            &conn,
+            LEGACY_RB_SELECTION,
+            Some(&format!(
+                r#"{{"excludedPlaylists":[{b}],"tags":["Genre/House"]}}"#
+            )),
+        )
+        .expect("legacy");
+        migrate_rekordbox_selection(&conn).expect("migrate");
+        assert_eq!(
+            export_selection(&conn, RB_DESTINATION).expect("row"),
+            Some(ExportSelection {
+                playlists: vec![a, c],
+                tags: vec!["Genre/House".to_owned()],
+                ..ExportSelection::default()
+            })
+        );
+        assert_eq!(get_setting(&conn, LEGACY_RB_SELECTION).expect("gone"), None);
+
+        let usb = ExportSelection {
+            playlists: vec![b],
+            tags: vec![],
+            smart: vec![7],
+            usb_mode: crate::usb_export::Mode::ReplaceAll,
+        };
+        set_export_selection(&conn, "usb:1234", &usb).expect("save");
+        set_export_selection(&conn, "usb:1234", &usb).expect("overwrite");
+        assert_eq!(export_selection(&conn, "usb:1234").expect("row"), Some(usb));
     }
 }

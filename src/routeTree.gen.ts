@@ -16,6 +16,7 @@ import { Route as ImportRouteImport } from './routes/import'
 import { Route as MetadataRouteImport } from './routes/metadata'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PlaylistsIdRouteImport } from './routes/playlists.$id'
+import { Route as SmartIdRouteImport } from './routes/smart.$id'
 import { Route as TagsSplatRouteImport } from './routes/tags.$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -53,6 +54,11 @@ const PlaylistsIdRoute = PlaylistsIdRouteImport.update({
   path: '/playlists/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SmartIdRoute = SmartIdRouteImport.update({
+  id: '/smart/$id',
+  path: '/smart/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TagsSplatRoute = TagsSplatRouteImport.update({
   id: '/tags/$',
   path: '/tags/$',
@@ -67,6 +73,7 @@ export interface FileRoutesByFullPath {
   '/metadata': typeof MetadataRoute
   '/settings': typeof SettingsRoute
   '/playlists/$id': typeof PlaylistsIdRoute
+  '/smart/$id': typeof SmartIdRoute
   '/tags/$': typeof TagsSplatRoute
 }
 export interface FileRoutesByTo {
@@ -77,6 +84,7 @@ export interface FileRoutesByTo {
   '/metadata': typeof MetadataRoute
   '/settings': typeof SettingsRoute
   '/playlists/$id': typeof PlaylistsIdRoute
+  '/smart/$id': typeof SmartIdRoute
   '/tags/$': typeof TagsSplatRoute
 }
 export interface FileRoutesById {
@@ -88,6 +96,7 @@ export interface FileRoutesById {
   '/metadata': typeof MetadataRoute
   '/settings': typeof SettingsRoute
   '/playlists/$id': typeof PlaylistsIdRoute
+  '/smart/$id': typeof SmartIdRoute
   '/tags/$': typeof TagsSplatRoute
 }
 export interface FileRouteTypes {
@@ -100,6 +109,7 @@ export interface FileRouteTypes {
     | '/metadata'
     | '/settings'
     | '/playlists/$id'
+    | '/smart/$id'
     | '/tags/$'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -110,6 +120,7 @@ export interface FileRouteTypes {
     | '/metadata'
     | '/settings'
     | '/playlists/$id'
+    | '/smart/$id'
     | '/tags/$'
   id:
     | '__root__'
@@ -120,6 +131,7 @@ export interface FileRouteTypes {
     | '/metadata'
     | '/settings'
     | '/playlists/$id'
+    | '/smart/$id'
     | '/tags/$'
   fileRoutesById: FileRoutesById
 }
@@ -131,6 +143,7 @@ export interface RootRouteChildren {
   MetadataRoute: typeof MetadataRoute
   SettingsRoute: typeof SettingsRoute
   PlaylistsIdRoute: typeof PlaylistsIdRoute
+  SmartIdRoute: typeof SmartIdRoute
   TagsSplatRoute: typeof TagsSplatRoute
 }
 
@@ -185,6 +198,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PlaylistsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/smart/$id': {
+      id: '/smart/$id'
+      path: '/smart/$id'
+      fullPath: '/smart/$id'
+      preLoaderRoute: typeof SmartIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/tags/$': {
       id: '/tags/$'
       path: '/tags/$'
@@ -203,6 +223,7 @@ const rootRouteChildren: RootRouteChildren = {
   MetadataRoute: MetadataRoute,
   SettingsRoute: SettingsRoute,
   PlaylistsIdRoute: PlaylistsIdRoute,
+  SmartIdRoute: SmartIdRoute,
   TagsSplatRoute: TagsSplatRoute,
 }
 export const routeTree = rootRouteImport

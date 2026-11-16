@@ -4,7 +4,9 @@
 //!
 //! The drive's existing library is kept: its tracks keep their ids (so rekordbox's beat grids and
 //! `exportExt.pdb` tags still line up) and its playlists stay, except ones with the same name as
-//! an exported playlist, which are replaced. Songs already on the drive, matched by path or by
+//! an exported playlist, which are replaced. `Mode` can also take every other playlist and
+//! folder away, and then every song no remaining playlist holds. [`preview`] works out the same
+//! changes without writing anything, for the review before an export. Songs already on the drive, matched by path or by
 //! exact file size, are not copied again.
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -89,6 +91,11 @@ pub struct Report {
     pub regridded: usize,
     /// Playlists written (new or replaced).
     pub playlists: usize,
+    /// Playlists and folders taken off the drive because they were not exported.
+    pub playlists_removed: usize,
+    /// Songs deleted from the drive because no playlist held them any more.
+    pub songs_deleted: usize,
+    pub bytes_freed: u64,
     /// Tracks in the drive's library afterwards.
     pub library_tracks: usize,
     /// Folder on the drive holding copies of both previous databases.
@@ -590,6 +597,26 @@ pub struct Options<'a> {
     pub store: Option<&'a Store>,
     /// Show detected keys as Camelot codes (`8A`) rather than `Am`.
     pub camelot: bool,
+    pub mode: Mode,
+}
+
+/// What happens to what is already on the drive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Mode {
+    /// Other playlists stay; same-named ones are replaced.
+    #[default]
+    Add,
+    /// Only the exported playlists stay; every song stays.
+    ReplacePlaylists,
+    /// Only the exported playlists stay, and songs none of them hold are deleted.
+    ReplaceAll,
+}
+
+impl Mode {
+    fn removes_playlists(self) -> bool {
+        self != Self::Add
+    }
 }
 
 /// Removes the drive's `OneLibrary` and its side files.
@@ -775,6 +802,9 @@ pub fn export(
         total,
         current: String::new(),
     });
+    if opts.mode.removes_playlists() {
+        report.playlists_removed = remove_other_playlists(&mut lib, playlists);
+    }
     let mut next_playlist = lib.playlists.iter().map(|p| p.id).max().unwrap_or(0) + 1;
     let mut next_sort = lib
         .playlists
@@ -810,14 +840,300 @@ pub fn export(
         report.playlists += 1;
     }
 
+    let unheld = if opts.mode == Mode::ReplaceAll {
+        take_unheld_tracks(&mut lib)
+    } else {
+        Vec::new()
+    };
     let (backup, one) = write_libraries(mount, &lib, sequence, opts.stamp, opts.today)?;
     report.backup = backup;
+    // Only once the libraries no longer list them, so a player never sees a missing file.
+    delete_track_files(mount, &lib, &unheld, &mut report);
     match one {
         Ok(()) => report.one_library = true,
         Err(e) => report.one_library_error = Some(e),
     }
     report.library_tracks = lib.tracks.len();
     Ok(report)
+}
+
+/// Takes out of the library every track no playlist holds, returning them.
+fn take_unheld_tracks(lib: &mut Library) -> Vec<pdb::Track> {
+    let held: HashSet<u32> = lib
+        .playlists
+        .iter()
+        .flat_map(|p| p.track_ids.iter().copied())
+        .collect();
+    let (keep, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut lib.tracks)
+        .into_iter()
+        .partition(|t| held.contains(&t.id));
+    lib.tracks = keep;
+    gone
+}
+
+/// Deletes the song files and analysis files of tracks taken out of the library. Analysis files
+/// another track still uses stay.
+fn delete_track_files(mount: &Path, lib: &Library, gone: &[pdb::Track], report: &mut Report) {
+    let in_use: HashSet<&str> = lib.tracks.iter().map(|t| t.analyze_path.as_str()).collect();
+    for t in gone {
+        let song = on_drive(mount, &t.path);
+        let size = fs::metadata(&song).map_or(0, |m| m.len());
+        match fs::remove_file(&song) {
+            Ok(()) => {
+                report.songs_deleted += 1;
+                report.bytes_freed += size;
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => report.songs_deleted += 1,
+            Err(e) => report.failed.push(Failure {
+                path: t.path.clone(),
+                error: format!("could not delete: {e}"),
+            }),
+        }
+        if t.analyze_path.is_empty() || in_use.contains(t.analyze_path.as_str()) {
+            continue;
+        }
+        let dat = on_drive(mount, &t.analyze_path);
+        for ext in ["DAT", "EXT", "2EX"] {
+            let _ = fs::remove_file(dat.with_extension(ext));
+        }
+    }
+}
+
+/// A song as the review lists it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SongRef {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub bpm: Option<f64>,
+    pub key: Option<String>,
+    pub duration_secs: Option<u32>,
+    /// The library song, when there is one (for its artwork).
+    pub track_id: Option<i64>,
+    /// The file on the drive, for a song only the drive has.
+    pub file: Option<String>,
+}
+
+impl SongRef {
+    fn of_source(s: &Source) -> Self {
+        Self {
+            title: s.title.clone(),
+            artist: s.artist.clone(),
+            album: s.album.clone(),
+            bpm: s.bpm,
+            key: s.key.clone(),
+            duration_secs: s.duration_ms.and_then(|ms| u32::try_from(ms / 1000).ok()),
+            track_id: Some(s.id),
+            file: None,
+        }
+    }
+
+    fn of_drive(mount: &Path, t: &pdb::Track) -> Self {
+        Self {
+            title: t.title.clone(),
+            artist: t.artist.clone(),
+            album: t.album.clone(),
+            bpm: (t.tempo > 0).then(|| f64::from(t.tempo) / 100.0),
+            key: (!t.key.is_empty()).then(|| t.key.clone()),
+            duration_secs: (t.duration_secs > 0).then_some(u32::from(t.duration_secs)),
+            track_id: None,
+            file: Some(on_drive(mount, &t.path).display().to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Change {
+    Added,
+    Updated,
+    Unchanged,
+    Removed,
+}
+
+/// What an export does to one playlist on the drive.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistChange {
+    pub name: String,
+    pub change: Change,
+    /// Songs in it afterwards (before, for a removed one).
+    pub songs: usize,
+    pub added: Vec<SongRef>,
+    pub removed: Vec<SongRef>,
+    /// Every song in it afterwards, in order (before, for a removed one).
+    pub tracks: Vec<SongRef>,
+}
+
+/// Everything an export would change on the drive, worked out without writing.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Diff {
+    pub playlists: Vec<PlaylistChange>,
+    /// Songs new to the drive.
+    pub copy: Vec<SongRef>,
+    pub copy_bytes: u64,
+    /// Songs deleted from the drive (`Mode::ReplaceAll`).
+    pub delete: Vec<SongRef>,
+    pub delete_bytes: u64,
+}
+
+/// A song in an exported playlist: one the drive has, or one the export copies.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Key {
+    Drive(u32),
+    New(i64),
+}
+
+/// How one exported playlist differs from the drive's playlist of the same name.
+fn playlist_change(
+    lib: &Library,
+    p: &SourcePlaylist,
+    key_of: &HashMap<i64, Key>,
+    song: &impl Fn(Key) -> Option<SongRef>,
+) -> PlaylistChange {
+    let keys: Vec<Key> = p
+        .track_ids
+        .iter()
+        .filter_map(|id| key_of.get(id).copied())
+        .collect();
+    let existing = lib
+        .playlists
+        .iter()
+        .find(|e| e.parent_id == 0 && !e.is_folder && e.name == p.name);
+    let old: Vec<Key> = existing
+        .map(|e| e.track_ids.iter().map(|&id| Key::Drive(id)).collect())
+        .unwrap_or_default();
+    let old_set: HashSet<Key> = old.iter().copied().collect();
+    let new_set: HashSet<Key> = keys.iter().copied().collect();
+    let added: Vec<SongRef> = keys
+        .iter()
+        .filter(|k| !old_set.contains(k))
+        .filter_map(|&k| song(k))
+        .collect();
+    let removed: Vec<SongRef> = old
+        .iter()
+        .filter(|k| !new_set.contains(k))
+        .filter_map(|&k| song(k))
+        .collect();
+    let change = match existing {
+        None => Change::Added,
+        Some(_) if added.is_empty() && removed.is_empty() => Change::Unchanged,
+        Some(_) => Change::Updated,
+    };
+    PlaylistChange {
+        name: p.name.clone(),
+        change,
+        songs: keys.len(),
+        added,
+        removed,
+        tracks: keys.iter().filter_map(|&k| song(k)).collect(),
+    }
+}
+
+/// What [`export`] would do with these playlists, without touching the drive.
+pub fn preview(
+    mount: &Path,
+    sources: &[Source],
+    playlists: &[SourcePlaylist],
+    mode: Mode,
+) -> Result<Diff, String> {
+    let (lib, _) = read_libraries(mount)?;
+    let by_id: HashMap<i64, &Source> = sources.iter().map(|s| (s.id, s)).collect();
+    let mut wanted = Vec::new();
+    let mut seen = HashSet::new();
+    for p in playlists {
+        for id in &p.track_ids {
+            if let Some(s) = by_id.get(id)
+                && seen.insert(*id)
+            {
+                wanted.push(*s);
+            }
+        }
+    }
+    let planned = plan(&lib, mount, &wanted);
+    let key_of: HashMap<i64, Key> = planned
+        .iter()
+        .map(|p| {
+            let key = p.existing.map_or(Key::New(p.source.id), Key::Drive);
+            (p.source.id, key)
+        })
+        .collect();
+    // A drive song that is also in the library is described from the library, which knows more.
+    let source_of: HashMap<u32, &Source> = planned
+        .iter()
+        .filter_map(|p| Some((p.existing?, p.source)))
+        .collect();
+    let drive_tracks: HashMap<u32, &pdb::Track> = lib.tracks.iter().map(|t| (t.id, t)).collect();
+    let drive_song = |id: u32| {
+        source_of.get(&id).map_or_else(
+            || drive_tracks.get(&id).map(|t| SongRef::of_drive(mount, t)),
+            |s| Some(SongRef::of_source(s)),
+        )
+    };
+    let song = |key: Key| match key {
+        Key::Drive(id) => drive_song(id),
+        Key::New(id) => by_id.get(&id).map(|s| SongRef::of_source(s)),
+    };
+
+    let mut diff = Diff {
+        playlists: playlists
+            .iter()
+            .map(|p| playlist_change(&lib, p, &key_of, &song))
+            .collect(),
+        ..Diff::default()
+    };
+    if mode.removes_playlists() {
+        let names: HashSet<&str> = playlists.iter().map(|p| p.name.as_str()).collect();
+        for e in &lib.playlists {
+            if e.is_folder || (e.parent_id == 0 && names.contains(e.name.as_str())) {
+                continue;
+            }
+            diff.playlists.push(PlaylistChange {
+                name: e.name.clone(),
+                change: Change::Removed,
+                songs: e.track_ids.len(),
+                added: Vec::new(),
+                removed: Vec::new(),
+                tracks: e
+                    .track_ids
+                    .iter()
+                    .filter_map(|&id| drive_song(id))
+                    .collect(),
+            });
+        }
+    }
+    for p in &planned {
+        if p.existing.is_none() && !on_drive(mount, &p.dest).exists() {
+            diff.copy_bytes += p.source.size;
+            diff.copy.push(SongRef::of_source(p.source));
+        }
+    }
+    if mode == Mode::ReplaceAll {
+        let kept: HashSet<u32> = key_of
+            .values()
+            .filter_map(|k| match k {
+                Key::Drive(id) => Some(*id),
+                Key::New(_) => None,
+            })
+            .collect();
+        for t in lib.tracks.iter().filter(|t| !kept.contains(&t.id)) {
+            diff.delete_bytes += u64::from(t.file_size);
+            diff.delete.push(SongRef::of_drive(mount, t));
+        }
+    }
+    Ok(diff)
+}
+
+/// Keeps only the top-level playlists this export rewrites (so they keep their ids and place)
+/// and drops every other playlist and folder. Returns how many went.
+fn remove_other_playlists(lib: &mut Library, exported: &[SourcePlaylist]) -> usize {
+    let names: HashSet<&str> = exported.iter().map(|p| p.name.as_str()).collect();
+    let before = lib.playlists.len();
+    lib.playlists
+        .retain(|p| p.parent_id == 0 && !p.is_folder && names.contains(p.name.as_str()));
+    before - lib.playlists.len()
 }
 
 #[cfg(test)]
@@ -864,6 +1180,7 @@ mod tests {
             free_bytes: free,
             store: None,
             camelot: true,
+            mode: Mode::Add,
         }
     }
 
@@ -887,6 +1204,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one drive taken through every export mode in turn
     fn exports_then_reexports_without_copying_again() {
         let lib_dir = dir("lib");
         let usb = dir("usb");
@@ -966,6 +1284,85 @@ mod tests {
         assert_eq!(warm.track_ids.len(), 1);
         let one = onelib::read(&usb.join(ONE_LIBRARY_PATH)).expect("OneLibrary");
         assert_eq!(one, lib, "both databases agree");
+
+        // Removing the rest leaves only what this export writes, keeping its playlist's id.
+        let only = Options {
+            mode: Mode::ReplacePlaylists,
+            ..opts(1 << 40)
+        };
+        let report = export(&usb, &sources, &again, &only, |_| {}).expect("exports");
+        assert_eq!((report.playlists, report.playlists_removed), (1, 1));
+        let after = crate::usb::library(&usb).expect("reads back");
+        assert_eq!(after.tracks.len(), 3, "songs stay");
+        assert_eq!(
+            after
+                .playlists
+                .iter()
+                .map(|p| (p.id, p.name.as_str()))
+                .collect::<Vec<_>>(),
+            [(warm.id, "Warm up")]
+        );
+        let one = onelib::read(&usb.join(ONE_LIBRARY_PATH)).expect("OneLibrary");
+        assert_eq!(one, after, "both databases agree");
+
+        // The review sees what replacing everything would do: song 1 stays, two go, and a new
+        // playlist with a new song is added.
+        let lib_dir2 = dir("lib-extra");
+        let mut more = sources.clone();
+        more.push(source(&lib_dir2, 4, "Kode9", "Memories", "new.mp3", 4000));
+        let last = vec![
+            SourcePlaylist {
+                name: "Warm up".into(),
+                track_ids: vec![1, 4],
+            },
+            SourcePlaylist {
+                name: "Fresh".into(),
+                track_ids: vec![4],
+            },
+        ];
+        let diff = preview(&usb, &more, &last, Mode::ReplaceAll).expect("preview");
+        let changes: Vec<_> = diff
+            .playlists
+            .iter()
+            .map(|p| {
+                (
+                    p.name.as_str(),
+                    p.change,
+                    p.songs,
+                    p.added.len(),
+                    p.removed.len(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            changes,
+            [
+                ("Warm up", Change::Updated, 2, 1, 0),
+                ("Fresh", Change::Added, 1, 1, 0)
+            ]
+        );
+        assert_eq!((diff.copy.len(), diff.copy_bytes), (1, 4000));
+        assert_eq!((diff.delete.len(), diff.delete_bytes), (2, 5000));
+        let untouched = crate::usb::library(&usb).expect("reads back");
+        assert_eq!(untouched, after, "a preview writes nothing");
+
+        let all = Options {
+            mode: Mode::ReplaceAll,
+            ..opts(1 << 40)
+        };
+        let report = export(&usb, &more, &last, &all, |_| {}).expect("exports");
+        assert_eq!((report.songs_deleted, report.bytes_freed), (2, 5000));
+        let end = crate::usb::library(&usb).expect("reads back");
+        assert_eq!(end.tracks.len(), 2, "song 1 and the new one");
+        assert!(!usb.join("Contents/Burial/Untrue/02 Near Dark.mp3").exists());
+        assert!(
+            !usb.join("Contents/UnknownArtist/UnknownAlbum/loose.wav")
+                .exists()
+        );
+        assert!(
+            usb.join("Contents/Burial/Untrue/01 Archangel.mp3")
+                .is_file()
+        );
     }
 
     #[test]

@@ -1,12 +1,12 @@
-import { Link, useMatchRoute } from "@tanstack/react-router";
-import { ChevronRight, CloudUpload, Download, FolderOpen, RefreshCw, Upload } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { CloudUpload, Download, FolderOpen, RefreshCw, Upload } from "lucide-react";
 import type { ReactNode } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { useDownloadsEnabled } from "#/components/downloads-source.tsx";
 import { useItunesOn } from "#/components/itunes-source.tsx";
 import { AddButton } from "#/components/sidebar-create.tsx";
-import { SectionLabel } from "#/components/sidebar-parts.tsx";
-import { rowBase, rowClass } from "#/components/sidebar-row.ts";
+import { GroupHeading, SectionLabel } from "#/components/sidebar-parts.tsx";
+import { CHILD_INDENT, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
 import { type DetailView, useDetail } from "#/context/detail-context.ts";
 import { type SyncKind, useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
@@ -17,9 +17,6 @@ import { useStoredFlag } from "#/lib/use-pane-width.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
 import { cn } from "#/lib/utils.ts";
-
-/** Indent of a destination or source under its heading, past the heading's icon. */
-const CHILD_INDENT = 22;
 
 const iconButton =
 	"grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors hover:bg-background/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5";
@@ -105,43 +102,6 @@ function ChildRow({
 					<FolderOpen />
 				</Link>
 			)}
-		</div>
-	);
-}
-
-/** A page's row, with a chevron that folds its sources or destinations away. */
-function Heading({
-	to,
-	label,
-	icon,
-	open,
-	onToggle,
-	action,
-}: {
-	to: "/import" | "/export";
-	label: string;
-	icon: ReactNode;
-	open: boolean;
-	onToggle: () => void;
-	action?: ReactNode;
-}) {
-	const active = !!useMatchRoute()({ to });
-	return (
-		<div className={cn("group/row relative", rowClass(active))}>
-			<Link to={to} className={rowBase}>
-				<span className="[&_svg]:size-4">{icon}</span>
-				<span className="truncate">{label}</span>
-			</Link>
-			{action}
-			<button
-				type="button"
-				aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
-				aria-expanded={open}
-				onClick={onToggle}
-				className="grid size-5 shrink-0 place-items-center rounded hover:bg-background/60"
-			>
-				<ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
-			</button>
 		</div>
 	);
 }
@@ -242,9 +202,9 @@ export function SidebarSync() {
 	const [importClosed, setImportClosed] = useStoredFlag("manplay.sidebar.importClosed");
 	const [exportClosed, setExportClosed] = useStoredFlag("manplay.sidebar.exportClosed");
 	return (
-		<section className="mb-4 space-y-0.5">
+		<section className="space-y-0.5">
 			<SectionLabel action={<QuickActions />}>Sync</SectionLabel>
-			<Heading
+			<GroupHeading
 				to="/import"
 				label="Import"
 				icon={<Download />}
@@ -252,7 +212,7 @@ export function SidebarSync() {
 				onToggle={() => setImportClosed(!importClosed)}
 			/>
 			{!importClosed && <ImportItems />}
-			<Heading
+			<GroupHeading
 				to="/export"
 				label="Export"
 				icon={<Upload />}
@@ -262,7 +222,7 @@ export function SidebarSync() {
 					<AddButton
 						label="Add destination"
 						onClick={() => detail.open({ kind: "add-destination" })}
-						className="mr-0.5 opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100"
+						className={HOVER_ACTION}
 					/>
 				}
 			/>

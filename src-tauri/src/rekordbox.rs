@@ -168,12 +168,25 @@ fn write_playlist(
 
 /// Builds the XML document. Playlist entries that point at unknown tracks are dropped. Tag
 /// playlists go in a "Tags" sub-folder, which is left out when there are none.
+/// The folder smart playlists go in, next to `Tags`.
+pub const SMART_FOLDER_NAME: &str = "Smart";
+
+/// The whole file. `tag_playlists` go in a `Tags` folder and `smart_playlists` in a `Smart` one,
+/// each left out when empty.
 pub fn build_xml(
     tracks: &[ExportTrack],
     playlists: &[ExportPlaylist],
     tag_playlists: &[ExportPlaylist],
+    smart_playlists: &[ExportPlaylist],
 ) -> String {
     let known: std::collections::HashSet<i64> = tracks.iter().map(|t| t.id).collect();
+    let subfolders: Vec<(&str, &[ExportPlaylist])> = [
+        (TAGS_FOLDER_NAME, tag_playlists),
+        (SMART_FOLDER_NAME, smart_playlists),
+    ]
+    .into_iter()
+    .filter(|(_, lists)| !lists.is_empty())
+    .collect();
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str("<DJ_PLAYLISTS Version=\"1.0.0\">\n");
@@ -185,7 +198,7 @@ pub fn build_xml(
     out.push_str("  </COLLECTION>\n");
     out.push_str("  <PLAYLISTS>\n");
     out.push_str("    <NODE Type=\"0\" Name=\"ROOT\" Count=\"1\">\n");
-    let folder_count = playlists.len() + usize::from(!tag_playlists.is_empty());
+    let folder_count = playlists.len() + subfolders.len();
     let _ = writeln!(
         out,
         "      <NODE Type=\"0\" Name=\"{FOLDER_NAME}\" Count=\"{folder_count}\">"
@@ -193,13 +206,14 @@ pub fn build_xml(
     for p in playlists {
         write_playlist(&mut out, &known, &p.name, &p.track_ids, "        ");
     }
-    if !tag_playlists.is_empty() {
+    for (folder, lists) in subfolders {
         let _ = writeln!(
             out,
-            "        <NODE Type=\"0\" Name=\"{TAGS_FOLDER_NAME}\" Count=\"{}\">",
-            tag_playlists.len()
+            "        <NODE Type=\"0\" Name=\"{}\" Count=\"{}\">",
+            esc(folder),
+            lists.len()
         );
-        for p in tag_playlists {
+        for p in lists {
             let name = p.name.replace('/', " › ");
             write_playlist(&mut out, &known, &name, &p.track_ids, "          ");
         }
@@ -343,7 +357,7 @@ mod tests {
             first_beat: 0.0425,
             bar_offset: 2,
         });
-        let xml = build_xml(&[t], &[], &[]);
+        let xml = build_xml(&[t], &[], &[], &[]);
         assert!(
             xml.contains(r#"<TEMPO Inizio="0.043" Bpm="124.00" Metro="4/4" Battito="3"/>"#),
             "{xml}"
@@ -371,7 +385,7 @@ mod tests {
                 main: false,
             },
         ];
-        let xml = build_xml(&[t], &[], &[]);
+        let xml = build_xml(&[t], &[], &[], &[]);
         assert!(
             xml.contains(r#"<POSITION_MARK Name="Drop &amp; go" Type="0" Start="12.346" Num="1" Red="48" Green="90" Blue="255"/>"#),
             "{xml}"
@@ -407,7 +421,7 @@ mod tests {
                 track_ids: vec![],
             },
         ];
-        let xml = build_xml(&tracks, &playlists, &[]);
+        let xml = build_xml(&tracks, &playlists, &[], &[]);
         let doc = roxmltree::Document::parse(&xml).expect("well-formed xml");
 
         let root = doc.root_element();
@@ -492,7 +506,7 @@ mod tests {
     #[test]
     fn control_characters_cannot_break_the_document() {
         let tracks = vec![track(1, "/m/a.mp3", "bad\u{0}\u{1}title\nline")];
-        let xml = build_xml(&tracks, &[], &[]);
+        let xml = build_xml(&tracks, &[], &[], &[]);
         assert!(roxmltree::Document::parse(&xml).is_ok());
     }
 
@@ -509,7 +523,7 @@ mod tests {
             name: "Genre/House".into(),
             track_ids: vec![1, 2],
         }];
-        let xml = build_xml(&tracks, &playlists, &tags);
+        let xml = build_xml(&tracks, &playlists, &tags, &[]);
         let doc = roxmltree::Document::parse(&xml).expect("well-formed xml");
         let folder = doc
             .descendants()

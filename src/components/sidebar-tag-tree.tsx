@@ -6,12 +6,13 @@ import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
-import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
-import { rowBase, rowClass } from "#/components/sidebar-row.ts";
+import { GroupHeading, RowCount } from "#/components/sidebar-parts.tsx";
+import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import { listTags, migrateLibraryTags, tagTracks } from "#/lib/api.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { buildTagTree, TAG_SEP, type TagNode, tagWithin, trackHasTag } from "#/lib/tag-tree.ts";
+import { useStoredFlag } from "#/lib/use-pane-width.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** A rename or delete waiting for a yes: `to` is the new full name, `null` deletes. */
@@ -116,6 +117,7 @@ export function SidebarTagTree() {
 	};
 	/** Where a new tag is being named: "" at the top level, else its parent's key. */
 	const [adding, setAdding] = useState<string | null>(null);
+	const [closed, setClosed] = useStoredFlag("manplay.sidebar.tagsClosed");
 	const startTag = (parent: TagNode) => {
 		const key = parent.name.toLowerCase();
 		if (!open.has(key)) {
@@ -126,7 +128,7 @@ export function SidebarTagTree() {
 	const newTagRow = (parent: TagNode | undefined, depth: number) => (
 		<NewRow
 			icon={<Tag />}
-			indent={8 + depth * 14}
+			indent={CHILD_PAD + depth * 14}
 			placeholder={parent ? `New tag in ${parent.label}` : "Tag name"}
 			parse={nonBlank}
 			onCancel={() => setAdding(null)}
@@ -189,7 +191,7 @@ export function SidebarTagTree() {
 							{renaming === key ? (
 								<div
 									className="flex min-w-0 flex-1 items-center gap-2 py-0.5"
-									style={{ paddingLeft: `${8 + depth * 14}px` }}
+									style={{ paddingLeft: `${CHILD_PAD + depth * 14}px` }}
 								>
 									<Tag className="size-4 shrink-0 text-muted-foreground" />
 									<InlineInput
@@ -206,7 +208,7 @@ export function SidebarTagTree() {
 									params={{ _splat: n.name }}
 									title={n.name}
 									className={rowBase}
-									style={{ paddingLeft: `${8 + depth * 14}px` }}
+									style={{ paddingLeft: `${CHILD_PAD + depth * 14}px` }}
 								>
 									<Tag className="size-4 shrink-0" />
 									<span className="truncate">{n.label}</span>
@@ -232,12 +234,25 @@ export function SidebarTagTree() {
 		});
 
 	return (
-		<section className="mt-4 space-y-0.5">
-			<SectionLabel action={<AddButton label="New tag" onClick={() => setAdding("")} />}>
-				Tags
-			</SectionLabel>
-			{adding === "" && newTagRow(undefined, 0)}
-			{rows(tree, 0)}
+		<div className="space-y-0.5">
+			<GroupHeading
+				label="Tags"
+				icon={<Tag />}
+				open={!closed}
+				onToggle={() => setClosed(!closed)}
+				action={
+					<AddButton
+						label="New tag"
+						className={HOVER_ACTION}
+						onClick={() => {
+							setClosed(false);
+							setAdding("");
+						}}
+					/>
+				}
+			/>
+			{!closed && adding === "" && newTagRow(undefined, 0)}
+			{!closed && rows(tree, 0)}
 			{move.isError && <p className="px-2 text-destructive text-xs">{String(move.error)}</p>}
 			{ask && (
 				<ConfirmDialog
@@ -258,6 +273,6 @@ export function SidebarTagTree() {
 						: `“${ask.to}” already exists, so its songs and these become one tag.`}
 				</ConfirmDialog>
 			)}
-		</section>
+		</div>
 	);
 }

@@ -1,4 +1,3 @@
-import type { RekordboxSelection } from "#/lib/api.ts";
 import type { TagNode } from "#/lib/tag-tree.ts";
 
 /** A tag and every tag below it, as written in the library. */
@@ -25,13 +24,4 @@ export function setTagTree(selected: readonly string[], node: TagNode, on: boole
 	const drop = new Set(names.map((n) => n.toLowerCase()));
 	const rest = selected.filter((t) => !drop.has(t.toLowerCase()));
 	return on ? [...rest, ...names] : rest;
-}
-
-export function sameSelection(a: RekordboxSelection, b: RekordboxSelection): boolean {
-	const key = (s: RekordboxSelection) =>
-		JSON.stringify([
-			[...s.excludedPlaylists].sort((x, y) => x - y),
-			s.tags.map((t) => t.toLowerCase()).sort(),
-		]);
-	return key(a) === key(b);
 }

@@ -1,36 +1,54 @@
+import { Menu } from "@base-ui/react/menu";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, HardDriveUpload, ListMusic, Tag as TagIcon } from "lucide-react";
+import {
+	Check,
+	ChevronDown,
+	HardDrive,
+	HardDriveUpload,
+	ListPlus,
+	ListX,
+	type LucideIcon,
+	Trash2,
+} from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { CheckList, CheckRow, Filter, LinkButton, TagTree } from "#/components/check-list.tsx";
 import { Drawer } from "#/components/drawer.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
-import { Button } from "#/components/ui/button.tsx";
-import { Segmented } from "#/components/view-toggle.tsx";
 import {
+	type ChooserTab,
+	ExportChooser,
+	ExportFooter,
+	type HeldPlaylist,
+	HeldPlaylists,
+} from "#/components/export-chooser.tsx";
+import { Button } from "#/components/ui/button.tsx";
+import { ButtonGroup } from "#/components/ui/button-group.tsx";
+import { type PlaylistSource, Review, ReviewCounts } from "#/components/usb-review.tsx";
+import {
+	type ExportSelection,
 	exportToUsb,
 	listPlaylists,
 	listTags,
 	onUsbExportProgress,
-	type Playlist,
 	playlistTracks,
-	type Tag,
+	type SmartRules,
+	smartPlaylistPreview,
 	type Track,
+	type UsbDiff,
 	type UsbDrive,
 	type UsbExportProgress,
 	type UsbExportReport,
 	type UsbLibrary,
+	type UsbMode,
+	usbExportPreview,
+	usbExportSelection,
 } from "#/lib/api.ts";
+import { EMPTY_SELECTION, plural, tagPlaylistName } from "#/lib/export-selection.ts";
 import { formatBytes } from "#/lib/format.ts";
 import { useTracks } from "#/lib/queries.ts";
-import { TAG_SEP, trackHasTag } from "#/lib/tag-tree.ts";
+import { trackHasTag } from "#/lib/tag-tree.ts";
 import { typeScale } from "#/lib/type-scale.ts";
+import { useSmartPlaylists } from "#/lib/use-smart.ts";
 import { cn } from "#/lib/utils.ts";
-
-const plural = (n: number, one: string, many: string) =>
-	`${n.toLocaleString()} ${n === 1 ? one : many}`;
-
-/** The playlist name a tag gets on the drive, as in the rekordbox XML export. */
-const tagPlaylistName = (tag: string) => tag.split(TAG_SEP).join(" › ");
 
 /** Room the export keeps free for the databases and analysis files (as the backend does). */
 const HEADROOM = 16 * 1024 * 1024;
@@ -69,15 +87,20 @@ interface Estimate {
 	loading: boolean;
 }
 
-/** Size of every chosen song by id: the playlists' songs, then songs carrying a chosen tag. */
+/**
+ * Size of every chosen song by id: the playlists' songs, then songs carrying a chosen tag, then
+ * the songs the chosen smart playlists pick.
+ */
 function chosenSongs(
 	fromPlaylists: readonly Track[],
 	library: readonly Track[],
 	tags: readonly string[],
+	fromSmart: readonly number[],
 ): Map<number, number> {
 	const songs = new Map(fromPlaylists.map((t) => [t.id, t.size]));
+	const smart = new Set(fromSmart);
 	for (const t of library) {
-		if (tags.some((name) => trackHasTag(t, name))) {
+		if (smart.has(t.id) || tags.some((name) => trackHasTag(t, name))) {
 			songs.set(t.id, t.size);
 		}
 	}
@@ -91,6 +114,7 @@ function chosenSongs(
 function useEstimate(
 	playlistIds: readonly number[],
 	tags: readonly string[],
+	smart: readonly SmartRules[],
 	library: UsbLibrary | undefined,
 ): Estimate {
 	const tracks = useTracks();
@@ -100,11 +124,19 @@ function useEstimate(
 			queryFn: () => playlistTracks(id),
 		})),
 	});
+	const previews = useQueries({
+		queries: smart.map((rules) => ({
+			queryKey: ["smart-preview", rules],
+			queryFn: () => smartPlaylistPreview(rules),
+		})),
+	});
+	const needLibrary = tags.length > 0 || smart.length > 0;
 	const sizes = useMemo(() => new Set((library?.tracks ?? []).map((t) => t.fileSize)), [library]);
 	const songs = chosenSongs(
 		lists.flatMap((q) => q.data ?? []),
-		tags.length > 0 ? (tracks.data ?? []) : [],
+		needLibrary ? (tracks.data ?? []) : [],
 		tags,
+		previews.flatMap((q) => q.data?.trackIds ?? []),
 	);
 	const fresh = [...songs.values()].filter((size) => !sizes.has(size));
 	const bytes = fresh.reduce((n, size) => n + size, 0);
@@ -113,7 +145,10 @@ function useEstimate(
 		songs: songs.size,
 		toCopy,
 		bytes,
-		loading: lists.some((q) => q.isPending) || (tags.length > 0 && tracks.isPending),
+		loading:
+			lists.some((q) => q.isPending) ||
+			previews.some((q) => q.isPending) ||
+			(needLibrary && tracks.isPending),
 	};
 }
 
@@ -163,137 +198,6 @@ function Swatch({ className, children }: { className: string; children: ReactNod
 			<span aria-hidden="true" className={cn("size-2 rounded-full", className)} />
 			{children}
 		</span>
-	);
-}
-
-type Tab = "playlists" | "tags";
-
-function PickerHeader({
-	hint,
-	allOn,
-	noneOn,
-	onAll,
-	onClear,
-}: {
-	hint: string;
-	allOn: boolean;
-	noneOn: boolean;
-	onAll: () => void;
-	onClear: () => void;
-}) {
-	return (
-		<div className="flex items-center justify-between gap-3 text-xs">
-			<p className="text-muted-foreground">{hint}</p>
-			<div className="flex shrink-0 gap-3">
-				<LinkButton disabled={allOn} onClick={onAll}>
-					Select all
-				</LinkButton>
-				<LinkButton disabled={noneOn} onClick={onClear}>
-					Clear
-				</LinkButton>
-			</div>
-		</div>
-	);
-}
-
-function PlaylistPicker({
-	list,
-	chosen,
-	onDrive,
-	onChange,
-}: {
-	list: readonly Playlist[];
-	chosen: ReadonlySet<number>;
-	/** Names of the drive's top-level playlists, which an export of the same name replaces. */
-	onDrive: ReadonlySet<string>;
-	onChange: (next: ReadonlySet<number>) => void;
-}) {
-	const [filter, setFilter] = useState("");
-	if (list.length === 0) {
-		return (
-			<p className="py-6 text-center text-muted-foreground text-sm">No playlists with songs yet.</p>
-		);
-	}
-	const needle = filter.trim().toLowerCase();
-	const shown = list.filter((p) => p.name.toLowerCase().includes(needle));
-	const toggle = (id: number, on: boolean) => {
-		const next = new Set(chosen);
-		if (on) {
-			next.add(id);
-		} else {
-			next.delete(id);
-		}
-		onChange(next);
-	};
-	return (
-		<div className="space-y-2">
-			<PickerHeader
-				hint={`${chosen.size} of ${list.length} chosen`}
-				allOn={chosen.size === list.length}
-				noneOn={chosen.size === 0}
-				onAll={() => onChange(new Set(list.map((p) => p.id)))}
-				onClear={() => onChange(new Set())}
-			/>
-			{list.length > 8 && <Filter value={filter} onChange={setFilter} label="Filter playlists" />}
-			<CheckList>
-				{shown.map((p) => (
-					<CheckRow
-						key={p.id}
-						label={p.name}
-						detail={plural(p.trackCount, "track", "tracks")}
-						note={onDrive.has(p.name) ? "Replaces the one on the drive" : undefined}
-						icon={<ListMusic className="size-4" />}
-						state={chosen.has(p.id) ? "on" : "off"}
-						onChange={(on) => toggle(p.id, on)}
-					/>
-				))}
-				{shown.length === 0 && (
-					<p className="px-3 py-2 text-muted-foreground text-sm">No playlist matches.</p>
-				)}
-			</CheckList>
-		</div>
-	);
-}
-
-function TagPicker({
-	tags,
-	chosen,
-	onDrive,
-	chosenPlaylistNames,
-	onChange,
-}: {
-	tags: readonly Tag[];
-	chosen: readonly string[];
-	onDrive: ReadonlySet<string>;
-	/** Library playlists also being exported; a tag with the same name would overwrite one. */
-	chosenPlaylistNames: ReadonlySet<string>;
-	onChange: (next: string[]) => void;
-}) {
-	if (tags.length === 0) {
-		return <p className="py-6 text-center text-muted-foreground text-sm">No tagged songs yet.</p>;
-	}
-	return (
-		<div className="space-y-2">
-			<PickerHeader
-				hint="Each tag becomes a playlist of its songs, including tags below it"
-				allOn={chosen.length >= tags.length}
-				noneOn={chosen.length === 0}
-				onAll={() => onChange(tags.map((t) => t.name))}
-				onClear={() => onChange([])}
-			/>
-			<TagTree
-				tags={tags}
-				selected={chosen}
-				onChange={onChange}
-				noteFor={(n) => {
-					const name = tagPlaylistName(n.name);
-					if (chosenPlaylistNames.has(name)) {
-						return "Same name as a chosen playlist";
-					}
-					return onDrive.has(name) ? "Replaces the one on the drive" : undefined;
-				}}
-			/>
-		</div>
 	);
 }
 
@@ -363,30 +267,46 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 				</span>
 				<div className="min-w-0">
 					<p className="font-medium">
-						{plural(report.playlists, "playlist", "playlists")} on {drive.name}
+						{plural(report.playlists, "playlist")} on {drive.name}
 					</p>
 					<p className="text-muted-foreground text-sm">
-						{plural(report.libraryTracks, "track", "tracks")} in the drive's library now
+						{plural(report.libraryTracks, "track")} in the drive's library now
 					</p>
 				</div>
 			</div>
 			<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-lg border bg-card p-4 text-sm">
 				<dt className="text-muted-foreground">Copied</dt>
 				<dd className="tabular-nums">
-					{plural(report.copied, "song", "songs")}, {formatBytes(report.bytesCopied)}
+					{plural(report.copied, "song")}, {formatBytes(report.bytesCopied)}
 				</dd>
+				{report.playlistsRemoved > 0 && (
+					<>
+						<dt className="text-muted-foreground">Removed</dt>
+						<dd className="tabular-nums">
+							{plural(report.playlistsRemoved, "playlist or folder", "playlists and folders")}
+						</dd>
+					</>
+				)}
+				{report.songsDeleted > 0 && (
+					<>
+						<dt className="text-muted-foreground">Deleted</dt>
+						<dd className="tabular-nums">
+							{plural(report.songsDeleted, "song")}, {formatBytes(report.bytesFreed)} freed
+						</dd>
+					</>
+				)}
 				<dt className="text-muted-foreground">Already there</dt>
-				<dd className="tabular-nums">{plural(report.alreadyThere, "song", "songs")}</dd>
+				<dd className="tabular-nums">{plural(report.alreadyThere, "song")}</dd>
 				{report.analyzed > 0 && (
 					<>
 						<dt className="text-muted-foreground">Analysed</dt>
-						<dd className="tabular-nums">{plural(report.analyzed, "song", "songs")}</dd>
+						<dd className="tabular-nums">{plural(report.analyzed, "song")}</dd>
 					</>
 				)}
 				{report.regridded > 0 && (
 					<>
 						<dt className="text-muted-foreground">Grids updated</dt>
-						<dd className="tabular-nums">{plural(report.regridded, "song", "songs")}</dd>
+						<dd className="tabular-nums">{plural(report.regridded, "song")}</dd>
 					</>
 				)}
 				<dt className="text-muted-foreground">Players</dt>
@@ -411,7 +331,7 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 			{report.failed.length > 0 && (
 				<div className="space-y-1">
 					<p className="font-medium text-destructive text-sm">
-						{plural(report.failed.length, "song", "songs")} not exported
+						{plural(report.failed.length, "song")} not exported
 					</p>
 					<ul className="space-y-1 text-xs">
 						{report.failed.map((f) => (
@@ -426,104 +346,215 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 	);
 }
 
-function exportLabel(count: number): string {
-	return count === 0 ? "Export" : `Export ${plural(count, "playlist", "playlists")}`;
+/** The drive's playlists with their folders and songs, for the "On drive" tab. */
+function heldPlaylists(library: UsbLibrary, removing: ReadonlySet<number>): HeldPlaylist[] {
+	const byId = new Map(library.playlists.map((p) => [p.id, p]));
+	const songs = new Map(library.tracks.map((t) => [t.id, t]));
+	const folders = (parentId: number): string[] => {
+		const names: string[] = [];
+		for (let p = byId.get(parentId); p && names.length < 32; p = byId.get(p.parentId)) {
+			names.unshift(p.name);
+		}
+		return names;
+	};
+	return library.playlists
+		.filter((p) => !p.isFolder)
+		.sort((x, y) => x.sortOrder - y.sortOrder)
+		.map((p) => ({
+			folders: folders(p.parentId),
+			name: p.name,
+			removed: removing.has(p.id),
+			tracks: p.trackIds.flatMap((id) => {
+				const t = songs.get(id);
+				return t ? [{ title: t.title, artist: t.artist }] : [];
+			}),
+		}));
+}
+
+/**
+ * The choice the drawer opens with: what was last exported to this drive, else the library
+ * playlists and tags whose names the drive's playlists already have.
+ */
+function startingSelection(
+	saved: ExportSelection | null | undefined,
+	onDrive: ReadonlySet<string>,
+	playlists: readonly { id: number; name: string }[],
+	tags: readonly { name: string }[],
+): ExportSelection {
+	if (saved) {
+		return saved;
+	}
+	return {
+		playlists: playlists.filter((p) => onDrive.has(p.name)).map((p) => p.id),
+		tags: tags.filter((t) => onDrive.has(tagPlaylistName(t.name))).map((t) => t.name),
+		smart: [],
+		usbMode: "add",
+	};
 }
 
 /** Everything the export drawer shows: what is chosen, what it adds up to, and the run. */
 function useUsbExport(drive: UsbDrive, library: UsbLibrary | undefined, open: boolean) {
 	const queryClient = useQueryClient();
-	const [tab, setTab] = useState<Tab>("playlists");
-	const [chosen, setChosen] = useState<ReadonlySet<number>>(new Set());
-	const [chosenTags, setChosenTags] = useState<string[]>([]);
+	const [tab, setTab] = useState<ChooserTab>("playlists");
+	const [draft, setDraft] = useState<ExportSelection | null>(null);
 	const playlists = useQuery({ queryKey: ["playlists"], queryFn: listPlaylists, enabled: open });
 	const tags = useQuery({ queryKey: ["tags"], queryFn: listTags, enabled: open });
+	const saved = useQuery({
+		queryKey: ["usb-export-selection", drive.id],
+		queryFn: () => usbExportSelection(drive.id),
+		enabled: open,
+	});
+	const onDrive = useMemo(
+		() =>
+			new Set(
+				(library?.playlists ?? [])
+					.filter((p) => p.parentId === 0 && !p.isFolder)
+					.map((p) => p.name),
+			),
+		[library],
+	);
+	const ready = saved.isSuccess && playlists.isSuccess && tags.isSuccess;
+	const selection =
+		draft ??
+		(ready ? startingSelection(saved.data, onDrive, playlists.data, tags.data) : EMPTY_SELECTION);
+	/** The changes the export would make, shown for a yes before anything is written. */
+	const review = useMutation({
+		mutationFn: () => usbExportPreview(drive.mount, selection),
+	});
 	const run = useMutation({
-		mutationFn: () => exportToUsb(drive.mount, [...chosen], chosenTags),
+		mutationFn: () => exportToUsb(drive.mount, selection),
+		onSuccess: () => {
+			setDraft(null);
+			review.reset();
+		},
 		onSettled: async () => {
-			await queryClient.invalidateQueries({ queryKey: ["usb-library", drive.mount] });
-			await queryClient.invalidateQueries({ queryKey: ["usb-formats", drive.mount] });
-			await queryClient.invalidateQueries({ queryKey: ["usb-drives"] });
+			for (const key of [
+				["usb-library", drive.mount],
+				["usb-formats", drive.mount],
+				["usb-drives"],
+				["usb-export-selection", drive.id],
+			]) {
+				await queryClient.invalidateQueries({ queryKey: key });
+			}
 		},
 	});
 	const progress = useExportProgress(run.isPending);
-	const estimate = useEstimate(open ? [...chosen] : [], open ? chosenTags : [], library);
+	const smart = useSmartPlaylists();
+	const chosenSmart = (smart.data ?? []).filter((p) => selection.smart.includes(p.id));
+	const estimate = useEstimate(
+		open ? selection.playlists : [],
+		open ? selection.tags : [],
+		open ? chosenSmart.map((p) => p.rules) : [],
+		library,
+	);
+	const ids = new Set((playlists.data ?? []).map((p) => p.id));
+	// Same order as the export writes them, so a later one with the same name wins here too.
+	const sources = new Map<string, PlaylistSource>([
+		...(playlists.data ?? [])
+			.filter((p) => selection.playlists.includes(p.id))
+			.map((p): [string, PlaylistSource] => [p.name, "playlist"]),
+		...selection.tags.map((t): [string, PlaylistSource] => [tagPlaylistName(t), "tag"]),
+		...chosenSmart.map((p): [string, PlaylistSource] => [p.name, "smart"]),
+	]);
+	const exportNames = new Set([
+		...(playlists.data ?? []).filter((p) => selection.playlists.includes(p.id)).map((p) => p.name),
+		...selection.tags.map(tagPlaylistName),
+		...chosenSmart.map((p) => p.name),
+	]);
+	const removing =
+		selection.usbMode !== "add" ? removedByExport(library, exportNames) : new Set<number>();
 	return {
 		drive,
+		removing,
+		sourceOf: (name: string): PlaylistSource => sources.get(name) ?? "playlist",
+		/** Playlists (not folders) the export takes off the drive. */
+		removingCount: (library?.playlists ?? []).filter((p) => !p.isFolder && removing.has(p.id))
+			.length,
+		library,
 		tab,
 		setTab,
-		chosen,
-		setChosen,
-		chosenTags,
-		setChosenTags,
-		playlists,
-		tags,
+		selection,
+		setDraft,
 		run,
 		progress,
 		estimate,
-		onDrive: new Set(
-			(library?.playlists ?? []).filter((p) => p.parentId === 0 && !p.isFolder).map((p) => p.name),
-		),
-		count: chosen.size + chosenTags.length,
+		onDrive,
+		review,
+		count:
+			selection.playlists.filter((id) => ids.has(id)).length +
+			selection.tags.length +
+			chosenSmart.length,
 		fits: estimate.bytes + HEADROOM <= drive.freeBytes,
 	};
 }
 
-type ExportState = ReturnType<typeof useUsbExport>;
-
-function Chooser({ x }: { x: ExportState }) {
-	const list = (x.playlists.data ?? []).filter((p) => p.trackCount > 0);
-	const tagList = (x.tags.data ?? []).filter((t) => t.trackCount > 0);
-	const chosenNames = new Set(list.filter((p) => x.chosen.has(p.id)).map((p) => p.name));
-	return (
-		<div className="space-y-3">
-			<Segmented
-				value={x.tab}
-				onChange={x.setTab}
-				label="What to export"
-				items={[
-					{ value: "playlists", label: "Playlists", icon: <ListMusic />, count: x.chosen.size },
-					{ value: "tags", label: "Tags", icon: <TagIcon />, count: x.chosenTags.length },
-				]}
-			/>
-			{x.playlists.isError && <ErrorText message={String(x.playlists.error)} />}
-			{x.tags.isError && <ErrorText message={String(x.tags.error)} />}
-			{x.tab === "playlists" && x.playlists.isSuccess && (
-				<PlaylistPicker list={list} chosen={x.chosen} onDrive={x.onDrive} onChange={x.setChosen} />
-			)}
-			{x.tab === "tags" && x.tags.isSuccess && (
-				<TagPicker
-					tags={tagList}
-					chosen={x.chosenTags}
-					onDrive={x.onDrive}
-					chosenPlaylistNames={chosenNames}
-					onChange={x.setChosenTags}
-				/>
-			)}
-		</div>
+/**
+ * Ids of the drive's playlists and folders that an export removing the rest takes away: all but
+ * the top-level playlists it writes again.
+ */
+function removedByExport(
+	library: UsbLibrary | undefined,
+	exportNames: ReadonlySet<string>,
+): Set<number> {
+	return new Set(
+		(library?.playlists ?? [])
+			.filter((p) => !(p.parentId === 0 && !p.isFolder && exportNames.has(p.name)))
+			.map((p) => p.id),
 	);
 }
 
-function Body({ x }: { x: ExportState }) {
+type ExportState = ReturnType<typeof useUsbExport>;
+
+function Body({ x, onLeave }: { x: ExportState; onLeave: () => void }) {
 	if (x.run.isSuccess) {
 		return <Summary report={x.run.data} drive={x.drive} />;
 	}
 	if (x.run.isPending) {
 		return <Steps progress={x.progress} />;
 	}
-	return <Chooser x={x} />;
+	if (x.review.isSuccess) {
+		return <Review diff={x.review.data} mode={x.selection.usbMode} sourceOf={x.sourceOf} />;
+	}
+	return (
+		<ExportChooser
+			selection={x.selection}
+			onChange={x.setDraft}
+			tab={x.tab}
+			onTab={x.setTab}
+			replaces={x.onDrive}
+			onLeave={onLeave}
+			destination={{
+				label: "On drive",
+				icon: <HardDrive />,
+				content: x.library ? (
+					<HeldPlaylists
+						playlists={heldPlaylists(x.library, x.removing)}
+						empty="No rekordbox playlists on the drive yet."
+					/>
+				) : (
+					<p className="text-muted-foreground text-sm">Reading the drive…</p>
+				),
+			}}
+		/>
+	);
 }
 
 /** The footer line: what the choice adds up to, or what to do now. */
-function status(x: ExportState): { text: string; warn: boolean } {
+function status(x: ExportState): { text: ReactNode; warn: boolean } {
 	if (x.run.isSuccess) {
 		return { text: "Eject the drive before unplugging it", warn: false };
 	}
 	if (x.run.isPending) {
 		return { text: "Keep the drive plugged in", warn: false };
 	}
+	if (x.review.isPending) {
+		return { text: "Working out the changes…", warn: false };
+	}
+	if (x.review.isSuccess) {
+		return { text: <ReviewCounts diff={x.review.data} />, warn: false };
+	}
 	if (x.count === 0) {
-		return { text: "Choose playlists or tags", warn: false };
+		return { text: "Choose playlists, tags or smart playlists", warn: false };
 	}
 	if (x.estimate.loading) {
 		return { text: "Counting songs…", warn: false };
@@ -532,41 +563,136 @@ function status(x: ExportState): { text: string; warn: boolean } {
 		return { text: "Probably too big for the drive", warn: true };
 	}
 	const { songs, toCopy } = x.estimate;
-	return {
-		text: `${plural(songs, "song", "songs")}, ${toCopy.toLocaleString()} to copy`,
-		warn: false,
-	};
+	const sizes = `${plural(songs, "song")}, ${toCopy.toLocaleString()} to copy`;
+	if (x.removingCount > 0) {
+		return {
+			text: `${sizes}. Removes ${plural(x.removingCount, "other playlist")}`,
+			warn: true,
+		};
+	}
+	return { text: sizes, warn: false };
+}
+
+const MODES: readonly { value: UsbMode; icon: LucideIcon; title: string; detail: string }[] = [
+	{
+		value: "add",
+		icon: ListPlus,
+		title: "Add to the drive",
+		detail: "Playlists already on the drive stay.",
+	},
+	{
+		value: "replacePlaylists",
+		icon: ListX,
+		title: "Replace the drive's playlists",
+		detail: "Removes playlists not chosen here. Songs stay on the drive.",
+	},
+	{
+		value: "replaceAll",
+		icon: Trash2,
+		title: "Replace playlists and delete songs",
+		detail: "Removes playlists not chosen here, then deletes songs no exported playlist holds.",
+	},
+];
+
+function confirmLabel(mode: UsbMode, diff: UsbDiff): string {
+	if (mode === "replaceAll" && diff.delete.length > 0) {
+		return `Export and delete ${plural(diff.delete.length, "song")}`;
+	}
+	return mode === "add" ? "Export" : "Export and replace";
+}
+
+/**
+ * Review, with a menu beside it choosing what happens to what is already on the drive. The
+ * choice is saved for the drive with the export.
+ */
+function ReviewSplitButton({ x }: { x: ExportState }) {
+	const busy = x.review.isPending;
+	return (
+		<ButtonGroup>
+			<Button onClick={() => x.review.mutate()} disabled={x.count === 0 || busy}>
+				{busy ? "Checking the drive…" : `Review ${plural(x.count, "playlist")}`}
+			</Button>
+			<Menu.Root>
+				<Menu.Trigger
+					disabled={busy}
+					render={
+						<Button aria-label="What happens on the drive" style={{ paddingInline: "0.5rem" }} />
+					}
+				>
+					<ChevronDown />
+				</Menu.Trigger>
+				<Menu.Portal>
+					<Menu.Positioner side="top" align="end" sideOffset={6} className="z-50">
+						<Menu.Popup className="w-80 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg outline-none">
+							<Menu.RadioGroup
+								value={x.selection.usbMode}
+								onValueChange={(v: string) => x.setDraft({ ...x.selection, usbMode: v as UsbMode })}
+							>
+								{MODES.map((m) => (
+									<Menu.RadioItem
+										key={m.value}
+										value={m.value}
+										closeOnClick
+										className="flex cursor-default items-start gap-3 rounded-md px-2 py-2 outline-none data-[highlighted]:bg-muted"
+									>
+										<m.icon
+											className={cn(
+												"mt-0.5 size-4 shrink-0",
+												m.value === "add" ? "text-muted-foreground" : "text-destructive",
+											)}
+										/>
+										<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+											<span className="font-medium text-sm">{m.title}</span>
+											<span className="text-muted-foreground text-xs">{m.detail}</span>
+										</span>
+										<Menu.RadioItemIndicator className="mt-0.5 text-primary">
+											<Check className="size-4" />
+										</Menu.RadioItemIndicator>
+									</Menu.RadioItem>
+								))}
+							</Menu.RadioGroup>
+							<p className="px-2 pt-1.5 pb-1 text-muted-foreground text-xs">
+								You see every change before anything is written. Remembered for {x.drive.name}.
+							</p>
+						</Menu.Popup>
+					</Menu.Positioner>
+				</Menu.Portal>
+			</Menu.Root>
+		</ButtonGroup>
+	);
 }
 
 function Footer({ x, onClose }: { x: ExportState; onClose: () => void }) {
 	const line = status(x);
 	return (
-		<div className="-mx-4 -mb-4 sticky bottom-0 z-10 flex items-center gap-3 border-t bg-background/85 px-4 py-3 backdrop-blur-md">
-			<p
-				className={cn(
-					"min-w-0 flex-1 truncate text-sm tabular-nums",
-					line.warn ? "text-destructive" : "text-muted-foreground",
-				)}
-			>
-				{line.text}
-			</p>
+		<ExportFooter text={line.text} warn={line.warn}>
 			{x.run.isSuccess ? (
 				<Button onClick={onClose}>Done</Button>
 			) : (
 				<>
-					<Button variant="ghost" onClick={onClose} disabled={x.run.isPending}>
-						Cancel
-					</Button>
-					<Button
-						onClick={() => x.run.mutate()}
-						disabled={x.count === 0 || x.run.isPending}
-						title="Copies new songs into /Contents, adds beat grids and waveforms, and adds the playlists. Songs already on the drive are not copied again."
-					>
-						{x.run.isPending ? "Exporting…" : exportLabel(x.count)}
-					</Button>
+					{x.review.isSuccess ? (
+						<Button variant="ghost" onClick={() => x.review.reset()} disabled={x.run.isPending}>
+							Back
+						</Button>
+					) : (
+						<Button variant="ghost" onClick={onClose} disabled={x.run.isPending}>
+							Cancel
+						</Button>
+					)}
+					{x.review.isSuccess ? (
+						<Button
+							variant={x.review.data.delete.length > 0 ? "destructive" : "default"}
+							onClick={() => x.run.mutate()}
+							disabled={x.run.isPending}
+						>
+							{x.run.isPending ? "Exporting…" : confirmLabel(x.selection.usbMode, x.review.data)}
+						</Button>
+					) : (
+						<ReviewSplitButton x={x} />
+					)}
 				</>
 			)}
-		</div>
+		</ExportFooter>
 	);
 }
 
@@ -584,6 +710,9 @@ export function UsbExportButton({
 		if (!x.run.isPending) {
 			setOpen(false);
 			x.run.reset();
+			x.review.reset();
+			x.setDraft(null);
+			x.setTab("playlists");
 		}
 	};
 	return (
@@ -591,14 +720,20 @@ export function UsbExportButton({
 			<Button size="sm" onClick={() => setOpen(true)} disabled={!drive.writable}>
 				<HardDriveUpload /> Export to drive…
 			</Button>
-			<Drawer open={open} onClose={close} title={`Export to ${drive.name}`} width="w-[32rem]">
+			<Drawer
+				open={open}
+				onClose={close}
+				title={`Export to ${drive.name}`}
+				width={x.review.isSuccess ? "w-[40rem]" : "w-[32rem]"}
+			>
 				<div className="flex min-h-full flex-col">
 					<div className="flex-1 space-y-5 pb-6">
 						<div className="space-y-3">
 							<h2 className={cn("truncate", typeScale.panelTitle)}>{drive.name}</h2>
 							<SpaceMeter drive={drive} adding={x.run.isSuccess ? 0 : x.estimate.bytes} />
 						</div>
-						<Body x={x} />
+						<Body x={x} onLeave={close} />
+						{x.review.isError && <ErrorText message={String(x.review.error)} />}
 						{x.run.isError && <ErrorText message={String(x.run.error)} />}
 					</div>
 					<Footer x={x} onClose={close} />
