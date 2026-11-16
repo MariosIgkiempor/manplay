@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect } from "react";
 import { Button } from "#/components/ui/button.tsx";
+import { keyLabel, TRASH } from "#/lib/platform.ts";
 
 type Group = { title: string; keys: [keys: string[], what: string][] };
 
@@ -30,7 +31,7 @@ const GROUPS: Group[] = [
 			[["⌘N"], "New folder"],
 			[["F2"], "Rename"],
 			[["⌘X", "⌘C", "⌘V"], "Cut, copy, paste"],
-			[["⌘⌫"], "Move to Trash"],
+			[["⌘⌫"], `Move to ${TRASH}`],
 			[["⌘Z"], "Undo"],
 			[["⌘A"], "Select all"],
 		],
@@ -60,7 +61,7 @@ const GROUPS: Group[] = [
 function Key({ children }: { children: string }) {
 	return (
 		<kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-b-2 bg-muted/60 px-1.5 font-sans text-[11px] text-foreground">
-			{children}
+			{keyLabel(children)}
 		</kbd>
 	);
 }

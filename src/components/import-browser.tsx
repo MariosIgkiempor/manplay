@@ -30,6 +30,7 @@ import { audioUrl, type ImportGroup, type ImportTrack } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
 import { groupFacts, type Quality, qualityOf } from "#/lib/import-meta.ts";
 import { allKeys, type Edit, newKeys, type Placement, trackKey } from "#/lib/import-state.ts";
+import { TRASH } from "#/lib/platform.ts";
 import type { Modifiers } from "#/lib/selection.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -359,7 +360,7 @@ function TrackRow({
 				},
 				"separator",
 				{
-					label: "Move to Trash…",
+					label: `Move to ${TRASH}…`,
 					icon: <Trash2 />,
 					destructive: true,
 					onSelect: () => p.onTrash(keys),
@@ -512,7 +513,7 @@ function releaseMenu(
 		{ label: "Pick all", icon: <CheckSquare />, onSelect: () => p.onSetMany(keys, true) },
 		"separator",
 		{
-			label: p.group.fromZip ? "Move zip to Trash…" : "Move release to Trash…",
+			label: `Move ${p.group.fromZip ? "zip" : "release"} to ${TRASH}…`,
 			icon: <Trash2 />,
 			destructive: true,
 			onSelect: () => p.onTrash(keys),

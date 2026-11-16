@@ -24,7 +24,7 @@ log = "0.4"
 tauri = { version = "2.12.5", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 lofty = "0.25.5"
-rusqlite = { version = "0.41.1", features = ["bundled-sqlcipher"] }
+rusqlite = { version = "0.41.1", features = ["bundled-sqlcipher-vendored-openssl"] }
 walkdir = "2.5.0"
 thiserror = "2.0.21"
 tauri-plugin-dialog = "2.8.4"
@@ -42,9 +42,10 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 hmac = "0.13.0"
 sha2 = "0.11.1"
-keyring = { version = "3", features = ["apple-native"] }
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 rustfft = "6.4.1"
 symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "flac", "wav", "pcm", "aiff", "isomp4", "aac", "alac"] }
+tauri-plugin-opener = "2"
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -65,3 +66,6 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[target."cfg(windows)".dependencies]
+sysinfo = { version = "0.40", default-features = false, features = ["disk"] }

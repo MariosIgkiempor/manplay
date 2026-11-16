@@ -224,18 +224,11 @@ pub fn dir_sizes(root: &Path, dir: &Path) -> Result<std::collections::HashMap<St
     Ok(out)
 }
 
-/// Shows `path` selected in a Finder window.
+/// Shows `path` selected in a Finder or Explorer window.
 pub fn reveal(root: &Path, path: &Path) -> Result<(), Error> {
     let target = inside(root, path)?;
-    let status = std::process::Command::new("open")
-        .arg("-R")
-        .arg(&target)
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(err("Finder could not show the file."))
-    }
+    tauri_plugin_opener::reveal_item_in_dir(&target)
+        .map_err(|e| err(format!("could not show the file: {e}")))
 }
 
 pub fn make_dir(root: &Path, parent: &Path, name: &str) -> Result<PathBuf, Error> {

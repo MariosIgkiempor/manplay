@@ -4,7 +4,6 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use lofty::file::TaggedFileExt;
 use lofty::prelude::Accessor;
@@ -101,9 +100,27 @@ pub fn sanitize(name: &str, fallback: &str) -> String {
     let trimmed = trimmed.trim_end_matches(['.', ' ']).to_owned();
     if trimmed.is_empty() {
         fallback.to_owned()
+    } else if is_reserved(&trimmed) {
+        format!("{trimmed}_")
     } else {
         trimmed
     }
+}
+
+/// Names Windows keeps for devices (`CON`, `NUL`, `COM1`…), which no file or folder may have
+/// there, even with an extension. Avoided everywhere so a library can move to a Windows PC.
+fn is_reserved(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end()
+        .to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0')
 }
 
 /// Library file name: `NN Title.mp3`, `D-NN Title.mp3` on multi-disc releases, or `Title.mp3`.
@@ -276,22 +293,36 @@ pub fn record_imported(
     Ok(())
 }
 
-/// Finds ffmpeg even when the app was launched from Finder (which has a minimal PATH).
+/// The ffmpeg bundled with the app (a sidecar next to the executable), else one installed on the
+/// system. The system search also covers Homebrew, since apps launched from Finder get a minimal
+/// PATH.
 pub fn find_ffmpeg() -> Option<PathBuf> {
-    let fixed = [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/opt/local/bin",
-        "/usr/bin",
-    ];
+    let name = format!("ffmpeg{}", std::env::consts::EXE_SUFFIX);
+    // Tests run from `target/<profile>/deps`; the sidecar is copied to `target/<profile>`.
+    let bundled = std::env::current_exe().ok().into_iter().flat_map(|exe| {
+        exe.ancestors()
+            .skip(1)
+            .take(2)
+            .map(Path::to_path_buf)
+            .collect::<Vec<_>>()
+    });
+    let fixed: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/opt/local/bin",
+            "/usr/bin",
+        ]
+    } else {
+        &[]
+    };
     let from_path = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
         .unwrap_or_default();
-    fixed
-        .iter()
-        .map(PathBuf::from)
+    bundled
+        .chain(fixed.iter().map(PathBuf::from))
         .chain(from_path)
-        .map(|d| d.join("ffmpeg"))
+        .map(|d| d.join(&name))
         .find(|p| p.is_file())
 }
 
@@ -334,7 +365,7 @@ fn convert(ffmpeg: &Path, c: &Candidate, dest: &Path) -> Result<(), String> {
     let dir = dest.parent().ok_or("no destination folder")?;
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let tmp = dir.join(format!(".manplay-{}.tmp", std::process::id()));
-    let out = Command::new(ffmpeg)
+    let out = crate::process::command(ffmpeg)
         .args(ffmpeg_args(&c.path, &tmp))
         .output()
         .map_err(|e| format!("could not run ffmpeg: {e}"))?;
@@ -417,7 +448,8 @@ pub fn import(
         return report;
     }
     let Some(ffmpeg) = find_ffmpeg() else {
-        report.error = Some("ffmpeg not found. Install it with: brew install ffmpeg".to_owned());
+        report.error =
+            Some("ffmpeg is missing from this copy of manplay. Reinstall the app.".to_owned());
         return report;
     };
     for c in pending {
@@ -456,6 +488,16 @@ pub fn import(
 #[allow(clippy::expect_used, clippy::unwrap_used)] // tests: panicking is the failure mode
 mod tests {
     use super::*;
+
+    #[test]
+    fn avoids_windows_device_names() {
+        assert_eq!(sanitize("CON", "x"), "CON_");
+        assert_eq!(sanitize("nul", "x"), "nul_");
+        assert_eq!(sanitize("COM1", "x"), "COM1_");
+        assert_eq!(sanitize("Console", "x"), "Console");
+        assert_eq!(sanitize("COM0", "x"), "COM0");
+        assert_eq!(sanitize("a: b?", "x"), "a_ b_");
+    }
     use lofty::file::AudioFile;
 
     fn cand(artist: &str, album: &str, title: &str) -> Candidate {
@@ -562,7 +604,7 @@ mod tests {
         std::fs::create_dir_all(&src_dir).unwrap();
         std::fs::create_dir_all(&library).unwrap();
         let src = src_dir.join("1 Tune.m4a");
-        let made = Command::new(&ffmpeg)
+        let made = crate::process::command(&ffmpeg)
             .args([
                 "-v",
                 "error",

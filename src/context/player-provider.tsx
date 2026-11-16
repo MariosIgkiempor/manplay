@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type PlayerApi, PlayerContext } from "#/context/player-context.ts";
-import { audioUrl, type Track } from "#/lib/api.ts";
+import { playableUrl, type Track } from "#/lib/api.ts";
 
 const RESTART_THRESHOLD_SECONDS = 3;
 
@@ -35,8 +35,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			return;
 		}
 		setError(null);
-		audio.src = audioUrl(currentPath);
-		start();
+		let stale = false;
+		playableUrl(currentPath)
+			.then((src) => {
+				if (!stale) {
+					audio.src = src;
+					start();
+				}
+			})
+			.catch((e: unknown) => {
+				if (!stale) {
+					setError(describeError(e));
+				}
+			});
+		return () => {
+			stale = true;
+		};
 	}, [currentPath, start]);
 
 	useEffect(() => {

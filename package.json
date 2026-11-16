@@ -17,7 +17,9 @@
 		"check:fix": "biome check --write",
 		"verify": "pnpm typecheck && pnpm check && pnpm test",
 		"tauri": "tauri",
-		"test": "vitest run"
+		"test": "vitest run",
+		"ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+		"postinstall": "node scripts/fetch-ffmpeg.mjs"
 	},
 	"dependencies": {
 		"@base-ui/react": "^1.9.0",

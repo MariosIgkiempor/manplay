@@ -7,7 +7,11 @@ on:
 
 jobs:
   verify:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -21,6 +25,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+      # Also fetches the bundled ffmpeg (postinstall), which the Tauri build expects.
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
       - run: pnpm build

@@ -12,6 +12,8 @@ mod import;
 mod itunes;
 mod onelib;
 mod pdb;
+mod playback;
+mod process;
 mod r2;
 mod rekordbox;
 mod scan;
@@ -243,8 +245,22 @@ fn remove_missing_now(state: State<'_, AppState>) -> Result<(), Error> {
 
 /// Scans a newly chosen folder and makes it the library folder.
 #[tauri::command]
-async fn scan_library(state: State<'_, AppState>, root: PathBuf) -> Result<usize, Error> {
+async fn scan_library(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    root: PathBuf,
+) -> Result<usize, Error> {
+    allow_assets(&app, &root);
     scan_and_store(&state, root).await
+}
+
+/// Lets the player load files from `dir` through the asset protocol. The static scope in
+/// `tauri.conf.json` covers the home folder and `/Volumes` on macOS; a library or drive elsewhere
+/// (another drive letter on Windows) is added here.
+fn allow_assets(app: &AppHandle, dir: &Path) {
+    if let Err(e) = app.asset_protocol_scope().allow_directory(dir, true) {
+        log::warn!("allowing {} for playback: {e}", dir.display());
+    }
 }
 
 #[tauri::command]
@@ -1235,10 +1251,14 @@ fn sync_history(state: State<'_, AppState>, limit: i64) -> Result<Vec<RunView>, 
 
 /// Removable drives that are plugged in right now.
 #[tauri::command]
-async fn usb_drives() -> Result<Vec<usb::Drive>, Error> {
-    tauri::async_runtime::spawn_blocking(usb::list)
+async fn usb_drives(app: AppHandle) -> Result<Vec<usb::Drive>, Error> {
+    let drives = tauri::async_runtime::spawn_blocking(usb::list)
         .await
-        .map_err(|e| Error::Msg(e.to_string()))
+        .map_err(|e| Error::Msg(e.to_string()))?;
+    for d in &drives {
+        allow_assets(&app, &d.mount);
+    }
+    Ok(drives)
 }
 
 /// Which rekordbox library formats a plugged-in drive holds, with their sizes.
@@ -2067,10 +2087,21 @@ async fn fs_move(
     Ok(())
 }
 
+/// Whether the player should load `path` through `pcm://` (AIFF and ALAC on Windows, whose
+/// webview cannot decode them).
+#[tauri::command]
+async fn playback_needs_decoding(path: PathBuf) -> bool {
+    tauri::async_runtime::spawn_blocking(move || playback::needs_decoding(&path))
+        .await
+        .unwrap_or(false)
+}
+
 /// Opens the macOS Full Disk Access pane, for when the system blocks the library folder.
+/// Windows has no such permission, so there it does nothing.
 #[tauri::command]
 fn open_privacy_settings() -> Result<(), Error> {
-    std::process::Command::new("open")
+    #[cfg(target_os = "macos")]
+    process::command("open")
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
         .spawn()?;
     Ok(())
@@ -2928,7 +2959,7 @@ impl ArtTarget {
 /// Only paths inside the library folder qualify, and songs on a mounted drive (for the review of
 /// an export, which lists songs only the drive has).
 fn fs_art_source(state: &AppState, path: &Path) -> Option<String> {
-    if path.starts_with("/Volumes")
+    if usb::on_drive(path)
         && !path
             .components()
             .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -2993,6 +3024,21 @@ pub fn run() {
             let target = ArtTarget::parse(request.uri().path());
             std::thread::spawn(move || responder.respond(art_response(&app, target)));
         })
+        .register_asynchronous_uri_scheme_protocol("pcm", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            let range = request
+                .headers()
+                .get("range")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            tauri::async_runtime::spawn_blocking(move || {
+                let scope = app.asset_protocol_scope();
+                responder.respond(playback::respond(&path, range.as_deref(), |p| {
+                    scope.is_allowed(p)
+                }));
+            });
+        })
         .register_asynchronous_uri_scheme_protocol("remote", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_owned();
@@ -3009,6 +3055,9 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let conn = db::open(&dir.join("library.db"))?;
+            if let Some(root) = db::get_setting(&conn, SETTING_ROOT)? {
+                allow_assets(app.handle(), Path::new(&root));
+            }
             // Beat grids and waveforms used to be kept as files; they live in the database now.
             if let Err(e) = anlz::import_files(&conn, &dir) {
                 log::warn!("importing kept analyses: {e}");
@@ -3046,6 +3095,7 @@ pub fn run() {
             set_analysis_settings,
             analysis_failures,
             usb_drives,
+            playback_needs_decoding,
             usb_library,
             usb_formats,
             export_to_usb,

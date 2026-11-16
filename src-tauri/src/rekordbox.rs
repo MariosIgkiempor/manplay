@@ -36,9 +36,33 @@ fn esc(s: &str) -> String {
     out
 }
 
-/// `file://localhost/Users/me/My%20Music/a.mp3`
+/// `file://localhost/Users/me/My%20Music/a.mp3`; on Windows `file://localhost/C:/Music/a.mp3`
+/// (the drive colon left as is, as rekordbox writes it).
 pub fn location(path: &str) -> String {
-    format!("file://localhost{}", utf8_percent_encode(path, PATH_SET))
+    #[cfg(windows)]
+    let path = &windows_url_path(path);
+    let encoded = utf8_percent_encode(path, PATH_SET).to_string();
+    format!(
+        "file://localhost{}",
+        encoded.replacen("%3A", ":", usize::from(has_drive(path)))
+    )
+}
+
+/// `C:\Music\a.mp3` → `/C:/Music/a.mp3`.
+#[cfg(any(windows, test))]
+fn windows_url_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    if path.starts_with('/') {
+        path
+    } else {
+        format!("/{path}")
+    }
+}
+
+/// Whether a URL path starts with a drive, as in `/C:/…`.
+fn has_drive(path: &str) -> bool {
+    let b = path.as_bytes();
+    b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':'
 }
 
 fn kind(path: &str) -> &'static str {
@@ -399,6 +423,10 @@ mod tests {
         assert_eq!(
             location("/Users/me/My Music/Ärtist/a #1 (mix).mp3"),
             "file://localhost/Users/me/My%20Music/%C3%84rtist/a%20%231%20%28mix%29.mp3"
+        );
+        assert_eq!(
+            location(&windows_url_path(r"D:\My Music\a: b.mp3")),
+            "file://localhost/D:/My%20Music/a%3A%20b.mp3"
         );
     }
 

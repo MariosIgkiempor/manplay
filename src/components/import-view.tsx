@@ -27,6 +27,7 @@ import {
 	trashTargets,
 	useLibraryIndex,
 } from "#/lib/import-state.ts";
+import { TRASH } from "#/lib/platform.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { type useImport, useImportProgress } from "#/lib/use-import.ts";
 import { cn } from "#/lib/utils.ts";
@@ -162,7 +163,7 @@ function Toolbar(p: ToolbarProps) {
 					onClick={p.onTrash}
 					disabled={s.trash.isPending}
 				>
-					<Trash2 /> Move to Trash
+					<Trash2 /> Move to {TRASH}
 				</Button>
 			) : (
 				p.total > 0 && (

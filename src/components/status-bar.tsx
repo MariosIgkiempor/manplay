@@ -11,6 +11,7 @@ import {
 	StatusScopeContext,
 } from "#/context/status-context.ts";
 import { useUndo } from "#/context/undo-context.ts";
+import { keyLabel } from "#/lib/platform.ts";
 import { SCAN_KEY, SYNC_KEY } from "#/lib/queries.ts";
 
 /** A labelled value in a status bar. */
@@ -52,12 +53,12 @@ function UndoPill() {
 		<button
 			type="button"
 			onClick={() => void undo()}
-			title={`Undo ${label} (⌘Z)`}
+			title={`Undo ${label} (${keyLabel("⌘Z")})`}
 			className="flex min-w-0 shrink items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-foreground outline-none transition-colors hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5 [&_svg]:shrink-0"
 		>
 			<Undo2 />
 			<span className="truncate">Undo {label}</span>
-			<kbd className="font-sans text-muted-foreground">⌘Z</kbd>
+			<kbd className="font-sans text-muted-foreground">{keyLabel("⌘Z")}</kbd>
 		</button>
 	);
 }

@@ -11,6 +11,7 @@ import {
 	useState,
 } from "react";
 import { listPlaylists, listTags } from "#/lib/api.ts";
+import { keyLabel } from "#/lib/platform.ts";
 import { useTracks } from "#/lib/queries.ts";
 import {
 	type Pill,
@@ -191,7 +192,7 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 							title="Jump to search from anywhere"
 							className="shrink-0 rounded border bg-muted px-1.5 font-sans text-[11px] text-muted-foreground"
 						>
-							⌘K
+							{keyLabel("⌘K")}
 						</kbd>
 					)}
 					{hasAny && (

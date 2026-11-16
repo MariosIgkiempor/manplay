@@ -6,7 +6,6 @@
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use lofty::config::WriteOptions;
 use lofty::file::{AudioFile, TaggedFileExt};
@@ -313,7 +312,7 @@ fn convert(path: &Path, ffmpeg: &Path) -> Result<PathBuf, Error> {
         )));
     }
     let tmp = scratch(path, "convert");
-    let out = Command::new(ffmpeg)
+    let out = crate::process::command(ffmpeg)
         .args(convert_args(path, &tmp))
         .output()
         .map_err(|e| err(format!("could not run ffmpeg: {e}")))?;
@@ -414,7 +413,9 @@ pub fn fix_file(root: &Path, path: &Path, ffmpeg: Option<&Path>) -> Result<PathB
     let root = root.canonicalize()?;
     let mut cur = fsops::inside(&root, path)?;
     if !is_mp3(&cur) {
-        let ffmpeg = ffmpeg.ok_or_else(|| err("ffmpeg is not installed (brew install ffmpeg)"))?;
+        let ffmpeg = ffmpeg.ok_or_else(|| {
+            err("ffmpeg is missing from this copy of manplay. Reinstall the app.")
+        })?;
         cur = convert(&cur, ffmpeg)?;
     }
     if id3v2_major(&cur) == Some(4) {
@@ -641,7 +642,7 @@ mod tests {
     /// Makes a 1 s tone with ffmpeg; `None` when ffmpeg is not installed (test is skipped).
     fn tone(ffmpeg: &Path, out: &Path, extra: &[&str]) {
         std::fs::create_dir_all(out.parent().expect("parent")).expect("mkdir");
-        let status = Command::new(ffmpeg)
+        let status = crate::process::command(ffmpeg)
             .args([
                 "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=d=1",
             ])

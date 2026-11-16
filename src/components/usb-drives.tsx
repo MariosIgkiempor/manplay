@@ -33,6 +33,7 @@ import {
 	usbReveal,
 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
+import { FILE_MANAGER, isMac } from "#/lib/platform.ts";
 import { typeScale } from "#/lib/type-scale.ts";
 import { useUsbDrives, useUsbLibrary } from "#/lib/use-usb.ts";
 import { cn } from "#/lib/utils.ts";
@@ -152,7 +153,7 @@ function DriveHeader({
 					<>
 						{actions}
 						<Button size="sm" variant="outline" onClick={() => reveal.mutate()}>
-							<FolderOpen /> Show in Finder
+							<FolderOpen /> Show in {FILE_MANAGER}
 						</Button>
 						<Button
 							size="sm"
@@ -372,8 +373,8 @@ function BackupsRow({ drive }: { drive: UsbDrive }) {
 					onConfirm={() => prune.mutate()}
 				>
 					<p>
-						The newest backup stays. The others are deleted from the drive for good, not moved to
-						its Trash, so the space frees up now.
+						The newest backup stays. The others are deleted from the drive for good, so the space
+						frees up now.
 					</p>
 					{prune.isError && <ErrorText message={String(prune.error)} />}
 				</ConfirmDialog>
@@ -439,9 +440,9 @@ function ResetRow({ drive }: { drive: UsbDrive }) {
 				>
 					<div className="space-y-3">
 						<p>
-							The rekordbox library (both formats), analysis files, artwork and every song in
-							Contents move to the drive&apos;s Trash. Players will show the drive as empty. The
-							space frees up when you empty the Trash; until then you can put them back from it.
+							{isMac
+								? "The rekordbox library (both formats), analysis files, artwork and every song in Contents move to the drive's Trash. Players will show the drive as empty. The space frees up when you empty the Trash; until then you can put them back from it."
+								: "The rekordbox library (both formats), analysis files, artwork and every song in Contents are deleted from the drive for good (Windows keeps no Recycle Bin on USB drives). Players will show the drive as empty."}
 						</p>
 						<div className="space-y-1.5">
 							<label htmlFor={field} className="block text-foreground text-xs">

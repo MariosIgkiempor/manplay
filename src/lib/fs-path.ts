@@ -15,6 +15,17 @@ export function joinPath(base: string, ...parts: string[]): string {
 	return [base.replace(/[\\/]+$/, ""), ...parts].join(sep);
 }
 
+/** The last part of a path: `C:\Music\a.mp3` or `/Music/a.mp3` → `a.mp3`. */
+export function baseName(path: string): string {
+	return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/** Whether `path` is strictly inside the folder `dir`. */
+export function isInside(path: string, dir: string): boolean {
+	const base = dir.replace(/[\\/]+$/, "");
+	return path.startsWith(`${base}/`) || path.startsWith(`${base}\\`);
+}
+
 export function parentPath(path: string): string {
 	const sep = sepOf(path);
 	const i = path.replace(/[\\/]+$/, "").lastIndexOf(sep);

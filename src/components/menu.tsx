@@ -2,6 +2,7 @@ import { ContextMenu } from "@base-ui/react/context-menu";
 import { ChevronRight } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 import { menuItem, popup } from "#/lib/menu-styles.ts";
+import { keyLabel } from "#/lib/platform.ts";
 import { cn } from "#/lib/utils.ts";
 
 export interface MenuAction {
@@ -85,7 +86,9 @@ export function MenuItems({ items }: { items: readonly MenuEntry[] }) {
 				{item.icon}
 				{item.label}
 				{item.shortcut && (
-					<span className="ml-auto pl-4 text-muted-foreground text-xs">{item.shortcut}</span>
+					<span className="ml-auto pl-4 text-muted-foreground text-xs">
+						{keyLabel(item.shortcut)}
+					</span>
 				)}
 			</ContextMenu.Item>
 		);

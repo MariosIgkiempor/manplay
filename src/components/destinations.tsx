@@ -18,6 +18,7 @@ import {
 	type UsbDrive,
 } from "#/lib/api.ts";
 import { formatBytes, timeAgo } from "#/lib/format.ts";
+import { baseName } from "#/lib/fs-path.ts";
 import { useSyncHistory, useSyncTargets, useTracks } from "#/lib/queries.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
@@ -191,7 +192,7 @@ function RekordboxRow() {
 		<Row
 			brand="rekordbox"
 			name="Rekordbox XML"
-			where={s.path.split("/").pop()}
+			where={baseName(s.path)}
 			whereTitle={s.path}
 			fill={
 				<div className="text-muted-foreground text-xs tabular-nums">

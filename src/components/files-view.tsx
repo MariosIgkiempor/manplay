@@ -13,6 +13,7 @@ import { useDetail } from "#/context/detail-context.ts";
 import { useUndo } from "#/context/undo-context.ts";
 import { confirmFix, type FixReport } from "#/lib/api.ts";
 import { describeFixes, fixablePaths, indexIssues } from "#/lib/audit.ts";
+import { isInside } from "#/lib/fs-path.ts";
 import {
 	useAudit,
 	useAuditFix,
@@ -267,7 +268,7 @@ export function FilesView({
 	/** A remembered folder only counts while it is still inside the library folder. */
 	const at = (i: 0 | 1) => {
 		const p = paths[i];
-		return p && (p === base || p.startsWith(`${base}/`)) ? p : base;
+		return p && (p === base || isInside(p, base)) ? p : base;
 	};
 	const go = (i: 0 | 1) => (p: string) =>
 		setPaths((prev) => (i === 0 ? [p, prev[1]] : [prev[0], p]));

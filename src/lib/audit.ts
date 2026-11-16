@@ -1,5 +1,6 @@
 import type { AuditIssue } from "#/lib/api.ts";
 import { parentPath } from "#/lib/fs-path.ts";
+import { TRASH } from "#/lib/platform.ts";
 
 export type IssueKind = AuditIssue["kind"];
 
@@ -122,7 +123,7 @@ export function fixablePaths(issues: readonly AuditIssue[], scopes?: readonly st
 }
 
 const KIND_LABEL: Record<IssueKind, (n: number) => string> = {
-	notMp3: (n) => `Convert ${n} file${n === 1 ? "" : "s"} to MP3 (originals go to the Trash)`,
+	notMp3: (n) => `Convert ${n} file${n === 1 ? "" : "s"} to MP3 (originals go to the ${TRASH})`,
 	tagVersion: (n) => `Rewrite metadata as ID3v2.3 on ${n} file${n === 1 ? "" : "s"}`,
 	misplaced: (n) => `Move ${n} file${n === 1 ? "" : "s"} into Artist/Album folders`,
 };

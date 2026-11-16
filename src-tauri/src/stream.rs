@@ -26,7 +26,7 @@ fn parse_path(uri_path: &str) -> Option<(i64, Vec<String>)> {
 
 /// The inclusive byte range to serve for a `Range` header on a file of `size` bytes, capped to
 /// [`CHUNK`]. `None` when the range cannot be satisfied.
-fn byte_range(header: Option<&str>, size: u64) -> Option<(u64, u64)> {
+pub(crate) fn byte_range(header: Option<&str>, size: u64) -> Option<(u64, u64)> {
     if size == 0 {
         return None;
     }

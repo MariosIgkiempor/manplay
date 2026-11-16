@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { TagChanges, TagRow } from "#/components/tag-diff.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { tagsPreview } from "#/lib/api.ts";
+import { keyLabel } from "#/lib/platform.ts";
 import { type FieldSummary, type FileChanges, summarize } from "#/lib/tag-preview.ts";
 import type { TagConfirmRequest } from "#/lib/use-tag-confirm.tsx";
 
@@ -95,7 +96,7 @@ export function TagConfirmDialog({
 						<Button ref={applyRef} onClick={() => onDone(true)} disabled={!ready}>
 							{ready ? `Apply to ${songs(files.length)}` : "Apply"}
 							<kbd className="ml-1 rounded-md bg-primary-foreground/20 px-1 font-sans text-xs">
-								⌘↵
+								{keyLabel("⌘↵")}
 							</kbd>
 						</Button>
 					</div>

@@ -2,6 +2,7 @@ import { ImagePlus, LoaderCircle } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { SaveState } from "#/components/save-state.tsx";
 import { bumpArt } from "#/lib/art-version.ts";
+import { keyLabel } from "#/lib/platform.ts";
 import { useTagsSetCover } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -80,7 +81,7 @@ export function CoverPicker({
 			<button
 				type="button"
 				aria-label={`Replace the cover of ${name}`}
-				title={error ?? "Click to choose a new cover, or paste one (⌘V)"}
+				title={error ?? `Click to choose a new cover, or paste one (${keyLabel("⌘V")})`}
 				disabled={busy}
 				onClick={() => fileInput.current?.click()}
 				className={cn(

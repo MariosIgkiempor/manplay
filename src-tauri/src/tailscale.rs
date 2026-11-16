@@ -1,11 +1,15 @@
 use std::collections::HashMap;
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
+use crate::process::command;
 
+/// Where the Tailscale app keeps its CLI when it is not on `PATH`.
+#[cfg(target_os = "macos")]
 const APP_BINARY: &str = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+#[cfg(windows)]
+const APP_BINARY: &str = r"C:\Program Files\Tailscale\tailscale.exe";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -64,13 +68,17 @@ fn run_status() -> Result<Vec<u8>, Error> {
         o.status.success() && o.stdout.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')
     };
     let args = ["status", "--json"];
-    let attempts: Vec<std::io::Result<std::process::Output>> = vec![
-        Command::new("tailscale").args(args).output(),
-        Command::new(APP_BINARY).args(args).output(),
-        Command::new("/bin/zsh")
+    #[allow(unused_mut)] // only extended on macOS
+    let mut attempts: Vec<std::io::Result<std::process::Output>> = vec![
+        command("tailscale").args(args).output(),
+        command(APP_BINARY).args(args).output(),
+    ];
+    #[cfg(target_os = "macos")]
+    attempts.push(
+        command("/bin/zsh")
             .args(["-lc", &format!("exec '{APP_BINARY}' status --json")])
             .output(),
-    ];
+    );
     let mut last = String::from("tailscale is not installed");
     for out in attempts.into_iter().flatten() {
         if json(&out) {

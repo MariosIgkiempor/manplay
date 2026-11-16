@@ -103,7 +103,7 @@ export function useTransfer(nameOf: (source: PaneSource) => string) {
 
 	const names = pending?.session.items.map((i) => i.name) ?? [];
 	const into = pending
-		? (pending.dest.path.split("/").filter(Boolean).pop() ?? nameOf(pending.dest.source))
+		? (pending.dest.path.split(/[\\/]/).filter(Boolean).pop() ?? nameOf(pending.dest.source))
 		: "";
 	const verb = pending?.op === "move" ? "Move" : "Copy";
 	const dialog = pending && (

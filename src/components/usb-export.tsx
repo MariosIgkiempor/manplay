@@ -44,6 +44,7 @@ import {
 } from "#/lib/api.ts";
 import { EMPTY_SELECTION, plural, tagPlaylistName } from "#/lib/export-selection.ts";
 import { formatBytes } from "#/lib/format.ts";
+import { baseName } from "#/lib/fs-path.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { trackHasTag } from "#/lib/tag-tree.ts";
 import { typeScale } from "#/lib/type-scale.ts";
@@ -336,7 +337,7 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 					<ul className="space-y-1 text-xs">
 						{report.failed.map((f) => (
 							<li key={f.path} className="truncate" title={`${f.path}: ${f.error}`}>
-								{f.path.split("/").pop()}: {f.error}
+								{baseName(f.path)}: {f.error}
 							</li>
 						))}
 					</ul>

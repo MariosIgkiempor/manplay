@@ -2,6 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { z } from "zod";
+import { TRASH } from "#/lib/platform.ts";
 
 const int = z.number().int();
 
@@ -228,6 +229,19 @@ export function audioUrl(path: string): string {
 	return path.startsWith(REMOTE_PREFIX)
 		? convertFileSrc(path.slice(REMOTE_PREFIX.length), "remote")
 		: convertFileSrc(path);
+}
+
+/** Extensions that may hold audio the Windows webview cannot decode (AIFF, ALAC). */
+const MAYBE_UNPLAYABLE = /\.(aif|aiff|aifc|m4a|mp4|alac)$/i;
+
+/** {@link audioUrl}, except for AIFF and ALAC songs on Windows (WebView2 has no decoder for
+ * them): those stream through `pcm://`, which decodes them as they play. */
+export async function playableUrl(path: string): Promise<string> {
+	if (path.startsWith(REMOTE_PREFIX) || !MAYBE_UNPLAYABLE.test(path)) {
+		return audioUrl(path);
+	}
+	const decode = await invoke<boolean>("playback_needs_decoding", { path });
+	return decode ? convertFileSrc(path, "pcm") : audioUrl(path);
 }
 
 // ---- playlists ------------------------------------------------------------
@@ -852,10 +866,10 @@ export async function fsTrash(paths: string[]): Promise<void> {
 /** Native yes/no prompt before deleting. */
 export function confirmTrash(names: string[]): Promise<boolean> {
 	const what = names.length === 1 ? `“${names[0]}”` : `${names.length} items`;
-	return ask(`Move ${what} to the Trash?`, {
+	return ask(`Move ${what} to the ${TRASH}?`, {
 		title: "Delete",
 		kind: "warning",
-		okLabel: "Move to Trash",
+		okLabel: `Move to ${TRASH}`,
 	});
 }
 

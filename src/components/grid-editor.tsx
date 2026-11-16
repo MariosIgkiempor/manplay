@@ -52,6 +52,7 @@ import {
 } from "#/lib/cues.ts";
 import { GRID_SHORTCUTS, type GridAction, gridAction } from "#/lib/grid-shortcuts.ts";
 import { formatBpm } from "#/lib/musical-key.ts";
+import { keyLabel } from "#/lib/platform.ts";
 import { useAnalyze, useTracks } from "#/lib/queries.ts";
 import { typeScale } from "#/lib/type-scale.ts";
 import { useAutosave } from "#/lib/unsaved.tsx";
@@ -460,10 +461,10 @@ function ShortcutHelp({
 									<dl className="space-y-1">
 										{g.items.map(([keys, what]) => (
 											<div key={keys} className="flex items-baseline justify-between gap-3">
-												<dt className="text-xs">{what}</dt>
+												<dt className="text-xs">{keyLabel(what)}</dt>
 												<dd>
 													<kbd className="whitespace-nowrap rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-														{keys}
+														{keyLabel(keys)}
 													</kbd>
 												</dd>
 											</div>
@@ -734,7 +735,7 @@ function GridControls({
 				</PropertyRow>
 				<PropertyRow
 					label={label("Move grid")}
-					title="10 ms a press, 1 ms with ⌥. Arrow keys do the same."
+					title={keyLabel("10 ms a press, 1 ms with ⌥. Arrow keys do the same.")}
 				>
 					<ButtonGroup>
 						<GroupButton onClick={(e) => onNudge(e.altKey ? -FINE : -COARSE)}>
@@ -747,7 +748,7 @@ function GridControls({
 				</PropertyRow>
 				<PropertyRow
 					label={label("Beat 1")}
-					title="Which beat of the bar is beat 1. ⇧← and ⇧→ do the same."
+					title={keyLabel("Which beat of the bar is beat 1. ⇧← and ⇧→ do the same.")}
 				>
 					<ButtonGroup>
 						<GroupButton label="Beat 1 a beat earlier" onClick={() => onShiftBar(-1)}>
@@ -759,7 +760,9 @@ function GridControls({
 					</ButtonGroup>
 				</PropertyRow>
 			</div>
-			<p className="text-muted-foreground text-xs">Hold ⌥ to move the grid 1 ms at a time.</p>
+			<p className="text-muted-foreground text-xs">
+				{keyLabel("Hold ⌥ to move the grid 1 ms at a time.")}
+			</p>
 		</div>
 	);
 }

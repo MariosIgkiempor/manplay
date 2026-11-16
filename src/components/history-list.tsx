@@ -8,6 +8,7 @@ import { Button } from "#/components/ui/button.tsx";
 import { dismissActivity, dismissSyncRuns } from "#/lib/api.ts";
 import { duration, timeAgo } from "#/lib/format.ts";
 import type { HistoryEntry, Part, Stat, Status } from "#/lib/history.ts";
+import { isMac } from "#/lib/platform.ts";
 import { cn } from "#/lib/utils.ts";
 
 const COLLAPSED_ROWS = 10;
@@ -26,7 +27,9 @@ const STATUS = {
 /** Plain-language cause for the most common failures. */
 function hint(error: string): string | null {
 	if (/operation not permitted|permission denied/i.test(error)) {
-		return "macOS is blocking access to a folder. Grant manplay (or the app that launches it) access under System Settings → Privacy & Security → Files & Folders / Full Disk Access.";
+		return isMac
+			? "macOS is blocking access to a folder. Grant manplay (or the app that launches it) access under System Settings → Privacy & Security → Files & Folders / Full Disk Access."
+			: "Windows is blocking access to a folder. Check that the folder is not read-only, and that Controlled folder access in Windows Security allows manplay.";
 	}
 	if (/access denied|\b40[13]\b/i.test(error)) {
 		return "The destination rejected the credentials. Check the key's permissions and the bucket name.";

@@ -9,6 +9,7 @@ import { PageHeader } from "#/components/page-header.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import type { SyncTarget } from "#/lib/api.ts";
 import { menuItem, popup } from "#/lib/menu-styles.ts";
+import { keyLabel } from "#/lib/platform.ts";
 import { SCAN_KEY, useLibraryRoot, useScan } from "#/lib/queries.ts";
 
 export interface FilesHeaderProps {
@@ -114,7 +115,7 @@ export function FilesHeader(p: FilesHeaderProps) {
 								variant="outline"
 								onClick={p.onUndo}
 								disabled={!p.canUndo}
-								title={p.undoLabel ? `Undo ${p.undoLabel} (⌘Z)` : "Nothing to undo"}
+								title={p.undoLabel ? `Undo ${p.undoLabel} (${keyLabel("⌘Z")})` : "Nothing to undo"}
 							>
 								<Undo2 />
 								Undo

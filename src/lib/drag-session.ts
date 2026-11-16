@@ -1,4 +1,4 @@
-import { parentPath } from "#/lib/fs-path.ts";
+import { isInside, parentPath } from "#/lib/fs-path.ts";
 
 /** What a file pane is showing: the library folder, or one destination. */
 export type PaneSource = { kind: "library" } | { kind: "remote"; id: number };
@@ -40,7 +40,7 @@ export function dropOp(session: DragSession, dest: DropDest): DropOp | null {
 		return session.source.kind === "library" || dest.source.kind === "library" ? "copy" : null;
 	}
 	const intoItself = session.items.some(
-		(i) => dest.path === i.path || (i.isDir && dest.path.startsWith(`${i.path}/`)),
+		(i) => dest.path === i.path || (i.isDir && isInside(dest.path, i.path)),
 	);
 	const alreadyThere = session.items.every((i) => parentPath(i.path) === dest.path);
 	return intoItself || alreadyThere ? null : "move";

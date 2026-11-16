@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.2.0 to build the macOS DMGs, sign the updater artifacts and
+# Push a tag like v0.2.0 to build the macOS DMGs and the Windows installer, sign the updater artifacts and
 # publish a GitHub release (including latest.json, which the in-app updater reads).
 on:
   push:
@@ -16,8 +16,12 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
+            os: macos-latest
           - target: x86_64-apple-darwin
-    runs-on: macos-latest
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -33,11 +37,14 @@ jobs:
           workspaces: src-tauri
           key: ${{ matrix.target }}
       - name: Set app version from tag
+        shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tauri.conf.tmp
           mv tauri.conf.tmp src-tauri/tauri.conf.json
       - run: pnpm install --frozen-lockfile
+      - name: Fetch the bundled ffmpeg for this target
+        run: node scripts/fetch-ffmpeg.mjs ${{ matrix.target }}
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

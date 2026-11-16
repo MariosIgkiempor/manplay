@@ -46,6 +46,7 @@ import { type FsEntry, fsReveal, pathArtUrl } from "#/lib/api.ts";
 import type { IssueIndex } from "#/lib/audit.ts";
 import { LIBRARY } from "#/lib/drag-session.ts";
 import { isAudioName, joinPath, parentPath, relSegments } from "#/lib/fs-path.ts";
+import { FILE_MANAGER, keyLabel, TRASH } from "#/lib/platform.ts";
 import { applyClick, EMPTY_SELECTION, type Selection } from "#/lib/selection.ts";
 import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
 import { labelOf } from "#/lib/tag-preview.ts";
@@ -913,7 +914,7 @@ function PaneActions({
 	const none = busy || count === 0;
 	return (
 		<div className="flex shrink-0 items-center">
-			<Tool label="New folder (⌘N)" disabled={busy} onClick={onNewFolder}>
+			<Tool label={`New folder (${keyLabel("⌘N")})`} disabled={busy} onClick={onNewFolder}>
 				<FolderPlus />
 			</Tool>
 			<Tool label="Rename (F2)" disabled={busy || count !== 1} onClick={onRename}>
@@ -922,17 +923,21 @@ function PaneActions({
 			{/* Clipboard tools fold away when the pane is narrow; the keys and menu still work. */}
 			<div className="hidden items-center @xl/pane:flex">
 				<Divider />
-				<Tool label="Cut (⌘X)" disabled={none} onClick={onCut}>
+				<Tool label={`Cut (${keyLabel("⌘X")})`} disabled={none} onClick={onCut}>
 					<Scissors />
 				</Tool>
-				<Tool label="Copy (⌘C)" disabled={none} onClick={onCopy}>
+				<Tool label={`Copy (${keyLabel("⌘C")})`} disabled={none} onClick={onCopy}>
 					<Copy />
 				</Tool>
-				<Tool label="Paste (⌘V)" disabled={busy || !hasClipboard} onClick={onPaste}>
+				<Tool
+					label={`Paste (${keyLabel("⌘V")})`}
+					disabled={busy || !hasClipboard}
+					onClick={onPaste}
+				>
 					<ClipboardPaste />
 				</Tool>
 			</div>
-			<Tool label="Move to Trash (⌘⌫)" disabled={none} onClick={onTrash}>
+			<Tool label={`Move to ${TRASH} (${keyLabel("⌘⌫")})`} disabled={none} onClick={onTrash}>
 				<Trash2 />
 			</Tool>
 			{split && (
@@ -1148,7 +1153,7 @@ function buildMenu(
 		run: () => a.newFolder(dest),
 	});
 	items.push({
-		label: entry ? "Show in Finder" : "Show this folder in Finder",
+		label: entry ? `Show in ${FILE_MANAGER}` : `Show this folder in ${FILE_MANAGER}`,
 		icon: FolderSearch,
 		run: () => a.reveal(entry?.path ?? dest),
 	});
@@ -1157,7 +1162,7 @@ function buildMenu(
 	}
 	if (entry) {
 		items.push({
-			label: "Move to Trash",
+			label: `Move to ${TRASH}`,
 			icon: Trash2,
 			shortcut: "⌘⌫",
 			danger: true,

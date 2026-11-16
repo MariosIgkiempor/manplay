@@ -266,7 +266,8 @@ function IssuesBody() {
 			/>
 			{noFfmpeg && (
 				<p className="text-muted-foreground text-xs">
-					Install ffmpeg (<code>brew install ffmpeg</code>) to convert non-MP3 files.
+					ffmpeg is missing from this copy of manplay, so non-MP3 files cannot be converted.
+					Reinstall the app.
 				</p>
 			)}
 			{notice && <ResultLine notice={notice} />}

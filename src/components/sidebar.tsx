@@ -18,6 +18,7 @@ import { SidebarSmartPlaylists } from "#/components/sidebar-smart-playlists.tsx"
 import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
+import { keyLabel } from "#/lib/platform.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
 import { usePaneWidth, useStoredFlag } from "#/lib/use-pane-width.ts";
 import { cn } from "#/lib/utils.ts";
@@ -130,7 +131,7 @@ export function Sidebar() {
 			type="button"
 			onClick={toggle}
 			aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-			title={collapsed ? "Expand sidebar (⌘\\)" : "Collapse sidebar (⌘\\)"}
+			title={`${collapsed ? "Expand" : "Collapse"} sidebar (${keyLabel("⌘\\")})`}
 			className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-4"
 		>
 			<ToggleIcon />
