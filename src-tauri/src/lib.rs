@@ -3058,10 +3058,6 @@ pub fn run() {
             if let Some(root) = db::get_setting(&conn, SETTING_ROOT)? {
                 allow_assets(app.handle(), Path::new(&root));
             }
-            // Beat grids and waveforms used to be kept as files; they live in the database now.
-            if let Err(e) = anlz::import_files(&conn, &dir) {
-                log::warn!("importing kept analyses: {e}");
-            }
             let http = reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .build()

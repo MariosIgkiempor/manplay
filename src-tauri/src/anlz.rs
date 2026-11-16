@@ -19,7 +19,7 @@ use crate::analysis::{Detail, WAVEFORM_RATE};
 use crate::db::Cue;
 use crate::error::Error;
 use rusqlite::{Connection, OptionalExtension, params};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Columns of the waveform shown across the whole track.
 const PREVIEW: usize = 400;
@@ -415,8 +415,6 @@ pub struct Stored {
     pub detail: Vec<u8>,
 }
 
-const MAGIC: &[u8; 4] = b"MPA1";
-
 impl Stored {
     pub fn from_detail(d: &Detail) -> Self {
         Self {
@@ -430,40 +428,6 @@ impl Stored {
 
     fn cols(&self) -> Vec<(u8, u8)> {
         self.detail.iter().map(|b| (b & 0x1f, b >> 5)).collect()
-    }
-
-    /// The file format earlier versions kept; only tests still write it.
-    #[cfg(test)]
-    pub fn encode(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(36 + self.detail.len());
-        v.extend_from_slice(MAGIC);
-        v.extend_from_slice(&self.grid_bpm.unwrap_or(0.0).to_le_bytes());
-        v.extend_from_slice(&self.first_beat.to_le_bytes());
-        v.extend_from_slice(&self.duration.to_le_bytes());
-        v.push(self.bar_offset);
-        v.extend_from_slice(&(self.detail.len() as u32).to_le_bytes());
-        v.extend_from_slice(&self.detail);
-        v
-    }
-
-    /// Reads the file format earlier versions kept (see [`import_files`]).
-    pub fn decode(b: &[u8]) -> Option<Self> {
-        let f = |o: usize| -> Option<f64> {
-            Some(f64::from_le_bytes(b.get(o..o + 8)?.try_into().ok()?))
-        };
-        if b.get(..4)? != MAGIC {
-            return None;
-        }
-        let len = u32::from_le_bytes(b.get(29..33)?.try_into().ok()?) as usize;
-        let detail = b.get(33..33 + len)?.to_vec();
-        let bpm = f(4)?;
-        Some(Self {
-            grid_bpm: (bpm > 0.0).then_some(bpm),
-            first_beat: f(12)?,
-            duration: f(20)?,
-            bar_offset: *b.get(28)? % 4,
-            detail,
-        })
     }
 }
 
@@ -485,12 +449,6 @@ impl Stored {
         let moved = steps as i64 + i64::from(first < 0.0);
         self.bar_offset = (i64::from(bar_offset) + moved).rem_euclid(4) as u8;
     }
-}
-
-/// Where manplay used to keep a track's analysis, one file per fingerprint, before it moved
-/// into the library database. Read once by [`import_files`].
-fn legacy_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("analysis")
 }
 
 /// The kept beat grid and waveform of the audio with this fingerprint; `None` until it has
@@ -536,40 +494,6 @@ pub fn save(conn: &Connection, fingerprint: &str, stored: &Stored) -> Result<(),
         ],
     )?;
     Ok(())
-}
-
-/// Moves analyses kept as files by earlier versions into the database, then renames their
-/// folder to `analysis-imported` so this runs once. Rows that already have a waveform keep it.
-pub fn import_files(conn: &Connection, data_dir: &Path) -> Result<usize, Error> {
-    let dir = legacy_dir(data_dir);
-    let Ok(shards) = std::fs::read_dir(&dir) else {
-        return Ok(0);
-    };
-    let mut count = 0;
-    for shard in shards.flatten() {
-        let Ok(files) = std::fs::read_dir(shard.path()) else {
-            continue;
-        };
-        for file in files.flatten() {
-            let path = file.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("mpa") {
-                continue;
-            }
-            let (Some(fp), Some(stored)) = (
-                path.file_stem().and_then(|s| s.to_str()),
-                std::fs::read(&path).ok().and_then(|b| Stored::decode(&b)),
-            ) else {
-                continue;
-            };
-            if load(conn, fp).is_none() {
-                save(conn, fp, &stored)?;
-                count += 1;
-            }
-        }
-    }
-    std::fs::rename(&dir, data_dir.join("analysis-imported"))
-        .map_err(|e| Error::Msg(format!("analysis folder: {e}")))?;
-    Ok(count)
 }
 
 /// The `.DAT` and `.EXT` files for a track at `path` on the drive. Without a tempo the grid is
@@ -921,15 +845,8 @@ mod tests {
 
     #[test]
     fn stored_analysis_round_trips() {
-        let stored = Stored::from_detail(&detail());
-        assert_eq!(Stored::decode(&stored.encode()), Some(stored.clone()));
-        assert_eq!(Stored::decode(b"nope"), None);
-        let mut none = stored;
+        let mut none = Stored::from_detail(&detail());
         none.grid_bpm = None;
-        assert_eq!(
-            Stored::decode(&none.encode()).and_then(|s| s.grid_bpm),
-            None
-        );
 
         let conn = crate::db::open(Path::new(":memory:")).expect("db");
         save(&conn, "abcdef", &none).expect("saves");
@@ -942,22 +859,5 @@ mod tests {
         )
         .expect("row");
         assert_eq!(load(&conn, "bare"), None);
-    }
-
-    #[test]
-    fn imports_analysis_files_once() {
-        let dir = std::env::temp_dir().join(format!("manplay-anlz-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let stored = Stored::from_detail(&detail());
-        let shard = legacy_dir(&dir).join("ab");
-        std::fs::create_dir_all(&shard).expect("dir");
-        std::fs::write(shard.join("abcdef.mpa"), stored.encode()).expect("write");
-        std::fs::write(shard.join("junk.mpa"), b"nope").expect("write");
-        let conn = crate::db::open(Path::new(":memory:")).expect("db");
-        assert_eq!(import_files(&conn, &dir).expect("imports"), 1);
-        assert_eq!(load(&conn, "abcdef"), Some(stored));
-        assert!(!legacy_dir(&dir).exists());
-        assert_eq!(import_files(&conn, &dir).expect("again"), 0);
-        let _ = std::fs::remove_dir_all(dir);
     }
 }
