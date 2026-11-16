@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter};
 use crate::db::{Base, BaseUpdate, SyncTarget, Synced};
 use crate::error::Error;
 use crate::fsops;
+use crate::libsync;
 use crate::r2::{self, R2};
 use crate::tags::{FieldMerge, Side};
 use crate::webdav;
@@ -184,6 +185,162 @@ impl<'a> Backend<'a> {
             Self::R2(c, r) => r.delete(c, dest).await,
         }
     }
+}
+
+// ---- library data ------------------------------------------------------------
+
+/// The op log folder (`.manplay/log`) of a destination, as a place for chunks.
+struct LogStore<'a, 'b> {
+    backend: &'b Backend<'a>,
+    base: Vec<String>,
+}
+
+impl LogStore<'_, '_> {
+    fn dir(&self, dev: Option<&str>) -> Vec<String> {
+        let mut dir = self.base.clone();
+        dir.extend([
+            libsync::remote::DIR.to_owned(),
+            libsync::remote::LOG_DIR.to_owned(),
+        ]);
+        dir.extend(dev.map(str::to_owned));
+        dir
+    }
+}
+
+/// A safe single path segment from a destination listing.
+fn plain_segment(s: &str) -> bool {
+    !s.is_empty() && !s.starts_with('.') && !s.contains(['/', '\\'])
+}
+
+impl libsync::ChunkStore for LogStore<'_, '_> {
+    async fn list_chunks(&self) -> Result<Vec<libsync::ChunkRef>, Error> {
+        let files = self.backend.list(&self.dir(None)).await?;
+        Ok(files
+            .into_iter()
+            .filter_map(|f| match f.rel.as_slice() {
+                [dev, name] if plain_segment(dev) => Some(libsync::ChunkRef {
+                    dev: dev.clone(),
+                    seq: libsync::remote::parse_chunk_name(name)?,
+                }),
+                _ => None,
+            })
+            .collect())
+    }
+
+    async fn read_chunk(&self, chunk: &libsync::ChunkRef) -> Result<Vec<u8>, Error> {
+        let mut src = self.dir(Some(&chunk.dev));
+        src.push(libsync::remote::chunk_name(chunk.seq));
+        let tmp = std::env::temp_dir().join(format!(
+            "manplay-chunk-{}-{}-{}",
+            std::process::id(),
+            chunk.dev,
+            chunk.seq
+        ));
+        let got = self.backend.get(&src, &tmp).await;
+        let bytes = match got {
+            Ok(()) => tokio::fs::read(&tmp).await.map_err(Error::from),
+            Err(e) => Err(e),
+        };
+        let _ = tokio::fs::remove_file(&tmp).await;
+        bytes
+    }
+
+    async fn write_chunk(&self, chunk: &libsync::ChunkRef, bytes: Vec<u8>) -> Result<(), Error> {
+        let dir = self.dir(Some(&chunk.dev));
+        for depth in self.base.len() + 1..=dir.len() {
+            self.backend.mkdir(&dir[..depth]).await?;
+        }
+        let name = libsync::remote::chunk_name(chunk.seq);
+        let mut dest = dir.clone();
+        dest.push(name.clone());
+        if self.backend.remote_size(&dest).await?.is_some() {
+            return Err(Error::Msg(format!(
+                "chunk {name} of this device already exists on the destination"
+            )));
+        }
+        let tmp = std::env::temp_dir().join(format!(
+            "manplay-chunk-{}-{}-{}.up",
+            std::process::id(),
+            chunk.dev,
+            chunk.seq
+        ));
+        tokio::fs::write(&tmp, &bytes).await?;
+        let sent = match self.backend {
+            // Written under a temporary name and renamed, so a reader never sees half a chunk.
+            Backend::Dav(_) => {
+                let mut part = dir;
+                part.push(format!("{name}.part"));
+                match self.backend.put(&part, &tmp).await {
+                    Ok(()) => self.backend.rename(&part, &dest).await,
+                    Err(e) => Err(e),
+                }
+            }
+            Backend::R2(..) => self.backend.put(&dest, &tmp).await,
+        };
+        let _ = tokio::fs::remove_file(&tmp).await;
+        sent
+    }
+}
+
+/// What library data did on one destination.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryOutcome {
+    pub target_id: i64,
+    pub name: String,
+    pub sent: usize,
+    pub received: usize,
+    pub unreadable: usize,
+    pub error: Option<String>,
+}
+
+/// Sends this device's new library edits to the destination and applies everyone else's. Runs
+/// before the files so tags and playlists are in place when songs arrive.
+pub async fn run_library_data(
+    client: &Client,
+    target: &SyncTarget,
+    db: &std::sync::Mutex<rusqlite::Connection>,
+) -> LibraryOutcome {
+    let mut out = LibraryOutcome {
+        target_id: target.id,
+        name: target_name(target),
+        sent: 0,
+        received: 0,
+        unreadable: 0,
+        error: None,
+    };
+    let base = base_of(target);
+    let backend = match Backend::for_target(client, target) {
+        Ok(b) => b,
+        Err(e) => {
+            out.error = Some(e.to_string());
+            return out;
+        }
+    };
+    match backend.exists(&base).await {
+        Ok(true) => {}
+        Ok(false) => {
+            out.error = Some("destination folder not found (is the machine online?)".to_owned());
+            return out;
+        }
+        Err(e) => {
+            out.error = Some(format!("destination unreachable: {e}"));
+            return out;
+        }
+    }
+    let summary = libsync::run(
+        db,
+        &LogStore {
+            backend: &backend,
+            base,
+        },
+    )
+    .await;
+    out.sent = summary.sent;
+    out.received = summary.received;
+    out.unreadable = summary.unreadable;
+    out.error = summary.error;
+    out
 }
 
 // ---- review plan -------------------------------------------------------------

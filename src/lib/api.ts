@@ -360,7 +360,12 @@ const newTargetSchema = z.object({
 
 export type NewTarget = z.infer<typeof newTargetSchema>;
 
-const targetSchema = newTargetSchema.extend({ id: int, syncedTracks: int });
+const targetSchema = newTargetSchema.extend({
+	id: int,
+	syncedTracks: int,
+	/** Tags and playlists are shared through this destination. */
+	libsync: z.boolean(),
+});
 
 export type SyncTarget = z.infer<typeof targetSchema>;
 
@@ -401,6 +406,32 @@ export async function updateSyncTarget(t: {
 		keyId: t.keyId ?? null,
 		secret: t.secret ?? null,
 	});
+}
+
+/**
+ * Switches sharing of tags and playlists through one destination. Only one destination shares
+ * them at a time; switching on sends everything the library holds.
+ */
+export async function setTargetLibsync(id: number, enabled: boolean): Promise<void> {
+	await invoke("set_target_libsync", { id, enabled });
+}
+
+const libraryOutcomeSchema = z.object({
+	targetId: int,
+	name: z.string(),
+	sent: int,
+	received: int,
+	unreadable: int,
+	error: z.string().nullable(),
+});
+export type LibraryOutcome = z.infer<typeof libraryOutcomeSchema>;
+
+/**
+ * Sends this device's tag and playlist edits to the destinations that share them and applies
+ * everyone else's. Run before the files.
+ */
+export async function libsyncRun(targetIds: number[]): Promise<LibraryOutcome[]> {
+	return z.array(libraryOutcomeSchema).parse(await invoke("libsync_run", { targetIds }));
 }
 
 export async function removeSyncTarget(id: number): Promise<void> {

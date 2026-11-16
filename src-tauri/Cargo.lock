@@ -2445,6 +2445,7 @@ name = "manplay"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "flate2",
  "futures-util",
  "hmac",
  "image",
@@ -2472,6 +2473,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "trash",
+ "uuid",
  "walkdir",
  "zip",
 ]

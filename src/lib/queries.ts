@@ -42,6 +42,7 @@ import {
 	setPanelTabs,
 	setServiceEnabled,
 	setTagClipboard,
+	setTargetLibsync,
 	setUiSetting,
 	syncApply,
 	syncHistory,
@@ -77,6 +78,16 @@ export function useActivity(source: ActivitySource) {
 
 export function useSyncTargets() {
 	return useQuery({ queryKey: ["sync-targets"], queryFn: listSyncTargets });
+}
+
+/** Switches sharing of tags and playlists through a destination on or off. */
+export function useSetLibsync() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+			setTargetLibsync(id, enabled),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: ["sync-targets"] }),
+	});
 }
 
 export const SYNC_KEY = ["sync-run"] as const;

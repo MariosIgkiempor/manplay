@@ -24,6 +24,7 @@ Windows 10/11 x64.
 | Audio identity | `audioprint.rs` (`audio_fp`: audio only), `scan::fingerprint` (whole file) |
 | Analysis, waveforms | `analysis.rs`, `anlz.rs` |
 | Destinations sync (WebDAV over Tailscale, R2) | `sync.rs`, `sync/transfer.rs`, `webdav.rs`, `r2.rs`, `tailscale.rs` |
+| Shared library data (op log: tags, playlists; off per destination until switched on) | `src-tauri/src/libsync/`, `docs/plans/shared-library/` |
 | rekordbox / USB export | `rekordbox.rs`, `usb*.rs`, `pdb/`, `onelib/` |
 | Frontend API wrappers | `src/lib/api.ts`, `src/lib/queries.ts` |
 | Plans and research | `docs/plans/`, `docs/*.md` |

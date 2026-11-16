@@ -1,5 +1,5 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, CloudUpload, Download, Loader2, RefreshCw } from "lucide-react";
+import { ChevronRight, CloudUpload, Download, Loader2, RefreshCw, Tags } from "lucide-react";
 import {
 	type Dispatch,
 	type ReactNode,
@@ -27,6 +27,8 @@ import { Switch } from "#/components/ui/switch.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import {
 	type ApplySummary,
+	type LibraryOutcome,
+	libsyncRun,
 	onPullProgress,
 	type PullOutcome,
 	type PullProgress,
@@ -38,7 +40,7 @@ import {
 	type TargetPlan,
 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
-import { useSyncApply, useSyncPlan } from "#/lib/queries.ts";
+import { useSetLibsync, useSyncApply, useSyncPlan, useSyncTargets } from "#/lib/queries.ts";
 import {
 	type Choices,
 	type IncomingAction,
@@ -67,7 +69,12 @@ type Phase =
 	| { step: "review" }
 	| { step: "pulling" }
 	| { step: "pushing" }
-	| { step: "done"; pulled: PullOutcome[]; pushed: ApplySummary[] }
+	| {
+			step: "done";
+			pulled: PullOutcome[];
+			pushed: ApplySummary[];
+			library: LibraryOutcome[];
+	  }
 	| { step: "failed"; error: string };
 
 /** One half of a sync on one destination: a switch, what it would do, and the list on demand. */
@@ -267,6 +274,42 @@ function PullIncoming({ t, ui }: { t: Row; ui: Ui }) {
 	);
 }
 
+/**
+ * Whether tags and playlists are shared through a destination. The choice applies at once; the
+ * edits travel with the next sync.
+ */
+function LibraryDataRow({ id }: { id: number }) {
+	const targets = useSyncTargets();
+	const setLibsync = useSetLibsync();
+	const on = targets.data?.find((t) => t.id === id)?.libsync ?? false;
+	return (
+		<div className="border-b first:border-t">
+			<div className="flex h-12 items-center gap-3 px-[var(--diff-inset)]">
+				<Switch
+					checked={on}
+					disabled={!targets.data || setLibsync.isPending}
+					onChange={(v) => setLibsync.mutate({ id, enabled: v })}
+					label="Library data"
+				/>
+				<span className="flex shrink-0 items-center gap-1.5 font-medium text-sm [&_svg]:size-4">
+					<Tags />
+					Library data
+				</span>
+				<span className="min-w-0 truncate text-muted-foreground text-sm">
+					{on
+						? "Tags and playlists sync with this destination"
+						: "Tags and playlists stay on this device"}
+				</span>
+			</div>
+			{setLibsync.isError && (
+				<p className="break-words px-[var(--diff-inset)] pb-2 text-destructive text-sm">
+					{String(setLibsync.error)}
+				</p>
+			)}
+		</div>
+	);
+}
+
 /** One destination: how much already matches, then its pull and its push. */
 function TargetBlock({
 	t,
@@ -315,6 +358,7 @@ function TargetBlock({
 			{t.pullError && (
 				<p className="break-words px-[var(--diff-inset)] text-destructive text-sm">{t.pullError}</p>
 			)}
+			<LibraryDataRow id={id} />
 			<Section
 				icon={<Download />}
 				title="Pull"
@@ -400,6 +444,26 @@ function TargetBlock({
 	);
 }
 
+/**
+ * Exchanges tags and playlists with the destinations that share them, then refreshes what the
+ * received edits can change.
+ */
+async function exchangeLibraryData(
+	ids: number[],
+	queryClient: ReturnType<typeof useQueryClient>,
+): Promise<LibraryOutcome[]> {
+	if (ids.length === 0) {
+		return [];
+	}
+	const outcomes = await libsyncRun(ids);
+	if (outcomes.some((l) => l.received > 0)) {
+		for (const key of ["tracks", "playlists", "playlist-tracks", "tags"]) {
+			await queryClient.invalidateQueries({ queryKey: [key] });
+		}
+	}
+	return outcomes;
+}
+
 /** What shows before there is a plan to review, and after the run: loading, errors, the result. */
 function notReady({
 	phase,
@@ -423,6 +487,7 @@ function notReady({
 			<SyncResult
 				pulled={phase.pulled}
 				pushed={phase.pushed}
+				library={phase.library}
 				variant={variant}
 				onDone={onClose ?? onRefresh}
 			/>
@@ -484,6 +549,7 @@ function Gather({
 	const scanned = scans.every((s) => !s.isPending);
 	const plan = useSyncPlan();
 	const apply = useSyncApply();
+	const syncTargets = useSyncTargets();
 	const [phase, setPhase] = useState<Phase>({ step: "review" });
 	const [progress, setProgress] = useState<PullProgress | null>(null);
 
@@ -574,11 +640,14 @@ function Gather({
 		}),
 	);
 	const total = pulls.reduce((n, t) => n + t.pull.length, 0) + applyIds.length;
+	// Destinations that share tags and playlists: they are exchanged first, whatever is ticked.
+	const libraryIds = ids.filter((id) => syncTargets.data?.find((t) => t.id === id)?.libsync);
 	const busy = phase.step !== "review";
 
 	const run = async () => {
 		try {
 			setPhase({ step: "pulling" });
+			const library = await exchangeLibraryData(libraryIds, queryClient);
 			const pulled: PullOutcome[] = [];
 			for (const t of pulls) {
 				pulled.push(
@@ -597,7 +666,7 @@ function Gather({
 				applyIds.length > 0
 					? await apply.mutateAsync({ planId, actionIds: applyIds, resolutions })
 					: [];
-			setPhase({ step: "done", pulled, pushed: result });
+			setPhase({ step: "done", pulled, pushed: result, library });
 		} catch (e) {
 			setPhase({ step: "failed", error: String(e) });
 		}
@@ -668,10 +737,16 @@ function Gather({
 						<Button
 							className="flex-1"
 							onClick={() => void run()}
-							disabled={busy || total === 0 || (removing > 0 && !understood)}
+							disabled={
+								busy || (total === 0 && libraryIds.length === 0) || (removing > 0 && !understood)
+							}
 						>
 							<RefreshCw className={busy ? "animate-spin motion-reduce:animate-none" : ""} />
-							{busy ? "Syncing…" : `Sync ${total.toLocaleString()} changes`}
+							{busy
+								? "Syncing…"
+								: total === 0
+									? "Sync library data"
+									: `Sync ${total.toLocaleString()} changes`}
 						</Button>
 					</div>
 				</>

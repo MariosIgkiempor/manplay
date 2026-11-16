@@ -10,6 +10,7 @@ mod error;
 mod fsops;
 mod import;
 mod itunes;
+mod libsync;
 mod onelib;
 mod pdb;
 mod playback;
@@ -72,6 +73,8 @@ async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error>
     detect_moves(&mut conn, &state.data_dir, &root, &result)?;
     db::upsert(&mut conn, &result.tracks)?;
     db::rekey_legacy(&mut conn)?;
+    // Shared tags and playlists that were waiting for these songs.
+    libsync::apply::materialize_pending(&mut conn)?;
     db::replace_tag_values(&mut conn, &result.values)?;
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
     reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
@@ -99,8 +102,12 @@ async fn fill_audio_fps(app: AppHandle) {
     })
     .await;
     let Ok(printed) = printed else { return };
-    let Ok(mut conn) = state.db.lock() else { return };
-    let stored = db::set_audio_fps(&mut conn, &printed).and_then(|()| db::rekey_legacy(&mut conn));
+    let Ok(mut conn) = state.db.lock() else {
+        return;
+    };
+    let stored = db::set_audio_fps(&mut conn, &printed)
+        .and_then(|()| db::rekey_legacy(&mut conn))
+        .and_then(|()| libsync::apply::materialize_pending(&mut conn).map(|_| ()));
     if let Err(e) = stored {
         log::warn!("could not fingerprint the library's audio: {e}");
     }
@@ -669,13 +676,7 @@ fn run_analysis(
         for (i, result, readable) in rx {
             if readable {
                 let conn = state.db.lock().map_err(|_| Error::Lock)?;
-                db::store_analysis(
-                    &conn,
-                    &jobs[i].audio_fp,
-                    &result,
-                    unix_now(),
-                    replace_edits,
-                )?;
+                db::store_analysis(&conn, &jobs[i].audio_fp, &result, unix_now(), replace_edits)?;
             }
             if result.is_ok() {
                 out.analyzed += 1;
@@ -716,10 +717,7 @@ async fn analyze_tracks(
         let jobs = db::analysis_jobs(&conn, track_ids.as_deref(), force)?;
         let ids = db::track_ids_with_audio_fps(
             &conn,
-            &jobs
-                .iter()
-                .map(|j| j.audio_fp.as_str())
-                .collect::<Vec<_>>(),
+            &jobs.iter().map(|j| j.audio_fp.as_str()).collect::<Vec<_>>(),
         )?;
         (jobs, ids, replace_edits)
     };
@@ -2038,6 +2036,35 @@ async fn sync_apply(
     Ok(summaries)
 }
 
+/// Switches library data (tags, playlists) on or off for one destination. Switching on writes
+/// ops for what the library holds now.
+#[tauri::command]
+fn set_target_libsync(state: State<'_, AppState>, id: i64, enabled: bool) -> Result<(), Error> {
+    with_db!(state, |c| db::set_target_libsync(c, id, enabled))
+}
+
+/// Shares library data with the destinations that have it switched on: sends this device's
+/// edits and applies everyone else's. Run before the files of a sync.
+#[tauri::command]
+async fn libsync_run(
+    state: State<'_, AppState>,
+    target_ids: Vec<i64>,
+) -> Result<Vec<sync::LibraryOutcome>, Error> {
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    let targets = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::get_targets(&conn, Some(&target_ids))?
+    };
+    let mut out = Vec::new();
+    for target in targets.iter().filter(|t| t.libsync) {
+        out.push(sync::run_library_data(&state.http, target, &state.db).await);
+    }
+    Ok(out)
+}
+
 #[tauri::command]
 fn is_syncing(state: State<'_, AppState>) -> bool {
     state.syncing.load(Ordering::SeqCst)
@@ -3190,6 +3217,8 @@ pub fn run() {
             add_sync_target,
             add_r2_target,
             update_sync_target,
+            set_target_libsync,
+            libsync_run,
             remove_sync_target,
             sync_history,
             activity_history,

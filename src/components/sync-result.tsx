@@ -3,7 +3,7 @@ import { TONE, type Tone } from "#/components/diff-view.tsx";
 import { FailureList } from "#/components/failure-list.tsx";
 import { SyncShell } from "#/components/sync-shell.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import type { ApplySummary, PullOutcome } from "#/lib/api.ts";
+import type { ApplySummary, LibraryOutcome, PullOutcome } from "#/lib/api.ts";
 import { TRASH } from "#/lib/platform.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -80,16 +80,21 @@ function Block({
 export function SyncResult({
 	pulled,
 	pushed,
+	library = [],
 	variant,
 	onDone,
 }: {
 	pulled: PullOutcome[];
 	pushed: ApplySummary[];
+	/** Tags and playlists exchanged with destinations that share them. */
+	library?: LibraryOutcome[];
 	variant: "drawer" | "panel";
 	onDone: () => void;
 }) {
 	const errors =
-		pulled.reduce((n, p) => n + p.failedTotal, 0) + pushed.reduce((n, p) => n + p.failedTotal, 0);
+		pulled.reduce((n, p) => n + p.failedTotal, 0) +
+		pushed.reduce((n, p) => n + p.failedTotal, 0) +
+		library.filter((l) => l.error !== null).length;
 	const Icon = errors > 0 ? TriangleAlert : CheckCircle2;
 	const sum = <T,>(items: T[], pick: (t: T) => number) => items.reduce((n, i) => n + pick(i), 0);
 	return (
@@ -116,6 +121,19 @@ export function SyncResult({
 					</div>
 				</header>
 				<div className="-space-y-px">
+					{library.map((l) => (
+						<Block
+							key={`library-${l.targetId}`}
+							title={`Library data: ${l.name}`}
+							stats={[
+								{ tone: "add", count: l.sent, label: "tag and playlist edits sent" },
+								{ tone: "change", count: l.received, label: "received" },
+							]}
+							failed={l.error ? [l.error] : []}
+							failedTotal={l.error ? 1 : 0}
+							outcome="not shared"
+						/>
+					))}
 					{pulled.length > 0 && (
 						<Block
 							title="Pull into your library"
