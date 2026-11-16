@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@fontsource/iosevka/latin-400.css";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
@@ -60,6 +61,7 @@
 }
 
 @theme inline {
+	--font-mono: "Iosevka", ui-monospace, "SF Mono", Menlo, monospace;
 	--color-background: var(--background);
 	--color-foreground: var(--foreground);
 	--color-card: var(--card);

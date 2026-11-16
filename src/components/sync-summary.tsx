@@ -1,9 +1,28 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { Loader2, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { ProgressBar, Tally } from "#/components/diff-view.tsx";
-import { PushResult } from "#/components/sync-review.tsx";
+import { ChevronRight, CloudUpload, Download, Loader2, RefreshCw } from "lucide-react";
+import {
+	type Dispatch,
+	type ReactNode,
+	type SetStateAction,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
+import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
+import { PullList } from "#/components/pull-review.tsx";
+import { SyncResult } from "#/components/sync-result.tsx";
+import {
+	countKinds,
+	DeleteGuard,
+	FilterTally,
+	KINDS,
+	LABEL,
+	type PushFilter,
+	PushList,
+} from "#/components/sync-review.tsx";
+import { SyncShell } from "#/components/sync-shell.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Switch } from "#/components/ui/switch.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import {
 	type ApplySummary,
@@ -18,107 +37,21 @@ import {
 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
 import { useSyncApply, useSyncPlan } from "#/lib/queries.ts";
+import { cn } from "#/lib/utils.ts";
 
-const key = (rel: readonly string[]) => rel.join("/");
+/** Which halves of a sync start switched on. */
+export type SyncMode = "both" | "pull" | "push";
+type Side = "pull" | "push";
+
 const bytes = (items: readonly { size: number }[]) => items.reduce((n, i) => n + i.size, 0);
-
-/** What one destination's sync does with the default choices of both reviews. */
-interface TargetSummary {
-	plan: TargetPlan;
-	/** Songs pulled into the library: everything missing except other formats of a library song. */
-	pull: RemoteFile[];
-	pullError: string | null;
-	/** Push actions that start ticked in the push review. */
-	push: SyncAction[];
-	/** Opt-in push actions left out, such as deleting files that are only on the destination. */
-	skipped: number;
-}
-
-function summarize(
-	plan: TargetPlan,
-	missing: readonly RemoteFile[] | undefined,
-	error: unknown,
-): TargetSummary {
-	const pull = (missing ?? []).filter((f) => !f.otherFormat);
-	const pulled = new Set(pull.map((f) => key(f.rel)));
-	const push = plan.actions.filter((a) => !a.optional);
-	// A song about to be pulled is no extra file on the destination any more.
-	const skipped = plan.actions.filter((a) => a.optional && !pulled.has(key(a.rel))).length;
-	return { plan, pull, pullError: error ? String(error) : null, push, skipped };
-}
-
-function count(actions: readonly SyncAction[], kind: SyncAction["kind"]) {
-	return actions.filter((a) => a.kind === kind).length;
-}
-
-/** One line of the summary: what happens, the counts, and the bytes moved. */
-function Line({
-	label,
-	children,
-	size,
-}: {
-	label: string;
-	children: React.ReactNode;
-	size?: number;
-}) {
-	return (
-		<div className="grid grid-cols-[7rem_minmax(0,1fr)_auto] items-baseline gap-2 py-1">
-			<span className="text-muted-foreground text-xs">{label}</span>
-			<span className="min-w-0">{children}</span>
-			<span className="text-muted-foreground text-xs tabular-nums">
-				{size ? formatBytes(size) : ""}
-			</span>
-		</div>
-	);
-}
-
-function TargetBlock({ s }: { s: TargetSummary }) {
-	const { plan } = s;
-	return (
-		<section className="rounded-lg border px-3 py-2">
-			<h3 className="break-words pb-1 font-semibold text-sm">{plan.name}</h3>
-			{plan.error && <p className="break-words py-1 text-destructive text-sm">{plan.error}</p>}
-			{!plan.error && s.pull.length + s.push.length + s.skipped === 0 && !s.pullError && (
-				<p className="py-1 text-muted-foreground text-sm">Up to date</p>
-			)}
-			{!plan.error && (s.pull.length + s.push.length + s.skipped > 0 || s.pullError) && (
-				<>
-					<Line label="Pull" size={bytes(s.pull)}>
-						{s.pullError ? (
-							<span className="text-destructive text-sm">{s.pullError}</span>
-						) : (
-							<Tally
-								items={[{ tone: "add", label: "songs", count: s.pull.length }]}
-								empty="Nothing"
-							/>
-						)}
-					</Line>
-					<Line
-						label="Push"
-						size={bytes(s.push.filter((a) => a.kind === "upload" || a.kind === "replace"))}
-					>
-						<Tally
-							items={[
-								{ tone: "add", label: "new", count: count(s.push, "upload") },
-								{ tone: "change", label: "replace", count: count(s.push, "replace") },
-								{ tone: "move", label: "rename", count: count(s.push, "move") },
-								{ tone: "remove", label: "delete", count: count(s.push, "delete") },
-							]}
-							empty="Nothing"
-						/>
-					</Line>
-					{s.skipped > 0 && (
-						<Line label="Skipped">
-							<span className="text-muted-foreground text-sm">
-								{s.skipped.toLocaleString()} opt-in changes
-							</span>
-						</Line>
-					)}
-				</>
-			)}
-		</section>
-	);
-}
+const flip = <T,>(set: ReadonlySet<T>, v: T): Set<T> => {
+	const next = new Set(set);
+	if (!next.delete(v)) {
+		next.add(v);
+	}
+	return next;
+};
+const pullKey = (id: number, f: RemoteFile) => `${id}:${f.rel.join("/")}`;
 
 type Phase =
 	| { step: "review" }
@@ -127,18 +60,344 @@ type Phase =
 	| { step: "done"; pulled: PullOutcome[]; pushed: ApplySummary[] }
 	| { step: "failed"; error: string };
 
+/** One half of a sync on one destination: a switch, what it would do, and the list on demand. */
+function Section({
+	icon,
+	title,
+	on,
+	onToggle,
+	summary,
+	size,
+	empty,
+	open,
+	onOpen,
+	children,
+}: {
+	icon: ReactNode;
+	title: string;
+	on: boolean;
+	onToggle: (on: boolean) => void;
+	/** Counts after the title; they may be buttons that open the list. */
+	summary: ReactNode;
+	size: number;
+	/** Nothing to do: the switch and the list are off. */
+	empty: boolean;
+	open: boolean;
+	/** Opens or closes the whole list. */
+	onOpen: () => void;
+	children: ReactNode;
+}) {
+	return (
+		<div className="border-b first:border-t [--sync-head:3rem]">
+			<div
+				className={cn(
+					"sticky top-[var(--sync-top,-1rem)] z-20 flex h-12 items-center gap-3 bg-background px-[var(--diff-inset)]",
+					open && !empty && "border-b",
+				)}
+			>
+				<Switch checked={on && !empty} disabled={empty} onChange={onToggle} label={title} />
+				<button
+					type="button"
+					aria-expanded={open}
+					disabled={empty}
+					onClick={onOpen}
+					className="flex shrink-0 items-center gap-1.5 rounded-md font-medium text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-default [&_svg]:size-4"
+				>
+					{icon}
+					{title}
+				</button>
+				<span className={cn("min-w-0 transition-opacity", !on && !empty && "opacity-45")}>
+					{summary}
+				</span>
+				{/* The empty stretch of the row opens the list too. */}
+				<button
+					type="button"
+					tabIndex={-1}
+					aria-hidden="true"
+					disabled={empty}
+					onClick={onOpen}
+					className="flex min-w-0 flex-1 items-center justify-end gap-3 self-stretch text-muted-foreground disabled:cursor-default"
+				>
+					{size > 0 && <span className="text-xs tabular-nums">{formatBytes(size)}</span>}
+					{!empty && (
+						<ChevronRight
+							className={cn(
+								"size-4 shrink-0 transition-transform motion-reduce:transition-none",
+								open && "rotate-90",
+							)}
+						/>
+					)}
+				</button>
+			</div>
+			{open && !empty && <div>{children}</div>}
+		</div>
+	);
+}
+
 /**
- * First step of a sync: reads both sides, then shows what a pull and a push would do for every
- * destination. Confirming runs both with the default choices; nothing changes before that.
+ * Sync with the destinations: reads them as soon as it opens, then shows a pull and a push for
+ * each, each with a switch and its full list of changes to tick. Nothing changes until Sync.
  */
-export function SyncSummary({
+export function SyncPanel({
 	ids,
-	onReviewSteps,
+	mode = "both",
+	variant = "drawer",
 	onClose,
 }: {
 	ids: number[];
-	onReviewSteps: () => void;
-	onClose: () => void;
+	mode?: SyncMode;
+	variant?: "drawer" | "panel";
+	onClose?: () => void;
+}) {
+	const [round, setRound] = useState(0);
+	return (
+		<Gather
+			key={round}
+			ids={ids}
+			mode={mode}
+			variant={variant}
+			onClose={onClose}
+			onRefresh={() => setRound((r) => r + 1)}
+		/>
+	);
+}
+
+interface Row {
+	plan: TargetPlan;
+	missing: RemoteFile[];
+	pullError: string | null;
+	pullOn: boolean;
+	pushOn: boolean;
+	/** What would be pulled if the switch were on, and what is, with it off nothing. */
+	pullSel: RemoteFile[];
+	pull: RemoteFile[];
+	pushSel: SyncAction[];
+	push: SyncAction[];
+}
+
+/** The state setters and tick lookups a destination's block works through. */
+interface Ui {
+	setOpen: Dispatch<SetStateAction<ReadonlyMap<string, string>>>;
+	setSwitched: Dispatch<SetStateAction<ReadonlyMap<string, boolean>>>;
+	setPullFlips: Dispatch<SetStateAction<ReadonlySet<string>>>;
+	setPushFlips: Dispatch<SetStateAction<ReadonlySet<number>>>;
+	pullPicked: (id: number, f: RemoteFile) => boolean;
+	pushPicked: (a: SyncAction) => boolean;
+}
+
+/** One destination: how much already matches, then its pull and its push. */
+function TargetBlock({
+	t,
+	multi,
+	open,
+	ui,
+}: {
+	t: Row;
+	multi: boolean;
+	open: ReadonlyMap<string, string>;
+	ui: Ui;
+}) {
+	const { setOpen, setSwitched, setPullFlips, setPushFlips, pullPicked, pushPicked } = ui;
+	const id = t.plan.targetId;
+	const skippedPush = new Set(t.plan.actions.filter((a) => !pushPicked(a)).map((a) => a.id));
+	// Pressing the title opens the list; with a filter on it first clears the filter, and only a
+	// list showing everything closes.
+	const toggleOpen = (side: Side) =>
+		setOpen((prev) => {
+			const next = new Map(prev);
+			const at = `${id}:${side}`;
+			if (prev.get(at) === "all") {
+				next.delete(at);
+			} else {
+				next.set(at, "all");
+			}
+			return next;
+		});
+	// A count of one kind shows only that kind; pressing it again goes back to all, still open.
+	const pickKind = (kind: PushFilter) =>
+		setOpen((prev) =>
+			new Map(prev).set(`${id}:push`, prev.get(`${id}:push`) === kind ? "all" : kind),
+		);
+	const pushFilter = (open.get(`${id}:push`) ?? "all") as PushFilter;
+	return (
+		<section key={id}>
+			{(multi || t.plan.inSync > 0) && (
+				<div className="flex flex-wrap items-baseline justify-between gap-x-3 px-[var(--diff-inset)] py-2">
+					{multi ? <h3 className="break-words font-semibold text-sm">{t.plan.name}</h3> : <span />}
+					<span className="text-muted-foreground text-xs tabular-nums">
+						{t.plan.inSync.toLocaleString()} already match
+					</span>
+				</div>
+			)}
+			{t.pullError && (
+				<p className="break-words px-[var(--diff-inset)] text-destructive text-sm">{t.pullError}</p>
+			)}
+			<Section
+				icon={<Download />}
+				title="Pull"
+				on={t.pullOn}
+				onToggle={(v) => setSwitched((m) => new Map(m).set(`${id}:pull`, v))}
+				empty={t.missing.length === 0}
+				size={bytes(t.pullSel)}
+				open={open.has(`${id}:pull`)}
+				onOpen={() => toggleOpen("pull")}
+				summary={
+					t.missing.length === 0 ? (
+						<span className="text-muted-foreground text-sm">Nothing to pull</span>
+					) : (
+						<span className="text-sm tabular-nums">
+							<span className="font-medium text-success">+{t.pullSel.length.toLocaleString()}</span>{" "}
+							<span className="text-muted-foreground">
+								of {t.missing.length.toLocaleString()} songs not in your library
+							</span>
+						</span>
+					)
+				}
+			>
+				<PullList
+					missing={t.missing}
+					picked={(f) => pullPicked(id, f)}
+					onToggle={(f) => setPullFlips((s) => flip(s, pullKey(id, f)))}
+					onToggleGroup={(files, on) =>
+						setPullFlips((s) => {
+							let next = s;
+							for (const f of files) {
+								if (pullPicked(id, f) !== on) {
+									next = flip(next, pullKey(id, f));
+								}
+							}
+							return next;
+						})
+					}
+					onOnly={(keep) =>
+						setPullFlips(
+							new Set(
+								t.missing
+									.filter((f) => !f.otherFormat !== keep.includes(f))
+									.map((f) => pullKey(id, f)),
+							),
+						)
+					}
+				/>
+			</Section>
+			<Section
+				icon={<CloudUpload />}
+				title="Push"
+				on={t.pushOn}
+				onToggle={(v) => setSwitched((m) => new Map(m).set(`${id}:push`, v))}
+				empty={t.plan.actions.length === 0 || t.plan.error !== null}
+				size={bytes(t.pushSel.filter((a) => a.kind === "upload" || a.kind === "replace"))}
+				open={open.has(`${id}:push`)}
+				onOpen={() => toggleOpen("push")}
+				summary={
+					t.plan.error ? (
+						<span className="break-words text-destructive text-sm">{t.plan.error}</span>
+					) : t.plan.actions.length === 0 ? (
+						<span className="text-muted-foreground text-sm">Up to date</span>
+					) : (
+						<FilterTally
+							counts={countKinds(t.pushSel)}
+							totals={countKinds(t.plan.actions)}
+							active={(open.get(`${id}:push`) as PushFilter | undefined) ?? null}
+							onPick={pickKind}
+						/>
+					)
+				}
+			>
+				<PushList
+					filter={pushFilter}
+					onShowAll={() => setOpen((prev) => new Map(prev).set(`${id}:push`, "all"))}
+					plan={t.plan}
+					skipped={skippedPush}
+					onToggle={(aid) => setPushFlips((s) => flip(s, aid))}
+					onToggleAll={(aids, on) =>
+						setPushFlips((s) => {
+							let next = s;
+							for (const a of t.plan.actions.filter((x) => aids.includes(x.id))) {
+								if (pushPicked(a) !== on) {
+									next = flip(next, a.id);
+								}
+							}
+							return next;
+						})
+					}
+				/>
+			</Section>
+		</section>
+	);
+}
+
+/** What shows before there is a plan to review, and after the run: loading, errors, the result. */
+function notReady({
+	phase,
+	plan,
+	scanned,
+	progress,
+	onRefresh,
+	onClose,
+	variant,
+}: {
+	phase: Phase;
+	plan: { data?: unknown; isError: boolean; error: unknown };
+	scanned: boolean;
+	progress: PullProgress | null;
+	onRefresh: () => void;
+	onClose: (() => void) | undefined;
+	variant: "drawer" | "panel";
+}): ReactNode {
+	if (phase.step === "done") {
+		return (
+			<SyncResult
+				pulled={phase.pulled}
+				pushed={phase.pushed}
+				variant={variant}
+				onDone={onClose ?? onRefresh}
+			/>
+		);
+	}
+	const error = phase.step === "failed" ? phase.error : plan.isError ? String(plan.error) : null;
+	if (error !== null) {
+		return (
+			<SyncShell variant={variant}>
+				<div className="space-y-3 px-[var(--diff-inset)] py-4">
+					<p className="break-words text-destructive text-sm">{error}</p>
+					<Button variant="outline" className="w-full" onClick={onRefresh}>
+						Try again
+					</Button>
+				</div>
+			</SyncShell>
+		);
+	}
+	if (plan.data) {
+		return null;
+	}
+	return (
+		<SyncShell variant={variant}>
+			<div className="space-y-3 px-[var(--diff-inset)] py-12 text-center text-sm">
+				<Loader2 className="mx-auto size-5 animate-spin text-muted-foreground motion-reduce:animate-none" />
+				<p>{scanned ? "Comparing with your library…" : "Reading the destinations…"}</p>
+				{progress && progress.total > 0 && (
+					<div className="mx-auto max-w-sm">
+						<RunProgress done={progress.done} total={progress.total} current={progress.current} />
+					</div>
+				)}
+			</div>
+		</SyncShell>
+	);
+}
+
+function Gather({
+	ids,
+	mode,
+	variant,
+	onClose,
+	onRefresh,
+}: {
+	ids: number[];
+	mode: SyncMode;
+	variant: "drawer" | "panel";
+	onClose: (() => void) | undefined;
+	onRefresh: () => void;
 }) {
 	const queryClient = useQueryClient();
 	const scans = useQueries({
@@ -171,63 +430,64 @@ export function SyncSummary({
 		};
 	}, []);
 
-	if (phase.step === "done") {
-		return <Done pulled={phase.pulled} pushed={phase.pushed} onDone={onClose} />;
-	}
-	if (phase.step === "failed") {
-		return (
-			<div className="space-y-3">
-				<p className="break-words text-destructive text-sm">{phase.error}</p>
-				<Button variant="outline" className="w-full" onClick={onClose}>
-					Close
-				</Button>
-			</div>
-		);
-	}
-	if (plan.isError) {
-		return (
-			<div className="space-y-3">
-				<p className="break-words text-destructive text-sm">{String(plan.error)}</p>
-				<Button variant="outline" className="w-full" onClick={onClose}>
-					Close
-				</Button>
-			</div>
-		);
-	}
-	if (!plan.data) {
-		return (
-			<div className="space-y-3 py-12 text-center text-sm">
-				<Loader2 className="mx-auto size-5 animate-spin text-muted-foreground motion-reduce:animate-none" />
-				<p>Comparing with your library…</p>
-				{progress && progress.total > 0 && (
-					<div className="mx-auto max-w-sm space-y-1">
-						<ProgressBar done={progress.done} total={progress.total} />
-						<p className="truncate text-muted-foreground text-xs">{progress.current}</p>
-					</div>
-				)}
-			</div>
-		);
+	// What the user changed from the defaults: switches, ticks and which lists are open.
+	const [switched, setSwitched] = useState<ReadonlyMap<string, boolean>>(new Map());
+	const [pullFlips, setPullFlips] = useState<ReadonlySet<string>>(new Set());
+	const [pushFlips, setPushFlips] = useState<ReadonlySet<number>>(new Set());
+	const [open, setOpen] = useState<ReadonlyMap<string, string>>(new Map());
+	const [understood, setUnderstood] = useState(false);
+
+	const isOn = (id: number, side: Side) =>
+		switched.get(`${id}:${side}`) ?? (mode === "both" || mode === side);
+	// Songs that only exist here in another format, and opt-in changes such as deletes, start unticked.
+	const pullPicked = (id: number, f: RemoteFile) =>
+		!f.otherFormat !== pullFlips.has(pullKey(id, f));
+	const pushPicked = (a: SyncAction) => !a.optional !== pushFlips.has(a.id);
+
+	const early = notReady({ phase, plan, scanned, progress, onRefresh, onClose, variant });
+	if (early || !plan.data) {
+		return early;
 	}
 
 	const planId = plan.data.id;
-	const summaries = plan.data.targets.map((t) => {
+	const targets = plan.data.targets.map((t: TargetPlan) => {
 		const scan = scans[ids.indexOf(t.targetId)];
-		return summarize(t, scan?.data?.missing, scan?.error);
+		const missing = scan?.data?.missing ?? [];
+		const pullOn = isOn(t.targetId, "pull");
+		const pushOn = isOn(t.targetId, "push") && !t.error;
+		const pullSel = missing.filter((f) => pullPicked(t.targetId, f));
+		const pushSel = t.actions.filter(pushPicked);
+		return {
+			plan: t,
+			missing,
+			pullError: scan?.error ? String(scan.error) : null,
+			pullOn,
+			pushOn,
+			pullSel,
+			pull: pullOn ? pullSel : [],
+			pushSel,
+			push: pushOn ? pushSel : [],
+		};
 	});
-	const pulls = summaries.filter((s) => s.pull.length > 0 && !s.plan.error);
-	const pushIds = summaries.filter((s) => !s.plan.error).flatMap((s) => s.push.map((a) => a.id));
-	const total = pulls.reduce((n, s) => n + s.pull.length, 0) + pushIds.length;
+	const pulls = targets.filter((t) => t.pull.length > 0);
+	const pushIds = targets.flatMap((t) => t.push.map((a) => a.id));
+	const pushed = targets.flatMap((t) => t.push);
+	const removing = pushed.filter((a) => a.kind === "delete").length;
+	const remoteFiles = targets
+		.filter((t) => t.push.some((a) => a.kind === "delete"))
+		.reduce((n, t) => n + t.plan.remoteTotal, 0);
+	const total = pulls.reduce((n, t) => n + t.pull.length, 0) + pushIds.length;
 	const busy = phase.step !== "review";
 
 	const run = async () => {
 		try {
 			setPhase({ step: "pulling" });
 			const pulled: PullOutcome[] = [];
-			for (const s of pulls) {
+			for (const t of pulls) {
 				pulled.push(
 					await remotePull(
-						s.plan.targetId,
-						s.pull.map((f) => f.rel),
+						t.plan.targetId,
+						t.pull.map((f) => f.rel),
 					),
 				);
 			}
@@ -236,40 +496,93 @@ export function SyncSummary({
 				await queryClient.invalidateQueries({ queryKey: ["library-status"] });
 			}
 			setPhase({ step: "pushing" });
-			const pushed =
+			const result =
 				pushIds.length > 0 ? await apply.mutateAsync({ planId, actionIds: pushIds }) : [];
-			setPhase({ step: "done", pulled, pushed });
+			setPhase({ step: "done", pulled, pushed: result });
 		} catch (e) {
 			setPhase({ step: "failed", error: String(e) });
 		}
 	};
 
 	return (
-		<div className="space-y-4">
-			<div className="space-y-2">
-				{summaries.map((s) => (
-					<TargetBlock key={s.plan.targetId} s={s} />
-				))}
-			</div>
-			<div className="sticky -bottom-4 z-20 -mx-4 -mb-4 space-y-3 border-t bg-background px-4 pt-3 pb-4">
-				<RunStatus phase={phase} pulling={progress} />
-				<div className="flex flex-wrap gap-2">
-					<Button variant="ghost" onClick={onReviewSteps} disabled={busy}>
-						Review each step
-					</Button>
-					<span className="flex-1" />
-					<Button variant="outline" onClick={onClose} disabled={busy}>
-						{total === 0 ? "Close" : "Cancel"}
-					</Button>
-					{total > 0 && (
-						<Button onClick={() => void run()} disabled={busy}>
+		<SyncShell
+			variant={variant}
+			footer={
+				<>
+					<DeleteGuard
+						removing={removing}
+						remoteFiles={remoteFiles}
+						understood={understood}
+						onChange={setUnderstood}
+					/>
+					<div className="space-y-1.5">
+						<div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+							<Tally
+								items={[
+									{
+										tone: "add",
+										label: "to pull",
+										count: pulls.reduce((n, t) => n + t.pull.length, 0),
+									},
+									...KINDS.map((k) => ({
+										tone: LABEL[k].tone,
+										label: LABEL[k].label.toLowerCase(),
+										count: pushed.filter((a) => a.kind === k).length,
+									})),
+								]}
+								empty="Nothing selected"
+							/>
+							<span className="text-muted-foreground text-xs tabular-nums">
+								{formatBytes(
+									bytes(pulls.flatMap((t) => t.pull)) +
+										bytes(pushed.filter((a) => a.kind === "upload" || a.kind === "replace")),
+								)}
+							</span>
+						</div>
+						<ChangeBar
+							parts={[
+								{ tone: "add", count: pulls.reduce((n, t) => n + t.pull.length, 0) },
+								...KINDS.map((k) => ({
+									tone: LABEL[k].tone,
+									count: pushed.filter((a) => a.kind === k).length,
+								})),
+							]}
+						/>
+					</div>
+					<RunStatus phase={phase} pulling={progress} />
+					<div className="flex gap-2">
+						<Button variant="outline" onClick={onRefresh} disabled={busy}>
+							Refresh
+						</Button>
+						{onClose && (
+							<Button variant="outline" onClick={onClose} disabled={busy}>
+								Close
+							</Button>
+						)}
+						<Button
+							className="flex-1"
+							onClick={() => void run()}
+							disabled={busy || total === 0 || (removing > 0 && !understood)}
+						>
 							<RefreshCw className={busy ? "animate-spin motion-reduce:animate-none" : ""} />
 							{busy ? "Syncing…" : `Sync ${total.toLocaleString()} changes`}
 						</Button>
-					)}
-				</div>
+					</div>
+				</>
+			}
+		>
+			<div>
+				{targets.map((t) => (
+					<TargetBlock
+						key={t.plan.targetId}
+						t={t}
+						multi={ids.length > 1}
+						open={open}
+						ui={{ setOpen, setSwitched, setPullFlips, setPushFlips, pullPicked, pushPicked }}
+					/>
+				))}
 			</div>
-		</div>
+		</SyncShell>
 	);
 }
 
@@ -290,48 +603,5 @@ function RunStatus({ phase, pulling }: { phase: Phase; pulling: PullProgress | n
 	if (total === 0) {
 		return null;
 	}
-	return (
-		<div className="space-y-1">
-			<ProgressBar done={done} total={total} />
-			<p className="truncate text-muted-foreground text-xs">{current}</p>
-		</div>
-	);
-}
-
-function Done({
-	pulled,
-	pushed,
-	onDone,
-}: {
-	pulled: PullOutcome[];
-	pushed: ApplySummary[];
-	onDone: () => void;
-}) {
-	const failed = pulled.flatMap((p) => p.failed);
-	return (
-		<div className="space-y-6">
-			{pulled.length > 0 && (
-				<div className="space-y-2">
-					<h3 className="font-semibold text-xl tracking-tight">Pull</h3>
-					<Tally
-						items={[
-							{ tone: "add", label: "pulled", count: pulled.reduce((n, p) => n + p.pulled, 0) },
-							{
-								tone: "remove",
-								label: "failed",
-								count: pulled.reduce((n, p) => n + p.failedTotal, 0),
-							},
-						]}
-						empty="Nothing pulled"
-					/>
-					{failed.map((m) => (
-						<p key={m} className="break-all text-destructive text-xs">
-							{m}
-						</p>
-					))}
-				</div>
-			)}
-			<PushResult results={pushed} onDone={onDone} />
-		</div>
-	);
+	return <RunProgress done={done} total={total} current={current} />;
 }

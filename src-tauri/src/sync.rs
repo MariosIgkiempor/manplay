@@ -308,20 +308,15 @@ struct Matched<'a> {
     deletes: Vec<(&'a Remote, Option<String>)>,
     /// Uploads not replaced by a move.
     uploads: Vec<&'a Item>,
-    /// Track id of an upload -> destination path that already holds the same audio, put there by
-    /// someone else (the library has no record of it).
-    duplicates: HashMap<i64, &'a Remote>,
 }
 
-/// Pairs each extra whose audio equals a pending upload (one-to-one). If the library knows the
-/// extra's path it is our own file under an old name and is renamed. Otherwise someone else put
-/// it there: it stays untouched and the upload is flagged as a duplicate instead of renaming
-/// their file. `extras` holds each file's fingerprint, if it could be read.
+/// Pairs each extra whose audio equals a pending upload (one-to-one) and renames it to the
+/// library's path, whoever put it there. `extras` holds each file's fingerprint, if it could be
+/// read.
 fn pair<'a>(
     items: &'a [Item],
     uploads: &[&'a Item],
     extras: &[(&'a Remote, Option<String>)],
-    is_mine: &dyn Fn(&Remote) -> bool,
 ) -> Matched<'a> {
     let mut wanting: HashMap<&str, Vec<&'a Item>> = HashMap::new();
     for item in uploads {
@@ -338,7 +333,6 @@ fn pair<'a>(
         moves: Vec::new(),
         deletes: Vec::new(),
         uploads: Vec::new(),
-        duplicates: HashMap::new(),
     };
     for (file, print) in extras {
         let Some(fp) = print else {
@@ -347,12 +341,8 @@ fn pair<'a>(
             continue;
         };
         if let Some(item) = wanting.get_mut(fp.as_str()).and_then(Vec::pop) {
-            if is_mine(file) {
-                moved.insert(item.track_id);
-                out.moves.push((file, item));
-            } else {
-                out.duplicates.insert(item.track_id, file);
-            }
+            moved.insert(item.track_id);
+            out.moves.push((file, item));
         } else {
             let note = known
                 .get(fp.as_str())
@@ -467,13 +457,11 @@ pub async fn plan_target(
         .iter()
         .map(|r| (*r, by_rel.get(r.rel.as_slice()).cloned().flatten()))
         .collect();
-    let matched = pair(items, &d.uploads, &extras, &|r| known.contains_key(&r.rel));
+    let matched = pair(items, &d.uploads, &extras);
 
     let mut push =
         |kind, rel: &[String], from, size, remote_size, note, track_id: Option<i64>, local| {
             let optional = kind == Kind::Delete
-                || (kind == Kind::Upload
-                    && track_id.is_some_and(|t| matched.duplicates.contains_key(&t)))
                 || (kind == Kind::Replace
                     && track_id.is_some_and(|t| retag.get(&t).is_some_and(|c| !c.edited_here)));
             let id = *next_id;
@@ -508,17 +496,13 @@ pub async fn plan_target(
         );
     }
     for item in &matched.uploads {
-        let note = matched
-            .duplicates
-            .get(&item.track_id)
-            .map(|r| format!("Already there as {}", r.rel.join("/")));
         push(
             Kind::Upload,
             &item.rel,
             None,
             item.size,
             None,
-            note,
+            None,
             Some(item.track_id),
             Some(item.local.clone()),
         );
@@ -1532,25 +1516,21 @@ mod tests {
         let items = [item(1, "new/song.wav", 10, Some("fp1"))];
         let up: Vec<&Item> = items.iter().collect();
         let old = remote("old/track.wav", 10);
-        let m = pair(&items, &up, &[(&old, Some("fp1".to_owned()))], &|_| true);
+        let m = pair(&items, &up, &[(&old, Some("fp1".to_owned()))]);
         assert_eq!(m.moves.len(), 1);
         assert!(m.deletes.is_empty());
         assert!(m.uploads.is_empty());
     }
 
     #[test]
-    fn someone_elses_copy_is_kept_and_the_upload_is_flagged_not_renamed() {
+    fn someone_elses_copy_is_renamed_to_the_library_path() {
         let items = [item(1, "mine/song.wav", 10, Some("fp"))];
         let up: Vec<&Item> = items.iter().collect();
         let theirs = remote("theirs/track.wav", 10);
-        let m = pair(&items, &up, &[(&theirs, Some("fp".to_owned()))], &|_| false);
-        assert!(m.moves.is_empty());
+        let m = pair(&items, &up, &[(&theirs, Some("fp".to_owned()))]);
+        assert_eq!(m.moves.len(), 1);
         assert!(m.deletes.is_empty());
-        assert_eq!(m.uploads.len(), 1);
-        assert_eq!(
-            m.duplicates.get(&1).map(|r| r.rel.clone()),
-            Some(rel("theirs/track.wav"))
-        );
+        assert!(m.uploads.is_empty());
     }
 
     #[test]
@@ -1561,7 +1541,7 @@ mod tests {
         ];
         let up: Vec<&Item> = items.iter().collect();
         let old = remote("old.wav", 10);
-        let m = pair(&items, &up, &[(&old, Some("fp".to_owned()))], &|_| true);
+        let m = pair(&items, &up, &[(&old, Some("fp".to_owned()))]);
         assert_eq!(m.moves.len(), 1);
         assert_eq!(m.uploads.len(), 1);
     }
@@ -1570,7 +1550,7 @@ mod tests {
     fn extra_matching_an_already_synced_file_is_a_noted_delete() {
         let items = [item(1, "a.wav", 10, Some("fp"))];
         let old = remote("copy.wav", 10);
-        let m = pair(&items, &[], &[(&old, Some("fp".to_owned()))], &|_| true);
+        let m = pair(&items, &[], &[(&old, Some("fp".to_owned()))]);
         assert!(m.moves.is_empty());
         assert_eq!(m.deletes.len(), 1);
         assert_eq!(m.deletes[0].1.as_deref(), Some("Duplicate of a.wav"));
@@ -1581,7 +1561,7 @@ mod tests {
         let items = [item(1, "a.wav", 10, Some("fp"))];
         let audio = remote("x.mp3", 10);
         let art = remote("cover.jpg", 10);
-        let m = pair(&items, &[], &[(&audio, None), (&art, None)], &|_| true);
+        let m = pair(&items, &[], &[(&audio, None), (&art, None)]);
         assert_eq!(m.deletes[0].1.as_deref(), Some("Not compared"));
         assert_eq!(m.deletes[1].1, None);
     }

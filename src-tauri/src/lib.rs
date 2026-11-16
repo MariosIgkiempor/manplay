@@ -3469,11 +3469,9 @@ mod tests {
         let later = unix_now() + GRACE_SECS + 10;
         purge_expired(&f.conn, &f.dir.join("backups"), later).expect("purge");
         assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
-        let victims = db::expired_synced(&f.conn, target, later - GRACE_SECS).expect("victims");
-        assert_eq!(victims.len(), 1);
 
         // Once the remote copy is deleted, the track record can go.
-        db::record_run(&mut f.conn, &record, &[], &[victims[0].0]).expect("run");
+        db::record_run(&mut f.conn, &record, &[], &[ids[0]]).expect("run");
         purge_expired(&f.conn, &f.dir.join("backups"), later).expect("purge");
         assert_eq!(db::missing_count(&f.conn).expect("count"), 0);
     }

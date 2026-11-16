@@ -3,18 +3,101 @@ import type { ReactNode } from "react";
 /** The look of one kind of change in a diff: add, change, move or remove. */
 export type Tone = "add" | "change" | "move" | "remove";
 
-export const TONE: Record<Tone, { sign: string; row: string; text: string }> = {
-	add: { sign: "+", row: "bg-success/10", text: "text-success" },
-	change: { sign: "~", row: "bg-warning/10", text: "text-warning" },
-	move: { sign: "→", row: "bg-move/10", text: "text-move" },
-	remove: { sign: "−", row: "bg-destructive/10", text: "text-destructive" },
+export const TONE: Record<Tone, { sign: string; row: string; text: string; bar: string }> = {
+	add: { sign: "+", row: "bg-success/10", text: "text-success", bar: "bg-success" },
+	change: { sign: "~", row: "bg-warning/10", text: "text-warning", bar: "bg-warning" },
+	move: { sign: "→", row: "bg-move/10", text: "text-move", bar: "bg-move" },
+	remove: { sign: "−", row: "bg-destructive/10", text: "text-destructive", bar: "bg-destructive" },
 };
+
+/** The bar pinned to the bottom of a review drawer: totals, progress and the buttons. */
+export const REVIEW_FOOTER =
+	"sticky -bottom-4 z-20 -mx-4 -mb-4 space-y-3 border-t bg-background px-4 pt-3 pb-4";
+
+/** A thin bar split by how much of each kind of change is about to happen. */
+export function ChangeBar({ parts }: { parts: readonly { tone: Tone; count: number }[] }) {
+	const shown = parts.filter((p) => p.count > 0);
+	if (shown.length === 0) {
+		return null;
+	}
+	return (
+		<div aria-hidden="true" className="flex h-1 gap-px overflow-hidden rounded-full bg-muted">
+			{shown.map((p) => (
+				<div key={p.tone} className={TONE[p.tone].bar} style={{ flexGrow: p.count }} />
+			))}
+		</div>
+	);
+}
+
+/** Progress of a running step with the file it is on. */
+export function RunProgress({
+	done,
+	total,
+	current,
+}: {
+	done: number;
+	total: number;
+	current?: string | undefined;
+}) {
+	if (total === 0) {
+		return null;
+	}
+	return (
+		<div className="space-y-1">
+			<ProgressBar done={done} total={total} />
+			<p className="flex justify-between gap-3 text-muted-foreground text-xs">
+				<span className="min-w-0 truncate">{current}</span>
+				<span className="shrink-0 tabular-nums">
+					{done.toLocaleString()} of {total.toLocaleString()}
+				</span>
+			</p>
+		</div>
+	);
+}
+
+const TOKENS = /(\/|\s+)/;
+
+/**
+ * A renamed file's path as an inline diff: what stays is muted, what the rename removes is struck
+ * in red and what it adds is green, compared piece by piece (folder, word, separator).
+ */
+export function PathDiff({ from, to }: { from: string; to: string }) {
+	const a = from.split(TOKENS).filter(Boolean);
+	const b = to.split(TOKENS).filter(Boolean);
+	let head = 0;
+	while (head < a.length && head < b.length && a[head] === b[head]) {
+		head++;
+	}
+	let tail = 0;
+	while (
+		tail < a.length - head &&
+		tail < b.length - head &&
+		a[a.length - 1 - tail] === b[b.length - 1 - tail]
+	) {
+		tail++;
+	}
+	const removed = a.slice(head, a.length - tail).join("");
+	const added = b.slice(head, b.length - tail).join("");
+	return (
+		<span className="block break-words font-mono text-[0.85em] leading-relaxed">
+			<span>{a.slice(0, head).join("")}</span>
+			{removed && (
+				<del className="rounded-sm bg-destructive/15 text-destructive decoration-destructive/60">
+					{removed}
+				</del>
+			)}
+			{added && <ins className="rounded-sm bg-success/15 text-success no-underline">{added}</ins>}
+			<span>{a.slice(a.length - tail).join("")}</span>
+		</span>
+	);
+}
 
 /**
  * Every diff row and folder header shares these columns, so checkboxes, signs, names and sizes
  * line up down the whole list: checkbox | sign | name | size.
  */
-const GRID = "grid grid-cols-[1rem_0.75rem_minmax(0,1fr)_auto] items-baseline gap-x-2.5 px-3";
+const GRID =
+	"grid grid-cols-[1rem_0.75rem_minmax(0,1fr)_auto] items-baseline gap-x-2.5 px-[var(--diff-inset,0.75rem)]";
 
 function Sign({ tone }: { tone: Tone }) {
 	return (
@@ -125,9 +208,9 @@ export function DiffRow({
 						{detail}
 					</span>
 				)}
-				{extra && <span className="mt-1 block">{extra}</span>}
 			</span>
 			<span className="text-right text-muted-foreground text-xs tabular-nums">{aside}</span>
+			{extra && <span className="col-start-3 col-end-5 mt-1 block">{extra}</span>}
 		</label>
 	);
 }
@@ -158,6 +241,7 @@ export function DiffHunk({
 	onToggleAll,
 	tallies,
 	disabled,
+	flush,
 	children,
 }: {
 	dir: string;
@@ -166,13 +250,15 @@ export function DiffHunk({
 	onToggleAll: (on: boolean) => void;
 	tallies: readonly { tone: Tone; count: number }[];
 	disabled?: boolean;
+	/** Runs edge to edge: no card around the folder, just rules above and below. */
+	flush?: boolean;
 	children: ReactNode;
 }) {
 	const shown = tallies.filter((t) => t.count > 0);
 	return (
-		<section className="overflow-clip rounded-lg border">
+		<section className={flush ? "border-b last:border-b-0" : "overflow-clip rounded-lg border"}>
 			<label
-				className={`${GRID} sticky -top-4 z-10 cursor-pointer border-b bg-card py-2 text-sm has-disabled:cursor-default`}
+				className={`${GRID} sticky top-[calc(var(--sync-top,-1rem)+var(--sync-head,0rem))] z-10 cursor-pointer border-b bg-card py-2 text-sm has-disabled:cursor-default`}
 			>
 				<input
 					type="checkbox"

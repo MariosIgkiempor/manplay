@@ -6,6 +6,7 @@ import {
 	KeyRound,
 	LockKeyhole,
 	Network,
+	RefreshCw,
 	Settings2,
 	Trash2,
 } from "lucide-react";
@@ -21,7 +22,7 @@ import { HistoryList } from "#/components/history-list.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
-import { PullButton, PushButton, SyncButton } from "#/components/sync-flow.tsx";
+import { SyncPanel } from "#/components/sync-summary.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
@@ -193,8 +194,8 @@ function SettingsForm({ target, children }: { target: SyncTarget; children?: Rea
 /** Removing the destination, as the last settings row. */
 function RemoveRow({ target, onRemoved }: { target: SyncTarget; onRemoved: () => void }) {
 	const queryClient = useQueryClient();
-	const busy = useSyncProgress().size > 0;
 	const [confirming, setConfirming] = useState(false);
+	const busy = useSyncProgress().size > 0;
 	const remove = useMutation({
 		mutationFn: removeSyncTarget,
 		onSuccess: async () => {
@@ -245,15 +246,14 @@ function RemoveRow({ target, onRemoved }: { target: SyncTarget; onRemoved: () =>
 	);
 }
 
-type Tab = "history" | "settings";
+type Tab = "sync" | "history" | "settings";
 
 /** One machine/folder or bucket/folder: what it holds, its settings and its own sync history. */
 export function TargetDetail({ id, onRemoved }: { id: number; onRemoved: () => void }) {
 	const targets = useSyncTargets();
 	const history = useSyncHistory();
 	const tracks = useTracks();
-	const busy = useSyncProgress().size > 0;
-	const [tab, setTab] = useState<Tab>("history");
+	const [tab, setTab] = useState<Tab>("sync");
 	const target = targets.data?.find((t) => t.id === id);
 	if (!target) {
 		return null;
@@ -262,7 +262,7 @@ export function TargetDetail({ id, onRemoved }: { id: number; onRemoved: () => v
 	const total = tracks.data?.length ?? 0;
 	const where = target.path.join(" / ") || "Bucket root";
 	return (
-		<div className="space-y-5 pb-6">
+		<div className="flex h-full min-h-0 flex-col gap-5">
 			<DestinationHeader
 				brand={r2 ? "cloudflare" : "tailscale"}
 				kind={
@@ -285,13 +285,6 @@ export function TargetDetail({ id, onRemoved }: { id: number; onRemoved: () => v
 						<FolderFigure path={where} />
 					</>
 				}
-				actions={
-					<>
-						<SyncButton ids={[target.id]} disabled={busy} />
-						<PullButton ids={[target.id]} disabled={busy} />
-						<PushButton ids={[target.id]} variant="outline" disabled={busy} />
-					</>
-				}
 				tabs={
 					<Segmented
 						className="border-b-0"
@@ -299,21 +292,31 @@ export function TargetDetail({ id, onRemoved }: { id: number; onRemoved: () => v
 						onChange={setTab}
 						label="Destination view"
 						items={[
+							{ value: "sync", label: "Sync", icon: <RefreshCw /> },
 							{ value: "history", label: "History", icon: <History /> },
 							{ value: "settings", label: "Settings", icon: <Settings2 /> },
 						]}
 					/>
 				}
 			/>
-			{tab === "history" ? (
-				<HistoryList
-					entries={syncEntries((history.data ?? []).filter((r) => r.targetId === id))}
-					empty="Never synced."
-				/>
+			{tab === "sync" ? (
+				<div className="min-h-0 flex-1">
+					<SyncPanel key={id} ids={[id]} variant="panel" />
+				</div>
 			) : (
-				<SettingsForm key={id} target={target}>
-					<RemoveRow target={target} onRemoved={onRemoved} />
-				</SettingsForm>
+				<div className="min-h-0 flex-1 overflow-y-auto pb-6">
+					{tab === "history" ? (
+						<HistoryList
+							entries={syncEntries((history.data ?? []).filter((r) => r.targetId === id))}
+							empty="Never synced."
+							titled={false}
+						/>
+					) : (
+						<SettingsForm key={id} target={target}>
+							<RemoveRow target={target} onRemoved={onRemoved} />
+						</SettingsForm>
+					)}
+				</div>
 			)}
 		</div>
 	);

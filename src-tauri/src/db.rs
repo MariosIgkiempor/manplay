@@ -1630,20 +1630,6 @@ pub fn expire_missing_now(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
-/// Synced copies of tracks that have been missing since `cutoff` or earlier.
-pub fn expired_synced(
-    conn: &Connection,
-    target_id: i64,
-    cutoff: i64,
-) -> Result<Vec<(i64, String)>, Error> {
-    let mut stmt = conn.prepare(
-        "SELECT t.id, t.path FROM synced_files sf JOIN tracks t ON t.id = sf.track_id
-         WHERE sf.target_id = ?1 AND t.missing_since IS NOT NULL AND t.missing_since <= ?2",
-    )?;
-    let rows = stmt.query_map(params![target_id, cutoff], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
-}
-
 const PURGEABLE: &str = "missing_since IS NOT NULL AND missing_since <= ?1
     AND NOT EXISTS (SELECT 1 FROM synced_files sf WHERE sf.track_id = tracks.id)";
 

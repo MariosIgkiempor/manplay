@@ -1,9 +1,8 @@
 import { CloudUpload, Download, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Drawer } from "#/components/drawer.tsx";
-import { PullReview } from "#/components/pull-review.tsx";
-import { ReviewBody } from "#/components/sync-review.tsx";
-import { SyncSummary } from "#/components/sync-summary.tsx";
+import { PageHeader } from "#/components/page-header.tsx";
+import { SyncPanel } from "#/components/sync-summary.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { type SyncKind, useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
@@ -14,29 +13,6 @@ interface Props {
 	size?: "sm" | "default";
 	variant?: "default" | "outline";
 	disabled?: boolean;
-}
-
-/** Walks through the pulls of each destination in turn, then calls `onDone`. */
-function PullSteps({ ids, onDone }: { ids: number[]; onDone: () => void }) {
-	const [step, setStep] = useState(0);
-	const id = ids[step];
-	if (id === undefined) {
-		return null;
-	}
-	return (
-		<div className="space-y-3">
-			{ids.length > 1 && (
-				<p className="text-muted-foreground text-xs">
-					Destination {step + 1} of {ids.length}
-				</p>
-			)}
-			<PullReview
-				key={id}
-				targetId={id}
-				onDone={() => (step + 1 < ids.length ? setStep(step + 1) : onDone())}
-			/>
-		</div>
-	);
 }
 
 function useIds(ids: number[] | undefined) {
@@ -58,35 +34,6 @@ export function PullButton({ ids, size, variant = "outline", disabled }: Props) 
 		>
 			<Download /> Review pull
 		</Button>
-	);
-}
-
-/** A summary of both steps first; from there, run them or review each one in detail. */
-function SyncFlow({ ids, onClose }: { ids: number[]; onClose: () => void }) {
-	const [detailed, setDetailed] = useState(false);
-	return detailed ? (
-		<SyncSteps ids={ids} onClose={onClose} />
-	) : (
-		<SyncSummary ids={ids} onReviewSteps={() => setDetailed(true)} onClose={onClose} />
-	);
-}
-
-/** Pull first (it changes the library), then review the push against the updated library. */
-function SyncSteps({ ids, onClose }: { ids: number[]; onClose: () => void }) {
-	const [pulled, setPulled] = useState(false);
-	if (!pulled) {
-		return (
-			<div className="space-y-4">
-				<p className="text-muted-foreground text-xs">Step 1 of 2: pull. Step 2 reviews the push.</p>
-				<PullSteps ids={ids} onDone={() => setPulled(true)} />
-			</div>
-		);
-	}
-	return (
-		<div className="space-y-4">
-			<p className="text-muted-foreground text-xs">Step 2 of 2: push.</p>
-			<ReviewBody ids={ids} onClose={onClose} />
-		</div>
 	);
 }
 
@@ -127,7 +74,7 @@ export function PushButton({
 			size={size}
 			variant={variant}
 			disabled={disabled}
-			title="See what will be sent, renamed or deleted before anything changes."
+			title="See what will be sent, moved or deleted before anything changes."
 			onClick={() => start("push", ids)}
 		>
 			<CloudUpload /> {label}
@@ -135,25 +82,60 @@ export function PushButton({
 	);
 }
 
+const ABOUT: Record<SyncKind, string> = {
+	sync: "Pull what your library is missing, then push your changes.",
+	pull: "Copy songs your library is missing. A pull never deletes.",
+	push: "Send, move and change files on destinations.",
+};
+
+/** The page header every other panel has: icon tile, title and a line on what this run does. */
+function SyncHeader({ kind }: { kind: SyncKind }) {
+	return (
+		<PageHeader
+			variant="plain"
+			art={
+				<div className="grid size-16 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary ring-1 ring-primary/20 [&_svg]:size-7">
+					<RefreshCw />
+				</div>
+			}
+			title="Sync with destinations"
+			subtitle={ABOUT[kind]}
+		/>
+	);
+}
+
 /**
- * The slide-overs for the pull, push and sync reviews. Mounted once beside the page, so any
- * button (the sidebar's included) can open them.
+ * The slide-over for syncing every destination, or the ones a button names. One panel with a
+ * switch for each pull and push; the buttons only decide which start switched on.
  */
 export function SyncDrawers() {
 	const { request, close } = useSyncActions();
 	const all = useIds(request?.ids);
-	const open = (kind: SyncKind) => request?.kind === kind;
+	// Keep the last kind while the drawer slides out.
+	const [last, setLast] = useState<SyncKind>("sync");
+	useEffect(() => {
+		if (request) {
+			setLast(request.kind);
+		}
+	}, [request]);
+	const kind = request?.kind ?? last;
 	return (
-		<>
-			<Drawer open={open("pull")} onClose={close} title="Review pull" width="w-[44rem]">
-				{request && <PullSteps key={request.session} ids={all} onDone={close} />}
-			</Drawer>
-			<Drawer open={open("push")} onClose={close} title="Review push" width="w-[44rem]">
-				{request && <ReviewBody key={request.session} ids={request.ids} onClose={close} />}
-			</Drawer>
-			<Drawer open={open("sync")} onClose={close} title="Sync" width="w-[44rem]">
-				{request && <SyncFlow key={request.session} ids={all} onClose={close} />}
-			</Drawer>
-		</>
+		<Drawer
+			open={request !== null}
+			onClose={close}
+			title="Sync"
+			width="w-[44rem]"
+			header={<SyncHeader kind={kind} />}
+			bare
+		>
+			{request && (
+				<SyncPanel
+					key={request.session}
+					ids={all}
+					mode={request.kind === "sync" ? "both" : request.kind}
+					onClose={close}
+				/>
+			)}
+		</Drawer>
 	);
 }

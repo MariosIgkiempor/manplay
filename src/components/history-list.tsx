@@ -1,9 +1,20 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, CircleAlert, CircleCheck, CircleX, Clock, X } from "lucide-react";
+import {
+	ArrowUp,
+	Check,
+	ChevronRight,
+	CircleAlert,
+	CircleCheck,
+	CircleX,
+	Clock,
+	type LucideIcon,
+	Trash2,
+	TriangleAlert,
+	X,
+} from "lucide-react";
 import { useState } from "react";
-import { Drawer } from "#/components/drawer.tsx";
+import { FailureList } from "#/components/failure-list.tsx";
 import { EmptyState } from "#/components/page.tsx";
-import { Badge } from "#/components/ui/badge.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { dismissActivity, dismissSyncRuns } from "#/lib/api.ts";
 import { duration, timeAgo } from "#/lib/format.ts";
@@ -14,14 +25,9 @@ import { cn } from "#/lib/utils.ts";
 const COLLAPSED_ROWS = 10;
 
 const STATUS = {
-	ok: { Icon: CircleCheck, tone: "text-success", bg: "bg-success/10", label: "Completed" },
-	partial: {
-		Icon: CircleAlert,
-		tone: "text-warning",
-		bg: "bg-warning/10",
-		label: "Completed with errors",
-	},
-	failed: { Icon: CircleX, tone: "text-destructive", bg: "bg-destructive/10", label: "Failed" },
+	ok: { Icon: CircleCheck, tone: "text-success", label: "Completed" },
+	partial: { Icon: CircleAlert, tone: "text-warning", label: "Completed with errors" },
+	failed: { Icon: CircleX, tone: "text-destructive", label: "Failed" },
 } as const satisfies Record<Status, unknown>;
 
 /** Plain-language cause for the most common failures. */
@@ -46,41 +52,79 @@ function hint(error: string): string | null {
 	return null;
 }
 
-/** Result chips; zero counts are hidden except failures. */
-function Stats({ stats }: { stats: readonly Stat[] }) {
-	const shown = stats.filter((s) => s.n > 0);
+/** The colour of a figure by what it counts: things done, things left alone, things lost. */
+function toneOf(stat: Stat): string {
+	if (stat.bad) {
+		return "text-destructive";
+	}
+	if (/removed|deleted/.test(stat.label)) {
+		return "text-destructive";
+	}
+	if (/up to date|skipped|already/.test(stat.label)) {
+		return "text-muted-foreground";
+	}
+	return "text-success";
+}
+
+const isQuiet = (s: Stat) => toneOf(s) === "text-muted-foreground";
+
+/** An icon for what a count counts, so a row reads at a glance; the words are in the tooltip. */
+function iconOf(stat: Stat): LucideIcon | null {
+	if (stat.bad) {
+		return TriangleAlert;
+	}
+	if (/removed|deleted/.test(stat.label)) {
+		return Trash2;
+	}
+	if (/up to date|skipped|already/.test(stat.label)) {
+		return Check;
+	}
+	return ArrowUp;
+}
+
+/**
+ * The counts of a run on one line, zero ones left out. In a row only what changed shows, as an
+ * icon and a number; the details list everything with the words, quiet counts included.
+ */
+function Figures({ stats, all = false }: { stats: readonly Stat[]; all?: boolean }) {
+	const shown = stats.filter((s) => s.n > 0 && (all ? true : !isQuiet(s)));
+	if (shown.length === 0) {
+		return <span className="text-muted-foreground text-xs">Nothing changed</span>;
+	}
 	return (
-		<div className="flex flex-wrap items-center gap-1.5">
-			{shown.map((s) =>
-				s.bad ? (
-					<Badge key={s.label} variant="destructive" className="h-6 px-2.5 tabular-nums">
-						<span className="font-semibold">{s.n.toLocaleString()}</span> {s.label}
-					</Badge>
-				) : (
-					<Badge key={s.label} variant="secondary" className="h-6 px-2.5 font-normal tabular-nums">
-						<span className="font-medium">{s.n.toLocaleString()}</span> {s.label}
-					</Badge>
-				),
-			)}
-			{shown.length === 0 && <span className="text-muted-foreground text-xs">Nothing to do</span>}
-		</div>
+		<span className="flex items-center gap-x-3 whitespace-nowrap text-xs tabular-nums">
+			{shown.map((s) => {
+				const Icon = iconOf(s);
+				return (
+					<span
+						key={s.label}
+						title={`${s.n.toLocaleString()} ${s.label}`}
+						className="inline-flex items-center gap-1"
+					>
+						{!all && Icon && <Icon aria-hidden="true" className={cn("size-3.5", toneOf(s))} />}
+						<span className={cn("font-medium", toneOf(s))}>{s.n.toLocaleString()}</span>
+						{all && <span className="text-muted-foreground">{s.label}</span>}
+						{!all && <span className="sr-only">{s.label}</span>}
+					</span>
+				);
+			})}
+		</span>
 	);
 }
 
-function PartDetail({ part }: { part: Part }) {
+function PartDetail({ part, titled }: { part: Part; titled: boolean }) {
 	const tip = part.errors.map(hint).find((h) => h !== null);
-	const hidden = part.failedTotal - part.errors.length;
 	return (
-		<div className="space-y-2 rounded-lg border bg-card p-3">
-			{part.title && (
+		<div className="space-y-2 px-[var(--diff-inset)]">
+			{titled && part.title && (
 				<div className="flex flex-wrap items-center justify-between gap-2">
-					<span className="truncate font-medium text-sm">{part.title}</span>
+					<span className="break-words font-medium text-sm">{part.title}</span>
 					<span className="flex items-center gap-1 text-muted-foreground text-xs">
 						<Clock className="size-3" /> {duration(part.seconds)}
 					</span>
 				</div>
 			)}
-			<Stats stats={part.stats} />
+			<Figures stats={part.stats} all />
 			{part.items.length > 0 && (
 				<ul className="max-h-60 space-y-0.5 overflow-auto text-sm">
 					{part.items.map((item) => (
@@ -90,24 +134,9 @@ function PartDetail({ part }: { part: Part }) {
 					))}
 				</ul>
 			)}
-			{tip && (
-				<p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-warning text-xs">
-					{tip}
-				</p>
-			)}
+			{tip && <p className="text-warning text-xs">{tip}</p>}
 			{part.errors.length > 0 && (
-				<ul className="max-h-48 space-y-1 overflow-auto font-mono text-destructive text-xs">
-					{part.errors.map((e) => (
-						<li key={e} className="break-all">
-							{e}
-						</li>
-					))}
-				</ul>
-			)}
-			{hidden > 0 && (
-				<p className="text-muted-foreground text-xs">
-					Showing the first {part.errors.length} of {part.failedTotal.toLocaleString()} failures.
-				</p>
+				<FailureList messages={part.errors} total={part.failedTotal} heading={false} />
 			)}
 		</div>
 	);
@@ -118,38 +147,78 @@ const took = (e: HistoryEntry) => {
 	return s > 0 ? ` · took ${duration(s)}` : "";
 };
 
+/** The day a run belongs under: Today, Yesterday, or the date. */
+function dayLabel(unixSeconds: number): string {
+	const day = new Date(unixSeconds * 1000);
+	const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+	const days = Math.round((startOf(new Date()) - startOf(day)) / 86_400_000);
+	if (days === 0) {
+		return "Today";
+	}
+	if (days === 1) {
+		return "Yesterday";
+	}
+	return day.toLocaleDateString(undefined, {
+		weekday: days < 7 ? "long" : undefined,
+		day: "numeric",
+		month: "long",
+		year: day.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
+	});
+}
+
 function Row({
 	entry,
-	onOpen,
+	titled,
+	open,
+	onToggle,
 	onDismiss,
 }: {
 	entry: HistoryEntry;
-	onOpen: () => void;
+	/** Show the run's own title; without it the time is the heading. */
+	titled: boolean;
+	open: boolean;
+	onToggle: () => void;
 	onDismiss: () => void;
 }) {
-	const { Icon, tone, bg, label } = STATUS[entry.status];
+	const { Icon, tone, label } = STATUS[entry.status];
 	return (
 		<li className="group/row">
-			<div className="flex items-center gap-3 rounded-lg px-2 py-3 transition-colors hover:bg-muted/40">
+			<div className="flex items-center gap-2 px-2 transition-colors hover:bg-muted/40">
 				<button
 					type="button"
-					onClick={onOpen}
-					className="flex min-w-0 flex-1 items-center gap-4 text-left"
+					aria-expanded={open}
+					onClick={onToggle}
+					className="flex min-w-0 flex-1 items-center gap-3 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 				>
-					<span className={cn("grid size-9 shrink-0 place-items-center rounded-full", bg)}>
-						<Icon role="img" aria-label={label} className={cn("size-[18px]", tone)} />
+					<ChevronRight
+						className={cn(
+							"size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none",
+							open && "rotate-90",
+						)}
+					/>
+					<Icon role="img" aria-label={label} className={cn("size-[18px] shrink-0", tone)} />
+					<span
+						className="min-w-0 flex-1"
+						title={new Date(entry.finishedAt * 1000).toLocaleString()}
+					>
+						{titled ? (
+							<>
+								<span className="block truncate font-medium text-sm leading-5">{entry.title}</span>
+								<span className="block truncate text-muted-foreground text-xs leading-5">
+									{timeAgo(entry.finishedAt)}
+									{took(entry)}
+								</span>
+							</>
+						) : (
+							<span className="block truncate font-medium text-sm leading-5">
+								{timeAgo(entry.finishedAt)}
+								<span className="font-normal text-muted-foreground">{took(entry)}</span>
+							</span>
+						)}
 					</span>
-					<span className="min-w-0 flex-1">
-						<span className="block truncate font-medium text-sm leading-5">{entry.title}</span>
-						<span
-							className="block truncate text-muted-foreground text-xs leading-5"
-							title={new Date(entry.finishedAt * 1000).toLocaleString()}
-						>
-							{timeAgo(entry.finishedAt)}
-							{took(entry)}
-						</span>
+					<span className="shrink-0">
+						<Figures stats={entry.stats} />
 					</span>
-					<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
 				</button>
 				<Button
 					variant="ghost"
@@ -161,40 +230,31 @@ function Row({
 					<X />
 				</Button>
 			</div>
+			{open && (
+				<div className="space-y-4 border-t bg-muted/20 py-3 [--diff-inset:1rem]">
+					{entry.parts.map((p) => (
+						<PartDetail key={p.id} part={p} titled={entry.parts.length > 1} />
+					))}
+				</div>
+			)}
 		</li>
 	);
 }
 
-function RunDrawer({ entry, onClose }: { entry: HistoryEntry | null; onClose: () => void }) {
-	return (
-		<Drawer open={entry !== null} onClose={onClose} title={entry?.title ?? ""} width="w-[28rem]">
-			{entry && (
-				<div className="space-y-3">
-					<p className="text-muted-foreground text-xs">
-						{new Date(entry.finishedAt * 1000).toLocaleString()}
-						{took(entry)}
-					</p>
-					{entry.parts.length > 1 && <Stats stats={entry.stats} />}
-					{entry.parts.map((p) => (
-						<PartDetail key={p.id} part={p} />
-					))}
-				</div>
-			)}
-		</Drawer>
-	);
-}
-
-/** Plain list of past runs (no card); clicking one opens its details in a nested drawer. */
+/** Past runs under their day, newest first. Pressing one opens its details right under it. */
 export function HistoryList({
 	entries,
 	empty,
+	titled = true,
 }: {
 	entries: readonly HistoryEntry[];
 	empty: string;
+	/** Name each run. Turn off where every run is of the page's own destination. */
+	titled?: boolean;
 }) {
 	const queryClient = useQueryClient();
 	const [expanded, setExpanded] = useState(false);
-	const [selectedKey, setSelectedKey] = useState<string | null>(null);
+	const [openKey, setOpenKey] = useState<string | null>(null);
 	const dismiss = useMutation({
 		mutationFn: (e: HistoryEntry) =>
 			e.scope === "sync" ? dismissSyncRuns(e.ids) : dismissActivity(e.ids),
@@ -203,25 +263,42 @@ export function HistoryList({
 			await queryClient.invalidateQueries({ queryKey: ["activity"] });
 		},
 	});
-	const selected = entries.find((e) => e.key === selectedKey) ?? null;
 	const visible = expanded ? entries : entries.slice(0, COLLAPSED_ROWS);
 	const hidden = entries.length - COLLAPSED_ROWS;
+	if (entries.length === 0) {
+		return <EmptyState title={empty} className="py-8" />;
+	}
+	const days: [string, HistoryEntry[]][] = [];
+	for (const e of visible) {
+		const label = dayLabel(e.finishedAt);
+		const last = days.at(-1);
+		if (last?.[0] === label) {
+			last[1].push(e);
+		} else {
+			days.push([label, [e]]);
+		}
+	}
 	return (
 		<>
-			{entries.length === 0 ? (
-				<EmptyState title={empty} className="py-8" />
-			) : (
-				<ul className="-mx-2 divide-y">
-					{visible.map((e) => (
-						<Row
-							key={e.key}
-							entry={e}
-							onOpen={() => setSelectedKey(e.key)}
-							onDismiss={() => dismiss.mutate(e)}
-						/>
-					))}
-				</ul>
-			)}
+			<div className="-mx-2 space-y-5">
+				{days.map(([label, list]) => (
+					<section key={label}>
+						<h3 className="px-4 pb-1.5 font-medium text-muted-foreground text-xs">{label}</h3>
+						<ul className="divide-y border-y">
+							{list.map((e) => (
+								<Row
+									key={e.key}
+									entry={e}
+									titled={titled}
+									open={openKey === e.key}
+									onToggle={() => setOpenKey(openKey === e.key ? null : e.key)}
+									onDismiss={() => dismiss.mutate(e)}
+								/>
+							))}
+						</ul>
+					</section>
+				))}
+			</div>
 			{hidden > 0 && (
 				<button
 					type="button"
@@ -231,7 +308,6 @@ export function HistoryList({
 					{expanded ? "Show less" : `Show ${hidden} older`}
 				</button>
 			)}
-			<RunDrawer entry={selected} onClose={() => setSelectedKey(null)} />
 		</>
 	);
 }

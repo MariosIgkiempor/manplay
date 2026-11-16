@@ -17,12 +17,18 @@ export function Drawer({
 	onClose: close,
 	title,
 	width = "w-[30rem]",
+	header,
+	bare = false,
 	children,
 }: {
 	open: boolean;
 	onClose: () => void;
 	title: string;
 	width?: string;
+	/** Replaces the title bar with a fixed header of its own, such as a page header with tabs. */
+	header?: ReactNode;
+	/** The content has no padding and does its own scrolling, to pin a footer under it. */
+	bare?: boolean;
 	children: ReactNode;
 }) {
 	const id = useId();
@@ -80,13 +86,28 @@ export function Drawer({
 					open ? "translate-x-0" : "translate-x-full",
 				)}
 			>
-				<div className="flex items-center justify-between border-b px-3 py-2">
-					<span className="truncate pl-2 font-medium text-sm">{title}</span>
-					<Button variant="ghost" size="icon" aria-label="Close" onClick={onClose}>
-						<X />
-					</Button>
-				</div>
-				<div className="min-h-0 flex-1 overflow-y-auto p-4">
+				{header !== undefined ? (
+					<div className="relative border-b bg-card/40 px-4 pt-4">
+						{header}
+						<Button
+							variant="ghost"
+							size="icon"
+							aria-label="Close"
+							onClick={onClose}
+							className="absolute top-2 right-2"
+						>
+							<X />
+						</Button>
+					</div>
+				) : (
+					<div className="flex items-center justify-between border-b px-3 py-2">
+						<span className="truncate pl-2 font-medium text-sm">{title}</span>
+						<Button variant="ghost" size="icon" aria-label="Close" onClick={onClose}>
+							<X />
+						</Button>
+					</div>
+				)}
+				<div className={cn("min-h-0 flex-1", !bare && "overflow-y-auto p-4")}>
 					<Provider>{open ? children : last}</Provider>
 				</div>
 			</aside>

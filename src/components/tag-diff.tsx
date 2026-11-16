@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { PropertyRow } from "#/components/property-row.tsx";
 import { diffNames, isMulti, labelOf, type TagChange } from "#/lib/tag-preview.ts";
@@ -88,19 +88,101 @@ export function TagRow({
 	);
 }
 
-/** Changed tags laid out like the metadata editor: only the changed fields, one row each. */
-export function TagDiff({ changes }: { changes: readonly TagChange[] }) {
+/** One value of a push conflict. The column that stays is tinted and plain, the other muted and struck. */
+function Cell({ value, kept, last }: { value: string | null; kept: boolean; last: boolean }) {
 	return (
-		<div className="space-y-1">
-			{changes.map((c) => (
-				<TagRow key={c.field} field={c.field} was={[{ value: c.from, count: 1 }]} to={c.to} />
+		<span
+			className={cn(
+				"min-w-0 break-words px-2.5 py-0.5",
+				kept ? "bg-primary/10 font-medium text-foreground" : "text-muted-foreground",
+				kept && last && "rounded-b-md",
+				!kept && value !== null && "line-through decoration-muted-foreground/50",
+			)}
+		>
+			{value ?? <span className="italic">empty</span>}
+		</span>
+	);
+}
+
+/** A column head of the conflict grid; the side that stays carries a check. */
+function Head({ who, kept }: { who: "Yours" | "Remote"; kept: boolean }) {
+	return (
+		<span
+			className={cn(
+				"inline-flex items-center gap-1 px-2.5 py-1 text-xs",
+				kept ? "rounded-t-md bg-primary/10 font-medium text-primary" : "text-muted-foreground",
+			)}
+		>
+			{kept && <Check className="size-3" />}
+			{who}
+			{kept && <span className="sr-only"> (kept)</span>}
+		</span>
+	);
+}
+
+/**
+ * Changed tags laid out like the metadata editor: only the changed fields, one row each.
+ * With `keep` set it is a push conflict: the destination's value against yours, and the one that
+ * will be kept is marked (`keep` true: yours replaces the destination's).
+ */
+export function TagDiff({
+	changes,
+	keep,
+}: {
+	changes: readonly TagChange[];
+	keep?: boolean | undefined;
+}) {
+	if (keep === undefined) {
+		return (
+			<div className="space-y-1">
+				{changes.map((c) => (
+					<TagRow key={c.field} field={c.field} was={[{ value: c.from, count: 1 }]} to={c.to} />
+				))}
+			</div>
+		);
+	}
+	return (
+		<div className="grid grid-cols-[6rem_minmax(0,1fr)_minmax(0,1fr)] items-baseline text-sm">
+			<span />
+			<Head who="Yours" kept={keep} />
+			<Head who="Remote" kept={!keep} />
+			{changes.map((c, i) => (
+				<div key={c.field} className="col-span-3 grid grid-cols-subgrid items-baseline">
+					<span className="truncate text-muted-foreground text-xs">{labelOf(c.field)}</span>
+					<Cell value={c.to} kept={keep} last={i === changes.length - 1} />
+					<Cell value={c.from} kept={!keep} last={i === changes.length - 1} />
+				</div>
 			))}
 		</div>
 	);
 }
 
+/** The diff, always open, for use inside a row whose label ticks a checkbox. */
+export function TagDiffInline({
+	changes,
+	keep,
+}: {
+	changes: readonly TagChange[];
+	keep?: boolean | undefined;
+}) {
+	return (
+		// Diff rows are labels for their checkbox: clicks in here must not tick it.
+		// biome-ignore lint/a11y/noStaticElementInteractions: only stops the click reaching the label
+		// biome-ignore lint/a11y/useKeyWithClickEvents: keyboard never reaches the label through here
+		<span className="mt-1 block cursor-default" onClick={(e) => e.preventDefault()}>
+			<TagDiff changes={changes} keep={keep} />
+		</span>
+	);
+}
+
 /** The changed tags' names, which open into the editor-style diff when pressed. */
-export function TagChanges({ changes }: { changes: readonly TagChange[] }) {
+export function TagChanges({
+	changes,
+	keep,
+}: {
+	changes: readonly TagChange[];
+	keep?: boolean | undefined;
+}) {
 	const [open, setOpen] = useState(false);
 	if (changes.length === 0) {
 		return null;
@@ -126,7 +208,7 @@ export function TagChanges({ changes }: { changes: readonly TagChange[] }) {
 			</button>
 			{open && (
 				<span className="mt-1.5 block">
-					<TagDiff changes={changes} />
+					<TagDiff changes={changes} keep={keep} />
 				</span>
 			)}
 		</span>

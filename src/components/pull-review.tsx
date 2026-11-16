@@ -5,10 +5,12 @@ import {
 	DiffHunk,
 	DiffRow,
 	groupByDir,
-	ProgressBar,
+	REVIEW_FOOTER,
+	RunProgress,
 	Tally,
 	type Tone,
 } from "#/components/diff-view.tsx";
+import { FailureList } from "#/components/failure-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	onPullProgress,
@@ -99,16 +101,7 @@ function PullResult({ outcome: r, onDone }: { outcome: PullOutcome; onDone: () =
 				]}
 				empty="Nothing was pulled"
 			/>
-			{r.failedTotal > 0 && (
-				<div className="space-y-1 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-destructive text-xs">
-					<p className="font-medium">{r.failedTotal} failed:</p>
-					{r.failed.map((m) => (
-						<p key={m} className="break-all">
-							{m}
-						</p>
-					))}
-				</div>
-			)}
+			{r.failedTotal > 0 && <FailureList messages={r.failed} total={r.failedTotal} />}
 			<Button className="w-full" onClick={onDone}>
 				Done
 			</Button>
@@ -194,6 +187,78 @@ function FilterBar({
 					Pull only these ({shown.toLocaleString()})
 				</Button>
 			)}
+		</div>
+	);
+}
+
+/** The songs a pull would copy in, folder by folder, with a filter. Ticks belong to the caller. */
+export function PullList({
+	missing,
+	picked,
+	onToggle,
+	onToggleGroup,
+	onOnly,
+}: {
+	missing: RemoteFile[];
+	picked: (f: RemoteFile) => boolean;
+	onToggle: (f: RemoteFile) => void;
+	onToggleGroup: (files: RemoteFile[], on: boolean) => void;
+	onOnly: (keep: RemoteFile[]) => void;
+}) {
+	const [shown, setShown] = useState(HUNKS_PER_PAGE);
+	const [query, setQuery] = useState("");
+	const needle = query.trim().toLowerCase();
+	const matching = filterFiles(missing, needle);
+	const hunks = groupByDir(matching, dirOf, nameOf);
+	return (
+		<div>
+			<div className="border-b px-[var(--diff-inset,0)] py-2">
+				<FilterBar
+					query={query}
+					onQuery={setQuery}
+					shown={matching.length}
+					active={needle !== ""}
+					disabled={false}
+					onOnly={() => onOnly(matching)}
+				/>
+			</div>
+			<div>
+				{hunks.slice(0, shown).map(([dir, files]) => (
+					<DiffHunk
+						flush
+						key={dir}
+						dir={dir}
+						total={files.length}
+						picked={files.filter(picked).length}
+						onToggleAll={(on) => onToggleGroup(files, on)}
+						tallies={(["add", "change", "move"] as const).map((tone) => ({
+							tone,
+							count: files.filter((f) => describe(f, undefined).tone === tone).length,
+						}))}
+					>
+						{files.map((f) => (
+							<FileRow
+								key={key(f)}
+								file={f}
+								picked={picked(f)}
+								verdict={undefined}
+								disabled={false}
+								onToggle={() => onToggle(f)}
+							/>
+						))}
+					</DiffHunk>
+				))}
+				{hunks.length > shown && (
+					<Button
+						variant="ghost"
+						size="sm"
+						className="mx-[var(--diff-inset,0)] my-2"
+						onClick={() => setShown(shown + HUNKS_PER_PAGE)}
+					>
+						Show more folders ({hunks.length - shown} hidden)
+					</Button>
+				)}
+			</div>
 		</div>
 	);
 }
@@ -335,7 +400,7 @@ function Picker({
 				)}
 			</div>
 
-			<div className="sticky -bottom-4 z-20 -mx-4 -mb-4 space-y-3 border-t bg-background px-4 pt-3 pb-4">
+			<div className={REVIEW_FOOTER}>
 				{verify.isError && <p className="text-destructive text-sm">{String(verify.error)}</p>}
 				{pull.isError && <p className="text-destructive text-sm">{String(pull.error)}</p>}
 				<div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -365,12 +430,7 @@ function Picker({
 					</Button>
 				</div>
 				{busy && progress && progress.total > 0 && (
-					<div className="space-y-1">
-						<ProgressBar done={progress.done} total={progress.total} />
-						<p className="break-all text-muted-foreground text-xs">
-							{progress.done}/{progress.total}: {progress.current}
-						</p>
-					</div>
+					<RunProgress done={progress.done} total={progress.total} current={progress.current} />
 				)}
 				<div className="flex gap-2">
 					<Button variant="outline" className="flex-1" onClick={onDone} disabled={pull.isPending}>
