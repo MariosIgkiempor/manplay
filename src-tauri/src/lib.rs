@@ -16,6 +16,7 @@ mod r2;
 mod rekordbox;
 mod scan;
 mod sync;
+mod tag_region;
 mod tags;
 mod tailscale;
 mod usb;

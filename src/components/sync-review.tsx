@@ -2,8 +2,6 @@ import { CheckCircle2, CloudUpload, FolderArchive, Loader2, ShieldAlert } from "
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
 	DiffHunk,
-	DiffLine,
-	DiffNote,
 	DiffRow,
 	groupByDir,
 	ProgressBar,
@@ -12,6 +10,7 @@ import {
 	type Tone,
 } from "#/components/diff-view.tsx";
 import { Drawer } from "#/components/drawer.tsx";
+import { TagChanges } from "#/components/tag-diff.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import {
@@ -80,6 +79,26 @@ function Tally({ counts }: { counts: Counts }) {
 	);
 }
 
+/** Where a renamed file came from: just the old name when it stays in the same folder. */
+function movedFrom(action: SyncAction): string | null {
+	if (action.kind !== "move" || !action.from) {
+		return null;
+	}
+	const sameDir = path(action.from.slice(0, -1)) === path(action.rel.slice(0, -1));
+	return `Was ${sameDir ? (action.from.at(-1) ?? "") : path(action.from)}`;
+}
+
+function sizeOf(action: SyncAction): string {
+	if (
+		action.kind === "replace" &&
+		action.remoteSize !== null &&
+		action.remoteSize !== action.size
+	) {
+		return `${formatBytes(action.remoteSize)} → ${formatBytes(action.size)}`;
+	}
+	return formatBytes(action.size);
+}
+
 function ActionRow({
 	action,
 	picked,
@@ -89,25 +108,28 @@ function ActionRow({
 	picked: boolean;
 	onToggle: () => void;
 }) {
-	let size = formatBytes(action.size);
-	if (action.kind === "replace" && action.remoteSize !== null) {
-		size =
-			action.remoteSize === action.size
-				? `${size} (same size)`
-				: `${formatBytes(action.remoteSize)} → ${size}`;
-	}
+	const from = movedFrom(action);
 	return (
-		<DiffRow picked={picked} onToggle={onToggle} label={path(action.rel)} aside={size}>
-			{action.kind === "move" && action.from ? (
-				<>
-					<DiffLine tone="remove">{path(action.from)}</DiffLine>
-					<DiffLine tone="move">{path(action.rel)}</DiffLine>
-				</>
-			) : (
-				<DiffLine tone={LABEL[action.kind].tone}>{nameOf(action)}</DiffLine>
-			)}
-			{action.note && <DiffNote>{action.note}</DiffNote>}
-		</DiffRow>
+		<DiffRow
+			tone={LABEL[action.kind].tone}
+			name={nameOf(action)}
+			detail={
+				action.note && from ? (
+					<>
+						{from}
+						<span className="block text-warning">{action.note}</span>
+					</>
+				) : (
+					(action.note ?? from)
+				)
+			}
+			warn={action.note !== null && from === null}
+			picked={picked}
+			onToggle={onToggle}
+			extra={action.tags && <TagChanges changes={action.tags} />}
+			label={path(action.rel)}
+			aside={sizeOf(action)}
+		/>
 	);
 }
 
@@ -172,14 +194,18 @@ function TargetSection({
 	const count = (k: Kind) => plan.actions.filter((a) => a.kind === k).length;
 	return (
 		<section className="space-y-3 border-t pt-6 first:border-t-0 first:pt-0">
-			<div className="space-y-1.5">
-				<h3 className="break-words font-semibold text-sm">{plan.name}</h3>
-				<Tally counts={countKinds(plan.actions)} />
-				<p className="text-muted-foreground text-xs">
-					{plan.inSync.toLocaleString()} already match
-					{plan.unchecked > 0 &&
-						`. Audio of ${plan.unchecked.toLocaleString()} destination files could not be compared, so renames may be missed.`}
-				</p>
+			<div className="space-y-1">
+				<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+					<h3 className="break-words font-semibold">{plan.name}</h3>
+					<span className="text-muted-foreground text-xs tabular-nums">
+						{plan.inSync.toLocaleString()} already match
+					</span>
+				</div>
+				{plan.unchecked > 0 && (
+					<p className="text-muted-foreground text-xs">
+						{plan.unchecked.toLocaleString()} not compared
+					</p>
+				)}
 			</div>
 			{plan.error && (
 				<p className="break-words rounded-md border border-destructive/30 bg-destructive/5 p-3 text-destructive text-sm">
@@ -187,19 +213,17 @@ function TargetSection({
 				</p>
 			)}
 			{!plan.error && plan.actions.length === 0 && (
-				<p className="text-muted-foreground text-sm">
-					Nothing to change. This destination matches.
-				</p>
+				<p className="text-muted-foreground text-sm">Up to date</p>
 			)}
 			{plan.actions.length > 0 && (
-				<div className="flex flex-wrap gap-1.5 font-mono text-xs">
+				<div className="flex flex-wrap gap-1 text-muted-foreground text-xs tabular-nums">
 					<button
 						type="button"
 						onClick={() => setFilter(null)}
 						aria-pressed={filter === null}
-						className={`rounded-full border px-2.5 py-0.5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${filter === null ? "bg-muted" : "text-muted-foreground"}`}
+						className="rounded-md px-2.5 py-1 outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 aria-pressed:bg-muted aria-pressed:text-foreground"
 					>
-						All {plan.actions.length}
+						All <span className="ml-1 text-foreground">{plan.actions.length.toLocaleString()}</span>
 					</button>
 					{KINDS.filter((k) => count(k) > 0).map((k) => (
 						<button
@@ -207,9 +231,13 @@ function TargetSection({
 							type="button"
 							onClick={() => setFilter(filter === k ? null : k)}
 							aria-pressed={filter === k}
-							className={`rounded-full border px-2.5 py-0.5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${STYLE[k].text} ${filter === k ? STYLE[k].row : "opacity-70"}`}
+							className="rounded-md px-2.5 py-1 outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 aria-pressed:bg-muted aria-pressed:text-foreground"
 						>
-							{STYLE[k].sign} {STYLE[k].label} {count(k)}
+							{STYLE[k].label}{" "}
+							<span className={`ml-1 font-medium ${STYLE[k].text}`}>
+								{STYLE[k].sign}
+								{count(k).toLocaleString()}
+							</span>
 						</button>
 					))}
 				</div>
@@ -229,7 +257,7 @@ function TargetSection({
 			{plan.held.length > 0 && (
 				<details className="rounded-md border px-3 py-2 text-xs">
 					<summary className="cursor-pointer text-muted-foreground">
-						{plan.held.length.toLocaleString()} kept: missing from your library for less than 7 days
+						{plan.held.length.toLocaleString()} kept for 7 days after leaving the library
 					</summary>
 					<ul className="mt-2 space-y-0.5 font-mono">
 						{plan.held.slice(0, 50).map((h) => (
@@ -268,11 +296,11 @@ function DeleteToggle({
 		<div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground text-xs">
 			<span>
 				{marked === 0
-					? `${total.toLocaleString()} files only on the destination are kept. Deleting is opt-in.`
-					: `${marked.toLocaleString()} of ${total.toLocaleString()} extra files marked for deletion.`}
+					? `${total.toLocaleString()} extra files kept`
+					: `${marked.toLocaleString()} of ${total.toLocaleString()} extra files to delete`}
 			</span>
 			<Button variant="ghost" size="sm" disabled={busy} onClick={onToggle}>
-				{marked === 0 ? "Also delete extra files…" : "Keep extra files"}
+				{marked === 0 ? "Delete them" : "Keep them"}
 			</Button>
 		</div>
 	);
@@ -354,8 +382,7 @@ function Review({
 						{drastic && (
 							<p className="flex items-start gap-2 font-medium text-destructive">
 								<ShieldAlert className="mt-0.5 size-4 shrink-0" />
-								This deletes more than half of the files on the destination. Check that it is the
-								right folder and library.
+								Deletes over half the destination. Right folder?
 							</p>
 						)}
 						<label className="flex cursor-pointer items-start gap-2">
@@ -366,8 +393,8 @@ function Review({
 								onChange={(e) => setUnderstood(e.target.checked)}
 							/>
 							<span>
-								Delete {t.remove.toLocaleString()} {t.remove === 1 ? "file" : "files"} from the
-								destination. Each one is copied to a backup folder on this computer first.
+								Delete {t.remove.toLocaleString()} {t.remove === 1 ? "file" : "files"} (backed up
+								first)
 							</span>
 						</label>
 					</div>
@@ -404,7 +431,7 @@ function Review({
 	);
 }
 
-function Result({ results, onDone }: { results: ApplySummary[]; onDone: () => void }) {
+export function PushResult({ results, onDone }: { results: ApplySummary[]; onDone: () => void }) {
 	const failed = results.reduce((n, r) => n + r.failedTotal, 0);
 	return (
 		<div className="space-y-6">
@@ -422,7 +449,7 @@ function Result({ results, onDone }: { results: ApplySummary[]; onDone: () => vo
 					{r.backupDir && (
 						<p className="flex items-start gap-1.5 break-all text-muted-foreground text-xs">
 							<FolderArchive className="mt-0.5 size-3.5 shrink-0" />
-							Backup of replaced and deleted files: {r.backupDir}. Kept for 30 days.
+							Backup, kept 30 days: {r.backupDir}
 						</p>
 					)}
 					{r.failedTotal > 0 && (
@@ -470,12 +497,12 @@ export function ReviewBody({ ids, onClose }: { ids: number[] | undefined; onClos
 
 	let content: ReactNode;
 	if (apply.isSuccess) {
-		content = <Result results={apply.data} onDone={onClose} />;
+		content = <PushResult results={apply.data} onDone={onClose} />;
 	} else if (plan.isPending) {
 		content = (
 			<div className="space-y-3 py-12 text-center text-sm">
 				<Loader2 className="mx-auto size-5 animate-spin text-muted-foreground motion-reduce:animate-none" />
-				<p>Comparing destinations with your library. Nothing is changed yet.</p>
+				<p>Comparing with your library…</p>
 				{progress && progress.total > 0 && (
 					<div className="mx-auto max-w-sm space-y-1">
 						<ProgressBar done={progress.done} total={progress.total} />

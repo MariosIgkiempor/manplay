@@ -201,6 +201,9 @@ pub struct Action {
     /// Starts unticked in the review: deletions, and uploads of audio the destination already
     /// has under another path (e.g. pushed by someone else).
     pub optional: bool,
+    /// Replace only: tags that differ between the destination copy and the library file, from
+    /// the destination's value to the library's. `None` when the destination's tags couldn't be read.
+    pub tags: Option<Vec<crate::tags::Change>>,
     #[serde(skip)]
     pub track_id: Option<i64>,
     #[serde(skip)]
@@ -321,7 +324,7 @@ fn pair<'a>(
     };
     for (file, print) in extras {
         let Some(fp) = print else {
-            let note = is_audio_name(&file.rel).then(|| "Audio could not be compared".to_owned());
+            let note = is_audio_name(&file.rel).then(|| "Not compared".to_owned());
             out.deletes.push((file, note));
             continue;
         };
@@ -335,7 +338,7 @@ fn pair<'a>(
         } else {
             let note = known
                 .get(fp.as_str())
-                .map(|i| format!("Duplicate: same audio as {}", i.rel.join("/")));
+                .map(|i| format!("Duplicate of {}", i.rel.last().map_or("", String::as_str)));
             out.deletes.push((file, note));
         }
     }
@@ -467,13 +470,14 @@ pub async fn plan_target(
                 remote_size,
                 note,
                 optional,
+                tags: None,
                 track_id,
                 local,
                 seen: None,
             });
         };
     for (file, item) in &matched.moves {
-        let note = Some(format!("Same audio as {}", item.rel.join("/")));
+        let note = None;
         push(
             Kind::Move,
             &item.rel,
@@ -486,12 +490,10 @@ pub async fn plan_target(
         );
     }
     for item in &matched.uploads {
-        let note = matched.duplicates.get(&item.track_id).map(|r| {
-            format!(
-                "Already on the destination as {} (same audio). Skipped unless ticked.",
-                r.rel.join("/")
-            )
-        });
+        let note = matched
+            .duplicates
+            .get(&item.track_id)
+            .map(|r| format!("Already there as {}", r.rel.join("/")));
         push(
             Kind::Upload,
             &item.rel,
@@ -505,12 +507,7 @@ pub async fn plan_target(
     }
     for (item, remote_size) in &d.replaces {
         let delta = item.size.abs_diff(*remote_size);
-        let note = (delta <= TAG_SIZED_DELTA).then(|| {
-            format!(
-                "Size differs by {} KB: likely a tag edit",
-                delta.div_ceil(1024)
-            )
-        });
+        let note = (delta <= TAG_SIZED_DELTA).then(|| SIZE_NOTE.to_owned());
         push(
             Kind::Replace,
             &item.rel,
@@ -527,10 +524,9 @@ pub async fn plan_target(
             continue;
         };
         let note = if change.edited_here {
-            "Tags or metadata changed here since the last sync (same file size)"
+            EDITED_HERE
         } else {
-            "Tags or audio differ on the destination but were not changed here: probably \
-             edited by someone else. Ticking overwrites their version."
+            "Edited on the destination. Tick to overwrite."
         };
         push(
             Kind::Replace,
@@ -561,8 +557,125 @@ pub async fn plan_target(
             a.seen = Some(change.remote.clone());
         }
     }
+    record_tag_changes(app, client, target, &mut plan.actions).await;
     record_seen(app, client, target, &mut plan.actions).await;
     plan
+}
+
+const EDITED_HERE: &str = "Edited here";
+
+/// Replaces compared tag by tag at most; past this the review shows only the size.
+const MAX_TAG_DIFFS: usize = 500;
+
+/// Lists which tags each replace changes, reading only the tag region of the destination copy.
+/// A note that only guessed at a tag edit is dropped once the actual tags are known.
+async fn record_tag_changes(
+    app: &AppHandle,
+    client: &Client,
+    target: &SyncTarget,
+    actions: &mut [Action],
+) {
+    use futures_util::stream::{FuturesUnordered, StreamExt};
+    let Ok(backend) = Backend::for_target(client, target) else {
+        return;
+    };
+    let base = base_of(target);
+    let mut replaces: Vec<&mut Action> = actions
+        .iter_mut()
+        .filter(|a| a.kind == Kind::Replace && a.local.is_some() && safe_rel(&a.rel))
+        .take(MAX_TAG_DIFFS)
+        .collect();
+    let jobs: Vec<(Vec<String>, u64, Option<PathBuf>)> = replaces
+        .iter()
+        .map(|a| {
+            (
+                dest_of(&base, &a.rel),
+                a.remote_size.unwrap_or(a.size),
+                a.local.clone(),
+            )
+        })
+        .collect();
+    let total = jobs.len();
+    let backend = &backend;
+    let start = |(i, (dest, size, local)): (usize, (Vec<String>, u64, Option<PathBuf>))| async move {
+        (i, tag_changes(backend, &dest, size, local).await)
+    };
+    let mut queue = jobs.into_iter().enumerate();
+    let mut running = FuturesUnordered::new();
+    for next in queue.by_ref().take(COMPARE_AT_ONCE) {
+        running.push(start(next));
+    }
+    let mut results = vec![None; total];
+    let mut done = 0;
+    while let Some((i, changes)) = running.next().await {
+        if let Some(next) = queue.next() {
+            running.push(start(next));
+        }
+        done += 1;
+        let _ = app.emit(
+            "pull-progress",
+            PullProgress {
+                done,
+                total,
+                current: "Reading tags",
+            },
+        );
+        results[i] = changes;
+    }
+    for (a, changes) in replaces.iter_mut().zip(results) {
+        if let Some(c) = &changes
+            && !c.is_empty()
+            && a.note
+                .as_deref()
+                .is_some_and(|n| n == EDITED_HERE || n == SIZE_NOTE)
+        {
+            a.note = None;
+        }
+        a.tags = changes;
+    }
+}
+
+/// Tag differences from the destination file to the library file, or `None` if either can't be read.
+async fn tag_changes(
+    backend: &Backend<'_>,
+    dest: &[String],
+    size: u64,
+    local: Option<PathBuf>,
+) -> Option<Vec<crate::tags::Change>> {
+    use crate::tag_region::{FIRST_HEAD, MAX_HEAD, TAIL, head_needed};
+    use lofty::file::TaggedFileExt;
+    let mut head = backend
+        .get_range(dest, 0, size.min(FIRST_HEAD))
+        .await
+        .ok()?;
+    for _ in 0..8 {
+        let need = head_needed(&head).min(size).min(MAX_HEAD);
+        let have = head.len() as u64;
+        if need <= have {
+            break;
+        }
+        let more = backend.get_range(dest, have, need - have).await.ok()?;
+        if more.is_empty() {
+            break;
+        }
+        head.extend(more);
+    }
+    let have = head.len() as u64;
+    let tail = if have >= size {
+        Vec::new()
+    } else {
+        let len = TAIL.min(size - have);
+        backend.get_range(dest, size - len, len).await.ok()?
+    };
+    let remote = crate::tag_region::read(size, head, tail)?;
+    let local = local?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let file = lofty::read_from_path(&local).ok()?;
+        Some(crate::tags::diff(Some(&remote), file.primary_tag()))
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Reads the tags region and audio samples of every destination file an action would overwrite,
@@ -602,7 +715,7 @@ async fn record_seen(
             None
         };
         if a.seen.is_none() {
-            let warn = "Could not be read for comparison: will not be applied";
+            let warn = "Unreadable, will be skipped";
             a.note = Some(
                 a.note
                     .take()
@@ -686,6 +799,7 @@ async fn ensure_unchanged(
 /// A size difference this small between a library file and its destination copy is most likely
 /// a tag edit rather than different audio.
 const TAG_SIZED_DELTA: u64 = 512 * 1024;
+const SIZE_NOTE: &str = "Likely a tag edit";
 const EDGE: u64 = 64 * 1024;
 
 /// Destination files compared at once while reviewing.
@@ -1363,10 +1477,7 @@ mod tests {
         let m = pair(&items, &[], &[(&old, Some("fp".to_owned()))], &|_| true);
         assert!(m.moves.is_empty());
         assert_eq!(m.deletes.len(), 1);
-        assert_eq!(
-            m.deletes[0].1.as_deref(),
-            Some("Duplicate: same audio as a.wav")
-        );
+        assert_eq!(m.deletes[0].1.as_deref(), Some("Duplicate of a.wav"));
     }
 
     #[test]
@@ -1375,10 +1486,7 @@ mod tests {
         let audio = remote("x.mp3", 10);
         let art = remote("cover.jpg", 10);
         let m = pair(&items, &[], &[(&audio, None), (&art, None)], &|_| true);
-        assert_eq!(
-            m.deletes[0].1.as_deref(),
-            Some("Audio could not be compared")
-        );
+        assert_eq!(m.deletes[0].1.as_deref(), Some("Not compared"));
         assert_eq!(m.deletes[1].1, None);
     }
 

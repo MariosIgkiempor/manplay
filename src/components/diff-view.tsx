@@ -6,17 +6,20 @@ export type Tone = "add" | "change" | "move" | "remove";
 export const TONE: Record<Tone, { sign: string; row: string; text: string }> = {
 	add: { sign: "+", row: "bg-success/10", text: "text-success" },
 	change: { sign: "~", row: "bg-warning/10", text: "text-warning" },
-	move: { sign: "→", row: "bg-sky-500/10", text: "text-sky-400" },
+	move: { sign: "→", row: "bg-move/10", text: "text-move" },
 	remove: { sign: "−", row: "bg-destructive/10", text: "text-destructive" },
 };
 
-/** One diff line: a coloured sign and text on a tinted background. */
-export function DiffLine({ tone, children }: { tone: Tone; children: ReactNode }) {
-	const st = TONE[tone];
+/**
+ * Every diff row and folder header shares these columns, so checkboxes, signs, names and sizes
+ * line up down the whole list: checkbox | sign | name | size.
+ */
+const GRID = "grid grid-cols-[1rem_0.75rem_minmax(0,1fr)_auto] items-baseline gap-x-2.5 px-3";
+
+function Sign({ tone }: { tone: Tone }) {
 	return (
-		<span className={`flex items-start gap-2 px-2 py-0.5 ${st.row}`}>
-			<span className={`w-3 shrink-0 text-center font-bold ${st.text}`}>{st.sign}</span>
-			<span className="min-w-0 flex-1 break-all">{children}</span>
+		<span aria-hidden="true" className={`text-center font-semibold ${TONE[tone].text}`}>
+			{TONE[tone].sign}
 		</span>
 	);
 }
@@ -40,11 +43,14 @@ export function Tally({
 		return <span className="text-muted-foreground text-sm">{empty}</span>;
 	}
 	return (
-		<span className="inline-flex flex-wrap gap-x-4 gap-y-1 font-mono text-sm tabular-nums">
+		<span className="inline-flex flex-wrap gap-x-4 gap-y-1 text-sm tabular-nums">
 			{shown.map((i) => (
-				<span key={i.label} className={TONE[i.tone].text}>
-					{TONE[i.tone].sign}
-					{i.count.toLocaleString()} <span className="text-muted-foreground">{i.label}</span>
+				<span key={i.label}>
+					<span className={`font-medium ${TONE[i.tone].text}`}>
+						{TONE[i.tone].sign}
+						{i.count.toLocaleString()}
+					</span>{" "}
+					<span className="text-muted-foreground">{i.label}</span>
 				</span>
 			))}
 		</span>
@@ -67,49 +73,84 @@ export function ProgressBar({ done, total }: { done: number; total: number }) {
 	);
 }
 
-/** A selectable row of a diff: checkbox, diff lines, and a size or other detail on the right. */
+/**
+ * A selectable row of a diff: checkbox, coloured sign, the file name, and a size on the right.
+ * `detail` is one muted line under the name, such as where a renamed file came from.
+ */
 export function DiffRow({
+	tone,
+	name,
+	detail,
+	warn,
+	extra,
 	picked,
 	onToggle,
 	label,
 	aside,
 	disabled,
-	children,
 }: {
+	tone: Tone;
+	name: ReactNode;
+	detail?: ReactNode;
+	/** Shows `detail` in the warning colour: something the user should look at before ticking. */
+	warn?: boolean;
+	/** Anything else under the name, such as the tags a replace changes. */
+	extra?: ReactNode;
 	picked: boolean;
 	onToggle: () => void;
 	/** Accessible name of the checkbox. */
 	label: string;
 	aside?: ReactNode;
 	disabled?: boolean;
-	children: ReactNode;
 }) {
 	return (
 		<label
-			className={`flex cursor-pointer items-stretch gap-2 font-mono text-xs leading-snug hover:bg-muted/40 ${picked ? "" : "opacity-40"}`}
+			className={`${GRID} cursor-pointer py-1.5 text-sm transition-opacity hover:bg-muted/40 has-disabled:cursor-default ${picked ? "" : "opacity-45"}`}
 		>
 			<input
 				type="checkbox"
 				aria-label={label}
-				className="mt-1.5 size-3.5 shrink-0 accent-primary"
+				className="size-3.5 translate-y-0.5 self-start accent-primary"
 				checked={picked}
 				onChange={onToggle}
 				disabled={disabled}
 			/>
-			<span className="min-w-0 flex-1">{children}</span>
-			{aside !== undefined && (
-				<span className="shrink-0 self-center text-muted-foreground tabular-nums">{aside}</span>
-			)}
+			<Sign tone={tone} />
+			<span className="min-w-0">
+				<span className="block break-words">{name}</span>
+				{detail && (
+					<span
+						className={`mt-0.5 block break-words text-xs ${warn ? "text-warning" : "text-muted-foreground"}`}
+					>
+						{detail}
+					</span>
+				)}
+				{extra && <span className="mt-1 block">{extra}</span>}
+			</span>
+			<span className="text-right text-muted-foreground text-xs tabular-nums">{aside}</span>
 		</label>
 	);
 }
 
-/** Muted explanation under a diff line. */
-export function DiffNote({ children }: { children: ReactNode }) {
-	return <span className="block px-2 pt-0.5 pl-7 text-warning/90 text-xs italic">{children}</span>;
+/** A folder path as a breadcrumb: parent folders muted, the folder itself in full strength. */
+function FolderPath({ dir }: { dir: string }) {
+	const parts = dir.split("/");
+	const last = parts.pop();
+	return (
+		<span className="min-w-0 break-words">
+			{parts.map((p, i) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: path segments can repeat
+				<span key={i} className="text-muted-foreground">
+					{p}
+					<span className="px-1 opacity-50">/</span>
+				</span>
+			))}
+			<span className="font-medium">{last}</span>
+		</span>
+	);
 }
 
-/** A folder's changes under an `@@ folder @@` header with a select-all checkbox. */
+/** A folder's changes under a header with the folder path, its counts and a select-all checkbox. */
 export function DiffHunk({
 	dir,
 	total,
@@ -127,13 +168,16 @@ export function DiffHunk({
 	disabled?: boolean;
 	children: ReactNode;
 }) {
+	const shown = tallies.filter((t) => t.count > 0);
 	return (
-		<section className="overflow-clip rounded-md border">
-			<div className="sticky -top-4 z-10 flex items-center gap-2 border-b bg-muted px-2 py-1 font-mono text-xs">
+		<section className="overflow-clip rounded-lg border">
+			<label
+				className={`${GRID} sticky -top-4 z-10 cursor-pointer border-b bg-card py-2 text-sm has-disabled:cursor-default`}
+			>
 				<input
 					type="checkbox"
 					aria-label={`Select all in ${dir}`}
-					className="size-3.5 shrink-0 accent-primary"
+					className="size-3.5 translate-y-0.5 self-start accent-primary"
 					checked={picked === total}
 					disabled={disabled}
 					ref={(el) => {
@@ -143,17 +187,19 @@ export function DiffHunk({
 					}}
 					onChange={() => onToggleAll(picked !== total)}
 				/>
-				<span className="min-w-0 flex-1 break-all text-muted-foreground">@@ {dir} @@</span>
-				{tallies
-					.filter((t) => t.count > 0)
-					.map((t) => (
-						<span key={t.tone} className={`shrink-0 ${TONE[t.tone].text}`}>
+				<span className="col-span-2 min-w-0">
+					<FolderPath dir={dir} />
+				</span>
+				<span className="flex gap-2.5 text-xs tabular-nums">
+					{shown.map((t) => (
+						<span key={t.tone} className={TONE[t.tone].text}>
 							{TONE[t.tone].sign}
 							{t.count}
 						</span>
 					))}
-			</div>
-			<div className="space-y-px py-1 pr-2 pl-2">{children}</div>
+				</span>
+			</label>
+			<div className="divide-y divide-border/60">{children}</div>
 		</section>
 	);
 }

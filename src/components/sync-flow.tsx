@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Drawer } from "#/components/drawer.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
 import { ReviewBody } from "#/components/sync-review.tsx";
+import { SyncSummary } from "#/components/sync-summary.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useSyncTargets } from "#/lib/queries.ts";
 
@@ -68,6 +69,16 @@ export function PullButton({ ids, size, variant = "outline", disabled }: Props) 
 	);
 }
 
+/** A summary of both steps first; from there, run them or review each one in detail. */
+function SyncFlow({ ids, onClose }: { ids: number[]; onClose: () => void }) {
+	const [detailed, setDetailed] = useState(false);
+	return detailed ? (
+		<SyncSteps ids={ids} onClose={onClose} />
+	) : (
+		<SyncSummary ids={ids} onReviewSteps={() => setDetailed(true)} onClose={onClose} />
+	);
+}
+
 /** Pull first (it changes the library), then review the push against the updated library. */
 function SyncSteps({ ids, onClose }: { ids: number[]; onClose: () => void }) {
 	const [pulled, setPulled] = useState(false);
@@ -104,7 +115,7 @@ export function SyncButton({
 				size={size}
 				variant={variant}
 				disabled={disabled === true || all.length === 0}
-				title="Pull, then push. You review each step before anything changes."
+				title="Shows what a pull and a push would change, then runs both once confirmed."
 				onClick={() => {
 					setSession((n) => n + 1);
 					setOpen(true);
@@ -112,8 +123,8 @@ export function SyncButton({
 			>
 				<RefreshCw /> {label}
 			</Button>
-			<Drawer open={open} onClose={() => setOpen(false)} title="Review sync" width="w-[44rem]">
-				{open && <SyncSteps key={session} ids={all} onClose={() => setOpen(false)} />}
+			<Drawer open={open} onClose={() => setOpen(false)} title="Sync" width="w-[44rem]">
+				{open && <SyncFlow key={session} ids={all} onClose={() => setOpen(false)} />}
 			</Drawer>
 		</>
 	);

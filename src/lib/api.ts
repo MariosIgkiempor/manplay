@@ -425,6 +425,9 @@ const actionSchema = z.object({
 	remoteSize: int.nullable(),
 	note: z.string().nullable(),
 	optional: z.boolean(),
+	tags: z
+		.array(z.object({ field: z.string(), from: z.string().nullable(), to: z.string().nullable() }))
+		.nullable(),
 });
 export type SyncAction = z.infer<typeof actionSchema>;
 

@@ -1,70 +1,16 @@
 import { useQueries } from "@tanstack/react-query";
-import { ArrowRight, ChevronRight, Tags } from "lucide-react";
+import { ChevronRight, Tags } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
+import { TagChanges, TagRow } from "#/components/tag-diff.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { tagsPreview } from "#/lib/api.ts";
-import {
-	diffNames,
-	type FieldSummary,
-	type FileChanges,
-	isMulti,
-	isReorder,
-	labelOf,
-	summarize,
-} from "#/lib/tag-preview.ts";
+import { type FieldSummary, type FileChanges, summarize } from "#/lib/tag-preview.ts";
 import type { TagConfirmRequest } from "#/lib/use-tag-confirm.tsx";
-import { cn } from "#/lib/utils.ts";
 
 const MAX_FILES = 60;
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 const parentName = (path: string) => path.split(/[\\/]/).slice(-3, -1).join(" / ");
 const songs = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
-
-const chip = "inline-flex max-w-full items-center rounded-md px-1.5 py-0.5 text-xs";
-
-function Empty() {
-	return <span className={cn(chip, "bg-muted text-muted-foreground italic")}>empty</span>;
-}
-
-/** A tag value as chips: one per name for list tags, one chip otherwise. */
-function Chips({ field, value }: { field: string; value: string | null }) {
-	if (value === null) {
-		return <Empty />;
-	}
-	const names = isMulti(field) ? value.split(";").map((n) => n.trim()) : [value];
-	return (
-		<span className="inline-flex flex-wrap gap-1">
-			{names
-				.filter((n) => n !== "")
-				.map((n) => (
-					<span key={n} className={cn(chip, "bg-secondary text-secondary-foreground")}>
-						<span className="break-words">{n}</span>
-					</span>
-				))}
-		</span>
-	);
-}
-
-function DiffChips({ from, to }: { from: string | null; to: string | null }) {
-	return (
-		<span className="inline-flex flex-wrap items-center gap-1">
-			{diffNames(from, to).map((d) => (
-				<span
-					key={`${d.state}-${d.name}`}
-					className={cn(
-						chip,
-						d.state === "kept" && "bg-secondary text-secondary-foreground",
-						d.state === "added" && "bg-success/15 text-success ",
-						d.state === "removed" && "bg-destructive/10 text-destructive line-through",
-					)}
-				>
-					{d.state === "added" && <span className="mr-1 font-medium">+</span>}
-					<span className="break-words">{d.name}</span>
-				</span>
-			))}
-		</span>
-	);
-}
 
 export function TagConfirmDialog({
 	req,
@@ -194,58 +140,13 @@ function Body({
 	}
 	return (
 		<>
-			<section className="space-y-2.5">
+			<section className="space-y-1">
 				{rows.map((r) => (
-					<FieldRow key={r.field} row={r} />
+					<TagRow key={r.field} field={r.field} was={r.was} to={r.to} />
 				))}
 			</section>
 			<PerFile files={files} />
 		</>
-	);
-}
-
-function FieldRow({ row: r }: { row: FieldSummary }) {
-	const single = r.was.length === 1 ? r.was[0] : undefined;
-	// One shared old value and a list tag: show exactly which names come and go.
-	const diff = single !== undefined && isMulti(r.field);
-	return (
-		<div className="rounded-lg border px-3.5 py-3">
-			<div className="mb-2 flex items-baseline justify-between gap-2">
-				<span className="font-medium">{r.label}</span>
-				<span className="text-muted-foreground text-xs">{songs(r.songs)}</span>
-			</div>
-			{diff ? (
-				<div className="space-y-1.5">
-					<DiffChips from={single.value} to={r.to} />
-					{isReorder(single.value, r.to) && (
-						<div className="text-muted-foreground text-xs">Same names, new order.</div>
-					)}
-				</div>
-			) : (
-				<div className="grid grid-cols-[3.5rem_1fr] items-start gap-x-2 gap-y-1.5">
-					<span className="pt-0.5 text-muted-foreground text-xs">Before</span>
-					<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-						{r.was.slice(0, 4).map((w) => (
-							<span key={w.value ?? "∅"} className="inline-flex items-center gap-1">
-								<Chips field={r.field} value={w.value} />
-								{r.was.length > 1 && (
-									<span className="text-muted-foreground text-xs">×{w.count}</span>
-								)}
-							</span>
-						))}
-						{r.was.length > 4 && (
-							<span className="text-muted-foreground text-xs">+{r.was.length - 4} more</span>
-						)}
-					</div>
-					<span className="pt-0.5 text-primary text-xs">After</span>
-					{r.to === null ? (
-						<span className={cn(chip, "w-fit bg-destructive/10 text-destructive")}>Cleared</span>
-					) : (
-						<Chips field={r.field} value={r.to} />
-					)}
-				</div>
-			)}
-		</div>
 	);
 }
 
@@ -267,26 +168,9 @@ function PerFile({ files }: { files: FileChanges[] }) {
 								{parentName(f.path)}
 							</span>
 						</div>
-						{f.changes.map((c) => (
-							<div key={c.field} className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1">
-								<span className="w-20 shrink-0 text-muted-foreground">{labelOf(c.field)}</span>
-								{isMulti(c.field) ? (
-									<DiffChips from={c.from} to={c.to} />
-								) : (
-									<>
-										<Chips field={c.field} value={c.from} />
-										<ArrowRight className="size-3 shrink-0 text-muted-foreground" />
-										{c.to === null ? (
-											<span className={cn(chip, "bg-destructive/10 text-destructive")}>
-												cleared
-											</span>
-										) : (
-											<Chips field={c.field} value={c.to} />
-										)}
-									</>
-								)}
-							</div>
-						))}
+						<div className="mt-1.5">
+							<TagChanges changes={f.changes} />
+						</div>
 					</li>
 				))}
 				{files.length > MAX_FILES && (

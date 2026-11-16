@@ -226,7 +226,7 @@ fn normalized(field: &str, value: &str) -> String {
     }
 }
 
-#[derive(Serialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {
     pub field: String,
@@ -248,6 +248,23 @@ pub struct Preview {
     pub total: usize,
     /// Only the songs where at least one tag would actually change.
     pub files: Vec<FileChanges>,
+}
+
+/// Every field that differs between two tags, as a change from `from` to `to`. Lists compare
+/// name by name, so `A;B` and `A; B` are the same.
+pub fn diff(from: Option<&Tag>, to: Option<&Tag>) -> Vec<Change> {
+    FIELDS
+        .iter()
+        .filter_map(|(field, _)| {
+            let old = read_field(from, field).map(|v| normalized(field, &v));
+            let new = read_field(to, field).map(|v| normalized(field, &v));
+            (old != new).then(|| Change {
+                field: (*field).to_owned(),
+                from: old,
+                to: new,
+            })
+        })
+        .collect()
 }
 
 /// What `edits` would change in each song at or under `paths`, without writing anything.
@@ -603,6 +620,39 @@ mod tests {
             }]
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn diff_lists_changed_fields_from_a_partly_read_file() {
+        let dir = std::env::temp_dir().join(format!("manplay-tagdiff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap_or_default();
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let (old, new) = (dir.join("old.wav"), dir.join("new.wav"));
+        std::fs::write(&old, silent_wav()).unwrap_or_default();
+        std::fs::write(&new, silent_wav()).unwrap_or_default();
+        let base = BTreeMap::from([
+            ("genre".to_owned(), "House".to_owned()),
+            ("artist".to_owned(), "A;B".to_owned()),
+        ]);
+        write(&dir, &[old.clone(), new.clone()], &base).expect("seed");
+        let edit = BTreeMap::from([("genre".to_owned(), "Techno".to_owned())]);
+        write(&dir, std::slice::from_ref(&new), &edit).expect("edit");
+
+        // Read the old copy as a destination would serve it: start and end only.
+        let bytes = std::fs::read(&old).expect("read");
+        let size = bytes.len() as u64;
+        let remote = crate::tag_region::read(size, bytes[..64].to_vec(), bytes[64..].to_vec())
+            .expect("remote tag");
+        let local = read_from_path(&new).expect("local");
+        assert_eq!(
+            diff(Some(&remote), local.primary_tag()),
+            [Change {
+                field: "genre".into(),
+                from: Some("House".into()),
+                to: Some("Techno".into())
+            }]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

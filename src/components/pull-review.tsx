@@ -3,8 +3,6 @@ import { CheckCircle2, Download, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
 	DiffHunk,
-	DiffLine,
-	DiffNote,
 	DiffRow,
 	groupByDir,
 	ProgressBar,
@@ -46,13 +44,13 @@ function describe(
 	verdict: Verified | undefined,
 ): { tone: Tone; note: string | null } {
 	if (verdict?.duplicateOf) {
-		return { tone: "change", note: `Same audio as ${verdict.duplicateOf}` };
+		return { tone: "change", note: `Duplicate of ${verdict.duplicateOf}` };
 	}
 	if (verdict && !verdict.checked) {
-		return { tone: "add", note: "Audio could not be compared" };
+		return { tone: "add", note: "Not compared" };
 	}
 	if (!verdict && file.otherFormat) {
-		return { tone: "move", note: `Your library has this as .${file.otherFormat}` };
+		return { tone: "move", note: `In library as .${file.otherFormat}` };
 	}
 	return { tone: "add", note: null };
 }
@@ -73,15 +71,15 @@ function FileRow({
 	const { tone, note } = describe(file, verdict);
 	return (
 		<DiffRow
+			tone={tone}
+			name={nameOf(file)}
+			detail={note}
 			picked={picked}
 			onToggle={onToggle}
 			disabled={disabled}
 			label={key(file)}
 			aside={formatBytes(file.size)}
-		>
-			<DiffLine tone={tone}>{nameOf(file)}</DiffLine>
-			{note && <DiffNote>{note}</DiffNote>}
-		</DiffRow>
+		/>
 	);
 }
 
@@ -313,7 +311,10 @@ function Picker({
 						picked={files.filter((f) => !skipped.has(key(f))).length}
 						onToggleAll={(on) => toggleGroup(files, on)}
 						disabled={busy}
-						tallies={[{ tone: "add", count: files.length }]}
+						tallies={(["add", "change", "move"] as const).map((tone) => ({
+							tone,
+							count: files.filter((f) => describe(f, verdicts.get(key(f))).tone === tone).length,
+						}))}
 					>
 						{files.map((f) => (
 							<FileRow
