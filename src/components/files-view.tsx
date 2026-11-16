@@ -1,6 +1,7 @@
 import { Tags, Undo2 } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FilePane } from "#/components/file-pane.tsx";
+import { FileShortcuts } from "#/components/file-shortcuts.tsx";
 import { type FixNotice, HealthBar } from "#/components/library-health.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TagCopyDialog } from "#/components/tag-copy-dialog.tsx";
@@ -20,11 +21,50 @@ import {
 	useTracks,
 } from "#/lib/queries.ts";
 import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
+import { DEFAULT_FILE_SORT, type FileSort } from "#/lib/tree.ts";
 import type { FsClipboard } from "#/lib/use-fs-ops.ts";
 import { type TagConfirmRequest, useTagConfirm } from "#/lib/use-tag-confirm.tsx";
 import { useTagPanelNav } from "#/lib/use-tag-panel-nav.ts";
 
 const AUTO_KEY = "manplay.tags.autoOpen";
+const VIEW_KEY = "manplay.files.view";
+
+/** Where each pane was, whether the view was split, and the sort, so coming back resumes there. */
+interface SavedView {
+	paths: [string | null, string | null];
+	split: boolean;
+	sort: FileSort;
+}
+
+const SORT_KEYS = new Set(["name", "size", "modified"]);
+
+function loadView(): SavedView {
+	const fallback: SavedView = { paths: [null, null], split: false, sort: DEFAULT_FILE_SORT };
+	try {
+		const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "null");
+		if (!v || typeof v !== "object") {
+			return fallback;
+		}
+		const str = (x: unknown) => (typeof x === "string" ? x : null);
+		return {
+			paths: [str(v.paths?.[0]), str(v.paths?.[1])],
+			split: v.split === true,
+			sort: SORT_KEYS.has(v.sort?.key)
+				? { key: v.sort.key, desc: v.sort.desc === true }
+				: DEFAULT_FILE_SORT,
+		};
+	} catch {
+		return fallback;
+	}
+}
+
+function saveView(v: SavedView) {
+	try {
+		localStorage.setItem(VIEW_KEY, JSON.stringify(v));
+	} catch {
+		// Resuming where you were is a convenience only.
+	}
+}
 
 function loadAutoOpen(): boolean {
 	try {
@@ -86,7 +126,10 @@ export function FilesView() {
 	const audit = useAudit();
 	const tracks = useTracks();
 	const fixer = useAuditFix();
-	const [split, setSplit] = useState(false);
+	const [saved] = useState(loadView);
+	const [split, setSplit] = useState(saved.split);
+	const [sort, setSort] = useState<FileSort>(saved.sort);
+	const [shortcuts, setShortcuts] = useState(false);
 	const [clipboard, setClipboard] = useState<FsClipboard | null>(null);
 	const [active, setActive] = useState<0 | 1>(0);
 	const [notice, setNotice] = useState<FixNotice | null>(null);
@@ -130,7 +173,8 @@ export function FilesView() {
 		enabled: tagsOpen,
 	});
 	// Per-pane folder; `null` means "the library root".
-	const [paths, setPaths] = useState<[string | null, string | null]>([null, null]);
+	const [paths, setPaths] = useState<[string | null, string | null]>(saved.paths);
+	useEffect(() => saveView({ paths, split, sort }), [paths, split, sort]);
 
 	const issues = audit.data;
 	const health = useMemo(() => indexIssues(root.data ?? "", issues ?? []), [root.data, issues]);
@@ -145,7 +189,11 @@ export function FilesView() {
 		);
 	}
 	const base = root.data;
-	const at = (i: 0 | 1) => paths[i] ?? base;
+	/** A remembered folder only counts while it is still inside the library folder. */
+	const at = (i: 0 | 1) => {
+		const p = paths[i];
+		return p && (p === base || p.startsWith(`${base}/`)) ? p : base;
+	};
 	const go = (i: 0 | 1) => (p: string) =>
 		setPaths((prev) => (i === 0 ? [p, prev[1]] : [prev[0], p]));
 	const toggleSplit = () => {
@@ -236,6 +284,9 @@ export function FilesView() {
 						onCopyTags={setCopying}
 						onPasteTags={pasteTags}
 						onFocusTags={tagNav.focusTags}
+						sort={sort}
+						onSort={setSort}
+						onShowShortcuts={() => setShortcuts(true)}
 					/>
 				))}
 			</div>
@@ -247,6 +298,7 @@ export function FilesView() {
 				<Stat label="Issues" value={issues?.length ?? 0} />
 			</StatusBar>
 			{tagConfirm.dialog}
+			{shortcuts && <FileShortcuts onClose={() => setShortcuts(false)} />}
 		</div>
 	);
 }

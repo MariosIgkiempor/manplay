@@ -18,10 +18,12 @@ export function flattenTree(
 	base: string,
 	listings: ReadonlyMap<string, readonly FsEntry[]>,
 	expanded: ReadonlySet<string>,
+	sort?: FileSort,
 ): TreeRow[] {
 	const rows: TreeRow[] = [];
 	const walk = (dir: string, depth: number) => {
-		for (const entry of listings.get(dir) ?? []) {
+		const entries = listings.get(dir) ?? [];
+		for (const entry of sort ? sortEntries(entries, sort) : entries) {
 			const path = joinPath(dir, entry.name);
 			rows.push({ entry, path, parent: dir, depth });
 			if (entry.isDir && expanded.has(path)) {
@@ -31,6 +33,63 @@ export function flattenTree(
 	};
 	walk(base, 0);
 	return rows;
+}
+
+export type FileSortKey = "name" | "size" | "modified";
+
+export interface FileSort {
+	key: FileSortKey;
+	desc: boolean;
+}
+
+export const DEFAULT_FILE_SORT: FileSort = { key: "name", desc: false };
+
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/**
+ * Folders first, then by `sort`. Names compare the way Finder does: case-insensitive, with
+ * numbers by value ("Track 2" before "Track 10"). Ties fall back to the name.
+ */
+export function sortEntries(entries: readonly FsEntry[], sort: FileSort): FsEntry[] {
+	const dir = sort.desc ? -1 : 1;
+	const by = (a: FsEntry, b: FsEntry): number => {
+		if (sort.key === "size" && a.size !== b.size) {
+			return a.size - b.size;
+		}
+		if (sort.key === "modified" && a.modified !== b.modified) {
+			return (a.modified ?? 0) - (b.modified ?? 0);
+		}
+		return collator.compare(a.name, b.name);
+	};
+	return [...entries].sort((a, b) => (a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : dir * by(a, b)));
+}
+
+/** The name contains `query`, ignoring case and accents. */
+export function nameMatches(name: string, query: string): boolean {
+	const fold = (t: string) => t.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+	return query.trim() === "" || fold(name).includes(fold(query.trim()));
+}
+
+/**
+ * Rows whose name matches `query`, plus the open folders they sit in so the tree still reads.
+ * An empty query keeps everything.
+ */
+export function filterRows(rows: readonly TreeRow[], query: string): TreeRow[] {
+	if (query.trim() === "") {
+		return [...rows];
+	}
+	const parentOf = new Map(rows.map((r) => [r.path, r.parent]));
+	const keep = new Set<string>();
+	for (const r of rows) {
+		if (!nameMatches(r.entry.name, query)) {
+			continue;
+		}
+		keep.add(r.path);
+		for (let p = r.parent; parentOf.has(p) && !keep.has(p); p = parentOf.get(p) ?? "") {
+			keep.add(p);
+		}
+	}
+	return rows.filter((r) => keep.has(r.path));
 }
 
 /** Drops `paths` and everything under them (after they were moved, renamed or deleted). */

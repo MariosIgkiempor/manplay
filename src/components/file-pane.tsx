@@ -1,5 +1,6 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
 import {
+	ArrowDown,
 	ArrowRight,
 	ArrowUp,
 	ChevronRight,
@@ -10,12 +11,18 @@ import {
 	Folder,
 	FolderOpen,
 	FolderPlus,
+	FolderSearch,
+	Keyboard,
+	Pause,
 	Pencil,
+	Play,
 	Scissors,
+	Search,
 	Square,
 	Tags,
 	Trash2,
 	Wrench,
+	X,
 } from "lucide-react";
 import {
 	type DragEvent,
@@ -27,17 +34,24 @@ import {
 } from "react";
 import { ErrorText } from "#/components/error-text.tsx";
 import { IssuePopover } from "#/components/issue-popover.tsx";
-import { PaneSearch } from "#/components/pane-search.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
-import { type FsEntry, pathArtUrl } from "#/lib/api.ts";
+import type { UndoEntry } from "#/context/undo-context.ts";
+import { type FsEntry, fsReveal, pathArtUrl } from "#/lib/api.ts";
 import type { IssueIndex } from "#/lib/audit.ts";
 import { isAudioName, joinPath, parentPath, relSegments } from "#/lib/fs-path.ts";
 import { applyClick, EMPTY_SELECTION, type Selection } from "#/lib/selection.ts";
 import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
 import { labelOf } from "#/lib/tag-preview.ts";
-import type { TreeRow } from "#/lib/tree.ts";
+import {
+	type FileSort,
+	type FileSortKey,
+	filterRows,
+	nameMatches,
+	type TreeRow,
+} from "#/lib/tree.ts";
 import { useFileDrag } from "#/lib/use-file-drag.ts";
+import { useFilePlay } from "#/lib/use-file-play.ts";
 import type { FsClipboard } from "#/lib/use-fs-ops.ts";
 import { useFsOps } from "#/lib/use-fs-ops.ts";
 import { undoMakeDir, undoRename } from "#/lib/use-fs-undo.ts";
@@ -103,8 +117,6 @@ function collapseRow(
 	}
 }
 
-import type { UndoEntry } from "#/context/undo-context.ts";
-
 interface PaneProps {
 	/** Remembers an operation on the shared undo stack. */
 	onRecord: (entry: UndoEntry) => void;
@@ -133,6 +145,11 @@ interface PaneProps {
 	onPasteTags: (targets: { path: string; name: string; isDir: boolean }[]) => unknown;
 	/** Moves keyboard focus to the tag editor (vim `L`). */
 	onFocusTags: () => void;
+	/** How both panes order their rows. */
+	sort: FileSort;
+	onSort: (sort: FileSort) => void;
+	/** Opens the keyboard shortcut sheet (`?`). */
+	onShowShortcuts: () => void;
 }
 
 export function FilePane({
@@ -155,6 +172,9 @@ export function FilePane({
 	onCopyTags,
 	onPasteTags,
 	onFocusTags,
+	sort,
+	onSort,
+	onShowShortcuts,
 }: PaneProps) {
 	const {
 		listing,
@@ -165,8 +185,13 @@ export function FilePane({
 		isLoading,
 		setOpen,
 		forget,
-	} = useTree(path);
-	const visible = rows.map((r) => r.path);
+	} = useTree(path, sort);
+	/** Text in the filter box; rows that do not match are hidden. */
+	const [query, setQuery] = useState("");
+	const filterRef = useRef<HTMLInputElement>(null);
+	const shown = filterRows(rows, query);
+	const visible = shown.map((r) => r.path);
+	const player = useFilePlay();
 
 	const [sel, setSel] = useState<Selection<string>>(EMPTY_SELECTION);
 	const [renaming, setRenaming] = useState<string | null>(null);
@@ -183,7 +208,7 @@ export function FilePane({
 		setRenaming(null);
 		setCreatingIn(null);
 		setError(null);
-		nav.closeSearchBox();
+		setQuery("");
 	}, [path]);
 
 	const { makeDir, rename, busy, fail, runMove, paste, remove, record } = useFsOps({
@@ -206,8 +231,13 @@ export function FilePane({
 		onDrop: runMove,
 	});
 
-	/** Folders open in place (chevron); double-click and Enter go into them. */
-	const enter = (r: TreeRow) => r.entry.isDir && onNavigate(r.path);
+	const isSong = (r: TreeRow) => !r.entry.isDir && isAudioName(r.entry.name);
+	const play = (r: TreeRow) => isSong(r) && player.toggle(shown, r.path);
+	/** Folders open in place (chevron); double-click and Enter go into them, or play a song. */
+	const enter = (r: TreeRow) => (r.entry.isDir ? onNavigate(r.path) : play(r));
+	const playStateOf = (p: string): PlayState =>
+		player.current !== p ? null : player.playing ? "playing" : "paused";
+	const reveal = (p: string) => void fsReveal(p).catch((e) => setError(String(e)));
 
 	const onRowClick = (
 		r: TreeRow,
@@ -227,6 +257,8 @@ export function FilePane({
 
 	const actions: PaneActionSet = {
 		open: (r) => enter(r),
+		play: (r) => play(r),
+		reveal: (p) => reveal(p),
 		rename: (p) => setRenaming(p),
 		newFolder: (parent) => {
 			setOpen(parent, true);
@@ -274,13 +306,21 @@ export function FilePane({
 	};
 
 	const currentRow = sel.anchor ?? onlySelected?.path ?? null;
-	const nav = useVimNav({ rows, current: currentRow, jumpTo, paneRef: sectionRef });
+	const nav = useVimNav({ rows: shown, current: currentRow, jumpTo, query });
+	const focusPane = () => requestAnimationFrame(() => sectionRef.current?.focus());
+
+	/** Enter goes to the first match; Escape clears the filter. Either way, back to the list. */
+	const finishFilter = (keep: boolean) => {
+		if (keep) {
+			jumpTo(shown.find((r) => nameMatches(r.entry.name, query))?.path);
+		} else {
+			setQuery("");
+		}
+		focusPane();
+	};
 
 	const onKeyDown = (ev: KeyboardEvent) => {
-		const action = keyAction(
-			ev,
-			renaming !== null || creatingIn !== null || nav.searching !== null,
-		);
+		const action = keyAction(ev, renaming !== null || creatingIn !== null);
 		if (action !== "g") {
 			nav.resetG();
 		}
@@ -292,7 +332,10 @@ export function FilePane({
 			open: () => onlySelected && enter(onlySelected),
 			up: () => !atRoot && onNavigate(parentPath(path)),
 			all: () => setSel({ selected: new Set(visible), anchor: null }),
-			clear: () => setSel(EMPTY_SELECTION),
+			// Escape drops the selection first, then the filter.
+			clear: () => (selected.size > 0 ? setSel(EMPTY_SELECTION) : setQuery("")),
+			play: () => onlySelected && play(onlySelected),
+			help: onShowShortcuts,
 			newFolder: () => actions.newFolder(keyboardDest),
 			cut: () => actions.cut(pathsOf()),
 			copy: () => actions.copy(pathsOf()),
@@ -304,7 +347,7 @@ export function FilePane({
 			top: () => jumpTo(visible[0]),
 			bottom: () => jumpTo(visible[visible.length - 1]),
 			g: () => nav.g(() => jumpTo(visible[0])),
-			search: nav.openSearch,
+			search: () => filterRef.current?.select(),
 			searchNext: () => nav.stepSearch(1),
 			searchPrev: () => nav.stepSearch(-1),
 			focusTags: onFocusTags,
@@ -390,6 +433,13 @@ export function FilePane({
 	);
 
 	const selectedPaths = [...selected];
+	const selectedBytes = selectedPaths.reduce(
+		(sum, p) => sum + (rowByPath.get(p)?.entry.size ?? 0),
+		0,
+	);
+	const filtering = query.trim() !== "";
+	/** Rows matching the filter, `null` when not filtering. */
+	const matches = filtering ? shown.filter((r) => nameMatches(r.entry.name, query)).length : null;
 
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: pane-level keyboard shortcuts
@@ -398,7 +448,7 @@ export function FilePane({
 			data-file-pane
 			tabIndex={-1}
 			className={cn(
-				"flex min-h-0 min-w-0 flex-1 flex-col border-r bg-card/40 outline-none last:border-r-0",
+				"@container/pane flex min-h-0 min-w-0 flex-1 flex-col border-r bg-card/40 outline-none last:border-r-0",
 				active && "bg-card/70",
 			)}
 			onKeyDown={onKeyDown}
@@ -407,11 +457,12 @@ export function FilePane({
 				focusUnlessTyping(ev);
 			}}
 		>
-			<div className="flex items-center gap-1 border-b p-2">
+			<div className="flex items-center gap-1 border-b px-2 py-1.5">
 				<Button
 					variant="ghost"
 					size="icon-sm"
-					aria-label="Up one folder"
+					aria-label="Up one folder (⌫)"
+					title="Up one folder (⌫)"
 					disabled={atRoot}
 					onClick={() => onNavigate(parentPath(path))}
 				>
@@ -421,28 +472,35 @@ export function FilePane({
 				<PaneActions
 					busy={busy}
 					count={selected.size}
+					hasClipboard={clipboard !== null}
 					split={otherPath !== null}
 					canMove={movable}
 					onNewFolder={() => actions.newFolder(keyboardDest)}
 					onRename={() => setRenaming(selectedPaths[0] ?? null)}
+					onCut={() => actions.cut(selectedPaths)}
+					onCopy={() => actions.copy(selectedPaths)}
+					onPaste={() => actions.paste(keyboardDest)}
+					onTrash={() => actions.remove(selectedPaths)}
 					onToggleSplit={onToggleSplit}
 					onMove={() => otherPath !== null && runMove(selectedPaths, otherPath)}
 				/>
 			</div>
 
-			<PaneSearch
-				value={nav.searching}
-				onType={nav.typeSearch}
-				onEnd={nav.endSearch}
-				onBlur={nav.closeSearchBox}
+			<FilterBox
+				inputRef={filterRef}
+				value={query}
+				matches={matches ?? 0}
+				onChange={setQuery}
+				onDone={finishFilter}
 			/>
 			<Banners error={error} listError={listing?.isError ? String(listing.error) : null} />
+			<ColumnHeader sort={sort} onSort={onSort} />
 
 			<MenuShell items={paneMenu}>
 				{/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for the current folder */}
 				<div
 					className={cn(
-						"min-h-0 flex-1 overflow-y-auto",
+						"min-h-0 flex-1 overflow-y-auto py-0.5",
 						drag.dropTarget === path && "bg-primary/10",
 					)}
 					onDragOver={(ev) => drag.allowDrop(ev, path)}
@@ -450,7 +508,7 @@ export function FilePane({
 					onDrop={(ev) => drag.dropInto(ev, path)}
 				>
 					{creatingIn === path && newFolderRow(path, 0)}
-					{rows.flatMap((r) => {
+					{shown.flatMap((r) => {
 						const row =
 							renaming === r.path ? (
 								<NameRow
@@ -465,6 +523,7 @@ export function FilePane({
 								<EntryRow
 									key={r.path}
 									row={r}
+									query={query}
 									selected={selected.has(r.path)}
 									active={active}
 									expanded={expanded}
@@ -476,6 +535,8 @@ export function FilePane({
 									onIssueOpen={(open) => issueNav.toggleIssue(r.path, open)}
 									clipboard={clipboard}
 									dropTarget={drag.dropTarget}
+									playState={playStateOf(r.path)}
+									onPlay={isSong(r) ? () => play(r) : undefined}
 									onToggle={() => setOpen(r.path, !expanded.has(r.path))}
 									onDragStart={(ev) => drag.dragStart(ev, r.path)}
 									onClick={(ev) => onRowClick(r, ev)}
@@ -491,16 +552,220 @@ export function FilePane({
 							? [row, newFolderRow(r.path, r.depth + 1)]
 							: [row];
 					})}
-					{listing?.isSuccess && listed.length === 0 && creatingIn !== path && (
-						<p className="p-3 text-muted-foreground text-sm">Empty folder.</p>
-					)}
+					<PaneEmpty
+						empty={listing?.isSuccess === true && listed.length === 0 && creatingIn !== path}
+						noMatch={matches === 0}
+						query={query}
+						onNewFolder={() => actions.newFolder(path)}
+						onClearFilter={() => setQuery("")}
+					/>
 				</div>
 			</MenuShell>
-			<div className="border-t px-3 py-1 text-muted-foreground text-xs">
-				{listed.length} item{listed.length === 1 ? "" : "s"}
-				{selected.size > 0 && ` · ${selected.size} selected`}
-			</div>
+			<PaneFooter
+				count={listed.length}
+				matches={matches}
+				selected={selected.size}
+				bytes={selectedBytes}
+				onShowShortcuts={onShowShortcuts}
+			/>
 		</section>
+	);
+}
+
+/** Counts for the pane and the shortcut sheet button. */
+function PaneFooter({
+	count,
+	matches,
+	selected,
+	bytes,
+	onShowShortcuts,
+}: {
+	count: number;
+	/** Rows matching the filter, `null` when not filtering. */
+	matches: number | null;
+	selected: number;
+	bytes: number;
+	onShowShortcuts: () => void;
+}) {
+	const items =
+		matches === null ? `${count} item${count === 1 ? "" : "s"}` : `${matches} matching`;
+	const picked =
+		selected > 0 ? ` · ${selected} selected${bytes > 0 ? ` (${size(bytes)})` : ""}` : "";
+	return (
+		<div className="flex items-center gap-2 border-t px-3 py-1 text-muted-foreground text-xs tabular-nums">
+			<span className="min-w-0 flex-1 truncate">
+				{items}
+				{picked}
+			</span>
+			<button
+				type="button"
+				onClick={onShowShortcuts}
+				title="Keyboard shortcuts (?)"
+				className="-mr-1.5 flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground [&_svg]:size-3.5"
+			>
+				<Keyboard />
+				<span className="hidden @md/pane:inline">Shortcuts</span>
+			</button>
+		</div>
+	);
+}
+
+/** Always-visible filter; `/` jumps into it, Enter goes back to the list, Escape clears it. */
+function FilterBox({
+	inputRef,
+	value,
+	matches,
+	onChange,
+	onDone,
+}: {
+	inputRef: React.RefObject<HTMLInputElement | null>;
+	value: string;
+	matches: number;
+	onChange: (v: string) => void;
+	onDone: (keep: boolean) => void;
+}) {
+	const on = value.trim() !== "";
+	return (
+		<div className="flex items-center gap-2 border-b px-3">
+			<Search
+				className={cn("size-3.5 shrink-0", on ? "text-primary" : "text-muted-foreground/70")}
+			/>
+			<input
+				ref={inputRef}
+				value={value}
+				placeholder="Filter by name"
+				aria-label="Filter by name"
+				spellCheck={false}
+				className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+				onChange={(ev) => onChange(ev.target.value)}
+				onKeyDown={(ev) => {
+					ev.stopPropagation();
+					if (ev.key === "Enter" || ev.key === "Escape" || ev.key === "ArrowDown") {
+						ev.preventDefault();
+						onDone(ev.key !== "Escape");
+					}
+				}}
+			/>
+			{on ? (
+				<>
+					<span className="shrink-0 text-muted-foreground text-xs tabular-nums">
+						{matches === 0 ? "No matches" : `${matches} found`}
+					</span>
+					<button
+						type="button"
+						aria-label="Clear filter"
+						title="Clear filter (Esc)"
+						onClick={() => onDone(false)}
+						className="-mr-1 grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+					>
+						<X className="size-3.5" />
+					</button>
+				</>
+			) : (
+				<kbd className="hidden shrink-0 rounded border px-1.5 text-[11px] text-muted-foreground/70 @sm/pane:inline">
+					/
+				</kbd>
+			)}
+		</div>
+	);
+}
+
+/** Shared widths so the header and every row line up. */
+const DATE_COL = "hidden w-28 shrink-0 text-right @lg/pane:block";
+const SIZE_COL = "w-16 shrink-0 text-right";
+
+const SORT_COLUMNS: { key: FileSortKey; label: string; className: string; desc: boolean }[] = [
+	{ key: "name", label: "Name", className: "min-w-0 flex-1 text-left", desc: false },
+	{ key: "modified", label: "Modified", className: DATE_COL, desc: true },
+	{ key: "size", label: "Size", className: SIZE_COL, desc: true },
+];
+
+/** Column names that sort when clicked; clicking the sorted one flips it. */
+function ColumnHeader({ sort, onSort }: { sort: FileSort; onSort: (s: FileSort) => void }) {
+	return (
+		<div className="flex h-7 items-center gap-2 border-b pr-3 pl-[72px] text-muted-foreground text-xs">
+			{SORT_COLUMNS.map((c) => {
+				const on = sort.key === c.key;
+				const Arrow = sort.desc ? ArrowDown : ArrowUp;
+				return (
+					<button
+						key={c.key}
+						type="button"
+						title={`Sort by ${c.label.toLowerCase()}`}
+						aria-pressed={on}
+						onClick={() =>
+							onSort(on ? { key: c.key, desc: !sort.desc } : { key: c.key, desc: c.desc })
+						}
+						className={cn(c.className, "group/col hover:text-foreground", on && "text-foreground")}
+					>
+						<span
+							className={cn(
+								"inline-flex items-center gap-1",
+								c.key !== "name" && "flex-row-reverse",
+							)}
+						>
+							{c.label}
+							<Arrow
+								className={cn("size-3", on ? "opacity-70" : "opacity-0 group-hover/col:opacity-40")}
+							/>
+						</span>
+					</button>
+				);
+			})}
+		</div>
+	);
+}
+
+/** The empty-folder or no-matches note, when the list shows nothing. */
+function PaneEmpty({
+	empty,
+	noMatch,
+	query,
+	onNewFolder,
+	onClearFilter,
+}: {
+	empty: boolean;
+	noMatch: boolean;
+	query: string;
+	onNewFolder: () => void;
+	onClearFilter: () => void;
+}) {
+	if (empty) {
+		return <EmptyNote title="This folder is empty" action="New folder" onAction={onNewFolder} />;
+	}
+	if (noMatch) {
+		return (
+			<EmptyNote
+				title={`Nothing here matches “${query.trim()}”`}
+				hint="The filter looks at this folder and any folders you have open."
+				action="Clear filter"
+				onAction={onClearFilter}
+			/>
+		);
+	}
+	return null;
+}
+
+/** What an empty list means and the one thing to do about it. */
+function EmptyNote({
+	title,
+	hint,
+	action,
+	onAction,
+}: {
+	title: string;
+	hint?: string;
+	action: string;
+	onAction: () => void;
+}) {
+	return (
+		<div className="flex flex-col items-center gap-1 px-6 py-12 text-center">
+			<p className="text-sm">{title}</p>
+			{hint && <p className="max-w-64 text-muted-foreground text-xs">{hint}</p>}
+			<Button variant="outline" size="sm" className="mt-2" onClick={onAction}>
+				{action}
+			</Button>
+		</div>
 	);
 }
 
@@ -563,70 +828,98 @@ function Breadcrumbs({
 	);
 }
 
+/** An icon button whose tooltip names the shortcut. */
+function Tool({
+	label,
+	disabled,
+	onClick,
+	children,
+}: {
+	label: string;
+	disabled?: boolean;
+	onClick: () => void;
+	children: React.ReactNode;
+}) {
+	return (
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			aria-label={label}
+			title={label}
+			disabled={disabled}
+			onClick={onClick}
+		>
+			{children}
+		</Button>
+	);
+}
+
+const Divider = () => <span aria-hidden="true" className="mx-0.5 h-4 w-px shrink-0 bg-border" />;
+
 function PaneActions({
 	busy,
 	count,
+	hasClipboard,
 	split,
 	canMove,
 	onNewFolder,
 	onRename,
+	onCut,
+	onCopy,
+	onPaste,
+	onTrash,
 	onToggleSplit,
 	onMove,
 }: {
 	busy: boolean;
 	count: number;
+	hasClipboard: boolean;
 	split: boolean;
 	canMove: boolean;
 	onNewFolder: () => void;
 	onRename: () => void;
+	onCut: () => void;
+	onCopy: () => void;
+	onPaste: () => void;
+	onTrash: () => void;
 	onToggleSplit: () => void;
 	onMove: () => void;
 }) {
-	const splitLabel = split ? "Single pane" : "Split panes";
+	const none = busy || count === 0;
 	return (
-		<>
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				aria-label="New folder"
-				title="New folder"
-				disabled={busy}
-				onClick={onNewFolder}
-			>
+		<div className="flex shrink-0 items-center">
+			<Tool label="New folder (⌘N)" disabled={busy} onClick={onNewFolder}>
 				<FolderPlus />
-			</Button>
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				aria-label="Rename (F2)"
-				title="Rename (F2)"
-				disabled={busy || count !== 1}
-				onClick={onRename}
-			>
+			</Tool>
+			<Tool label="Rename (F2)" disabled={busy || count !== 1} onClick={onRename}>
 				<Pencil />
-			</Button>
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				aria-label={splitLabel}
-				title={splitLabel}
-				onClick={onToggleSplit}
-			>
-				{split ? <Square /> : <Columns2 />}
-			</Button>
+			</Tool>
+			{/* Clipboard tools fold away when the pane is narrow; the keys and menu still work. */}
+			<div className="hidden items-center @xl/pane:flex">
+				<Divider />
+				<Tool label="Cut (⌘X)" disabled={none} onClick={onCut}>
+					<Scissors />
+				</Tool>
+				<Tool label="Copy (⌘C)" disabled={none} onClick={onCopy}>
+					<Copy />
+				</Tool>
+				<Tool label="Paste (⌘V)" disabled={busy || !hasClipboard} onClick={onPaste}>
+					<ClipboardPaste />
+				</Tool>
+			</div>
+			<Tool label="Move to Trash (⌘⌫)" disabled={none} onClick={onTrash}>
+				<Trash2 />
+			</Tool>
+			<Divider />
 			{split && (
-				<Button
-					variant="ghost"
-					size="icon-sm"
-					aria-label="Move selection to the other pane"
-					title="Move selection to the other pane"
-					disabled={busy || count === 0 || !canMove}
-					onClick={onMove}
-				>
+				<Tool label="Move selection to the other pane" disabled={none || !canMove} onClick={onMove}>
 					<ArrowRight />
-				</Button>
+				</Tool>
 			)}
-		</>
+			<Tool label={split ? "Single pane" : "Split panes"} onClick={onToggleSplit}>
+				{split ? <Square /> : <Columns2 />}
+			</Tool>
+		</div>
 	);
 }
 
@@ -657,6 +950,8 @@ type KeyAction =
 	| "prevIssue"
 	| "issues"
 	| "fix"
+	| "play"
+	| "help"
 	| null;
 
 const KEYS: Record<string, KeyAction> = {
@@ -679,6 +974,8 @@ const KEYS: Record<string, KeyAction> = {
 	enter: "open",
 	backspace: "up",
 	escape: "clear",
+	" ": "play",
+	"?": "help",
 	// Vim keys
 	j: "next",
 	k: "prev",
@@ -714,6 +1011,8 @@ function keyAction(ev: KeyboardEvent, editing: boolean): KeyAction {
 
 interface PaneActionSet {
 	open: (r: TreeRow) => unknown;
+	play: (r: TreeRow) => unknown;
+	reveal: (path: string) => unknown;
 	rename: (path: string) => unknown;
 	newFolder: (parent: string) => unknown;
 	cut: (paths: string[]) => unknown;
@@ -789,7 +1088,9 @@ function buildMenu(
 	const { entry, paths, dest } = target;
 	const items: MenuItem[] = [];
 	if (entry?.entry.isDir) {
-		items.push({ label: "Open", icon: FolderOpen, run: () => a.open(entry) });
+		items.push({ label: "Open", icon: FolderOpen, shortcut: "↩", run: () => a.open(entry) });
+	} else if (entry && isAudioName(entry.entry.name)) {
+		items.push({ label: "Play", icon: Play, shortcut: "Space", run: () => a.play(entry) });
 	}
 	if (entry && target.fixable > 0) {
 		items.push({
@@ -818,14 +1119,19 @@ function buildMenu(
 		shortcut: "⌘N",
 		run: () => a.newFolder(dest),
 	});
+	items.push({
+		label: entry ? "Show in Finder" : "Show this folder in Finder",
+		icon: FolderSearch,
+		run: () => a.reveal(entry?.path ?? dest),
+	});
 	if (entry && ctx.canMoveToOther) {
 		items.push({ label: "Move to other pane", icon: ArrowRight, run: () => a.moveToOther(paths) });
 	}
 	if (entry) {
 		items.push({
-			label: "Delete",
+			label: "Move to Trash",
 			icon: Trash2,
-			shortcut: "⌫",
+			shortcut: "⌘⌫",
 			danger: true,
 			run: () => a.remove(paths),
 		});
@@ -849,6 +1155,77 @@ function Thumb({ src, children }: { src: string; children: React.ReactNode }) {
 			onError={() => setFailed(true)}
 		/>
 	);
+}
+
+/**
+ * A song's cover with a play button over it on hover, and a steady pause / play mark while it is
+ * the one loaded in the player.
+ */
+function SongIcon({
+	entry,
+	path,
+	state,
+	onPlay,
+}: {
+	entry: FsEntry;
+	path: string;
+	state: PlayState;
+	onPlay: () => void;
+}) {
+	const Glyph = state === "playing" ? Pause : Play;
+	return (
+		<button
+			type="button"
+			tabIndex={-1}
+			aria-label={state === "playing" ? `Pause ${entry.name}` : `Play ${entry.name}`}
+			onClick={(ev) => {
+				ev.stopPropagation();
+				onPlay();
+			}}
+			onDoubleClick={(ev) => ev.stopPropagation()}
+			className="relative size-7 shrink-0 rounded-md"
+		>
+			<EntryIcon entry={entry} path={path} />
+			<span
+				className={cn(
+					"absolute inset-0 grid place-items-center rounded-md bg-black/55 text-white transition-opacity",
+					state ? "opacity-100" : "opacity-0 group-hover/row:opacity-100",
+				)}
+			>
+				<Glyph className="size-3.5 fill-current" />
+			</span>
+		</button>
+	);
+}
+
+type PlayState = "playing" | "paused" | null;
+
+/** The name with the filtered-for part marked. */
+function Name({ name, query }: { name: string; query: string }) {
+	const q = query.trim().toLowerCase();
+	const at = q === "" ? -1 : name.toLowerCase().indexOf(q);
+	if (at === -1) {
+		return <>{name}</>;
+	}
+	return (
+		<>
+			{name.slice(0, at)}
+			<mark className="rounded-sm bg-primary/25 text-inherit">{name.slice(at, at + q.length)}</mark>
+			{name.slice(at + q.length)}
+		</>
+	);
+}
+
+const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+const timeFmt = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+
+/** Today's changes by time, older ones by date. */
+function modifiedLabel(unix: number | null): string {
+	if (unix === null) {
+		return "–";
+	}
+	const d = new Date(unix * 1000);
+	return d.toDateString() === new Date().toDateString() ? timeFmt.format(d) : dateFmt.format(d);
 }
 
 /** Album art when the file or folder has any, otherwise a plain icon. */
@@ -916,6 +1293,9 @@ function Chevron({
 
 function EntryRow({
 	row,
+	query,
+	playState,
+	onPlay,
 	selected,
 	active,
 	expanded,
@@ -938,6 +1318,10 @@ function EntryRow({
 	onContextMenu,
 }: {
 	row: TreeRow;
+	query: string;
+	playState: PlayState;
+	/** Set for songs. */
+	onPlay: (() => void) | undefined;
 	selected: boolean;
 	active: boolean;
 	expanded: ReadonlySet<string>;
@@ -984,15 +1368,24 @@ function EntryRow({
 				onDrop={entry.isDir ? onDrop : undefined}
 				style={{ paddingLeft: `${12 + depth * INDENT}px` }}
 				className={cn(
-					"flex cursor-default select-none items-center gap-2 py-1 pr-3 text-sm",
+					"group/row mx-1 flex cursor-default select-none items-center gap-2 rounded-md py-1 pr-2 text-sm",
 					selected ? highlight : "hover:bg-muted/60",
 					dropping && "bg-primary/30 ring-1 ring-primary ring-inset",
 					dimmed && "opacity-50",
 				)}
 			>
 				<Chevron entry={entry} open={open} loading={loading} onToggle={onToggle} />
-				<EntryIcon entry={entry} path={path} />
-				<span className="min-w-0 flex-1 truncate">{entry.name}</span>
+				{onPlay ? (
+					<SongIcon entry={entry} path={path} state={playState} onPlay={onPlay} />
+				) : (
+					<EntryIcon entry={entry} path={path} />
+				)}
+				<span
+					className={cn("min-w-0 flex-1 truncate", playState && "font-medium text-primary")}
+					title={entry.name}
+				>
+					<Name name={entry.name} query={query} />
+				</span>
 				<IssuePopover
 					path={path}
 					isDir={entry.isDir}
@@ -1002,7 +1395,12 @@ function EntryRow({
 					open={issueOpen}
 					onOpenChange={onIssueOpen}
 				/>
-				{!entry.isDir && <span className="text-muted-foreground text-xs">{size(entry.size)}</span>}
+				<span className={cn(DATE_COL, "text-muted-foreground text-xs tabular-nums")}>
+					{modifiedLabel(entry.modified)}
+				</span>
+				<span className={cn(SIZE_COL, "text-muted-foreground text-xs tabular-nums")}>
+					{entry.isDir ? <span className="opacity-40">–</span> : size(entry.size)}
+				</span>
 			</div>
 		</MenuShell>
 	);

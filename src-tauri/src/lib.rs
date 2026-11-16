@@ -1741,6 +1741,15 @@ async fn fs_copy(
     Ok(created)
 }
 
+/// Shows a file or folder of the library in Finder.
+#[tauri::command]
+async fn fs_reveal(state: State<'_, AppState>, path: PathBuf) -> Result<(), Error> {
+    let root = library_root(&state)?;
+    tauri::async_runtime::spawn_blocking(move || fsops::reveal(&root, &path))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?
+}
+
 /// Moves to the system Trash. Tracks that vanish are soft-deleted by the rescan, as usual.
 #[tauri::command]
 async fn fs_trash(state: State<'_, AppState>, paths: Vec<PathBuf>) -> Result<(), Error> {
@@ -2790,6 +2799,7 @@ pub fn run() {
             itunes_import,
             itunes_pending,
             fs_list,
+            fs_reveal,
             fs_make_dir,
             fs_rename,
             fs_move,

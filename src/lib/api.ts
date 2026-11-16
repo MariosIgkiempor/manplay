@@ -706,6 +706,11 @@ export async function fsCopy(paths: string[], dest: string): Promise<string[]> {
 	return z.array(z.string()).parse(await invoke("fs_copy", { paths, dest }));
 }
 
+/** Shows a file or folder of the library selected in Finder. */
+export async function fsReveal(path: string): Promise<void> {
+	await invoke("fs_reveal", { path });
+}
+
 /** Moves to the system Trash. */
 export async function fsTrash(paths: string[]): Promise<void> {
 	await invoke("fs_trash", { paths });

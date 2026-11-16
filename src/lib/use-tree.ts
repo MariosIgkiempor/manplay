@@ -1,10 +1,10 @@
 import { useQueries } from "@tanstack/react-query";
 import { useState } from "react";
 import { type FsEntry, fsList } from "#/lib/api.ts";
-import { flattenTree, forgetPaths, type TreeRow } from "#/lib/tree.ts";
+import { type FileSort, flattenTree, forgetPaths, type TreeRow } from "#/lib/tree.ts";
 
 /** A folder shown as a tree: its own entries plus the contents of every expanded subfolder. */
-export function useTree(path: string) {
+export function useTree(path: string, sort?: FileSort) {
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 	// The pane's own folder plus every expanded folder, each listed separately.
 	const dirs = [path, ...expanded];
@@ -18,7 +18,7 @@ export function useTree(path: string) {
 			listings.set(dir, q.data);
 		}
 	}
-	const rows = flattenTree(path, listings, expanded);
+	const rows = flattenTree(path, listings, expanded, sort);
 
 	const setOpen = (dir: string, open: boolean) =>
 		setExpanded((prev) => {

@@ -1,5 +1,5 @@
-import { type RefObject, useRef, useState } from "react";
-import type { TreeRow } from "#/lib/tree.ts";
+import { useRef } from "react";
+import { nameMatches, type TreeRow } from "#/lib/tree.ts";
 
 /** Row whose name contains `q`, searching from `from` (itself included when `delta` is 0), wrapping. */
 export function findByName(
@@ -8,16 +8,16 @@ export function findByName(
 	from: string | null,
 	delta: 0 | 1 | -1,
 ): string | undefined {
-	const needle = q.toLowerCase();
 	const n = rows.length;
-	if (needle === "" || n === 0) {
+	if (q.trim() === "" || n === 0) {
 		return undefined;
 	}
 	const start = from === null ? -1 : rows.findIndex((r) => r.path === from);
 	for (let step = delta === 0 ? 0 : 1; step <= n; step += 1) {
 		const i = (((start + (delta === -1 ? -step : step)) % n) + n) % n;
-		if (rows[i]?.entry.name.toLowerCase().includes(needle)) {
-			return rows[i]?.path;
+		const r = rows[i];
+		if (r && nameMatches(r.entry.name, q)) {
+			return r.path;
 		}
 	}
 	return undefined;
@@ -44,50 +44,23 @@ export function expandOrEnter(
 	}
 }
 
-/** `/` search over the rows shown, `n`/`N` to repeat it, and the `gg` double-tap. */
+/** `n`/`N` through the rows matching the pane's filter, and the `gg` double-tap. */
 export function useVimNav({
 	rows,
 	current,
 	jumpTo,
-	paneRef,
+	query,
 }: {
 	rows: readonly TreeRow[];
 	/** Row the keyboard is on. */
 	current: string | null;
 	jumpTo: (path: string | null | undefined) => void;
-	paneRef: RefObject<HTMLElement | null>;
+	/** Text in the filter box. */
+	query: string;
 }) {
-	/** Text of the open search box; `null` when it is closed. */
-	const [searching, setSearching] = useState<string | null>(null);
-	const origin = useRef<string | null>(null);
-	const last = useRef("");
 	const gPending = useRef(false);
-
-	const close = () => {
-		setSearching(null);
-		requestAnimationFrame(() => paneRef.current?.focus());
-	};
-
 	return {
-		searching,
-		closeSearchBox: () => setSearching(null),
-		openSearch: () => {
-			origin.current = current;
-			setSearching("");
-		},
-		/** Typing in the box: jump to the first match at or after where the search began. */
-		typeSearch: (text: string) => {
-			setSearching(text);
-			jumpTo(findByName(rows, text, origin.current, 0));
-		},
-		/** Enter keeps the search for `n`/`N`; Esc drops it. */
-		endSearch: (keep: boolean) => {
-			if (keep) {
-				last.current = searching ?? "";
-			}
-			close();
-		},
-		stepSearch: (delta: 1 | -1) => jumpTo(findByName(rows, last.current, current, delta)),
+		stepSearch: (delta: 1 | -1) => jumpTo(findByName(rows, query, current, delta)),
 		/** Call with `false` on any other key so only two quick `g`s count. */
 		g: (top: () => void) => {
 			if (gPending.current) {

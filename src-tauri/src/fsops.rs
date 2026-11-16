@@ -199,6 +199,20 @@ pub fn list(root: &Path, dir: &Path) -> Result<Vec<FsEntry>, Error> {
     Ok(out)
 }
 
+/// Shows `path` selected in a Finder window.
+pub fn reveal(root: &Path, path: &Path) -> Result<(), Error> {
+    let target = inside(root, path)?;
+    let status = std::process::Command::new("open")
+        .arg("-R")
+        .arg(&target)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(err("Finder could not show the file."))
+    }
+}
+
 pub fn make_dir(root: &Path, parent: &Path, name: &str) -> Result<PathBuf, Error> {
     let parent = inside(root, parent)?;
     let target = parent.join(valid_name(name)?);
