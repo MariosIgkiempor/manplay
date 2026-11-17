@@ -30,7 +30,8 @@ pub const A_GRID_HAND: &str = "grid_hand";
 pub const A_BPM_EDITED: &str = "bpm_edited";
 pub const A_KEY_EDITED: &str = "key_edited";
 pub const A_GRID_EDITED: &str = "grid_edited";
-/// Tombstone: the entity is gone. Wins over every edit, earlier or later.
+/// Tombstone: the entity is gone. Wins over every edit, earlier or later. Its value is `null`;
+/// a later `_delete` with the value `false` takes it back (Restore in Recently deleted).
 pub const F_DELETE: &str = "_delete";
 /// The entity was merged into another of its kind (`val` is that uid). It is gone like a
 /// tombstone, and everything that pointed at it (memberships, smart playlist rules) points at the

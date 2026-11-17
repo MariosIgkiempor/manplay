@@ -41,7 +41,7 @@ import {
 	type TargetPlan,
 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
-import { useSyncApply, useSyncPlan, useSyncTargets } from "#/lib/queries.ts";
+import { DELETED_KEY, useSyncApply, useSyncPlan, useSyncTargets } from "#/lib/queries.ts";
 import {
 	type Choices,
 	type IncomingAction,
@@ -421,6 +421,8 @@ async function exchangeLibraryData(
 		return [];
 	}
 	const outcomes = await libsyncRun(ids);
+	// Who deleted what can also change when only a snapshot was written or read.
+	await queryClient.invalidateQueries({ queryKey: DELETED_KEY });
 	if (outcomes.some((l) => l.received > 0)) {
 		for (const key of [
 			"tracks",

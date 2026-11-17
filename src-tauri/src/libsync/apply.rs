@@ -439,7 +439,7 @@ fn resolve(conn: &Connection, kind: Kind, uid: &str) -> Result<Option<Row>, Erro
 
 /// Every membership op of one item and of what was merged into it, applied to its row (it was
 /// just created or took a merge).
-fn rematerialize_members(
+pub fn rematerialize_members(
     conn: &Connection,
     kind: Kind,
     uid: &str,
@@ -585,6 +585,13 @@ pub fn renumber(conn: &Connection, playlist_id: i64) -> Result<(), Error> {
 /// brought it in. Returns how many were applied.
 pub fn materialize_pending(conn: &mut Connection) -> Result<usize, Error> {
     let tx = conn.transaction()?;
+    let n = materialize_pending_in(&tx)?;
+    tx.commit()?;
+    Ok(n)
+}
+
+/// [`materialize_pending`] inside a transaction the caller already has.
+pub fn materialize_pending_in(tx: &Connection) -> Result<usize, Error> {
     let mut waiting: Vec<(bool, String)> = Vec::new();
     for (kind, tracks_of) in [
         (
@@ -618,13 +625,12 @@ pub fn materialize_pending(conn: &mut Connection) -> Result<usize, Error> {
     for (is_tag, id) in &waiting {
         if let Some((parent, fp)) = id.split_once('/') {
             let kind = if *is_tag { TAGS } else { PLAYLISTS };
-            materialize_member(&tx, kind, parent, fp, &mut touched)?;
+            materialize_member(tx, kind, parent, fp, &mut touched)?;
         }
     }
     for id in touched {
-        renumber(&tx, id)?;
+        renumber(tx, id)?;
     }
-    let analyses = entities::materialize_waiting_analysis(&tx)?;
-    tx.commit()?;
+    let analyses = entities::materialize_waiting_analysis(tx)?;
     Ok(waiting.len() + analyses)
 }

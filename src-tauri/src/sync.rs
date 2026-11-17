@@ -213,18 +213,51 @@ fn plain_segment(s: &str) -> bool {
 }
 
 impl libsync::ChunkStore for LogStore<'_, '_> {
-    async fn list_chunks(&self) -> Result<Vec<libsync::ChunkRef>, Error> {
+    async fn list_chunks(&self) -> Result<Vec<libsync::remote::ChunkInfo>, Error> {
         let files = self.backend.list(&self.dir(None)).await?;
         Ok(files
             .into_iter()
             .filter_map(|f| match f.rel.as_slice() {
-                [dev, name] if plain_segment(dev) => Some(libsync::ChunkRef {
-                    dev: dev.clone(),
-                    seq: libsync::remote::parse_chunk_name(name)?,
+                [dev, name] if plain_segment(dev) => Some(libsync::remote::ChunkInfo {
+                    chunk: libsync::ChunkRef {
+                        dev: dev.clone(),
+                        seq: libsync::remote::parse_chunk_name(name)?,
+                    },
+                    size: f.size,
                 }),
                 _ => None,
             })
             .collect())
+    }
+
+    async fn delete_chunk(&self, chunk: &libsync::ChunkRef) -> Result<(), Error> {
+        let mut dest = self.dir(Some(&chunk.dev));
+        dest.push(libsync::remote::chunk_name(chunk.seq));
+        self.backend.delete(&dest).await
+    }
+
+    async fn list_waveforms(&self) -> Result<Vec<libsync::waveforms::WaveformRef>, Error> {
+        let mut dir = self.base.clone();
+        dir.extend([
+            libsync::remote::DIR.to_owned(),
+            libsync::waveforms::DIR.to_owned(),
+        ]);
+        let files = self.backend.list(&dir).await?;
+        Ok(files
+            .into_iter()
+            .filter_map(|f| match f.rel.as_slice() {
+                [sub, name] => {
+                    let w = libsync::compact::parse_waveform_name(name)?;
+                    (w.rel()? == (sub.clone(), name.clone())).then_some(w)
+                }
+                _ => None,
+            })
+            .collect())
+    }
+
+    async fn delete_waveform(&self, w: &libsync::waveforms::WaveformRef) -> Result<(), Error> {
+        let (_, path) = self.waveform_path(w)?;
+        self.backend.delete(&path).await
     }
 
     async fn read_chunk(&self, chunk: &libsync::ChunkRef) -> Result<Vec<u8>, Error> {
@@ -303,7 +336,21 @@ impl libsync::ChunkStore for LogStore<'_, '_> {
         }
         let tmp = Self::meta_tmp("put");
         tokio::fs::write(&tmp, &bytes).await?;
-        let sent = self.backend.put(&full, &tmp).await;
+        // A snapshot is big: written under a temporary name and renamed, so a reader never
+        // takes half of one for the newest.
+        let sent = match self.backend {
+            Backend::Dav(_) if path.starts_with(libsync::snapshot::DIR) => {
+                let mut part = full.clone();
+                if let Some(name) = part.last_mut() {
+                    name.push_str(".part");
+                }
+                match self.backend.put(&part, &tmp).await {
+                    Ok(()) => self.backend.rename(&part, &full).await,
+                    Err(e) => Err(e),
+                }
+            }
+            _ => self.backend.put(&full, &tmp).await,
+        };
         let _ = tokio::fs::remove_file(&tmp).await;
         sent
     }

@@ -2132,6 +2132,28 @@ fn list_clashes(state: State<'_, AppState>) -> Result<Vec<libsync::clashes::Clas
     with_db!(state, |c| libsync::clashes::list(c))
 }
 
+/// Shared items deleted in the last 90 days, newest first.
+#[tauri::command]
+fn list_recently_deleted(
+    state: State<'_, AppState>,
+) -> Result<Vec<libsync::recent::Deleted>, Error> {
+    with_db!(state, |c| libsync::recent::list(
+        c,
+        libsync::clock::now_ms()
+    ))
+}
+
+/// Takes a deleted item back with its old uid and its songs.
+#[tauri::command]
+fn restore_deleted(state: State<'_, AppState>, kind: String, uid: String) -> Result<(), Error> {
+    with_db!(state, |c| libsync::recent::restore(
+        c,
+        &kind,
+        &uid,
+        libsync::clock::now_ms()
+    ))
+}
+
 /// What combining the two sides of a clash would share and remove.
 #[tauri::command]
 fn clash_combine_preview(
@@ -3507,6 +3529,8 @@ pub fn run() {
             get_device_name,
             set_device_name,
             list_clashes,
+            list_recently_deleted,
+            restore_deleted,
             clash_combine_preview,
             resolve_clash,
             share_preview,

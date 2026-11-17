@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use super::apply::{PLAYLISTS, SMARTS, TAGS};
 use super::entities;
-use super::remote::{ChunkStore, RunSummary, run};
+use super::remote::{ChunkStore, RunSummary, run_at};
 use super::write::{active, device_id, new_uid};
+use super::{clock, compact, snapshot};
 use crate::db;
 use crate::error::Error;
 
@@ -31,7 +32,7 @@ const SETTING_DEVICE_NAME: &str = "device_name";
 const SETTING_SEEDED: &str = "libsync_seeded";
 
 /// Version of `library.json`.
-const LIBRARY_FORMAT: u32 = 1;
+pub const LIBRARY_FORMAT: u32 = 1;
 
 fn now() -> i64 {
     SystemTime::now()
@@ -85,6 +86,11 @@ async fn read_library<S: ChunkStore>(store: &S) -> Result<Option<LibraryFile>, E
             "{LIBRARY_FILE} on the destination cannot be read: {e}"
         ))
     })
+}
+
+/// The `format` in `library.json`, if the file is there and readable.
+pub async fn library_format<S: ChunkStore>(store: &S) -> Result<Option<u32>, Error> {
+    Ok(read_library(store).await?.map(|f| f.format))
 }
 
 /// Writes `library.json` and `.ignore`.
@@ -256,6 +262,7 @@ fn prepare_join(conn: &Connection, choice: JoinChoice) -> Result<(), Error> {
                      ('tag', 'track_tag', 'playlist', 'playlist_track', 'smart_playlist');
                  DELETE FROM op_cursor;",
             )?;
+            snapshot::forget(conn)?;
         }
     }
     Ok(())
@@ -411,6 +418,16 @@ pub async fn run_joined<S: ChunkStore>(
     store: &S,
     fallback_name: &str,
 ) -> RunSummary {
+    run_joined_at(db, store, fallback_name, clock::now_ms()).await
+}
+
+/// [`run_joined`] at a given time (UTC ms).
+pub async fn run_joined_at<S: ChunkStore>(
+    db: &Mutex<Connection>,
+    store: &S,
+    fallback_name: &str,
+    now_ms: i64,
+) -> RunSummary {
     match lock(db).and_then(|c| active(&c)) {
         Ok(true) => {}
         Ok(false) => return RunSummary::default(),
@@ -427,7 +444,43 @@ pub async fn run_joined<S: ChunkStore>(
             ..RunSummary::default()
         };
     }
-    run(db, store).await
+    let summary = run_at(db, store, now_ms).await;
+    if summary.error.is_none() {
+        // Neither is needed for the sync itself: a failure here is tried again next time.
+        if let Err(e) = refresh_devices(db, store).await {
+            log::warn!("could not read the member list: {e}");
+        }
+        if let Err(e) = compact::maybe(db, store, now_ms, compact::THRESHOLD).await {
+            log::warn!("could not compact the shared library: {e}");
+        }
+    }
+    summary
+}
+
+/// Remembers the names of the other members, for Recently deleted.
+async fn refresh_devices<S: ChunkStore>(db: &Mutex<Connection>, store: &S) -> Result<(), Error> {
+    let mut names = Vec::new();
+    for file in store.list_meta(DEVICES_DIR).await? {
+        let Some(id) = file.strip_suffix(".json") else {
+            continue;
+        };
+        if let Some(bytes) = store.read_meta(&device_path(id)).await?
+            && let Ok(d) = serde_json::from_slice::<DeviceFile>(&bytes)
+        {
+            names.push((id.to_owned(), d.name));
+        }
+    }
+    let mut conn = lock(db)?;
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM libsync_devices", [])?;
+    for (id, name) in names {
+        tx.execute(
+            "INSERT OR REPLACE INTO libsync_devices (id, name) VALUES (?1, ?2)",
+            params![id, name],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 // ---- leaving ----------------------------------------------------------------------
@@ -459,7 +512,7 @@ pub async fn leave<S: ChunkStore>(
         device_id(&conn)?
     };
     if sync {
-        let summary = run(db, store).await;
+        let summary = run_at(db, store, clock::now_ms()).await;
         if let Some(e) = summary.error {
             return Err(Error::Msg(format!("Could not sync before leaving: {e}")));
         }
@@ -527,12 +580,14 @@ pub fn leave_local(conn: &Connection, choice: LeaveChoice) -> Result<(), Error> 
          DELETE FROM op_state;
          DELETE FROM op_cursor;
          DELETE FROM op_unknown;
+         DELETE FROM libsync_devices;
          UPDATE analysis SET wf_pushed = 0;
          UPDATE sync_targets SET libsync = 0;",
     )?;
     for key in [SETTING_LIBRARY_ID, SETTING_LIBRARY_NAME, SETTING_SEEDED] {
         db::set_setting(conn, key, None)?;
     }
+    snapshot::forget(conn)?;
     Ok(())
 }
 

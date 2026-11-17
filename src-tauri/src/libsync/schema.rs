@@ -50,6 +50,12 @@ pub fn create(conn: &Connection) -> Result<(), Error> {
              keeps TEXT NOT NULL,
              held  TEXT NOT NULL,
              UNIQUE (kind, held)
+         );
+         -- The other members of the library as the destination last listed them (names for
+         -- Recently deleted). Rebuilt at every sync.
+         CREATE TABLE IF NOT EXISTS libsync_devices (
+             id   TEXT PRIMARY KEY,
+             name TEXT NOT NULL
          );",
     )?;
     Ok(())

@@ -50,10 +50,14 @@ pub fn get_bool(conn: &Connection, e: &str, id: &str, f: &str) -> Result<Option<
     Ok(get(conn, e, id, f)?.and_then(|v| v.as_bool()))
 }
 
-/// Whether the entity has a tombstone or was merged into another.
+/// Whether the entity has a tombstone or was merged into another. A `_delete` whose value is
+/// `false` is a restore (see `recent.rs`): the newest `_delete` register says which it is.
 pub fn is_dead(conn: &Connection, e: &str, id: &str) -> Result<bool, Error> {
     Ok(conn
-        .prepare_cached("SELECT 1 FROM op_state WHERE e = ?1 AND id = ?2 AND f IN (?3, ?4)")?
+        .prepare_cached(
+            "SELECT 1 FROM op_state WHERE e = ?1 AND id = ?2
+             AND ((f = ?3 AND val <> 'false') OR f = ?4)",
+        )?
         .exists(params![e, id, F_DELETE, F_MERGE])?)
 }
 
@@ -106,10 +110,11 @@ pub fn cursor(conn: &Connection, dev: &str) -> Result<u64, Error> {
     Ok(seq.and_then(|s| u64::try_from(s).ok()).unwrap_or(0))
 }
 
+/// Moves a cursor forward; one that is already further stays.
 pub fn set_cursor(conn: &Connection, dev: &str, seq: u64) -> Result<(), Error> {
     conn.execute(
         "INSERT INTO op_cursor (dev, seq) VALUES (?1, ?2)
-         ON CONFLICT(dev) DO UPDATE SET seq = excluded.seq",
+         ON CONFLICT(dev) DO UPDATE SET seq = MAX(seq, excluded.seq)",
         params![dev, i64::try_from(seq).unwrap_or(i64::MAX)],
     )?;
     Ok(())

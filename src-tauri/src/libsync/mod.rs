@@ -10,14 +10,17 @@
 pub mod apply;
 pub mod clashes;
 pub mod clock;
+pub mod compact;
 pub mod entities;
 pub mod frac;
 pub mod membership;
 pub mod ops;
+pub mod recent;
 pub mod remote;
 pub mod schema;
 pub mod seed;
 pub mod share;
+pub mod snapshot;
 pub mod state;
 pub mod waveforms;
 pub mod write;

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { createContext, type ReactNode, useContext, useEffect } from "react";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
+import { SidebarRecentlyDeleted } from "#/components/sidebar-deleted.tsx";
 import { SectionLabel } from "#/components/sidebar-parts.tsx";
 import { SidebarPlaylists } from "#/components/sidebar-playlists.tsx";
 import { SidebarSmartPlaylists } from "#/components/sidebar-smart-playlists.tsx";
@@ -180,6 +181,7 @@ export function Sidebar() {
 							<SidebarPlaylists />
 							<SidebarSmartPlaylists />
 							<SidebarTagTree />
+							<SidebarRecentlyDeleted />
 						</section>
 					</div>
 				)}

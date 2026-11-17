@@ -12,9 +12,10 @@ use super::clock::{self, Hlc};
 use super::frac;
 use super::membership::{self, JoinChoice, LeaveChoice};
 use super::ops::{FORMAT, Op};
-use super::remote::{self, ChunkRef, ChunkStore};
+use super::remote::run_at;
+use super::remote::{self, ChunkInfo, ChunkRef, ChunkStore};
 use super::waveforms::{self, Misses, WaveformRef};
-use super::{clashes, share};
+use super::{clashes, compact, recent, share, snapshot};
 use super::{run, seed, state};
 use crate::db;
 use crate::error::Error;
@@ -557,6 +558,8 @@ struct Memory {
     chunks: Mutex<BTreeMap<ChunkRef, Vec<u8>>>,
     waves: Mutex<BTreeMap<String, Vec<u8>>>,
     wave_writes: std::sync::atomic::AtomicUsize,
+    /// Bytes of every chunk ever stored, deleted or not.
+    chunk_bytes: std::sync::atomic::AtomicUsize,
     /// Small files under `.manplay/`, by path.
     meta: Mutex<BTreeMap<String, Vec<u8>>>,
     /// Every call of any kind, so a test can show a destination was never talked to.
@@ -582,9 +585,41 @@ impl Memory {
 
 #[allow(clippy::unused_async_trait_impl)] // the trait is async; memory never waits
 impl ChunkStore for Memory {
-    async fn list_chunks(&self) -> Result<Vec<ChunkRef>, Error> {
+    async fn list_chunks(&self) -> Result<Vec<ChunkInfo>, Error> {
         self.touch();
-        Ok(self.chunks.lock().expect("lock").keys().cloned().collect())
+        Ok(self
+            .chunks
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|(chunk, bytes)| ChunkInfo {
+                chunk: chunk.clone(),
+                size: bytes.len() as u64,
+            })
+            .collect())
+    }
+
+    async fn delete_chunk(&self, chunk: &ChunkRef) -> Result<(), Error> {
+        self.touch();
+        self.chunks.lock().expect("lock").remove(chunk);
+        Ok(())
+    }
+
+    async fn list_waveforms(&self) -> Result<Vec<WaveformRef>, Error> {
+        self.touch();
+        Ok(self
+            .waves
+            .lock()
+            .expect("lock")
+            .keys()
+            .filter_map(|key| compact::parse_waveform_name(key.rsplit('/').next()?))
+            .collect())
+    }
+
+    async fn delete_waveform(&self, w: &WaveformRef) -> Result<(), Error> {
+        self.touch();
+        self.waves.lock().expect("lock").remove(&Self::wave_key(w)?);
+        Ok(())
     }
 
     async fn read_chunk(&self, chunk: &ChunkRef) -> Result<Vec<u8>, Error> {
@@ -603,6 +638,8 @@ impl ChunkStore for Memory {
         if chunks.contains_key(chunk) {
             return Err(Error::Msg("exists".into()));
         }
+        self.chunk_bytes
+            .fetch_add(bytes.len(), std::sync::atomic::Ordering::SeqCst);
         chunks.insert(chunk.clone(), bytes);
         Ok(())
     }
@@ -1012,7 +1049,7 @@ async fn a_chunk_is_written_once_and_the_log_resumes_after_it() {
         .await
         .expect("list")
         .iter()
-        .map(|c| c.seq)
+        .map(|c| c.chunk.seq)
         .collect();
     assert_eq!(seqs, vec![1, 2]);
     let me = super::write::device_id(&a.lock().expect("lock")).expect("id");
@@ -2309,7 +2346,16 @@ async fn leaving_waits_for_a_reachable_destination_unless_told_not_to() {
     struct Down;
     #[allow(clippy::unused_async_trait_impl)]
     impl ChunkStore for Down {
-        async fn list_chunks(&self) -> Result<Vec<ChunkRef>, Error> {
+        async fn list_chunks(&self) -> Result<Vec<ChunkInfo>, Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn delete_chunk(&self, _: &ChunkRef) -> Result<(), Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn list_waveforms(&self) -> Result<Vec<WaveformRef>, Error> {
+            Err(Error::Msg("offline".into()))
+        }
+        async fn delete_waveform(&self, _: &WaveformRef) -> Result<(), Error> {
             Err(Error::Msg("offline".into()))
         }
         async fn read_chunk(&self, _: &ChunkRef) -> Result<Vec<u8>, Error> {
@@ -2449,4 +2495,664 @@ fn removing_the_destination_of_a_library_leaves_it_with_a_copy() {
         })
         .expect("tag");
     assert_eq!(scope, "local");
+}
+
+// ---- snapshots, cleanup, Recently deleted ----------------------------------------
+
+const DAY_MS: i64 = 86_400_000;
+
+fn my_id(db: &Mutex<Connection>) -> String {
+    super::write::device_id(&db.lock().expect("lock")).expect("id")
+}
+
+async fn sync(db: &Mutex<Connection>, store: &Memory) {
+    let sum = run(db, store).await;
+    assert!(sum.error.is_none(), "{:?}", sum.error);
+}
+
+fn chunks_of(store: &Memory, dev: &str) -> Vec<u64> {
+    store
+        .chunks
+        .lock()
+        .expect("lock")
+        .keys()
+        .filter(|c| c.dev == dev)
+        .map(|c| c.seq)
+        .collect()
+}
+
+fn snapshots(store: &Memory) -> Vec<String> {
+    store
+        .meta
+        .lock()
+        .expect("lock")
+        .keys()
+        .filter_map(|k| snapshot::parse_name(k.strip_prefix("snapshot/")?))
+        .collect()
+}
+
+fn remote_bytes(store: &Memory) -> usize {
+    let chunks: usize = store
+        .chunks
+        .lock()
+        .expect("lock")
+        .values()
+        .map(Vec::len)
+        .sum();
+    let snaps: usize = store
+        .meta
+        .lock()
+        .expect("lock")
+        .iter()
+        .filter(|(k, _)| k.starts_with("snapshot/"))
+        .map(|(_, v)| v.len())
+        .sum();
+    chunks + snaps
+}
+
+async fn compacted(db: &Mutex<Connection>, store: &Memory, threshold: u64) -> compact::Outcome {
+    compact::maybe(db, store, clock::now_ms(), threshold)
+        .await
+        .expect("compact")
+}
+
+fn delete_tag_named(db: &Mutex<Connection>, name: &str) {
+    let id = row_id(db, "tags", name);
+    db::delete_tag(&db.lock().expect("lock"), id).expect("delete");
+}
+
+fn uid_of(db: &Mutex<Connection>, table: &str, name: &str) -> String {
+    db.lock()
+        .expect("lock")
+        .query_row(
+            &format!("SELECT uid FROM {table} WHERE name = ?1"),
+            params![name],
+            |r| r.get(0),
+        )
+        .expect("uid")
+}
+
+fn everything(db: &Mutex<Connection>) -> String {
+    format!("{}\n--\n{}", shown(db), smart_shown(db))
+}
+
+#[tokio::test]
+async fn a_snapshot_and_the_chunks_after_it_rebuild_what_replaying_everything_does() {
+    let store = Memory::default();
+    let a = device(6);
+    let b = device(6);
+    tag(&a, "Genre/House", &[1, 2, 3]);
+    tag(&b, "Vocal", &[2]);
+    tag(&a, "Gone", &[1]);
+    let list = playlist(&a, "Warmup", &[4, 2, 5]);
+    smart(&a, "House", &["Genre/House"]);
+    db::store_analysis(
+        &a.lock().expect("lock"),
+        "fp1",
+        &Ok(finished(128.0)),
+        100,
+        false,
+    )
+    .expect("analyse");
+    for d in [&a, &b, &a] {
+        sync(d, &store).await;
+    }
+    delete_tag_named(&a, "Gone");
+    untag(&a, "Genre/House", 3);
+    remove(&a, list, 4);
+    sync(&a, &store).await;
+    sync(&b, &store).await;
+
+    let all_before = store.chunks.lock().expect("lock").clone();
+    let out = compacted(&a, &store, 1).await;
+    assert!(out.snapshot.is_some());
+    assert_eq!(snapshots(&store).len(), 1);
+    assert!(
+        chunks_of(&store, &my_id(&a)).is_empty(),
+        "A's chunks are in the snapshot, so A removed them"
+    );
+    assert!(
+        !chunks_of(&store, &my_id(&b)).is_empty(),
+        "B's are B's to remove"
+    );
+
+    // Edits after the snapshot, from both sides; A's new chunk must not reuse a removed number.
+    tag(&b, "Late", &[6]);
+    add(&b, list, &[1]);
+    tag(&a, "After", &[5]);
+    sync(&b, &store).await;
+    sync(&a, &store).await;
+    sync(&b, &store).await;
+    assert_eq!(
+        chunks_of(&store, &my_id(&a)),
+        vec![out_next(&all_before, &my_id(&a))]
+    );
+
+    // A device that starts from the snapshot, and one that replays every chunk ever written.
+    let full = Memory::default();
+    {
+        let mut kept = full.chunks.lock().expect("lock");
+        kept.extend(all_before);
+        kept.extend(store.chunks.lock().expect("lock").clone());
+    }
+    let from_snapshot = device(6);
+    let from_log = device(6);
+    sync(&from_snapshot, &store).await;
+    sync(&from_log, &full).await;
+    assert_eq!(everything(&from_snapshot), everything(&from_log));
+    assert_eq!(everything(&from_snapshot), everything(&a));
+    assert_eq!(everything(&a), everything(&b));
+    let text = everything(&from_snapshot);
+    assert!(text.contains("Late") && text.contains("After"), "{text}");
+    assert!(!text.contains("Gone"), "{text}");
+    assert_eq!(
+        analysis_row(&from_snapshot, "fp1").map(|r| r.0),
+        Some(Some(128.0))
+    );
+}
+
+/// The chunk number after the highest one `dev` had written.
+fn out_next(written: &BTreeMap<ChunkRef, Vec<u8>>, dev: &str) -> u64 {
+    written
+        .keys()
+        .filter(|c| c.dev == dev)
+        .map(|c| c.seq)
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
+#[tokio::test]
+async fn a_device_deletes_only_its_own_chunks() {
+    let store = Memory::default();
+    let a = device(4);
+    let b = device(4);
+    tag(&a, "One", &[1]);
+    sync(&a, &store).await;
+    tag(&b, "Two", &[2]);
+    sync(&b, &store).await;
+    sync(&a, &store).await;
+    sync(&b, &store).await;
+
+    // Too small to be worth a snapshot: nothing is written or removed.
+    let none = compacted(&b, &store, u64::MAX).await;
+    assert_eq!(none, compact::Outcome::default());
+
+    let first = compacted(&b, &store, 1).await;
+    assert!(first.snapshot.is_some());
+    assert_eq!(first.chunks_deleted, 1);
+    assert_eq!(chunks_of(&store, &my_id(&b)), Vec::<u64>::new());
+    assert_eq!(
+        chunks_of(&store, &my_id(&a)),
+        vec![1],
+        "A's chunk stays until A removes it, whatever B thinks of it"
+    );
+    sync(&a, &store).await;
+    let second = compacted(&a, &store, u64::MAX).await;
+    assert_eq!((second.snapshot, second.chunks_deleted), (None, 1));
+    assert_eq!(chunks_of(&store, &my_id(&a)), Vec::<u64>::new());
+    assert_eq!(snapshots(&store).len(), 1);
+    assert_eq!(everything(&a), everything(&b));
+}
+
+#[tokio::test]
+async fn a_device_behind_a_removed_chunk_recovers_from_the_snapshot() {
+    let store = Memory::default();
+    let a = device(5);
+    let b = device(5);
+    let c = device(5);
+    tag(&a, "One", &[1]);
+    sync(&a, &store).await;
+    sync(&c, &store).await; // C has chunk 1 and then goes away
+    tag(&a, "Two", &[2]);
+    sync(&a, &store).await;
+    tag(&a, "Three", &[3]);
+    sync(&a, &store).await;
+    sync(&b, &store).await;
+    compacted(&a, &store, 1).await;
+    assert_eq!(chunks_of(&store, &my_id(&a)), Vec::<u64>::new());
+    // A keeps writing: its numbering continues past what was removed.
+    tag(&a, "Four", &[4]);
+    sync(&a, &store).await;
+    assert_eq!(chunks_of(&store, &my_id(&a)), vec![4]);
+
+    sync(&c, &store).await;
+    assert_eq!(everything(&c), everything(&a));
+    let text = shown(&c);
+    assert!(text.contains("Two") && text.contains("Four"), "{text}");
+    sync(&b, &store).await;
+    assert_eq!(everything(&b), everything(&a));
+}
+
+#[tokio::test]
+async fn a_hole_the_newest_snapshot_does_not_explain_is_filled_from_another_snapshot() {
+    let store = Memory::default();
+    let a = device(5);
+    let b = device(5);
+    let d = device(5);
+    tag(&a, "One", &[1]);
+    sync(&a, &store).await;
+    sync(&b, &store).await;
+    sync(&d, &store).await; // D has chunk 1
+    tag(&a, "Two", &[2]);
+    sync(&a, &store).await;
+    tag(&a, "Three", &[3]);
+    sync(&a, &store).await;
+    compacted(&a, &store, 1).await;
+    tag(&a, "Four", &[4]);
+    sync(&a, &store).await;
+    // B, which only knew chunk 1, wrote a snapshot at the same time and its is the newer one.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let draft = snapshot::draft(&mut b.lock().expect("lock"), clock::now_ms()).expect("draft");
+    assert_eq!(draft.header.covers.get(&my_id(&a)), Some(&1));
+    snapshot::write(&store, &draft).await.expect("write");
+    assert_eq!(snapshots(&store).len(), 2);
+
+    sync(&d, &store).await;
+    assert_eq!(everything(&d), everything(&a));
+}
+
+#[tokio::test]
+async fn two_devices_compacting_at_once_leave_a_readable_newest_snapshot() {
+    let store = Memory::default();
+    let a = device(5);
+    let b = device(5);
+    tag(&a, "One", &[1]);
+    sync(&a, &store).await;
+    tag(&b, "Two", &[2]);
+    sync(&b, &store).await; // B read A; A has not read B
+    compacted(&a, &store, 1).await;
+    // B writes its own snapshot without having seen A's.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let draft = snapshot::draft(&mut b.lock().expect("lock"), clock::now_ms()).expect("draft");
+    snapshot::write(&store, &draft).await.expect("write");
+    assert_eq!(
+        snapshots(&store).len(),
+        2,
+        "each wrote one, neither removed the other's"
+    );
+    sync(&a, &store).await;
+    sync(&b, &store).await;
+    compacted(&a, &store, u64::MAX).await;
+    compacted(&b, &store, u64::MAX).await;
+    assert_eq!(
+        snapshots(&store).len(),
+        1,
+        "the writer of the older one removed it"
+    );
+    let c = device(5);
+    sync(&c, &store).await;
+    assert_eq!(everything(&c), everything(&b));
+    assert!(shown(&c).contains("One") && shown(&c).contains("Two"));
+}
+
+#[tokio::test]
+async fn unknown_ops_are_kept_in_snapshots() {
+    let store = Memory::default();
+    let a = device(3);
+    let future = Op {
+        v: FORMAT + 1,
+        ..op(
+            10,
+            "cccccccc",
+            "tag",
+            "t-new",
+            "name",
+            json!("From the future"),
+        )
+    };
+    let other_kind = op(11, "cccccccc", "color", "c-1", "hex", json!("#ff0000"));
+    store.chunks.lock().expect("lock").insert(
+        ChunkRef {
+            dev: "cccccccc".into(),
+            seq: 1,
+        },
+        remote::encode(&[future, other_kind]).expect("encode"),
+    );
+    tag(&a, "Mine", &[1]);
+    sync(&a, &store).await;
+    assert!(compacted(&a, &store, 1).await.snapshot.is_some());
+    // The device that wrote them is gone; only the snapshot remembers.
+    store
+        .chunks
+        .lock()
+        .expect("lock")
+        .retain(|c, _| c.dev != "cccccccc");
+
+    let b = device(3);
+    sync(&b, &store).await;
+    let conn = b.lock().expect("lock");
+    let unknown: i64 = conn
+        .query_row("SELECT COUNT(*) FROM op_unknown", [], |r| r.get(0))
+        .expect("count");
+    assert_eq!(unknown, 1, "the newer-format op is stored, not applied");
+    assert_eq!(
+        state::get(&conn, "color", "c-1", "hex").expect("get"),
+        Some(json!("#ff0000")),
+        "an entity this build does not know is kept"
+    );
+    assert!(!dump(&conn).contains("From the future"));
+}
+
+#[tokio::test]
+async fn tombstones_are_kept_for_90_days_and_then_leave_nothing_behind() {
+    let store = Memory::default();
+    let a = device(4);
+    tag(&a, "Old", &[1, 2]);
+    tag(&a, "Keep", &[3]);
+    let old = uid_of(&a, "tags", "Old");
+    sync(&a, &store).await;
+    delete_tag_named(&a, "Old");
+    let now = clock::now_ms();
+    let ops_at = |at: i64| snapshot::build(&a.lock().expect("lock"), at).expect("build");
+
+    let young = ops_at(now + 10 * DAY_MS);
+    assert!(young.iter().any(|o| o.id == old && o.f == "_delete"));
+    assert!(young.iter().any(|o| o.id.starts_with(&format!("{old}/"))));
+    let aged = ops_at(now + 100 * DAY_MS);
+    assert!(
+        !aged
+            .iter()
+            .any(|o| o.id == old || o.id.starts_with(&format!("{old}/"))),
+        "the tombstone and everything of the tag is gone"
+    );
+    assert!(
+        aged.iter()
+            .any(|o| o.e == "tag" && o.f == "name" && o.val == json!("Keep"))
+    );
+    assert!(
+        aged.iter()
+            .any(|o| o.e == "track_tag" && o.id.ends_with("/fp3"))
+    );
+    // Untagged songs older than 90 days are not remembered either.
+    untag(&a, "Keep", 3);
+    let later = ops_at(now + 100 * DAY_MS);
+    assert!(
+        !later
+            .iter()
+            .any(|o| o.e == "track_tag" && o.id.ends_with("/fp3"))
+    );
+}
+
+#[tokio::test]
+async fn a_device_away_for_over_90_days_starts_over_and_drops_its_stale_edits() {
+    let store = Memory::default();
+    let a = device(5);
+    let b = device(5);
+    tag(&a, "Old", &[1]);
+    tag(&a, "Keep", &[2]);
+    sync(&a, &store).await;
+    sync(&b, &store).await;
+    // B edits while away and never sends it.
+    tag(&b, "Offline", &[4]);
+    delete_tag_named(&a, "Old");
+    tag(&a, "New", &[3]);
+    sync(&a, &store).await;
+    let later = clock::now_ms() + 100 * DAY_MS;
+    let out = compact::maybe(&a, &store, later, 1).await.expect("compact");
+    assert!(out.snapshot.is_some());
+
+    // The tombstone is not in the snapshot, so B only learns of the deletion by starting over.
+    let back = run_at(&b, &store, later).await;
+    assert!(back.error.is_none(), "{:?}", back.error);
+    assert_eq!(back.sent, 0, "what B made before the horizon is not sent");
+    let text = shown(&b);
+    assert!(text.contains("Keep") && text.contains("New"), "{text}");
+    assert!(!text.contains("Old"), "{text}");
+    assert!(!text.contains("Offline"), "{text}");
+    assert_eq!(count_unsent(&b), 0);
+    assert_eq!(everything(&b), everything(&a));
+    // From then on it is an ordinary member again.
+    tag(&b, "Back", &[5]);
+    assert!(run_at(&b, &store, later).await.sent > 0);
+}
+
+fn count_unsent(db: &Mutex<Connection>) -> i64 {
+    db.lock()
+        .expect("lock")
+        .query_row("SELECT COUNT(*) FROM oplog WHERE uploaded = 0", [], |r| {
+            r.get(0)
+        })
+        .expect("count")
+}
+
+#[tokio::test]
+async fn a_device_that_never_syncs_again_is_cleaned_up_once_covered() {
+    let store = Memory::default();
+    let a = device(3);
+    let ancient = op(5_000, "dead0001", "tag", "t-ghost", "name", json!("Ghost"));
+    let ancient_member = op(5_000, "live0001", "tag", "t-live", "name", json!("Live"));
+    let recent = op(
+        clock::now_ms(),
+        "recent01",
+        "tag",
+        "t-recent",
+        "name",
+        json!("Recent"),
+    );
+    for (dev, o) in [
+        ("dead0001", ancient),
+        ("live0001", ancient_member),
+        ("recent01", recent),
+    ] {
+        store.chunks.lock().expect("lock").insert(
+            ChunkRef {
+                dev: dev.into(),
+                seq: 1,
+            },
+            remote::encode(&[o]).expect("encode"),
+        );
+    }
+    store.meta.lock().expect("lock").insert(
+        "devices/live0001.json".into(),
+        br#"{"name":"Studio","lastSeen":1,"analysisVersion":2}"#.to_vec(),
+    );
+    sync(&a, &store).await;
+    assert!(compacted(&a, &store, 1).await.snapshot.is_some());
+    assert!(
+        chunks_of(&store, "dead0001").is_empty(),
+        "no member file, nothing recent"
+    );
+    assert_eq!(
+        chunks_of(&store, "live0001"),
+        vec![1],
+        "it still has its member file"
+    );
+    assert_eq!(
+        chunks_of(&store, "recent01"),
+        vec![1],
+        "it wrote something recently"
+    );
+    let b = device(3);
+    sync(&b, &store).await;
+    assert!(shown(&b).contains("Ghost"));
+}
+
+#[tokio::test]
+async fn compaction_leaves_a_library_of_a_newer_format_alone() {
+    let store = Memory::default();
+    let a = device(3);
+    tag(&a, "One", &[1]);
+    sync(&a, &store).await;
+    store.meta.lock().expect("lock").insert(
+        "library.json".into(),
+        br#"{"format":2,"libraryId":"x","name":"Future","createdAt":1}"#.to_vec(),
+    );
+    assert_eq!(compacted(&a, &store, 1).await, compact::Outcome::default());
+    assert_eq!(snapshots(&store), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn waveforms_nothing_refers_to_are_removed_with_the_snapshot() {
+    let store = Memory::default();
+    let a = device(2);
+    db::store_analysis(
+        &a.lock().expect("lock"),
+        "fp1",
+        &Ok(finished(128.0)),
+        100,
+        false,
+    )
+    .expect("analyse");
+    sync(&a, &store).await;
+    let current = crate::analysis::VERSION;
+    let put = |fp: &str, version: i64| {
+        let w = WaveformRef {
+            audio_fp: fp.to_owned(),
+            version,
+        };
+        store
+            .waves
+            .lock()
+            .expect("lock")
+            .insert(Memory::wave_key(&w).expect("key"), vec![1; 10]);
+    };
+    put("fp1", current);
+    put("fp1", current + 5); // a device uses it
+    put("fp1", current + 7); // nobody does
+    put("zz9", current); // no song and no op mentions it
+    store.meta.lock().expect("lock").insert(
+        "devices/other001.json".into(),
+        format!(
+            r#"{{"name":"Laptop","lastSeen":1,"analysisVersion":{}}}"#,
+            current + 5
+        )
+        .into_bytes(),
+    );
+    let out = compacted(&a, &store, 1).await;
+    assert!(out.snapshot.is_some());
+    assert_eq!(out.waveforms_deleted, 2);
+    let left: Vec<String> = store.waves.lock().expect("lock").keys().cloned().collect();
+    assert_eq!(
+        left,
+        vec![
+            format!("fp/fp1-v{current}.bin"),
+            format!("fp/fp1-v{}.bin", current + 5)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_deleted_item_can_be_restored_with_its_old_uid_and_songs() {
+    let store = Memory::default();
+    let (a, _) = started(&store).await;
+    let (b, id) = unjoined(3);
+    rename_device(&b, "Laptop");
+    let sum = membership::join(&b, id, &store, JoinChoice::Merge, "")
+        .await
+        .expect("join");
+    assert!(sum.error.is_none());
+    let now = clock::now_ms();
+    smart(&a, "Rule", &["House"]);
+    let house = uid_of(&a, "tags", "House");
+    for d in [&a, &b, &a] {
+        let s = membership::run_joined_at(d, &store, "dest", now).await;
+        assert!(s.error.is_none(), "{:?}", s.error);
+    }
+    delete_tag_named(&b, "House");
+    delete_tag_named(&a, "Peak");
+    for d in [&b, &a, &b, &a] {
+        membership::run_joined_at(d, &store, "dest", now).await;
+    }
+    assert!(!shown(&a).contains("House"));
+    assert!(smart_shown(&a).contains('?'), "the rule lost its tag");
+
+    let listed = recent::list(&a.lock().expect("lock"), now).expect("list");
+    let line = |d: &recent::Deleted| format!("{} {} by {} ({})", d.kind, d.name, d.by, d.songs);
+    let mut lines: Vec<String> = listed.iter().map(line).collect();
+    lines.sort();
+    assert_eq!(
+        lines,
+        ["tag House by Laptop (1)", "tag Peak by This device (1)"]
+    );
+    assert!(listed.iter().all(|d| d.at > 0));
+    assert!(
+        recent::list(&a.lock().expect("lock"), now + 100 * DAY_MS)
+            .expect("list")
+            .is_empty(),
+        "after 90 days it is no longer offered"
+    );
+
+    recent::restore(&mut a.lock().expect("lock"), "tag", &house, now).expect("restore");
+    assert_eq!(uid_of(&a, "tags", "House"), house, "the same uid");
+    assert!(shown(&a).contains("tagged House fp1"));
+    for d in [&a, &b, &a] {
+        membership::run_joined_at(d, &store, "dest", now).await;
+    }
+    assert_eq!(uid_of(&b, "tags", "House"), house);
+    assert!(shown(&b).contains("tagged House fp1"));
+    assert!(smart_shown(&b).contains("-> [\"fp1\"]") && !smart_shown(&b).contains('?'));
+    assert_eq!(everything(&a), everything(&b));
+    let after = recent::list(&b.lock().expect("lock"), now).expect("list");
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].name, "Peak");
+    assert!(
+        recent::restore(&mut b.lock().expect("lock"), "tag", &house, now).is_err(),
+        "only what is deleted can be restored"
+    );
+}
+
+#[tokio::test]
+async fn years_of_edits_leave_about_one_snapshot_on_the_destination() {
+    let store = Memory::default();
+    let a = device(30);
+    let b = device(30);
+    let lists = [
+        playlist(&a, "Warmup", &[1, 2, 3]),
+        playlist(&a, "Peak", &[4, 5]),
+    ];
+    let mut snapshot_len = 0;
+    for d in [&a, &b] {
+        sync(d, &store).await;
+    }
+    for round in 0..120_usize {
+        let song = round % 30 + 1;
+        let name = format!("Tag{}", round % 9);
+        tag(&a, &name, &[song, (song + 7) % 30 + 1]);
+        untag(&a, &name, song);
+        add(&b, lists[round % 2], &[(song + 3) % 30 + 1]);
+        remove(&b, lists[round % 2], (song + 3) % 30 + 1);
+        if round % 13 == 0 {
+            delete_tag_named(&a, &name);
+        }
+        for d in [&a, &b, &a] {
+            sync(d, &store).await;
+        }
+        for d in [&a, &b] {
+            let out = compacted(d, &store, 4_000).await;
+            if out.snapshot.is_some() {
+                snapshot_len = remote_bytes(&store);
+            }
+            sync(d, &store).await;
+        }
+    }
+    for d in [&a, &b, &a, &b] {
+        sync(d, &store).await;
+        compacted(d, &store, u64::MAX).await;
+    }
+    let written = store.chunk_bytes.load(std::sync::atomic::Ordering::SeqCst);
+    let left = remote_bytes(&store);
+    let one = store
+        .meta
+        .lock()
+        .expect("lock")
+        .iter()
+        .filter(|(k, _)| k.starts_with("snapshot/"))
+        .map(|(_, v)| v.len())
+        .max()
+        .expect("a snapshot");
+    assert_eq!(snapshots(&store).len(), 1);
+    assert!(snapshot_len > 0);
+    assert!(
+        left < one * 3,
+        "{left} bytes left against a snapshot of {one}"
+    );
+    assert!(
+        written > left * 5,
+        "{written} bytes were written over the years, {left} remain"
+    );
+    let c = device(30);
+    sync(&c, &store).await;
+    assert_eq!(everything(&c), everything(&a));
+    assert_eq!(everything(&a), everything(&b));
 }

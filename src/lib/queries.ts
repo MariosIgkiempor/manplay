@@ -21,6 +21,7 @@ import {
 	getPanelTabs,
 	getTagClipboard,
 	getUiSetting,
+	type ItemKind,
 	itunesImport,
 	itunesPending,
 	type JoinChoice,
@@ -31,6 +32,7 @@ import {
 	listClashes,
 	listDuplicates,
 	listMissing,
+	listRecentlyDeleted,
 	listSyncTargets,
 	listTracks,
 	migrateLibraryTags,
@@ -40,6 +42,7 @@ import {
 	removeMissingNow,
 	rescanLibrary,
 	resetLibrary,
+	restoreDeleted,
 	type ServiceId,
 	saveAnalysisToFiles,
 	serviceFlags,
@@ -98,6 +101,13 @@ export function useClashes() {
 	return useQuery({ queryKey: CLASHES_KEY, queryFn: listClashes });
 }
 
+export const DELETED_KEY = ["recently-deleted"] as const;
+
+/** Shared items deleted in the last 90 days, who deleted them and when. */
+export function useRecentlyDeleted() {
+	return useQuery({ queryKey: DELETED_KEY, queryFn: listRecentlyDeleted });
+}
+
 /** Everything a share, a make-private, a hide or a clash choice can change in the lists. */
 export function useRefreshItems() {
 	const queryClient = useQueryClient();
@@ -105,6 +115,7 @@ export function useRefreshItems() {
 		await Promise.all(
 			[
 				CLASHES_KEY,
+				DELETED_KEY,
 				["tags"],
 				["playlists"],
 				["smart-playlists"],
@@ -113,6 +124,15 @@ export function useRefreshItems() {
 			].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
 		);
 	};
+}
+
+/** Takes a deleted item back; the lists and the deleted list refresh. */
+export function useRestoreDeleted() {
+	const refresh = useRefreshItems();
+	return useMutation({
+		mutationFn: ({ kind, uid }: { kind: ItemKind; uid: string }) => restoreDeleted(kind, uid),
+		onSettled: refresh,
+	});
 }
 
 /** Joins or starts a shared library on a destination. Everything shared changes in the lists. */

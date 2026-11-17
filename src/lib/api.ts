@@ -972,6 +972,29 @@ export async function listClashes(): Promise<Clash[]> {
 	return z.array(clashSchema).parse(await invoke("list_clashes"));
 }
 
+const deletedItemSchema = z.object({
+	kind: z.enum(["tag", "playlist", "smart_playlist"]),
+	uid: z.string(),
+	name: z.string(),
+	/** "This device", a member's name, or "Another device". */
+	by: z.string(),
+	/** Unix seconds. */
+	at: int,
+	songs: int,
+});
+
+/** A shared item someone deleted in the last 90 days. */
+export type DeletedItem = z.infer<typeof deletedItemSchema>;
+
+export async function listRecentlyDeleted(): Promise<DeletedItem[]> {
+	return z.array(deletedItemSchema).parse(await invoke("list_recently_deleted"));
+}
+
+/** Brings a deleted item back with its old uid and songs; everyone gets it at their next sync. */
+export async function restoreDeleted(kind: ItemKind, uid: string): Promise<void> {
+	await invoke("restore_deleted", { kind, uid });
+}
+
 const combinePreviewSchema = z.object({ sharesLocal: z.boolean(), songs: int, name: z.string() });
 
 export type CombinePreview = z.infer<typeof combinePreviewSchema>;

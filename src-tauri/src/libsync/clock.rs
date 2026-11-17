@@ -55,6 +55,16 @@ pub fn parse(clock: &str) -> Option<(i64, u32)> {
     Some((ms, counter))
 }
 
+/// The device that made a clock (the part after the counter).
+pub fn device_of(clock: &str) -> Option<&str> {
+    clock.splitn(3, '-').nth(2)
+}
+
+/// The prefix of a clock string for `ms`: a clock sorts before it exactly when it is older.
+pub fn before_ms(ms: i64) -> String {
+    format!("{ms:015}")
+}
+
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

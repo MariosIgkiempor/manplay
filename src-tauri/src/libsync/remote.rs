@@ -17,6 +17,7 @@ use serde::Serialize;
 use super::apply::apply_ops;
 use super::clock;
 use super::ops::Op;
+use super::snapshot;
 use super::state;
 use super::waveforms::WaveformRef;
 use super::write::device_id;
@@ -34,6 +35,13 @@ pub struct ChunkRef {
     pub seq: u64,
 }
 
+/// A chunk and how big its file is, for deciding when the log is big enough to compact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkInfo {
+    pub chunk: ChunkRef,
+    pub size: u64,
+}
+
 pub fn chunk_name(seq: u64) -> String {
     format!("{seq:08}{SUFFIX}")
 }
@@ -49,7 +57,16 @@ pub fn parse_chunk_name(name: &str) -> Option<u64> {
 /// Where chunks live. The real one is a `WebDAV` or R2 destination (`sync.rs`); tests use memory.
 pub trait ChunkStore {
     /// Every chunk of every device.
-    fn list_chunks(&self) -> impl Future<Output = Result<Vec<ChunkRef>, Error>> + Send;
+    fn list_chunks(&self) -> impl Future<Output = Result<Vec<ChunkInfo>, Error>> + Send;
+    /// Removes a chunk; one that is already gone counts as removed.
+    fn delete_chunk(&self, chunk: &ChunkRef) -> impl Future<Output = Result<(), Error>> + Send;
+    /// Every waveform file on the destination.
+    fn list_waveforms(&self) -> impl Future<Output = Result<Vec<WaveformRef>, Error>> + Send;
+    /// Removes a waveform file; one that is already gone counts as removed.
+    fn delete_waveform(
+        &self,
+        waveform: &WaveformRef,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
     fn read_chunk(&self, chunk: &ChunkRef) -> impl Future<Output = Result<Vec<u8>, Error>> + Send;
     /// Stores a new chunk. Fails if that chunk exists: chunks are never replaced.
     fn write_chunk(
@@ -150,56 +167,92 @@ fn unuploaded(conn: &Connection) -> Result<Vec<Op>, Error> {
 
 /// One sync of library data: uploads this device's new ops as a chunk, then downloads and
 /// applies the chunks of the other devices. The database lock is held only between awaits.
+#[cfg(test)]
 pub async fn run<S: ChunkStore>(db: &Mutex<Connection>, store: &S) -> RunSummary {
+    run_at(db, store, clock::now_ms()).await
+}
+
+/// [`run`] at a given time (UTC ms), which decides whether this device was away so long that it
+/// must start over from the snapshot.
+pub async fn run_at<S: ChunkStore>(db: &Mutex<Connection>, store: &S, now_ms: i64) -> RunSummary {
     let mut summary = RunSummary::default();
-    if let Err(e) = run_inner(db, store, &mut summary).await {
+    if let Err(e) = run_inner(db, store, now_ms, &mut summary).await {
         summary.error = Some(e.to_string());
     }
     summary
 }
 
+/// Writes `pending` as this device's next chunk and marks the ops uploaded. The number is never
+/// one a snapshot already covers: those chunks may have been cleaned up, and a reader would skip
+/// a new chunk with an old number.
+async fn upload<S: ChunkStore>(
+    db: &Mutex<Connection>,
+    store: &S,
+    own: &str,
+    pending: &[Op],
+    listed: &[ChunkRef],
+    covered: u64,
+) -> Result<(), Error> {
+    let remote_max = listed
+        .iter()
+        .filter(|c| c.dev == own)
+        .map(|c| c.seq)
+        .max()
+        .unwrap_or(0);
+    let seq = {
+        let conn = lock(db)?;
+        state::cursor(&conn, own)?.max(remote_max).max(covered) + 1
+    };
+    store
+        .write_chunk(
+            &ChunkRef {
+                dev: own.to_owned(),
+                seq,
+            },
+            encode(pending)?,
+        )
+        .await?;
+    let mut conn = lock(db)?;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare("UPDATE oplog SET uploaded = 1 WHERE clock = ?1")?;
+        for op in pending {
+            stmt.execute(params![op.clock])?;
+        }
+    }
+    state::set_cursor(&tx, own, seq)?;
+    tx.commit()?;
+    Ok(())
+}
+
 async fn run_inner<S: ChunkStore>(
     db: &Mutex<Connection>,
     store: &S,
+    now_ms: i64,
     summary: &mut RunSummary,
 ) -> Result<(), Error> {
+    // 0. A newer snapshot than this device has seen: load it first, so a device that is behind
+    // chunks that were cleaned up, or is new, starts from it. It can also drop what this device
+    // sent too long ago, so what is uploaded is read after it.
+    let known = snapshot::sync_in(db, store).await?;
     let (own, pending) = {
         let conn = lock(db)?;
         (device_id(&conn)?, unuploaded(&conn)?)
     };
-    let listed = store.list_chunks().await?;
+    let listed: Vec<ChunkRef> = store
+        .list_chunks()
+        .await?
+        .into_iter()
+        .map(|c| c.chunk)
+        .collect();
 
     // 1. Upload own new ops as one chunk.
     if !pending.is_empty() {
-        let remote_max = listed
-            .iter()
-            .filter(|c| c.dev == own)
-            .map(|c| c.seq)
-            .max()
+        let covered = known
+            .as_ref()
+            .and_then(|k| k.covers.get(&own).copied())
             .unwrap_or(0);
-        let seq = {
-            let conn = lock(db)?;
-            state::cursor(&conn, &own)?.max(remote_max) + 1
-        };
-        store
-            .write_chunk(
-                &ChunkRef {
-                    dev: own.clone(),
-                    seq,
-                },
-                encode(&pending)?,
-            )
-            .await?;
-        let mut conn = lock(db)?;
-        let tx = conn.transaction()?;
-        {
-            let mut stmt = tx.prepare("UPDATE oplog SET uploaded = 1 WHERE clock = ?1")?;
-            for op in &pending {
-                stmt.execute(params![op.clock])?;
-            }
-        }
-        state::set_cursor(&tx, &own, seq)?;
-        tx.commit()?;
+        upload(db, store, &own, &pending, &listed, covered).await?;
         summary.sent = pending.len();
     }
 
@@ -215,7 +268,23 @@ async fn run_inner<S: ChunkStore>(
             let conn = lock(db)?;
             state::cursor(&conn, dev)? + 1
         };
-        while seqs.contains(&next) {
+        let mut healed = false;
+        loop {
+            if !seqs.contains(&next) {
+                // Later chunks exist but this one is gone: it was cleaned up after a snapshot
+                // that covers it. Another snapshot than the newest may hold what is missing.
+                if !healed && seqs.range(next + 1..).next().is_some() {
+                    healed = true;
+                    if snapshot::heal(db, store, dev, next).await? {
+                        next = {
+                            let conn = lock(db)?;
+                            state::cursor(&conn, dev)? + 1
+                        };
+                        continue;
+                    }
+                }
+                break;
+            }
             let chunk = ChunkRef {
                 dev: dev.to_owned(),
                 seq: next,
@@ -256,6 +325,10 @@ async fn run_inner<S: ChunkStore>(
             state::set_cursor(&tx, dev, *seq)?;
         }
         tx.commit()?;
+    }
+    if failure.is_none() {
+        let conn = lock(db)?;
+        snapshot::set_last_sync(&conn, now_ms)?;
     }
     failure.map_or(Ok(()), Err)
 }

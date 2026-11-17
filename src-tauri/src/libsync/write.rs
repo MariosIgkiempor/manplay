@@ -101,6 +101,11 @@ impl Batch {
         self.push("tag", uid, F_DELETE, Value::Null);
     }
 
+    /// A deleted item was taken back: its tombstone is replaced by `false`.
+    pub fn restored(&mut self, e: &'static str, uid: &str) {
+        self.push(e, uid, F_DELETE, json!(false));
+    }
+
     /// A tag was merged into another: it is gone and its uid means `into` from now on.
     pub fn tag_merged(&mut self, uid: &str, into: &str) {
         self.push("tag", uid, F_MERGE, json!(into));
