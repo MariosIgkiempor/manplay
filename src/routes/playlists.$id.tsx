@@ -6,6 +6,7 @@ import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { CollectionHeader } from "#/components/page-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
+import { SharingControl } from "#/components/sharing-control.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useUndo } from "#/context/undo-context.ts";
 import {
@@ -84,6 +85,20 @@ function PlaylistPage() {
 				fallbackIcon={<ListMusic className="size-10" />}
 				onRename={(name) => rename.mutate(name)}
 				onDelete={() => setConfirming(true)}
+				sharing={
+					<SharingControl
+						item={
+							playlist
+								? {
+										kind: "playlist",
+										id: playlist.id,
+										name: playlist.name,
+										scope: playlist.scope ?? "shared",
+									}
+								: null
+						}
+					/>
+				}
 			/>
 			<div className="space-y-3 p-6">
 				{[remove, rename, destroy].map(

@@ -17,6 +17,7 @@ import {
 	fsMove,
 	fsRename,
 	fsTrash,
+	getDefaultScope,
 	getDeviceName,
 	getLibraryRoot,
 	getLibraryView,
@@ -50,6 +51,7 @@ import {
 	saveAnalysisToFiles,
 	serviceFlags,
 	setAnalysisSettings,
+	setDefaultScope,
 	setDeviceName,
 	setLibraryView,
 	setPanelTabs,
@@ -174,6 +176,17 @@ export function useDeviceName() {
 		onSuccess: (next) => queryClient.setQueryData(["device-name"], next),
 	});
 	return { name, save };
+}
+
+/** The scope new tags and playlists get, and the means to change it. */
+export function useDefaultScope() {
+	const queryClient = useQueryClient();
+	const scope = useQuery({ queryKey: ["default-scope"], queryFn: getDefaultScope });
+	const save = useMutation({
+		mutationFn: setDefaultScope,
+		onSuccess: (_, next) => queryClient.setQueryData(["default-scope"], next),
+	});
+	return { scope, save };
 }
 
 export const SYNC_KEY = ["sync-run"] as const;

@@ -235,6 +235,8 @@ interface CollectionProps {
 	fallbackIcon: ReactNode;
 	onRename: (name: string) => void;
 	onDelete: () => void;
+	/** Shared / Private switch beside the buttons (shown while in a shared library). */
+	sharing?: ReactNode;
 	/** Extra content under the buttons, such as subtags. */
 	children?: ReactNode;
 }
@@ -249,6 +251,7 @@ export function CollectionHeader({
 	fallbackIcon,
 	onRename,
 	onDelete,
+	sharing,
 	children,
 }: CollectionProps) {
 	const player = usePlayer();
@@ -278,6 +281,7 @@ export function CollectionHeader({
 					<Button variant="outline" onClick={() => setEditing(true)} disabled={editing}>
 						<Pencil /> Rename
 					</Button>
+					{sharing}
 					<Button variant="ghost" onClick={onDelete} className="hover:text-destructive">
 						<Trash2 /> Delete
 					</Button>

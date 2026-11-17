@@ -19,7 +19,7 @@ import {
 	playlistTracks,
 	renamePlaylist,
 } from "#/lib/api.ts";
-import { useItemSharing } from "#/lib/use-item-sharing.tsx";
+import { useItemSharing, useNewItemScope } from "#/lib/use-item-sharing.tsx";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 
 const nonBlank = (v: string) => (v.trim() === "" ? null : v.trim());
@@ -87,6 +87,7 @@ export function SidebarPlaylists() {
 	const [deleting, setDeleting] = useState<Playlist | null>(null);
 	const [closed, setClosed] = useStoredFlag("manplay.sidebar.playlistsClosed");
 	const sharing = useItemSharing();
+	const newScope = useNewItemScope();
 	const everything = playlists.data ?? [];
 	const all = everything.filter((p) => !p.hidden);
 	const hidden = everything.filter((p) => p.hidden);
@@ -126,9 +127,13 @@ export function SidebarPlaylists() {
 					indent={CHILD_PAD}
 					placeholder="Playlist name"
 					parse={(v) => v.trim() || null}
-					onCancel={() => setAdding(false)}
+					onCancel={() => {
+						setAdding(false);
+						newScope.reset();
+					}}
+					scope={newScope.prop}
 					onCreate={async (name) => {
-						const id = await createPlaylist(name);
+						const id = await createPlaylist(name, newScope.value);
 						await queryClient.invalidateQueries({ queryKey: ["playlists"] });
 						await navigate({ to: "/playlists/$id", params: { id: String(id) } });
 					}}

@@ -61,6 +61,67 @@ export function ScopeMark({ scope, held }: { scope: Scope; held: boolean }) {
 	);
 }
 
+const SCOPE_OPTIONS = [
+	{ value: "shared", label: "Shared", hint: "Shared with the library", icon: <Users /> },
+	{ value: "local", label: "Private", hint: "Only on this device", icon: <Lock /> },
+] as const;
+
+/**
+ * Shared or private, side by side, with the current one lit. `compact` drops the words, for the
+ * sidebar's new-item row. Choosing the other side calls `onChange`; the caller decides whether that
+ * needs a confirm.
+ */
+export function ScopeSwitch({
+	value,
+	onChange,
+	compact = false,
+	disabled = false,
+}: {
+	value: Scope;
+	onChange: (next: Scope) => void;
+	compact?: boolean;
+	disabled?: boolean;
+}) {
+	return (
+		<fieldset
+			aria-label="Who has it"
+			className={cn(
+				"m-0 inline-flex min-w-0 shrink-0 items-center rounded-lg border border-border bg-background p-0.5 dark:border-input dark:bg-input/30",
+				compact ? "h-6" : "h-8",
+			)}
+		>
+			{SCOPE_OPTIONS.map((o) => {
+				const on = value === o.value;
+				return (
+					<button
+						key={o.value}
+						type="button"
+						aria-pressed={on}
+						aria-label={compact ? o.hint : undefined}
+						title={o.hint}
+						disabled={disabled}
+						// Keeps focus where it was, so the new-item row's name field stays open.
+						onMouseDown={(e) => e.preventDefault()}
+						onClick={() => !on && onChange(o.value)}
+						className={cn(
+							"inline-flex h-full items-center gap-1.5 rounded-md font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50 [&_svg]:shrink-0",
+							compact ? "px-1.5 [&_svg]:size-3" : "px-2.5 text-sm [&_svg]:size-3.5",
+							on
+								? o.value === "shared"
+									? "bg-primary/15 text-primary"
+									: "bg-muted text-foreground"
+								: "text-muted-foreground hover:text-foreground",
+						)}
+					>
+						{o.icon}
+						{!compact && o.label}
+					</button>
+				);
+			})}
+		</fieldset>
+	);
+}
+
 /** One choice per local tag a smart playlist uses. */
 function TagChoices({
 	tags,
@@ -231,7 +292,16 @@ export function PrivateDialog({
 	});
 	const data = preview.data;
 	if (!data) {
-		return null;
+		return preview.isError ? (
+			<ConfirmDialog
+				title="Could not read it"
+				confirmLabel="Close"
+				onCancel={onClose}
+				onConfirm={onClose}
+			>
+				{String(preview.error)}
+			</ConfirmDialog>
+		) : null;
 	}
 	return (
 		<ConfirmDialog

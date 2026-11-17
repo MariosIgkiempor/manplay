@@ -245,6 +245,23 @@ fn holder_of(conn: &Connection, kind: Kind, name: &str, uid: &str) -> Result<Opt
         .optional()?)
 }
 
+/// Whether an incoming shared tag simply takes over `holder`: a local tag with no songs of its
+/// own and no local tags below it, such as a parent level recreated on this device before the
+/// shared one arrived. Nothing private is in it, so there is nothing to ask about.
+fn adopts(conn: &Connection, kind: Kind, holder: &Row) -> Result<bool, Error> {
+    if kind.table != TAGS.table || holder.scope != "local" {
+        return Ok(false);
+    }
+    let private: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM track_tags WHERE tag_id = ?1)
+             OR EXISTS (SELECT 1 FROM tags WHERE scope = 'local'
+                        AND lower(substr(name, 1, length(?2) + 1)) = lower(?2 || '/'))",
+        params![holder.id, holder.name],
+        |r| r.get(0),
+    )?;
+    Ok(!private)
+}
+
 /// `<name> (shared)`, or with a number when that is taken.
 fn held_name(conn: &Connection, kind: Kind, name: &str) -> Result<String, Error> {
     let mut n = 1;
@@ -326,6 +343,25 @@ pub fn materialize_item(
         return Ok(());
     };
     let holder = holder_of(conn, kind, &name, uid)?;
+    if existing.is_none()
+        && let Some(h) = holder.as_ref()
+        && adopts(conn, kind, h)?
+    {
+        conn.execute(
+            &format!(
+                "UPDATE {} SET uid = ?1, scope = 'shared' WHERE id = ?2",
+                kind.table
+            ),
+            params![uid, h.id],
+        )?;
+        super::entities::repoint_rules(conn, &h.uid, uid)?;
+        conn.execute(
+            "DELETE FROM clashes WHERE kind = ?1 AND (held = ?2 OR keeps = ?2)",
+            params![kind.label(), h.uid],
+        )?;
+        rematerialize_members(conn, kind, uid, touched)?;
+        return Ok(());
+    }
     // Between two shared items the lower uid keeps the name, so every device lists the same one
     // as held.
     let takes_name = holder

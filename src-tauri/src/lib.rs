@@ -57,6 +57,8 @@ struct AppState {
     wf_misses: libsync::waveforms::Misses,
     /// Held while waveforms are being downloaded in the background.
     wf_filling: AtomicBool,
+    /// A sync asked for a waveform transfer while one was running: run again when it ends.
+    wf_again: AtomicBool,
 }
 
 const SETTING_ROOT: &str = "library_root";
@@ -900,9 +902,38 @@ fn list_playlists(state: State<'_, AppState>) -> Result<Vec<Playlist>, Error> {
 }
 
 #[tauri::command]
-fn create_playlist(state: State<'_, AppState>, name: String) -> Result<i64, Error> {
-    let id = with_db!(state, |c| db::create_playlist(c, name.trim()))?;
+fn create_playlist(
+    state: State<'_, AppState>,
+    name: String,
+    scope: Option<String>,
+) -> Result<i64, Error> {
+    let id = with_db!(state, |c| db::create_playlist(
+        c,
+        name.trim(),
+        scope.as_deref()
+    ))?;
     Ok(id)
+}
+
+/// A new empty tag, shared or only on this device.
+#[tauri::command]
+fn create_tag(
+    state: State<'_, AppState>,
+    name: String,
+    scope: Option<String>,
+) -> Result<(), Error> {
+    with_db!(state, |c| db::create_tag(c, name.trim(), scope.as_deref()))
+}
+
+/// The scope new tags and playlists get: `shared` or `local`.
+#[tauri::command]
+fn default_scope(state: State<'_, AppState>) -> Result<String, Error> {
+    with_db!(state, |c| libsync::default_scope(c).map(str::to_owned))
+}
+
+#[tauri::command]
+fn set_default_scope(state: State<'_, AppState>, scope: String) -> Result<(), Error> {
+    with_db!(state, |c| libsync::set_default_scope(c, &scope))
 }
 
 #[tauri::command]
@@ -2357,7 +2388,7 @@ async fn libsync_join(
     state.wf_misses.clear();
     let out = sync::join_library(&state.http, &target, &state.db, choice).await?;
     let target = shared_target(&state, target_id)?;
-    tauri::async_runtime::spawn(fill_waveforms(app, target));
+    tauri::async_runtime::spawn(transfer_waveforms(app, target));
     Ok(out)
 }
 
@@ -2425,23 +2456,49 @@ async fn libsync_run(
         out.push(sync::run_library_data(&state.http, target, &state.db).await);
     }
     if let Some(target) = targets.into_iter().find(|t| t.libsync) {
-        tauri::async_runtime::spawn(fill_waveforms(app, target));
+        tauri::async_runtime::spawn(transfer_waveforms(app, target));
     }
     Ok(out)
 }
 
-/// Downloads the waveforms other devices made, a few at a time, after a sync. Problems are only
-/// logged: a waveform still missing is fetched when its song is shown.
-async fn fill_waveforms(app: AppHandle, target: db::SyncTarget) {
+/// Uploads this device's waveforms and downloads everyone else's after a sync, all of them, in
+/// the background, with `waveform-progress` events for the status bar. Problems are only logged:
+/// what is left goes after the next sync, and a missing waveform is fetched when its song shows.
+async fn transfer_waveforms(app: AppHandle, target: db::SyncTarget) {
     let state = app.state::<AppState>();
     if state.wf_filling.swap(true, Ordering::SeqCst) {
+        // The running transfer goes round again for what this sync brought.
+        state.wf_again.store(true, Ordering::SeqCst);
         return;
     }
     let _guard = SyncGuard(&state.wf_filling);
-    match sync::fill_waveforms(&state.http, &target, &state.db, &state.wf_misses).await {
-        Ok(0) => {}
-        Ok(n) => log::info!("fetched {n} waveforms from {}", sync::target_name(&target)),
-        Err(e) => log::warn!("could not fetch waveforms: {e}"),
+    loop {
+        state.wf_again.store(false, Ordering::SeqCst);
+        let report = |p: libsync::waveforms::Progress| {
+            let _ = app.emit("waveform-progress", p);
+        };
+        match sync::transfer_waveforms(&state.http, &target, &state.db, &state.wf_misses, report)
+            .await
+        {
+            Ok(t) => {
+                log::info!(
+                    "waveforms on {}: {} sent, {} fetched",
+                    sync::target_name(&target),
+                    t.sent,
+                    t.fetched
+                );
+                if let Some(e) = t.upload_error {
+                    log::warn!("waveform uploads stopped early: {e}");
+                }
+            }
+            Err(e) => {
+                log::warn!("could not move waveforms: {e}");
+                let _ = app.emit("waveform-progress", libsync::waveforms::Progress::done());
+            }
+        }
+        if !state.wf_again.load(Ordering::SeqCst) {
+            break;
+        }
     }
 }
 
@@ -3543,6 +3600,7 @@ pub fn run() {
                 plan: Mutex::new(None),
                 wf_misses: libsync::waveforms::Misses::default(),
                 wf_filling: AtomicBool::new(false),
+                wf_again: AtomicBool::new(false),
             });
             tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(reprint_audio_fps(app.handle().clone()));
@@ -3587,6 +3645,9 @@ pub fn run() {
             set_tempo_key,
             list_playlists,
             create_playlist,
+            create_tag,
+            default_scope,
+            set_default_scope,
             rename_playlist,
             delete_playlist,
             add_to_playlist,
@@ -3849,7 +3910,7 @@ mod tests {
         f.apply(&f.scan_of(&["1", "2"], 0));
         let id = db::list(&f.conn).expect("list")[0].id;
         db::tag_tracks(&mut f.conn, "keep", &[id]).expect("tag");
-        let pl = db::create_playlist(&f.conn, "p").expect("playlist");
+        let pl = db::create_playlist(&f.conn, "p", None).expect("playlist");
         db::add_to_playlist(&mut f.conn, pl, &[id]).expect("add");
 
         f.apply(&f.scan_of(&["2"], 0)); // track 1 disappears
@@ -4051,7 +4112,7 @@ mod tests {
         f.apply(&f.scan_of(&["1", "2"], 0));
         let id = ids_by_title(&f)["1"];
         db::tag_tracks(&mut f.conn, "keep", &[id]).expect("tag");
-        let pl = db::create_playlist(&f.conn, "p").expect("playlist");
+        let pl = db::create_playlist(&f.conn, "p", None).expect("playlist");
         db::add_to_playlist(&mut f.conn, pl, &[id]).expect("add");
 
         f.apply(&f.scan_of(&["new/1", "2"], 0)); // "1" moved to new/1
@@ -4150,7 +4211,7 @@ mod tests {
             .iter()
             .map(|t| t.id)
             .collect();
-        let pl = db::create_playlist(&f.conn, "Friday").expect("playlist");
+        let pl = db::create_playlist(&f.conn, "Friday", None).expect("playlist");
         db::add_to_playlist(&mut f.conn, pl, &[ids[2], ids[0]]).expect("add");
 
         let out = f.dir.join("out").join("rekordbox.xml");
@@ -4171,6 +4232,7 @@ mod tests {
             plan: Mutex::new(None),
             wf_misses: libsync::waveforms::Misses::default(),
             wf_filling: AtomicBool::new(false),
+            wf_again: AtomicBool::new(false),
         };
         assert!(export_inner(&state, false).expect("export"));
 
@@ -4208,8 +4270,8 @@ mod tests {
             .iter()
             .map(|t| t.id)
             .collect();
-        let keep = db::create_playlist(&f.conn, "Keep").expect("playlist");
-        let skip = db::create_playlist(&f.conn, "Skip").expect("playlist");
+        let keep = db::create_playlist(&f.conn, "Keep", None).expect("playlist");
+        let skip = db::create_playlist(&f.conn, "Skip", None).expect("playlist");
         db::add_to_playlist(&mut f.conn, keep, &[ids[0]]).expect("add");
         db::add_to_playlist(&mut f.conn, skip, &[ids[1]]).expect("add");
         db::tag_tracks(&mut f.conn, "Genre/House", &[ids[0], ids[2]]).expect("tag");
@@ -4264,6 +4326,7 @@ mod tests {
             plan: Mutex::new(None),
             wf_misses: libsync::waveforms::Misses::default(),
             wf_filling: AtomicBool::new(false),
+            wf_again: AtomicBool::new(false),
         };
         assert!(export_inner(&state, false).expect("export"));
 
@@ -4304,6 +4367,7 @@ mod tests {
             plan: Mutex::new(None),
             wf_misses: libsync::waveforms::Misses::default(),
             wf_filling: AtomicBool::new(false),
+            wf_again: AtomicBool::new(false),
         };
         assert!(!export_inner(&state, false).expect("no-op"));
     }

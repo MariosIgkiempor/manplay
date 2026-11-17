@@ -785,7 +785,19 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     migrate_selection_uids(&conn)?;
     crate::libsync::seed::catch_up(&conn)?;
     crate::libsync::clashes::migrate(&conn)?;
+    retry_unnamed_waveforms(&conn)?;
     Ok(conn)
+}
+
+/// Waveforms of prints like `a1:<hex>` could not be named as files before, and were marked as on
+/// the destination without being sent. Once, they are marked to be sent again.
+fn retry_unnamed_waveforms(conn: &Connection) -> Result<(), Error> {
+    const KEY: &str = "libsync_wf_names";
+    if get_setting(conn, KEY)?.is_none() {
+        conn.execute("UPDATE analysis SET wf_pushed = 0", [])?;
+        set_setting(conn, KEY, Some("1"))?;
+    }
+    Ok(())
 }
 
 /// Columns and tables for sharing library data (see `libsync`): a uid per shareable item, its
@@ -1302,10 +1314,14 @@ fn playlist_ident(conn: &Connection, id: i64) -> Result<(String, String), Error>
     })
 }
 
-pub fn create_playlist(conn: &Connection, name: &str) -> Result<i64, Error> {
+/// A new empty playlist. `scope` is `shared` or `local`; `None` takes the library default.
+pub fn create_playlist(conn: &Connection, name: &str, scope: Option<&str>) -> Result<i64, Error> {
     let tx = conn.unchecked_transaction()?;
     let uid = crate::libsync::new_uid();
-    let scope = crate::libsync::default_scope(&tx)?;
+    let scope = match scope {
+        Some(s) => crate::libsync::scope_of(s)?,
+        None => crate::libsync::default_scope(&tx)?,
+    };
     tx.execute(
         "INSERT INTO playlists (name, uid, scope) VALUES (?1, ?2, ?3)",
         params![name, uid, scope],
@@ -1499,10 +1515,19 @@ fn tag_ancestry(name: &str) -> Vec<String> {
     (1..=parts.len()).map(|n| parts[..n].join("/")).collect()
 }
 
-/// Adds one tag row if there is none by that name, with a uid, and says so in `ops`.
-fn insert_tag(conn: &Connection, name: &str, ops: &mut crate::libsync::Batch) -> Result<(), Error> {
+/// Adds one tag row if there is none by that name, with a uid, and says so in `ops`. `scope` is
+/// `shared` or `local`; `None` takes the library default.
+fn insert_tag(
+    conn: &Connection,
+    name: &str,
+    scope: Option<&str>,
+    ops: &mut crate::libsync::Batch,
+) -> Result<(), Error> {
     let uid = crate::libsync::new_uid();
-    let scope = crate::libsync::default_scope(conn)?;
+    let scope = match scope {
+        Some(s) => crate::libsync::scope_of(s)?,
+        None => crate::libsync::default_scope(conn)?,
+    };
     let added = conn.execute(
         "INSERT OR IGNORE INTO tags (name, uid, scope) VALUES (?1, ?2, ?3)",
         params![name, uid, scope],
@@ -1515,8 +1540,31 @@ fn insert_tag(conn: &Connection, name: &str, ops: &mut crate::libsync::Batch) ->
 
 /// Creates the tag and every parent level it names; returns the tag's id.
 fn ensure_tag(tx: &Connection, name: &str, ops: &mut crate::libsync::Batch) -> Result<i64, Error> {
+    ensure_tag_as(tx, name, None, ops)
+}
+
+/// [`ensure_tag`], with the scope for levels that do not exist yet. Below a local level every new
+/// level is local too: a shared tag under a parent other devices never get would arrive there
+/// without its parent.
+fn ensure_tag_as(
+    tx: &Connection,
+    name: &str,
+    scope: Option<&str>,
+    ops: &mut crate::libsync::Batch,
+) -> Result<i64, Error> {
+    let mut under_local = false;
     for level in tag_ancestry(name) {
-        insert_tag(tx, &level, ops)?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT scope FROM tags WHERE name = ?1",
+                params![level],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match existing {
+            Some(s) => under_local |= s == "local",
+            None => insert_tag(tx, &level, under_local.then_some("local").or(scope), ops)?,
+        }
     }
     Ok(
         tx.query_row("SELECT id FROM tags WHERE name = ?1", params![name], |r| {
@@ -1525,8 +1573,9 @@ fn ensure_tag(tx: &Connection, name: &str, ops: &mut crate::libsync::Batch) -> R
     )
 }
 
-/// Recreates any missing parent level (e.g. after `a` moved into `a/b`, or for tags named with
-/// `/` before tags were hierarchical).
+/// Recreates any missing parent level (e.g. after `a` moved into `a/b`). A recreated level is
+/// local: a parent that is missing here was deleted or made private elsewhere, and sending it
+/// again would bring it back for everyone under a new uid.
 fn restore_tag_parents(conn: &Connection, ops: &mut crate::libsync::Batch) -> Result<(), Error> {
     let names: Vec<String> = conn
         .prepare("SELECT name FROM tags WHERE instr(name, '/') > 0")?
@@ -1534,7 +1583,7 @@ fn restore_tag_parents(conn: &Connection, ops: &mut crate::libsync::Batch) -> Re
         .collect::<Result<_, _>>()?;
     for name in names {
         for level in tag_ancestry(&name) {
-            insert_tag(conn, &level, ops)?;
+            insert_tag(conn, &level, Some("local"), ops)?;
         }
     }
     Ok(())
@@ -1576,6 +1625,21 @@ fn tag_by_name(conn: &Connection, name: &str) -> Result<Option<(i64, String, Str
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?)
+}
+
+/// A new empty tag (and any parent level it names that is missing), shared or local (`None`: the
+/// library default). An existing tag keeps its scope.
+pub fn create_tag(conn: &mut Connection, name: &str, scope: Option<&str>) -> Result<(), Error> {
+    let name = normalize_tag(name);
+    if name.is_empty() {
+        return Ok(());
+    }
+    let tx = conn.transaction()?;
+    let mut ops = crate::libsync::Batch::new(&tx)?;
+    ensure_tag_as(&tx, &name, scope, &mut ops)?;
+    ops.commit(&tx)?;
+    tx.commit()?;
+    Ok(())
 }
 
 /// Creates the tag (and its parent levels) if needed and attaches it to every given track.
@@ -3452,7 +3516,7 @@ mod tests {
             ],
         )
         .expect("upsert");
-        let pl = create_playlist(&conn, "P").expect("playlist");
+        let pl = create_playlist(&conn, "P", None).expect("playlist");
         add_to_playlist(&mut conn, pl, &[2, 1, 3]).expect("add");
         let names: Vec<String> = playlist_tracks(&conn, pl)
             .expect("tracks")
@@ -3636,9 +3700,9 @@ mod tests {
     #[test]
     fn old_rekordbox_choice_becomes_the_list_of_exported_playlists() {
         let conn = open(Path::new(":memory:")).expect("db");
-        let a = create_playlist(&conn, "A").expect("a");
-        let b = create_playlist(&conn, "B").expect("b");
-        let c = create_playlist(&conn, "C").expect("c");
+        let a = create_playlist(&conn, "A", None).expect("a");
+        let b = create_playlist(&conn, "B", None).expect("b");
+        let c = create_playlist(&conn, "C", None).expect("c");
         assert_eq!(export_selection(&conn, RB_DESTINATION).expect("none"), None);
         set_setting(
             &conn,

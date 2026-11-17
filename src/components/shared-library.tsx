@@ -1,9 +1,10 @@
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
-import { Loader2, Tags } from "lucide-react";
+import { Loader2, Users } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { ClashList } from "#/components/clashes.tsx";
 import { ConfirmDialog, Dialog } from "#/components/confirm-dialog.tsx";
-import { ErrorLine } from "#/components/page.tsx";
+import { ScopeSwitch } from "#/components/item-sharing.tsx";
+import { ErrorLine, Panel, Section } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	type FoundLibrary,
@@ -15,7 +16,13 @@ import {
 	targetName,
 } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
-import { useJoinLibrary, useLeaveLibrary, useSyncTargets } from "#/lib/queries.ts";
+import {
+	useClashes,
+	useDefaultScope,
+	useJoinLibrary,
+	useLeaveLibrary,
+	useSyncTargets,
+} from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** What this device calls the shared library on a destination. */
@@ -325,24 +332,42 @@ function LookDialog({
 	if (found.data === null) {
 		return (
 			<Dialog
-				title="Start a shared library here?"
+				title={`Start a shared library on ${where}?`}
 				onCancel={onClose}
 				footer={
 					<div className="space-y-2">
+						<Choice
+							tone="main"
+							label="Start a shared library"
+							hint="Your tags and playlists are shared. Make any of them private from its page."
+							disabled={join.isPending}
+							onClick={() => onChoose("start")}
+						/>
+						<Choice
+							label="Files only"
+							hint="Copy the songs and nothing else. manplay writes nothing more here."
+							disabled={join.isPending}
+							onClick={onClose}
+						/>
 						{join.isError && <ErrorLine>{String(join.error)}</ErrorLine>}
-						<div className="flex items-center justify-end gap-2">
-							{join.isPending && <Loader2 className="size-4 animate-spin" />}
-							{filesOnly}
-							<Button disabled={join.isPending} onClick={() => onChoose("start")} autoFocus>
-								Yes, start one
-							</Button>
-						</div>
+						{join.isPending && (
+							<span className="inline-flex items-center gap-2 text-muted-foreground text-xs">
+								<Loader2 className="size-4 animate-spin" /> Starting the library…
+							</span>
+						)}
 					</div>
 				}
 			>
-				Nothing is shared in {where} yet. Starting one lets your other devices join it and share
-				tags, playlists, BPM, key and beat grids. The songs stay plain files. Files only copies the
-				songs and nothing else.
+				<p>
+					Your other devices can join it when they add this destination. The songs stay plain files,
+					so Jellyfin sees them as before.
+				</p>
+				<dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+					<dt className="text-foreground">Shared</dt>
+					<dd>Tags, playlists, smart playlists, BPM, key, beat grids, waveforms</dd>
+					<dt className="text-foreground">Stays here</dt>
+					<dd>Cues and settings</dd>
+				</dl>
 			</Dialog>
 		);
 	}
@@ -401,51 +426,144 @@ function FloatingError({ error }: { error: unknown }): ReactNode {
 	);
 }
 
-/**
- * The Sync tab's line for library data: which kind of destination this is, and how to change
- * it. The clash list sits under it for the destination that holds the library.
- */
-export function SharedLibraryRow({ id }: { id: number }) {
-	const target = useSyncTargets().data?.find((t) => t.id === id);
-	const [joining, setJoining] = useState(false);
-	const [leaving, setLeaving] = useState(false);
-	if (!target) {
-		return null;
+function MemberList({ target }: { target: SyncTarget }) {
+	const found = useQuery({
+		queryKey: ["library-inspect", target.id],
+		queryFn: () => libsyncInspect(target.id),
+		retry: false,
+		staleTime: 60_000,
+	});
+	if (found.isPending) {
+		return (
+			<p className="inline-flex items-center gap-2 text-muted-foreground text-xs">
+				<Loader2 className="size-3.5 animate-spin" /> Reading members…
+			</p>
+		);
+	}
+	if (found.isError || !found.data) {
+		return (
+			<p className="text-muted-foreground text-xs">
+				Members show when {targetName(target)} can be reached.
+			</p>
+		);
 	}
 	return (
-		<>
-			<div className="border-b first:border-t">
-				<div className="flex h-12 items-center gap-3 px-[var(--diff-inset)]">
-					<span className="flex shrink-0 items-center gap-1.5 font-medium text-sm [&_svg]:size-4">
-						<Tags />
-						Library data
+		<ul className="space-y-1">
+			{found.data.members.map((m) => (
+				<li key={`${m.name}-${m.lastSeen}`} className="flex items-baseline gap-3 text-sm">
+					<span className="min-w-0 flex-1 truncate">
+						{m.name}
+						{m.mine && <span className="text-muted-foreground"> (this device)</span>}
 					</span>
-					<LibraryBadge target={target} />
-					<span className="min-w-0 flex-1 truncate text-muted-foreground text-sm">
-						{target.libsync
-							? `${libraryLabel(target)}: tags, playlists, BPM, key and beat grids sync here`
-							: "Tags and playlists stay on this device"}
+					<span className="shrink-0 text-muted-foreground text-xs tabular-nums">
+						synced {timeAgo(m.lastSeen)}
 					</span>
-					{target.libsync ? (
-						<Button size="sm" variant="outline" onClick={() => setLeaving(true)}>
-							Leave…
-						</Button>
-					) : (
-						<Button size="sm" variant="outline" onClick={() => setJoining(true)}>
-							Join or start…
-						</Button>
-					)}
-				</div>
+				</li>
+			))}
+		</ul>
+	);
+}
+
+/** The scope new tags and playlists get, as a setting. */
+function DefaultScope() {
+	const { scope, save } = useDefaultScope();
+	return (
+		<div className="flex items-center gap-4">
+			<div className="min-w-0 flex-1">
+				<p className="font-medium text-sm">New tags and playlists</p>
+				<p className="text-muted-foreground text-xs">
+					Where they start. Each one can be switched later from its page header.
+				</p>
 			</div>
-			{target.libsync && <ClashList />}
-			{joining && <JoinLibraryDialog target={target} onClose={() => setJoining(false)} />}
-			{leaving && (
+			<ScopeSwitch
+				value={scope.data ?? "shared"}
+				disabled={scope.data === undefined || save.isPending}
+				onChange={(next) => save.mutate(next)}
+			/>
+		</div>
+	);
+}
+
+/**
+ * Settings for the shared library: which one this device is in, who else is, what new items
+ * start as, and clashes to settle. Outside a library, each destination can start or join one.
+ */
+export function SharedLibrarySettings() {
+	const targets = useSyncTargets().data ?? [];
+	const mine = targets.find((t) => t.libsync);
+	const [joining, setJoining] = useState<SyncTarget | null>(null);
+	const [leaving, setLeaving] = useState(false);
+	return (
+		<Section title="Shared library">
+			{mine ? (
+				<>
+					<Panel className="divide-y p-0 [&>*]:px-4 [&>*]:py-3">
+						<div className="flex items-center gap-3">
+							<span className="grid size-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary [&_svg]:size-4">
+								<Users />
+							</span>
+							<div className="min-w-0 flex-1">
+								<p className="truncate font-medium">{libraryLabel(mine)}</p>
+								<p className="truncate text-muted-foreground text-xs">
+									Kept on {targetName(mine)}. Tags, playlists, smart playlists, BPM, key, beat grids
+									and waveforms sync there. Cues stay on this device.
+								</p>
+							</div>
+							<Button variant="outline" onClick={() => setLeaving(true)}>
+								Leave…
+							</Button>
+						</div>
+						<div className="space-y-2">
+							<p className="font-medium text-sm">Members</p>
+							<MemberList target={mine} />
+						</div>
+						<DefaultScope />
+					</Panel>
+					<ClashPanel />
+				</>
+			) : (
+				<Panel className="space-y-3">
+					<p className="text-muted-foreground text-sm">
+						Share tags, playlists, smart playlists, BPM, key, beat grids and waveforms with your
+						other devices through one of your destinations. The songs stay plain files.
+					</p>
+					{targets.length === 0 ? (
+						<p className="text-muted-foreground text-sm">Add a destination under Export first.</p>
+					) : (
+						<ul className="divide-y rounded-md border">
+							{targets.map((t) => (
+								<li key={t.id} className="flex items-center gap-3 px-3 py-2">
+									<span className="min-w-0 flex-1 truncate text-sm">{targetName(t)}</span>
+									<Button size="sm" variant="outline" onClick={() => setJoining(t)}>
+										Start or join…
+									</Button>
+								</li>
+							))}
+						</ul>
+					)}
+				</Panel>
+			)}
+			{joining && <JoinLibraryDialog target={joining} onClose={() => setJoining(null)} />}
+			{leaving && mine && (
 				<LeaveLibraryDialog
-					target={target}
+					target={mine}
 					onDone={() => setLeaving(false)}
 					onCancel={() => setLeaving(false)}
 				/>
 			)}
-		</>
+		</Section>
+	);
+}
+
+/** Clashes, framed for the settings page. Nothing when there are none. */
+function ClashPanel() {
+	const count = useClashes().data?.length ?? 0;
+	if (count === 0) {
+		return null;
+	}
+	return (
+		<Panel className="overflow-hidden p-0 [--diff-inset:1rem] [&_section]:border-b-0">
+			<ClashList />
+		</Panel>
 	);
 }

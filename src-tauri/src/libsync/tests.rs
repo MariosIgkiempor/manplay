@@ -442,7 +442,7 @@ fn a_held_item_takes_its_name_when_the_other_is_renamed_or_removed() {
     library(&conn, 2);
     share(&mut conn);
     db::set_setting(&conn, "default_scope", Some("local")).expect("setting");
-    db::create_playlist(&conn, "Warmup").expect("playlist");
+    db::create_playlist(&conn, "Warmup", None).expect("playlist");
     let tx = conn.transaction().expect("tx");
     apply_ops(
         &tx,
@@ -741,7 +741,7 @@ fn tag(db: &Mutex<Connection>, name: &str, songs: &[usize]) {
 fn playlist(db: &Mutex<Connection>, name: &str, songs: &[usize]) -> i64 {
     let ids: Vec<i64> = songs.iter().map(|&n| track(db, n)).collect();
     let mut conn = db.lock().expect("lock");
-    let id = db::create_playlist(&conn, name).expect("playlist");
+    let id = db::create_playlist(&conn, name, None).expect("playlist");
     db::add_to_playlist(&mut conn, id, &ids).expect("add");
     id
 }
@@ -989,7 +989,7 @@ async fn nothing_is_written_until_library_data_is_switched_on() {
     let mut conn = open();
     let ids = library(&conn, 2);
     db::tag_tracks(&mut conn, "Quiet", &ids).expect("tag");
-    let pl = db::create_playlist(&conn, "Quiet").expect("playlist");
+    let pl = db::create_playlist(&conn, "Quiet", None).expect("playlist");
     db::add_to_playlist(&mut conn, pl, &ids).expect("add");
     let logged: i64 = conn
         .query_row("SELECT COUNT(*) FROM oplog", [], |r| r.get(0))
@@ -1032,7 +1032,7 @@ async fn local_items_never_write_ops() {
         .map(|r| r.expect("row"))
         .collect();
     db::tag_tracks(&mut conn, "Mine/Only", &ids).expect("tag");
-    let pl = db::create_playlist(&conn, "Mine").expect("playlist");
+    let pl = db::create_playlist(&conn, "Mine", None).expect("playlist");
     db::add_to_playlist(&mut conn, pl, &ids).expect("add");
     let logged: i64 = conn
         .query_row("SELECT COUNT(*) FROM oplog", [], |r| r.get(0))
@@ -1699,7 +1699,7 @@ async fn renaming_either_side_of_a_clash_settles_it() {
     // Local to B, same name.
     {
         let mut conn = b.lock().expect("lock");
-        let id = db::create_playlist(&conn, "Warmup").expect("playlist");
+        let id = db::create_playlist(&conn, "Warmup", None).expect("playlist");
         let ids = [track_in(&conn, 2)];
         db::add_to_playlist(&mut conn, id, &ids).expect("add");
     }
@@ -3163,3 +3163,89 @@ async fn years_of_edits_leave_about_one_snapshot_on_the_destination() {
 }
 
 mod edge;
+
+#[test]
+fn real_audio_prints_name_waveform_files() {
+    let fp = "a1:21eeea90841c495d2cb3083c19d679c829b6c30ce06397794a51b097301c6d50";
+    let w = WaveformRef::new(fp, 2);
+    let (dir, name) = w.rel().expect("a real print names a file");
+    assert_eq!(dir, "21");
+    assert_eq!(
+        name,
+        "a1_21eeea90841c495d2cb3083c19d679c829b6c30ce06397794a51b097301c6d50-v2.bin"
+    );
+    assert_eq!(WaveformRef::from_file_name(&name), Some(w));
+    assert!(WaveformRef::new("a1:../x", 2).rel().is_none());
+    assert!(WaveformRef::from_file_name("junk.bin").is_none());
+}
+
+#[tokio::test]
+async fn every_waveform_moves_after_a_sync_however_many() {
+    let store = Memory::default();
+    let a = device(45);
+    let b = device(45);
+    for n in 1..=45 {
+        db::store_analysis(
+            &a.lock().expect("lock"),
+            &format!("fp{n}"),
+            &Ok(finished(120.0)),
+            1,
+            false,
+        )
+        .expect("analyse");
+    }
+    let seen = Mutex::new(Vec::new());
+    let report =
+        |p: waveforms::Progress| seen.lock().expect("lock").push((p.phase, p.done, p.total));
+    let up = waveforms::transfer(
+        &a,
+        &store,
+        &Misses::default(),
+        20,
+        std::time::Duration::ZERO,
+        report,
+    )
+    .await
+    .expect("upload");
+    assert_eq!(up.sent, 45, "all of them, not one batch");
+    assert_eq!(waveforms::push_pending(&a).expect("count"), 0);
+    let phases: Vec<_> = seen.lock().expect("lock").drain(..).collect();
+    assert_eq!(
+        phases,
+        vec![
+            (waveforms::Phase::Upload, 0, 45),
+            (waveforms::Phase::Upload, 20, 45),
+            (waveforms::Phase::Upload, 40, 45),
+            (waveforms::Phase::Done, 0, 0),
+        ]
+    );
+
+    // B learns the analyses from ops and downloads every waveform.
+    assert!(run(&a, &store).await.error.is_none());
+    assert!(run(&b, &store).await.error.is_none());
+    let misses = Misses::default();
+    assert_eq!(waveforms::fill_pending(&b, &misses).expect("count"), 45);
+    let down = waveforms::transfer(&b, &store, &misses, 20, std::time::Duration::ZERO, |_| {})
+        .await
+        .expect("download");
+    assert_eq!(down.fetched, 45);
+    assert_eq!(waveforms::fill_pending(&b, &misses).expect("count"), 0);
+}
+
+#[tokio::test]
+async fn a_recreated_parent_gives_way_to_the_shared_one() {
+    let b = local_device(3);
+    // A shared child whose parent this device recreated on its own (local, no songs).
+    tag(&b, "Techno", &[]);
+    let tx = b.lock().expect("lock");
+    tx.execute_batch("BEGIN").expect("begin");
+    apply_ops(&tx, &[op(10, DEV_A, "tag", "s-1", "name", json!("Techno"))]).expect("apply");
+    tx.execute_batch("COMMIT").expect("commit");
+    assert!(
+        clashes::list(&tx).expect("list").is_empty(),
+        "no clash to settle"
+    );
+    drop(tx);
+    let text = shown(&b);
+    assert!(text.contains(" Techno shared"), "{text}");
+}

@@ -502,15 +502,12 @@ pub struct LibraryOutcome {
     pub clock_wrong: bool,
     /// This install found a second copy of itself and took a new device ID.
     pub new_device_id: bool,
-    /// Waveform files uploaded.
-    pub waveforms_sent: usize,
     pub error: Option<String>,
 }
 
-/// How many waveforms one sync uploads; the rest follow in the next syncs.
-const WAVEFORMS_PER_RUN: usize = 200;
-/// How many waveforms the fill after a sync downloads, and the pause between them.
-const FILL_PER_RUN: usize = 500;
+/// Waveforms moved between progress reports, after a sync.
+const WAVEFORM_BATCH: usize = 20;
+/// Pause between waveform downloads, so the destination is not hammered.
 const FILL_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Sends this device's new library edits to the destination and applies everyone else's. Runs
@@ -529,7 +526,6 @@ pub async fn run_library_data(
         held: 0,
         clock_wrong: false,
         new_device_id: false,
-        waveforms_sent: 0,
         error: None,
     };
     let base = base_of(target);
@@ -563,12 +559,6 @@ pub async fn run_library_data(
     out.clock_wrong = summary.clock_wrong;
     out.new_device_id = summary.new_device_id;
     out.error = summary.error;
-    if out.error.is_none() {
-        match libsync::waveforms::push(db, &store, WAVEFORMS_PER_RUN).await {
-            Ok(pushed) => out.waveforms_sent = pushed.sent,
-            Err(e) => out.error = Some(format!("waveforms: {e}")),
-        }
-    }
     out
 }
 
@@ -620,7 +610,7 @@ pub async fn join_library(
     };
     let name = target_name(target);
     let summary = libsync::membership::join(db, target.id, &store, choice, &name).await?;
-    let mut out = LibraryOutcome {
+    let out = LibraryOutcome {
         target_id: target.id,
         name,
         sent: summary.sent,
@@ -629,15 +619,8 @@ pub async fn join_library(
         held: summary.held,
         clock_wrong: summary.clock_wrong,
         new_device_id: summary.new_device_id,
-        waveforms_sent: 0,
         error: summary.error,
     };
-    if out.error.is_none() {
-        match libsync::waveforms::push(db, &store, WAVEFORMS_PER_RUN).await {
-            Ok(pushed) => out.waveforms_sent = pushed.sent,
-            Err(e) => out.error = Some(format!("waveforms: {e}")),
-        }
-    }
     Ok(out)
 }
 
@@ -664,20 +647,21 @@ pub async fn leave_library(
     libsync::membership::leave(db, &store, choice, false).await
 }
 
-/// Downloads the waveforms of songs other devices analysed, in the background after a sync.
-/// Returns how many it filled.
-pub async fn fill_waveforms(
+/// Uploads every waveform this device made that the destination lacks, then downloads every one
+/// other devices made that this device lacks (see [`libsync::waveforms::transfer`]).
+pub async fn transfer_waveforms(
     client: &Client,
     target: &SyncTarget,
     db: &std::sync::Mutex<rusqlite::Connection>,
     misses: &libsync::waveforms::Misses,
-) -> Result<usize, Error> {
+    report: impl Fn(libsync::waveforms::Progress),
+) -> Result<libsync::waveforms::Transfer, Error> {
     let backend = Backend::for_target(client, target)?;
     let store = LogStore {
         backend: &backend,
         base: base_of(target),
     };
-    libsync::waveforms::fill(db, &store, misses, FILL_PER_RUN, FILL_PAUSE).await
+    libsync::waveforms::transfer(db, &store, misses, WAVEFORM_BATCH, FILL_PAUSE, report).await
 }
 
 /// Fetches one song's waveform from the destination when it is shown or played and this device
@@ -2368,7 +2352,8 @@ pub struct Remote {
     pub size: u64,
 }
 
-/// Everything under the destination folder. Fails if the destination cannot be reached.
+/// Every song and file under the destination folder, without the shared library's own data
+/// (`.manplay/`). Fails if the destination cannot be reached.
 pub async fn list_remote(client: &Client, target: &SyncTarget) -> Result<Vec<Remote>, Error> {
     let base = base_of(target);
     let backend = Backend::for_target(client, target)?;
@@ -2377,7 +2362,16 @@ pub async fn list_remote(client: &Client, target: &SyncTarget) -> Result<Vec<Rem
             "folder not found (is the machine online and the folder still shared?)".to_owned(),
         ));
     }
-    backend.list(&base).await
+    let mut files = backend.list(&base).await?;
+    files.retain(|r| !is_library_data(&r.rel));
+    Ok(files)
+}
+
+/// A file of the shared library's own data (`.manplay/`), which the library data sync reads and
+/// writes. File sync never pulls, pushes or deletes it.
+fn is_library_data(rel: &[String]) -> bool {
+    rel.first()
+        .is_some_and(|s| s == crate::libsync::remote::DIR)
 }
 
 /// Total size of the files inside each subfolder of `rel`, by folder name.
@@ -2634,6 +2628,14 @@ mod tests {
 
     fn rel(p: &str) -> Vec<String> {
         p.split('/').map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn library_data_is_not_a_file_to_sync() {
+        assert!(is_library_data(&rel(".manplay/library.json")));
+        assert!(is_library_data(&rel(".manplay/log/a/00000001.jsonl.gz")));
+        assert!(!is_library_data(&rel("Artist/.manplay/x.mp3")));
+        assert!(!is_library_data(&rel("Artist/Album/01.mp3")));
     }
 
     fn item(id: i64, p: &str, size: u64, fp: Option<&str>) -> Item {

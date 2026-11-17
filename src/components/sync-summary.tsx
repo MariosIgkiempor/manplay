@@ -10,7 +10,6 @@ import {
 } from "react";
 import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
 import { PullList } from "#/components/pull-review.tsx";
-import { SharedLibraryRow } from "#/components/shared-library.tsx";
 import { IncomingList } from "#/components/sync-incoming.tsx";
 import { SyncResult } from "#/components/sync-result.tsx";
 import {
@@ -323,7 +322,6 @@ function TargetBlock({
 			{t.pullError && (
 				<p className="break-words px-[var(--diff-inset)] text-destructive text-sm">{t.pullError}</p>
 			)}
-			<SharedLibraryRow id={id} />
 			<Section
 				icon={<Download />}
 				title="Pull"

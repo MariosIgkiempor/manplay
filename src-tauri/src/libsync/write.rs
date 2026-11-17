@@ -38,6 +38,20 @@ pub fn default_scope(conn: &Connection) -> Result<&'static str, Error> {
     )
 }
 
+/// `shared` or `local` from a caller; anything else is refused.
+pub fn scope_of(label: &str) -> Result<&'static str, Error> {
+    match label {
+        "shared" => Ok("shared"),
+        "local" => Ok("local"),
+        _ => Err(Error::Msg(format!("Unknown scope: {label}."))),
+    }
+}
+
+/// Sets the scope new tags and playlists get.
+pub fn set_default_scope(conn: &Connection, scope: &str) -> Result<(), Error> {
+    db::set_setting(conn, SETTING_DEFAULT_SCOPE, Some(scope_of(scope)?))
+}
+
 /// Whether library data is being shared: some destination has it switched on. Until then no
 /// edit writes an op.
 pub fn active(conn: &Connection) -> Result<bool, Error> {

@@ -149,7 +149,6 @@ export function SyncResult({
 							stats={[
 								{ tone: "add", count: l.sent, label: "library edits sent" },
 								{ tone: "change", count: l.received, label: "received" },
-								{ tone: "add", count: l.waveformsSent, label: "waveforms uploaded" },
 							]}
 							failed={[...(l.error ? [l.error] : []), ...libraryNotes(l)]}
 							failedTotal={(l.error ? 1 : 0) + libraryNotes(l).length}

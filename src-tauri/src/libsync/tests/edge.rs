@@ -490,8 +490,8 @@ async fn a_tag_deleted_elsewhere_leaves_no_unknown_tag_in_smart_playlists() {
 #[test]
 fn export_selections_keep_playlists_by_uid_and_old_ids_are_migrated() {
     let conn = super::open();
-    let first = db::create_playlist(&conn, "One").expect("one");
-    let second = db::create_playlist(&conn, "Two").expect("two");
+    let first = db::create_playlist(&conn, "One", None).expect("one");
+    let second = db::create_playlist(&conn, "Two", None).expect("two");
     // Saved by an older version: integer ids.
     conn.execute(
         "INSERT INTO export_selections (destination, playlists, tags, smart)
@@ -610,4 +610,25 @@ async fn a_child_added_under_a_renamed_parent_is_kept_as_a_tag_of_its_own() {
     );
     assert!(text.contains("tagged Style/House fp1"), "{text}");
     assert_eq!(shown(&a), shown(&b));
+}
+
+#[tokio::test]
+async fn a_shared_tag_under_a_private_parent_stays_private() {
+    let a = device(3);
+    {
+        let mut conn = a.lock().expect("lock");
+        db::create_tag(&mut conn, "Genre", Some("local")).expect("parent");
+        db::create_tag(&mut conn, "Genre/House", Some("shared")).expect("child");
+        db::create_tag(&mut conn, "Mood/Calm", Some("shared")).expect("shared pair");
+    }
+    let conn = a.lock().expect("lock");
+    let scope = |name: &str| -> String {
+        conn.query_row("SELECT scope FROM tags WHERE name = ?1", [name], |r| {
+            r.get(0)
+        })
+        .expect("tag")
+    };
+    assert_eq!(scope("Genre/House"), "local");
+    assert_eq!(scope("Mood"), "shared");
+    assert_eq!(scope("Mood/Calm"), "shared");
 }

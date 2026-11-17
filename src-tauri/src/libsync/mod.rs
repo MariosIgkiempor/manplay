@@ -32,7 +32,7 @@ pub mod write;
 #[cfg(test)]
 pub use remote::run;
 pub use remote::{ChunkRef, ChunkStore};
-pub use write::{Batch, default_scope, new_uid};
+pub use write::{Batch, default_scope, new_uid, scope_of, set_default_scope};
 
 #[cfg(test)]
 mod tests;

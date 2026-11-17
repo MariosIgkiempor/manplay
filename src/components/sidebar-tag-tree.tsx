@@ -10,10 +10,15 @@ import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
 import { GroupHeading, RowCount } from "#/components/sidebar-parts.tsx";
 import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
 import { usePlayer } from "#/context/player-context.ts";
-import { listTags, migrateLibraryTags, type Tag as TagItem, tagTracks } from "#/lib/api.ts";
+import {
+	createTag as createLibraryTag,
+	listTags,
+	migrateLibraryTags,
+	type Tag as TagItem,
+} from "#/lib/api.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { buildTagTree, TAG_SEP, type TagNode, tagWithin, trackHasTag } from "#/lib/tag-tree.ts";
-import { useItemSharing } from "#/lib/use-item-sharing.tsx";
+import { useItemSharing, useNewItemScope } from "#/lib/use-item-sharing.tsx";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -130,9 +135,10 @@ export function SidebarTagTree() {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	/** Creates an empty tag (inside `parent` when given), opens it, and shows it in the tree. */
+	const newScope = useNewItemScope();
 	const createTag = async (leaf: string, parent?: TagNode) => {
 		const name = parent ? `${parent.name}${TAG_SEP}${leaf}` : leaf;
-		await tagTracks(name, []);
+		await createLibraryTag(name, newScope.value);
 		await queryClient.invalidateQueries({ queryKey: ["tags"] });
 		await navigate({ to: "/tags/$", params: { _splat: name } });
 	};
@@ -152,8 +158,12 @@ export function SidebarTagTree() {
 			indent={CHILD_PAD + depth * 14}
 			placeholder={parent ? `New tag in ${parent.label}` : "Tag name"}
 			parse={nonBlank}
-			onCancel={() => setAdding(null)}
+			onCancel={() => {
+				setAdding(null);
+				newScope.reset();
+			}}
 			onCreate={(leaf) => createTag(leaf, parent)}
+			scope={newScope.prop}
 		/>
 	);
 	const songsWith = (name: string) => (tracks.data ?? []).filter((t) => trackHasTag(t, name));

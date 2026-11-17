@@ -322,12 +322,5 @@ async fn clean_waveforms<S: ChunkStore>(db: &Mutex<Connection>, store: &S) -> Re
 
 /// Parses a waveform file name (`<audio_fp>-v<version>.bin`).
 pub fn parse_waveform_name(name: &str) -> Option<WaveformRef> {
-    let stem = name.strip_suffix(".bin")?;
-    let (fp, version) = stem.rsplit_once("-v")?;
-    let version: i64 = version.parse().ok()?;
-    let w = WaveformRef {
-        audio_fp: fp.to_owned(),
-        version,
-    };
-    w.rel().map(|_| w)
+    WaveformRef::from_file_name(name)
 }

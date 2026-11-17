@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::Serialize;
 
 use super::remote::ChunkStore;
 use crate::analysis;
@@ -41,19 +42,33 @@ impl WaveformRef {
     }
 
     /// The folder below `waveforms` and the file name; `None` for a print that is not safe to
-    /// put in a path.
+    /// put in a path. Prints look like `a1:<hex>`: the `:` becomes `_` in the name (`WebDAV` and
+    /// Windows paths refuse `:`), and the folder is the first two characters of the hash, so files
+    /// spread over folders instead of all landing in `a1`.
     pub fn rel(&self) -> Option<(String, String)> {
         let safe = !self.audio_fp.is_empty()
             && self
                 .audio_fp
                 .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-        safe.then(|| {
+                .all(|b| b.is_ascii_alphanumeric() || b == b':');
+        let hash = self.audio_fp.rsplit(':').next()?;
+        (safe && hash.len() >= 2).then(|| {
             (
-                self.audio_fp.chars().take(2).collect(),
-                format!("{}-v{}.bin", self.audio_fp, self.version),
+                hash.chars().take(2).collect(),
+                format!("{}-v{}.bin", self.audio_fp.replace(':', "_"), self.version),
             )
         })
+    }
+
+    /// The waveform a file name stands for (see [`Self::rel`]); `None` for any other name.
+    pub fn from_file_name(name: &str) -> Option<Self> {
+        let stem = name.strip_suffix(".bin")?;
+        let (fp, version) = stem.rsplit_once("-v")?;
+        let w = Self {
+            audio_fp: fp.replace('_', ":"),
+            version: version.parse().ok()?,
+        };
+        (w.rel()?.1 == name).then_some(w)
     }
 }
 
@@ -92,6 +107,38 @@ pub struct PushSummary {
     pub existed: usize,
     /// Over the size cap, never uploaded.
     pub too_big: usize,
+}
+
+/// How many waveforms [`push`] still has to check or send.
+pub fn push_pending(db: &Mutex<Connection>) -> Result<usize, Error> {
+    let n: i64 = lock(db)?.query_row(
+        "SELECT COUNT(*) FROM analysis
+         WHERE waveform IS NOT NULL AND wf_pushed = 0 AND audio_fp <> ''",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(usize::try_from(n).unwrap_or(0))
+}
+
+/// How many waveforms [`fill`] would still try to download (songs missing one, not known to be
+/// absent from the destination).
+pub fn fill_pending(db: &Mutex<Connection>, misses: &Misses) -> Result<usize, Error> {
+    Ok(wanted(db)?.iter().filter(|fp| !misses.contains(fp)).count())
+}
+
+/// Prints of present songs whose analysis came from ops but whose waveform is not here yet.
+fn wanted(db: &Mutex<Connection>) -> Result<Vec<String>, Error> {
+    let conn = lock(db)?;
+    let mut stmt = conn.prepare(
+        "SELECT a.audio_fp FROM analysis a
+         WHERE a.waveform IS NULL AND a.version > 0 AND a.audio_fp <> ''
+           AND EXISTS (SELECT 1 FROM tracks t WHERE t.audio_fp = a.audio_fp
+                       AND t.missing_since IS NULL)
+         ORDER BY a.audio_fp",
+    )?;
+    Ok(stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?)
 }
 
 /// Uploads up to `limit` waveforms the destination may not have: for each, a check that the
@@ -205,18 +252,7 @@ pub async fn fill<S: ChunkStore>(
     limit: usize,
     pause: Duration,
 ) -> Result<usize, Error> {
-    let wanted: Vec<String> = {
-        let conn = lock(db)?;
-        let mut stmt = conn.prepare(
-            "SELECT a.audio_fp FROM analysis a
-             WHERE a.waveform IS NULL AND a.version > 0 AND a.audio_fp <> ''
-               AND EXISTS (SELECT 1 FROM tracks t WHERE t.audio_fp = a.audio_fp
-                           AND t.missing_since IS NULL)
-             ORDER BY a.audio_fp",
-        )?;
-        stmt.query_map([], |r| r.get(0))?
-            .collect::<Result<_, _>>()?
-    };
+    let wanted = wanted(db)?;
     let mut filled = 0;
     for fp in wanted.iter().filter(|fp| !misses.contains(fp)) {
         if filled >= limit {
@@ -230,4 +266,96 @@ pub async fn fill<S: ChunkStore>(
         }
     }
     Ok(filled)
+}
+
+/// Where the waveform transfer after a sync is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Phase {
+    Upload,
+    Download,
+    Done,
+}
+
+/// Progress of the waveform transfer after a sync.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    pub phase: Phase,
+    pub done: usize,
+    pub total: usize,
+}
+
+impl Progress {
+    pub fn done() -> Self {
+        Self {
+            phase: Phase::Done,
+            done: 0,
+            total: 0,
+        }
+    }
+}
+
+/// What the waveform transfer after a sync did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Transfer {
+    pub sent: usize,
+    pub fetched: usize,
+    /// Why uploading stopped early, if it did.
+    pub upload_error: Option<String>,
+}
+
+/// Uploads every waveform this device made that the destination lacks, then downloads every one
+/// other devices made that this device lacks, `batch` at a time with a report after each. Runs
+/// in the background after a sync; stopping halfway loses nothing (the rest go next time).
+pub async fn transfer<S: ChunkStore>(
+    db: &Mutex<Connection>,
+    store: &S,
+    misses: &Misses,
+    batch: usize,
+    pause: Duration,
+    report: impl Fn(Progress),
+) -> Result<Transfer, Error> {
+    let mut out = Transfer::default();
+    let total = push_pending(db)?;
+    let mut done = 0;
+    while done < total {
+        report(Progress {
+            phase: Phase::Upload,
+            done,
+            total,
+        });
+        // A failed upload stops the uploads (the rest go next time) but not the downloads.
+        let step = match push(db, store, batch).await {
+            Ok(step) => step,
+            Err(e) => {
+                out.upload_error = Some(e.to_string());
+                break;
+            }
+        };
+        let handled = step.sent + step.existed + step.too_big;
+        if handled == 0 {
+            break;
+        }
+        out.sent += step.sent;
+        done += handled;
+    }
+    let total = fill_pending(db, misses)?;
+    let mut done = 0;
+    while done < total {
+        report(Progress {
+            phase: Phase::Download,
+            done,
+            total,
+        });
+        let before = fill_pending(db, misses)?;
+        out.fetched += fill(db, store, misses, batch, pause).await?;
+        let after = fill_pending(db, misses)?;
+        if after >= before {
+            break;
+        }
+        done += before - after;
+    }
+    report(Progress::done());
+    Ok(out)
 }

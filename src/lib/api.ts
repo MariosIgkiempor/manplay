@@ -325,8 +325,9 @@ export async function listPlaylists(): Promise<Playlist[]> {
 	return z.array(playlistSchema).parse(await invoke("list_playlists"));
 }
 
-export async function createPlaylist(name: string): Promise<number> {
-	return int.parse(await invoke("create_playlist", { name }));
+/** A new empty playlist; without `scope` it gets the library default. */
+export async function createPlaylist(name: string, scope?: Scope): Promise<number> {
+	return int.parse(await invoke("create_playlist", { name, scope: scope ?? null }));
 }
 
 export async function renamePlaylist(id: number, name: string): Promise<void> {
@@ -357,6 +358,20 @@ export type Tag = z.infer<typeof tagSchema>;
 
 export async function listTags(): Promise<Tag[]> {
 	return z.array(tagSchema).parse(await invoke("list_tags"));
+}
+
+/** A new empty tag, shared or only on this device; without `scope` it gets the library default. */
+export async function createTag(name: string, scope?: Scope): Promise<void> {
+	await invoke("create_tag", { name, scope: scope ?? null });
+}
+
+/** The scope new tags and playlists get. */
+export async function getDefaultScope(): Promise<Scope> {
+	return scopeSchema.parse(await invoke("default_scope"));
+}
+
+export async function setDefaultScope(scope: Scope): Promise<void> {
+	await invoke("set_default_scope", { scope });
 }
 
 export async function tagTracks(name: string, trackIds: number[]): Promise<void> {
@@ -474,10 +489,23 @@ const libraryOutcomeSchema = z.object({
 	held: int,
 	clockWrong: z.boolean(),
 	newDeviceId: z.boolean(),
-	waveformsSent: int,
 	error: z.string().nullable(),
 });
 export type LibraryOutcome = z.infer<typeof libraryOutcomeSchema>;
+
+const waveformProgressSchema = z.object({
+	phase: z.enum(["upload", "download", "done"]),
+	done: int,
+	total: int,
+});
+
+/** Where the waveform transfer after a sync is. */
+export type WaveformProgress = z.infer<typeof waveformProgressSchema>;
+
+/** Calls `onProgress` as waveforms go up and come down after a sync. Returns the unsubscribe. */
+export function onWaveformProgress(onProgress: (p: WaveformProgress) => void) {
+	return listen("waveform-progress", (e) => onProgress(waveformProgressSchema.parse(e.payload)));
+}
 
 /**
  * Sends this device's library edits to the destinations that share them and applies

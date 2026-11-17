@@ -1,5 +1,7 @@
 import { Plus } from "lucide-react";
 import { type ReactNode, useState } from "react";
+import { ScopeSwitch } from "#/components/item-sharing.tsx";
+import type { Scope } from "#/lib/api.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** The + that starts a new playlist or tag as a row named in place. */
@@ -43,6 +45,7 @@ export function NewRow({
 	parse,
 	onCreate,
 	onCancel,
+	scope,
 }: {
 	icon: ReactNode;
 	/** Left padding in px, to sit at the level it is created at. */
@@ -52,6 +55,8 @@ export function NewRow({
 	parse: (raw: string) => string | null;
 	onCreate: (name: string) => Promise<unknown>;
 	onCancel: () => void;
+	/** Shared or private for the new item, chosen in the row (only while in a shared library). */
+	scope?: { value: Scope; onChange: (next: Scope) => void } | undefined;
 }) {
 	const [name, setName] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -105,9 +110,15 @@ export function NewRow({
 							onCancel();
 						}
 					}}
-					onBlur={() => !busy && onCancel()}
+					onBlur={(e) => {
+						// Moving to the row's own scope switch keeps it open.
+						if (!busy && !e.currentTarget.parentElement?.contains(e.relatedTarget)) {
+							onCancel();
+						}
+					}}
 					className="h-6 min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
 				/>
+				{scope && <ScopeSwitch compact value={scope.value} onChange={scope.onChange} />}
 			</div>
 			{error && <p className="px-2 pt-0.5 text-destructive text-xs">{error}</p>}
 		</div>

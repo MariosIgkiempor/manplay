@@ -3,10 +3,12 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, Tag } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import type { Shareable } from "#/components/item-sharing.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { CollectionHeader } from "#/components/page-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
-import { listTags, migrateLibraryTags } from "#/lib/api.ts";
+import { SharingControl } from "#/components/sharing-control.tsx";
+import { listTags, migrateLibraryTags, type Tag as TagItem } from "#/lib/api.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { TAG_SEP, tagLeaf, tagWithin, trackHasTag } from "#/lib/tag-tree.ts";
 
@@ -15,6 +17,12 @@ export const Route = createFileRoute("/tags/$")({ component: TagPage });
 const songs = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
 
 type Ask = { kind: "delete" } | { kind: "merge"; to: string };
+
+/** The tag's row as the Shared / Private switch needs it; null while it has none. */
+function shareableTag(tags: readonly TagItem[], name: string): Shareable | null {
+	const own = tags.find((t) => t.name.toLowerCase() === name.toLowerCase());
+	return own ? { kind: "tag", id: own.id, name: own.name, scope: own.scope ?? "shared" } : null;
+}
 
 /** One library tag: its songs, and the means to rename or delete it. Subtags follow along. */
 function TagPage() {
@@ -30,6 +38,7 @@ function TagPage() {
 		() => (tracks.data ?? []).filter((t) => trackHasTag(t, name)),
 		[tracks.data, name],
 	);
+	const tagRow = shareableTag(tags.data ?? [], name);
 	const depth = name.split(TAG_SEP).length;
 	const subtags = (tags.data ?? []).filter(
 		(t) => tagWithin(t.name, name) && t.name.split(TAG_SEP).length === depth + 1,
@@ -111,6 +120,7 @@ function TagPage() {
 				fallbackIcon={<Tag className="size-10" />}
 				onRename={rename}
 				onDelete={() => setAsk({ kind: "delete" })}
+				sharing={<SharingControl item={tagRow} />}
 			>
 				{subtags.length > 0 && (
 					<div className="flex flex-wrap items-center gap-1.5">
