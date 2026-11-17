@@ -1,12 +1,34 @@
-import { CheckCircle2, FolderArchive, TriangleAlert } from "lucide-react";
+import { CheckCircle2, FolderArchive, Trash2, TriangleAlert } from "lucide-react";
 import { TONE, type Tone } from "#/components/diff-view.tsx";
 import { FailureList } from "#/components/failure-list.tsx";
 import { SyncShell } from "#/components/sync-shell.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import type { ApplySummary, PullOutcome } from "#/lib/api.ts";
+import type { ApplySummary, LibraryOutcome, PullOutcome } from "#/lib/api.ts";
+import { TRASH } from "#/lib/platform.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** One figure of the result: a big number in its tone's colour and what it counts. */
+/** Things worth knowing about a library sync that are not errors. */
+function libraryNotes(l: LibraryOutcome): string[] {
+	const notes: string[] = [];
+	if (l.clockWrong) {
+		notes.push(
+			"This device's clock is wrong. Set its date, time and time zone (automatic if you can). Until then the other devices hold back what you edit here.",
+		);
+	}
+	if (l.held > 0) {
+		notes.push(
+			`${l.held.toLocaleString()} edits from another device are held back because its clock is ahead of yours.`,
+		);
+	}
+	if (l.newDeviceId) {
+		notes.push(
+			"Another copy of manplay was using this device's ID (copied app data or a restored backup). This one has a new ID now; nothing was lost.",
+		);
+	}
+	return notes;
+}
+
 function Stat({ tone, count, label }: { tone: Tone; count: number; label: string }) {
 	return (
 		<div className="min-w-0">
@@ -24,6 +46,7 @@ function Block({
 	title,
 	stats,
 	backupDir,
+	trashed,
 	failed,
 	failedTotal,
 	outcome,
@@ -31,6 +54,8 @@ function Block({
 	title: string;
 	stats: { tone: Tone; count: number; label: string }[];
 	backupDir?: string | null;
+	/** Library files replaced by the destination's copy, now in the Trash. */
+	trashed?: number;
 	failed: readonly string[];
 	failedTotal: number;
 	outcome?: string;
@@ -57,6 +82,13 @@ function Block({
 					<p className="break-all font-mono opacity-70">{backupDir}</p>
 				</div>
 			)}
+			{trashed !== undefined && trashed > 0 && (
+				<p className="flex items-center gap-1.5 text-muted-foreground text-xs">
+					<Trash2 className="size-3.5 shrink-0" />
+					{trashed.toLocaleString()} replaced {trashed === 1 ? "file is" : "files are"} in the{" "}
+					{TRASH}
+				</p>
+			)}
 			{failedTotal > 0 && <FailureList messages={failed} total={failedTotal} outcome={outcome} />}
 		</section>
 	);
@@ -69,16 +101,21 @@ function Block({
 export function SyncResult({
 	pulled,
 	pushed,
+	library = [],
 	variant,
 	onDone,
 }: {
 	pulled: PullOutcome[];
 	pushed: ApplySummary[];
+	/** Tags and playlists exchanged with destinations that share them. */
+	library?: LibraryOutcome[];
 	variant: "drawer" | "panel";
 	onDone: () => void;
 }) {
 	const errors =
-		pulled.reduce((n, p) => n + p.failedTotal, 0) + pushed.reduce((n, p) => n + p.failedTotal, 0);
+		pulled.reduce((n, p) => n + p.failedTotal, 0) +
+		pushed.reduce((n, p) => n + p.failedTotal, 0) +
+		library.filter((l) => l.error !== null).length;
 	const Icon = errors > 0 ? TriangleAlert : CheckCircle2;
 	const sum = <T,>(items: T[], pick: (t: T) => number) => items.reduce((n, i) => n + pick(i), 0);
 	return (
@@ -105,6 +142,19 @@ export function SyncResult({
 					</div>
 				</header>
 				<div className="-space-y-px">
+					{library.map((l) => (
+						<Block
+							key={`library-${l.targetId}`}
+							title={`Library data: ${l.name}`}
+							stats={[
+								{ tone: "add", count: l.sent, label: "library edits sent" },
+								{ tone: "change", count: l.received, label: "received" },
+							]}
+							failed={[...(l.error ? [l.error] : []), ...libraryNotes(l)]}
+							failedTotal={(l.error ? 1 : 0) + libraryNotes(l).length}
+							outcome="not shared"
+						/>
+					))}
 					{pulled.length > 0 && (
 						<Block
 							title="Pull into your library"
@@ -122,10 +172,13 @@ export function SyncResult({
 							title={r.name}
 							stats={[
 								{ tone: "add", count: r.uploaded, label: "pushed" },
+								{ tone: "change", count: r.merged, label: "merged" },
+								{ tone: "change", count: r.updated, label: "updated in your library" },
 								{ tone: "move", count: r.moved, label: "moved" },
 								{ tone: "remove", count: r.deleted, label: "deleted" },
 							]}
 							backupDir={r.backupDir}
+							trashed={r.updated}
 							failed={r.failed}
 							failedTotal={r.failedTotal}
 							outcome="left unchanged"

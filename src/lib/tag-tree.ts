@@ -1,4 +1,4 @@
-import type { Tag, Track } from "#/lib/api.ts";
+import type { Scope, Tag, Track } from "#/lib/api.ts";
 
 /** Library tags are paths: `Genre/Electronic/House` sits under `Genre/Electronic` and `Genre`. */
 export const TAG_SEP = "/";
@@ -27,6 +27,11 @@ export interface TagNode {
 	label: string;
 	/** Songs tagged here or below. */
 	trackCount: number;
+	/** The tag's row; `null` for a parent level that exists only because a child does. */
+	id: number | null;
+	scope: Scope;
+	/** Shown under a held name (see Clashes). */
+	held: boolean;
 	children: TagNode[];
 }
 
@@ -38,7 +43,15 @@ export function buildTagTree(tags: readonly Tag[]): TagNode[] {
 		const key = path.toLowerCase();
 		let node = byKey.get(key);
 		if (!node) {
-			node = { name: path, label: tagLeaf(path), trackCount: 0, children: [] };
+			node = {
+				name: path,
+				label: tagLeaf(path),
+				trackCount: 0,
+				id: null,
+				scope: "shared",
+				held: false,
+				children: [],
+			};
 			byKey.set(key, node);
 			const cut = path.lastIndexOf(TAG_SEP);
 			(cut < 0 ? roots : nodeFor(path.slice(0, cut)).children).push(node);
@@ -50,6 +63,9 @@ export function buildTagTree(tags: readonly Tag[]): TagNode[] {
 		node.name = t.name;
 		node.label = tagLeaf(t.name);
 		node.trackCount = t.trackCount;
+		node.id = t.id;
+		node.scope = t.scope ?? "shared";
+		node.held = t.held ?? false;
 	}
 	const sort = (nodes: TagNode[]) => {
 		nodes.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));

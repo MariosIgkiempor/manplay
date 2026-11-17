@@ -6,6 +6,7 @@ import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { CollectionHeader } from "#/components/page-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
+import { SharingControl } from "#/components/sharing-control.tsx";
 import { SmartRulesEditor } from "#/components/smart-playlists.tsx";
 import { deleteSmartPlaylist, type SmartPlaylist, saveSmartPlaylist } from "#/lib/api.ts";
 import { duration } from "#/lib/format.ts";
@@ -59,6 +60,16 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 				fallbackIcon={<Sparkles className="size-10" />}
 				onRename={(name) => name.trim() && rename.mutate(name.trim())}
 				onDelete={() => setConfirming(true)}
+				sharing={
+					<SharingControl
+						item={{
+							kind: "smart_playlist",
+							id: playlist.id,
+							name: playlist.name,
+							scope: playlist.scope ?? "shared",
+						}}
+					/>
+				}
 			/>
 			<div className="space-y-8 p-6">
 				{[rename, destroy].map(

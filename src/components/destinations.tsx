@@ -6,6 +6,7 @@ import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { type MenuEntry, RowMenu } from "#/components/menu.tsx";
 import { EmptyState, ErrorLine, Section } from "#/components/page.tsx";
 import { RekordboxExportButton } from "#/components/rekordbox-view.tsx";
+import { LibraryBadge } from "#/components/shared-library.tsx";
 import { SyncButton } from "#/components/sync-flow.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { type DetailView, useDetail } from "#/context/detail-context.ts";
@@ -47,6 +48,8 @@ function Fill({ value, total, label }: { value: number; total: number; label: st
 interface RowProps {
 	brand: Brand;
 	name: string;
+	/** Next to the name, e.g. what kind of destination it is. */
+	badge?: ReactNode;
 	where: ReactNode;
 	/** Hover text for `where`, e.g. the full path. */
 	whereTitle?: string;
@@ -58,7 +61,18 @@ interface RowProps {
 }
 
 /** One destination. The row opens its details; the action works without opening it. */
-function Row({ brand, name, where, whereTitle, fill, status, action, open, menu }: RowProps) {
+function Row({
+	brand,
+	name,
+	badge,
+	where,
+	whereTitle,
+	fill,
+	status,
+	action,
+	open,
+	menu,
+}: RowProps) {
 	const detail = useDetail();
 	const go = () => detail.open(open);
 	return (
@@ -78,7 +92,10 @@ function Row({ brand, name, where, whereTitle, fill, status, action, open, menu 
 					onClick={go}
 					className="min-w-0 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 				>
-					<span className="block truncate font-medium text-sm">{name}</span>
+					<span className="flex items-center gap-2">
+						<span className="truncate font-medium text-sm">{name}</span>
+						{badge}
+					</span>
 					<span className="block truncate text-muted-foreground text-xs" title={whereTitle}>
 						{where}
 					</span>
@@ -144,6 +161,7 @@ function TargetRow({
 		<Row
 			brand={r2 ? "cloudflare" : "tailscale"}
 			name={target.machine}
+			badge={<LibraryBadge target={target} />}
 			where={
 				<span className="inline-flex items-center gap-1.5">
 					{!r2 && (

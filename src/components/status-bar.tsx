@@ -4,6 +4,7 @@ import { type ReactNode, useContext, useEffect, useMemo, useState } from "react"
 import { createPortal } from "react-dom";
 import { AnalysisStatusPill } from "#/components/analysis-status-pill.tsx";
 import { SyncStatusPill } from "#/components/sync-status-pill.tsx";
+import { WaveformStatusPill } from "#/components/waveform-status-pill.tsx";
 import { StatusSlotContext, useDetail } from "#/context/detail-context.ts";
 import {
 	ActiveStatusContext,
@@ -108,6 +109,7 @@ export function StatusBarHost({
 			<div className="flex items-center justify-center gap-4">
 				<SyncStatusPill />
 				<AnalysisStatusPill />
+				<WaveformStatusPill />
 			</div>
 			<div className="flex min-w-0 items-center justify-end gap-4">
 				<div ref={setSaveSlot} className="flex min-w-0 items-center gap-3 empty:hidden" />

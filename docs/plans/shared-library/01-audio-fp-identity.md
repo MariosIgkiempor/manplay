@@ -39,3 +39,31 @@ Two present tracks with the same `audio_fp` share tags, grid and playlist entrie
 ## Done when
 
 Every present track has an `audio_fp`, analysis survives a retag, and duplicates are listed.
+
+## As built
+
+- **`audio_fp` is filled by the scan itself** (`scan::read_track`), not by a separate background
+  pass: the scan already opens every file, and the print reads ~64 KiB. This also keeps it fresh
+  when audio is replaced at the same path. A file that cannot be printed stores `''` (never
+  retried every scan, never joins). A failed read never overwrites a good print with `''`.
+  `detect_moves` / `apply_move` write it too. A startup task (`fill_audio_fps`) prints tracks
+  that still have none (libraries from before this change) and finishes the re-key.
+- **Re-key.** On open, an old `analysis` / `cues` (keyed `fingerprint`) is renamed
+  `analysis_legacy` / `cues_legacy` and new tables keyed `audio_fp` are created.
+  `db::rekey_legacy` (after every scan and after the startup fill) copies each legacy row whose
+  track now has an `audio_fp`, through `tracks.fingerprint`, hand edits, grids and waveforms
+  included. When every present track has an `audio_fp`, the legacy tables are dropped. Kept:
+  rows of tracks in the library. Dropped: rows with no track (orphans from deleted or purged
+  songs), and rows of tracks that are missing from disk and never had an `audio_fp`.
+  Duplicates with different analyses: the present track's, then the newest, wins.
+- **`cues` moved to `audio_fp` too** (it was a column rename plus the same re-key).
+- **Carry on retag removed** from `upsert`: the key no longer changes on a retag.
+- **`audio_fp_version`** setting is written once (`audioprint::VERSION`, 1) when absent. Nothing
+  reads it yet; step 7 owns the remap when it changes.
+- **Duplicates notice**: status bar indicator plus a drawer (`src/components/duplicates.tsx`),
+  not the audit page. Reveal and move to Trash per file (reuses `fs_trash`). Query:
+  `db::duplicate_groups`, command `list_duplicates`. Empty `audio_fp` never counts as a duplicate.
+- **One entry per `audio_fp` in playlists**: applied to `playlist_tracks`, the playlist count and
+  the rekordbox export members (first position wins). Tag playlists, smart playlists and the
+  library list still show every file. USB export playlists built elsewhere are not deduplicated.
+- `ExportTrack.fingerprint` and `usb_export::Source.fingerprint` are now `audio_fp`.

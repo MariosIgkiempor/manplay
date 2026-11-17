@@ -202,6 +202,57 @@ export async function listMissing(): Promise<MissingTrack[]> {
 	return z.array(missingTrackSchema).parse(await invoke("list_missing"));
 }
 
+const duplicateGroupSchema = z.object({
+	audioFp: z.string(),
+	tracks: z.array(
+		z.object({
+			id: int,
+			path: z.string(),
+			title: z.string(),
+			artist: z.string(),
+			album: z.string(),
+			size: int,
+		}),
+	),
+});
+
+export type DuplicateGroup = z.infer<typeof duplicateGroupSchema>;
+
+/** Groups of present songs with the same audio: they share tags, grid and playlist entries. */
+export async function listDuplicates(): Promise<DuplicateGroup[]> {
+	return z.array(duplicateGroupSchema).parse(await invoke("list_duplicates"));
+}
+
+const carryCandidateSchema = z.object({
+	oldFp: z.string(),
+	trackId: int,
+	title: z.string(),
+	artist: z.string(),
+	path: z.string(),
+	oldPath: z.string().nullable(),
+	tags: int,
+	playlists: int,
+	edits: z.boolean(),
+});
+export type CarryCandidate = z.infer<typeof carryCandidateSchema>;
+
+/** Songs re-encoded under the same name whose old audio still has tags or playlists. */
+export async function listCarryCandidates(): Promise<CarryCandidate[]> {
+	return z.array(carryCandidateSchema).parse(await invoke("list_carry_candidates"));
+}
+
+/** Moves tags, playlist places and hand-set tempo from the old audio to the song's new audio. */
+export async function carryOver(oldFp: string, trackId: number) {
+	return z
+		.object({ tags: int, playlists: int, edits: int })
+		.parse(await invoke("carry_over", { oldFp, trackId }));
+}
+
+/** Leaves the old audio's tags and playlists where they are. */
+export async function dismissCarry(oldFp: string): Promise<void> {
+	await invoke("dismiss_carry", { oldFp });
+}
+
 /** Ends the grace period for missing tracks; the next sync removes their remote copies. */
 export async function removeMissingNow(): Promise<void> {
 	await invoke("remove_missing_now");
@@ -246,7 +297,27 @@ export async function playableUrl(path: string): Promise<string> {
 
 // ---- playlists ------------------------------------------------------------
 
-const playlistSchema = z.object({ id: int, name: z.string(), trackCount: int });
+/** Whether an item is shared with everyone on the destination or stays on this device. */
+const scopeSchema = z.enum(["shared", "local"]);
+
+export type Scope = z.infer<typeof scopeSchema>;
+
+/** What the sidebar knows about a tag, playlist or smart playlist beyond its name. */
+const sharingFields = {
+	/** Absent counts as shared. */
+	scope: scopeSchema.optional(),
+	/** Hidden on this device only. */
+	hidden: z.boolean().optional(),
+	/** Shown under a held name because another item has the name (see Clashes). */
+	held: z.boolean().optional(),
+};
+
+const playlistSchema = z.object({
+	id: int,
+	name: z.string(),
+	trackCount: int,
+	...sharingFields,
+});
 
 export type Playlist = z.infer<typeof playlistSchema>;
 
@@ -254,8 +325,9 @@ export async function listPlaylists(): Promise<Playlist[]> {
 	return z.array(playlistSchema).parse(await invoke("list_playlists"));
 }
 
-export async function createPlaylist(name: string): Promise<number> {
-	return int.parse(await invoke("create_playlist", { name }));
+/** A new empty playlist; without `scope` it gets the library default. */
+export async function createPlaylist(name: string, scope?: Scope): Promise<number> {
+	return int.parse(await invoke("create_playlist", { name, scope: scope ?? null }));
 }
 
 export async function renamePlaylist(id: number, name: string): Promise<void> {
@@ -280,12 +352,26 @@ export async function playlistTracks(playlistId: number): Promise<Track[]> {
 
 // ---- tags -----------------------------------------------------------------
 
-const tagSchema = z.object({ id: int, name: z.string(), trackCount: int });
+const tagSchema = z.object({ id: int, name: z.string(), trackCount: int, ...sharingFields });
 
 export type Tag = z.infer<typeof tagSchema>;
 
 export async function listTags(): Promise<Tag[]> {
 	return z.array(tagSchema).parse(await invoke("list_tags"));
+}
+
+/** A new empty tag, shared or only on this device; without `scope` it gets the library default. */
+export async function createTag(name: string, scope?: Scope): Promise<void> {
+	await invoke("create_tag", { name, scope: scope ?? null });
+}
+
+/** The scope new tags and playlists get. */
+export async function getDefaultScope(): Promise<Scope> {
+	return scopeSchema.parse(await invoke("default_scope"));
+}
+
+export async function setDefaultScope(scope: Scope): Promise<void> {
+	await invoke("set_default_scope", { scope });
 }
 
 export async function tagTracks(name: string, trackIds: number[]): Promise<void> {
@@ -339,7 +425,14 @@ const newTargetSchema = z.object({
 
 export type NewTarget = z.infer<typeof newTargetSchema>;
 
-const targetSchema = newTargetSchema.extend({ id: int, syncedTracks: int });
+const targetSchema = newTargetSchema.extend({
+	id: int,
+	syncedTracks: int,
+	/** This device's shared library lives on this destination (the others are files only). */
+	libsync: z.boolean(),
+	/** The shared library's name, once known. */
+	libraryName: z.string().nullable(),
+});
 
 export type SyncTarget = z.infer<typeof targetSchema>;
 
@@ -349,6 +442,11 @@ export async function listSyncTargets(): Promise<SyncTarget[]> {
 
 export async function addSyncTarget(target: NewTarget): Promise<number> {
 	return int.parse(await invoke("add_sync_target", { target }));
+}
+
+/** A destination as people read it: the machine and its folder. */
+export function targetName(target: SyncTarget): string {
+	return [target.machine, ...target.path].join(" / ");
 }
 
 export function isR2(target: SyncTarget): boolean {
@@ -380,6 +478,90 @@ export async function updateSyncTarget(t: {
 		keyId: t.keyId ?? null,
 		secret: t.secret ?? null,
 	});
+}
+
+const libraryOutcomeSchema = z.object({
+	targetId: int,
+	name: z.string(),
+	sent: int,
+	received: int,
+	unreadable: int,
+	held: int,
+	clockWrong: z.boolean(),
+	newDeviceId: z.boolean(),
+	error: z.string().nullable(),
+});
+export type LibraryOutcome = z.infer<typeof libraryOutcomeSchema>;
+
+const waveformProgressSchema = z.object({
+	phase: z.enum(["upload", "download", "done"]),
+	done: int,
+	total: int,
+});
+
+/** Where the waveform transfer after a sync is. */
+export type WaveformProgress = z.infer<typeof waveformProgressSchema>;
+
+/** Calls `onProgress` as waveforms go up and come down after a sync. Returns the unsubscribe. */
+export function onWaveformProgress(onProgress: (p: WaveformProgress) => void) {
+	return listen("waveform-progress", (e) => onProgress(waveformProgressSchema.parse(e.payload)));
+}
+
+/**
+ * Sends this device's library edits to the destinations that share them and applies
+ * everyone else's. Run before the files.
+ */
+export async function libsyncRun(targetIds: number[]): Promise<LibraryOutcome[]> {
+	return z.array(libraryOutcomeSchema).parse(await invoke("libsync_run", { targetIds }));
+}
+
+const foundLibrarySchema = z.object({
+	libraryId: z.string(),
+	name: z.string(),
+	createdAt: int,
+	members: z.array(z.object({ name: z.string(), lastSeen: int, mine: z.boolean() })),
+	/** When a member last synced (Unix seconds). */
+	lastChange: int.nullable(),
+});
+export type FoundLibrary = z.infer<typeof foundLibrarySchema>;
+
+/** What a destination holds: a shared library with its members, or null. Writes nothing. */
+export async function libsyncInspect(targetId: number): Promise<FoundLibrary | null> {
+	return foundLibrarySchema.nullable().parse(await invoke("libsync_inspect", { targetId }));
+}
+
+/** How many tags, playlists and smart playlists "replace mine" would drop. */
+export async function libsyncReplaceCount(): Promise<number> {
+	return int.parse(await invoke("libsync_replace_count"));
+}
+
+/**
+ * What happens to what this device has when it joins: `merge` shares it (same names become
+ * clashes), `keepLocal` makes it local, `replace` drops it, `start` begins a library there.
+ */
+export type JoinChoice = "merge" | "keepLocal" | "replace" | "start";
+
+/** Joins (or starts) the shared library on a destination and syncs it once. */
+export async function libsyncJoin(targetId: number, choice: JoinChoice): Promise<LibraryOutcome> {
+	return libraryOutcomeSchema.parse(await invoke("libsync_join", { targetId, choice }));
+}
+
+/** What happens to the shared items on this device when it leaves: keep them as local or drop them. */
+export type LeaveChoice = "keepCopy" | "keepLocal";
+
+/** Leaves the shared library; `sync` sends and receives one last time first. */
+export async function libsyncLeave(choice: LeaveChoice, sync: boolean): Promise<void> {
+	await invoke("libsync_leave", { choice, sync });
+}
+
+/** The name other members see this device as. */
+export async function getDeviceName(): Promise<string> {
+	return z.string().parse(await invoke("get_device_name"));
+}
+
+/** Names this device (blank goes back to the machine's name); returns the name now in use. */
+export async function setDeviceName(name: string): Promise<string> {
+	return z.string().parse(await invoke("set_device_name", { name }));
 }
 
 export async function removeSyncTarget(id: number): Promise<void> {
@@ -438,10 +620,30 @@ export async function dismissActivity(ids: number[]): Promise<void> {
 	await invoke("dismiss_activity", { ids });
 }
 
+const sideSchema = z.enum(["mine", "theirs"]);
+export type Side = z.infer<typeof sideSchema>;
+
+/** One tag field a merge row shows: the common ancestor and both edits. */
+const fieldMergeSchema = z.object({
+	field: z.string(),
+	base: z.string().nullable(),
+	mine: z.string().nullable(),
+	theirs: z.string().nullable(),
+	/** Which side wins when only one changed the field; `null` when both did and someone must choose. */
+	side: sideSchema.nullable(),
+});
+export type FieldMerge = z.infer<typeof fieldMergeSchema>;
+
+/** What the user chose for a merge (per clashing field) or a conflict (which copy stays). */
+export interface Resolution {
+	keep?: Side;
+	fields: Record<string, Side>;
+}
+
 const actionSchema = z.object({
 	id: int,
 	targetId: int,
-	kind: z.enum(["upload", "replace", "move", "delete"]),
+	kind: z.enum(["upload", "replace", "move", "delete", "update", "merge", "conflict"]),
 	rel: z.array(z.string()),
 	from: z.array(z.string()).nullable(),
 	size: int,
@@ -451,6 +653,8 @@ const actionSchema = z.object({
 	tags: z
 		.array(z.object({ field: z.string(), from: z.string().nullable(), to: z.string().nullable() }))
 		.nullable(),
+	localSize: int.nullable(),
+	merge: z.array(fieldMergeSchema).nullable(),
 });
 export type SyncAction = z.infer<typeof actionSchema>;
 
@@ -483,15 +687,27 @@ const applySummarySchema = z.object({
 	uploaded: int,
 	moved: int,
 	deleted: int,
+	updated: int,
+	merged: int,
 	failed: z.array(z.string()),
 	failedTotal: int,
 	backupDir: z.string().nullable(),
 });
 export type ApplySummary = z.infer<typeof applySummarySchema>;
 
-/** Runs the confirmed actions of a plan. Overwritten and deleted files are backed up first. */
-export async function syncApply(planId: string, actionIds: number[]): Promise<ApplySummary[]> {
-	return z.array(applySummarySchema).parse(await invoke("sync_apply", { planId, actionIds }));
+/**
+ * Runs the confirmed actions of a plan. Overwritten and deleted files are backed up first, and a
+ * library file replaced by the destination's copy goes to the Trash. `resolutions` settles merges
+ * and conflicts by action id.
+ */
+export async function syncApply(
+	planId: string,
+	actionIds: number[],
+	resolutions: Record<number, Resolution> = {},
+): Promise<ApplySummary[]> {
+	return z
+		.array(applySummarySchema)
+		.parse(await invoke("sync_apply", { planId, actionIds, resolutions }));
 }
 
 const remoteFileSchema = z.object({ rel: z.array(z.string()), size: int });
@@ -715,7 +931,12 @@ const smartRulesSchema = z.object({
 /** What a song needs to be in a smart playlist; parts left empty are ignored. */
 export type SmartRules = z.infer<typeof smartRulesSchema>;
 
-const smartPlaylistSchema = z.object({ id: int, name: z.string(), rules: smartRulesSchema });
+const smartPlaylistSchema = z.object({
+	id: int,
+	name: z.string(),
+	rules: smartRulesSchema,
+	...sharingFields,
+});
 
 /** A rule-based playlist that belongs to one export destination, never to the library. */
 export type SmartPlaylist = z.infer<typeof smartPlaylistSchema>;
@@ -731,6 +952,126 @@ export async function saveSmartPlaylist(playlist: SmartPlaylist): Promise<SmartP
 
 export async function deleteSmartPlaylist(id: number): Promise<void> {
 	await invoke("smart_playlist_delete", { id });
+}
+
+// ---- sharing: clashes, share, make private, hide ----------------------------
+
+/** What an item is: how the backend names the three kinds that can be shared. */
+export type ItemKind = "tag" | "playlist" | "smart_playlist";
+
+const localTagUseSchema = z.object({ id: int, tag: z.string(), songs: int });
+
+/** A local tag that a shared smart playlist would use. */
+export type LocalTagUse = z.infer<typeof localTagUseSchema>;
+
+export type TagChoice = "share" | "remove";
+
+const sharePreviewSchema = z.object({
+	name: z.string(),
+	songs: int,
+	localTags: z.array(localTagUseSchema),
+});
+
+export type SharePreview = z.infer<typeof sharePreviewSchema>;
+
+/** What sharing a local item would send; nothing leaves the device before the user confirms. */
+export async function sharePreview(kind: ItemKind, id: number): Promise<SharePreview> {
+	return sharePreviewSchema.parse(await invoke("share_preview", { kind, id }));
+}
+
+/** Makes a local item shared. `tags` says what to do with each local tag a smart playlist uses. */
+export async function shareItem(
+	kind: ItemKind,
+	id: number,
+	tags: Record<string, TagChoice> = {},
+): Promise<void> {
+	await invoke("share_item", { kind, id, tags });
+}
+
+const privatePreviewSchema = z.object({ name: z.string(), usedBy: z.array(z.string()) });
+
+export type PrivatePreview = z.infer<typeof privatePreviewSchema>;
+
+export async function privatePreview(kind: ItemKind, id: number): Promise<PrivatePreview> {
+	return privatePreviewSchema.parse(await invoke("private_preview", { kind, id }));
+}
+
+/** Everyone else loses the item; this device keeps a local copy. */
+export async function makePrivate(kind: ItemKind, id: number, removeRules: boolean): Promise<void> {
+	await invoke("make_private", { kind, id, removeRules });
+}
+
+export async function setItemHidden(kind: ItemKind, id: number, hidden: boolean): Promise<void> {
+	await invoke("set_item_hidden", { kind, id, hidden });
+}
+
+/** Local tags the rules use, for a smart playlist that is shared. */
+export async function smartLocalTags(rules: SmartRules): Promise<LocalTagUse[]> {
+	return z.array(localTagUseSchema).parse(await invoke("smart_local_tags", { rules }));
+}
+
+const clashSideSchema = z.object({
+	uid: z.string(),
+	id: int,
+	scope: scopeSchema,
+	name: z.string(),
+	songs: int,
+});
+
+const clashSchema = z.object({
+	id: int,
+	kind: z.enum(["tag", "playlist", "smart_playlist"]),
+	name: z.string(),
+	keeps: clashSideSchema,
+	held: clashSideSchema,
+});
+
+/** Two items with one name: the one that has the name, and the one shown under a held name. */
+export type Clash = z.infer<typeof clashSchema>;
+
+export async function listClashes(): Promise<Clash[]> {
+	return z.array(clashSchema).parse(await invoke("list_clashes"));
+}
+
+const deletedItemSchema = z.object({
+	kind: z.enum(["tag", "playlist", "smart_playlist"]),
+	uid: z.string(),
+	name: z.string(),
+	/** "This device", a member's name, or "Another device". */
+	by: z.string(),
+	/** Unix seconds. */
+	at: int,
+	songs: int,
+});
+
+/** A shared item someone deleted in the last 90 days. */
+export type DeletedItem = z.infer<typeof deletedItemSchema>;
+
+export async function listRecentlyDeleted(): Promise<DeletedItem[]> {
+	return z.array(deletedItemSchema).parse(await invoke("list_recently_deleted"));
+}
+
+/** Brings a deleted item back with its old uid and songs; everyone gets it at their next sync. */
+export async function restoreDeleted(kind: ItemKind, uid: string): Promise<void> {
+	await invoke("restore_deleted", { kind, uid });
+}
+
+const combinePreviewSchema = z.object({ sharesLocal: z.boolean(), songs: int, name: z.string() });
+
+export type CombinePreview = z.infer<typeof combinePreviewSchema>;
+
+export async function clashCombinePreview(id: number): Promise<CombinePreview> {
+	return combinePreviewSchema.parse(await invoke("clash_combine_preview", { id }));
+}
+
+export type ClashChoice = "combine" | "renameKeeps" | "renameHeld";
+
+export async function resolveClash(
+	id: number,
+	choice: ClashChoice,
+	newName?: string,
+): Promise<void> {
+	await invoke("resolve_clash", { id, choice, newName: newName ?? null });
 }
 
 const smartPreviewSchema = z.object({

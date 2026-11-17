@@ -3,6 +3,7 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { Shell } from "#/components/app-shell.tsx";
 import { AutoRefresh } from "#/components/auto-refresh.tsx";
+import { DuplicatesIndicator } from "#/components/duplicates.tsx";
 import { IssuesIndicator } from "#/components/issues-drawer.tsx";
 import { MissingIndicator } from "#/components/missing-files.tsx";
 import { StatusBarHost, StatusScopeProvider } from "#/components/status-bar.tsx";
@@ -33,6 +34,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 	const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
 	const [saveSlot, setSaveSlot] = useState<HTMLElement | null>(null);
 	const [missingOpen, setMissingOpen] = useState(false);
+	const [duplicatesOpen, setDuplicatesOpen] = useState(false);
 	const [issuesOpen, setIssuesOpen] = useState(false);
 	return (
 		<html lang="en" className="dark">
@@ -53,8 +55,10 @@ function RootDocument({ children }: { children: ReactNode }) {
 													<Shell
 														missingOpen={missingOpen}
 														issuesOpen={issuesOpen}
+														duplicatesOpen={duplicatesOpen}
 														setMissingOpen={setMissingOpen}
 														setIssuesOpen={setIssuesOpen}
+														setDuplicatesOpen={setDuplicatesOpen}
 													>
 														{children}
 													</Shell>
@@ -64,6 +68,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 														notices={
 															<>
 																<IssuesIndicator onClick={() => setIssuesOpen(true)} />
+																<DuplicatesIndicator onClick={() => setDuplicatesOpen(true)} />
 																<MissingIndicator onClick={() => setMissingOpen(true)} />
 															</>
 														}

@@ -1,13 +1,15 @@
 import { ChevronRight, FolderOpen, Plus, Upload } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AddR2, AddTailscale } from "#/components/add-destination.tsx";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { Drawer } from "#/components/drawer.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
+import { JoinLibraryDialog } from "#/components/shared-library.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { type DestinationService, useDetail } from "#/context/detail-context.ts";
+import { useSyncTargets } from "#/lib/queries.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { space, useUsbDrives } from "#/lib/use-usb.ts";
 
@@ -99,13 +101,42 @@ const plural = (n: number) => `${n} plugged in`;
 function SyncTargetStep({ service }: { service: "tailscale" | "r2" }) {
 	const detail = useDetail();
 	const [added, setAdded] = useState<number | null>(null);
+	// A new destination is first asked what it should be: part of the shared library, or files
+	// only. A device already in a library keeps it files only; Sync has "Join or start".
+	const [asked, setAsked] = useState<number | null>(null);
+	const [offering, setOffering] = useState<number | null>(null);
+	const targets = useSyncTargets().data;
+	useEffect(() => {
+		if (
+			added !== null &&
+			added !== asked &&
+			offering === null &&
+			targets?.some((t) => t.id === added)
+		) {
+			if (targets.some((t) => t.libsync)) {
+				setAsked(added);
+			} else {
+				setOffering(added);
+			}
+		}
+	}, [added, asked, offering, targets]);
+	const offer = targets?.find((t) => t.id === offering);
 	const meta = SERVICES.find((s) => s.id === service);
 	return (
 		<div className="space-y-5 pb-6">
 			<Heading brand={meta?.brand} title={meta?.title ?? ""} />
 			{service === "r2" ? <AddR2 onAdded={setAdded} /> : <AddTailscale onAdded={setAdded} />}
+			{offer && (
+				<JoinLibraryDialog
+					target={offer}
+					onClose={() => {
+						setAsked(offer.id);
+						setOffering(null);
+					}}
+				/>
+			)}
 			<Drawer
-				open={added !== null}
+				open={added !== null && added === asked}
 				onClose={() => added !== null && detail.open({ kind: "target", id: added })}
 				title="Pull existing files"
 				width="w-[44rem]"

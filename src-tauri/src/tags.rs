@@ -267,6 +267,103 @@ pub fn diff(from: Option<&Tag>, to: Option<&Tag>) -> Vec<Change> {
         .collect()
 }
 
+/// Every field a tag holds, as stored (lists normalised); fields it lacks are left out.
+pub fn field_values(tag: Option<&Tag>) -> BTreeMap<String, String> {
+    FIELDS
+        .iter()
+        .filter_map(|(field, _)| {
+            let v = normalized(field, &read_field(tag, field)?);
+            (!v.is_empty()).then(|| ((*field).to_owned(), v))
+        })
+        .collect()
+}
+
+/// The fields of the file at `path`, or `None` when its tags cannot be read.
+pub fn file_fields(path: &Path) -> Option<BTreeMap<String, String>> {
+    use lofty::config::ParseOptions;
+    let file = lofty::probe::Probe::open(path)
+        .ok()?
+        .options(ParseOptions::new().read_properties(false))
+        .read()
+        .ok()?;
+    Some(field_values(file.primary_tag()))
+}
+
+/// [`file_fields`] as JSON, for the sync base.
+pub fn fields_json(path: &Path) -> Option<String> {
+    serde_json::to_string(&file_fields(path)?).ok()
+}
+
+/// Fields stored by [`fields_json`].
+pub fn parse_fields(json: &str) -> Option<BTreeMap<String, String>> {
+    serde_json::from_str(json).ok()
+}
+
+/// One side of a two-sided edit.
+#[derive(Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Side {
+    Mine,
+    Theirs,
+}
+
+/// A field that differs between the library file and the destination copy, with the common
+/// ancestor and which side wins when only one of them changed it.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldMerge {
+    pub field: String,
+    pub base: Option<String>,
+    pub mine: Option<String>,
+    pub theirs: Option<String>,
+    /// `None` when both sides changed the field: someone has to choose.
+    pub side: Option<Side>,
+}
+
+/// Three-way merge per field: a field only one side changed takes that side's value; a field
+/// both changed differently is a conflict (`side` is `None`). Fields equal on both sides are left out.
+pub fn merge(
+    base: &BTreeMap<String, String>,
+    mine: &BTreeMap<String, String>,
+    theirs: &BTreeMap<String, String>,
+) -> Vec<FieldMerge> {
+    FIELDS
+        .iter()
+        .filter_map(|(field, _)| {
+            let key = *field;
+            let (b, m, t) = (base.get(key), mine.get(key), theirs.get(key));
+            if m == t {
+                return None;
+            }
+            let side = if m == b {
+                Some(Side::Theirs)
+            } else if t == b {
+                Some(Side::Mine)
+            } else {
+                None
+            };
+            Some(FieldMerge {
+                field: key.to_owned(),
+                base: b.cloned(),
+                mine: m.cloned(),
+                theirs: t.cloned(),
+                side,
+            })
+        })
+        .collect()
+}
+
+/// Writes `edits` into the one file at `file` (an empty value clears the field).
+pub fn write_file(file: &Path, edits: &BTreeMap<String, String>) -> Result<(), Error> {
+    if let Some(bad) = edits.keys().find(|k| item_key(k).is_none()) {
+        return Err(err(format!("unknown tag field: {bad}")));
+    }
+    if edits.is_empty() {
+        return Ok(());
+    }
+    write_edits(file, edits)
+}
+
 /// What `edits` would change in each song at or under `paths`, without writing anything.
 pub fn preview(
     root: &Path,
@@ -747,5 +844,69 @@ mod tests {
             "unpicked song is untouched"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn fields(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn edits_to_different_fields_merge_without_a_choice() {
+        let base = fields(&[("genre", "House"), ("year", "2020")]);
+        let mine = fields(&[("genre", "Techno"), ("year", "2020")]);
+        let theirs = fields(&[("genre", "House"), ("year", "2021"), ("label", "X")]);
+        let m = merge(&base, &mine, &theirs);
+        let side = |f: &str| m.iter().find(|x| x.field == f).map(|x| x.side);
+        assert_eq!(side("genre"), Some(Some(Side::Mine)));
+        assert_eq!(side("year"), Some(Some(Side::Theirs)));
+        assert_eq!(side("label"), Some(Some(Side::Theirs)));
+        assert_eq!(m.len(), 3);
+    }
+
+    #[test]
+    fn the_same_field_edited_differently_is_a_conflict() {
+        let base = fields(&[("genre", "House")]);
+        let m = merge(
+            &base,
+            &fields(&[("genre", "Techno")]),
+            &fields(&[("genre", "Disco")]),
+        );
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].side, None);
+        assert_eq!(m[0].base.as_deref(), Some("House"));
+    }
+
+    #[test]
+    fn the_same_edit_on_both_sides_and_untouched_fields_are_left_out() {
+        let base = fields(&[("genre", "House"), ("year", "2020")]);
+        let both = fields(&[("genre", "Techno"), ("year", "2020")]);
+        assert_eq!(merge(&base, &both, &both), vec![]);
+    }
+
+    #[test]
+    fn a_cleared_field_counts_as_an_edit() {
+        let base = fields(&[("genre", "House")]);
+        let m = merge(&base, &fields(&[]), &fields(&[("genre", "House")]));
+        assert_eq!(m[0].side, Some(Side::Mine));
+        assert_eq!(m[0].mine, None);
+    }
+
+    #[test]
+    fn merged_fields_written_to_a_file_read_back() {
+        let dir = std::env::temp_dir().join(format!("manplay-merge-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let file = dir.join("s.wav");
+        std::fs::write(&file, silent_wav()).expect("write");
+        write_file(&file, &fields(&[("genre", "House"), ("year", "2020")])).expect("w1");
+        write_file(&file, &fields(&[("genre", "")])).expect("clear");
+        let got = file_fields(&file).expect("fields");
+        assert_eq!(got.get("genre"), None);
+        assert_eq!(got.get("year").map(String::as_str), Some("2020"));
+        let json = fields_json(&file).expect("json");
+        assert_eq!(parse_fields(&json), Some(got));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -51,3 +51,71 @@ Re-joining later: the kept copies clash with the shared items, and **Combine** r
 
 A second device can join an existing library through the dialog and leave it without losing
 data.
+
+## As built
+
+Code: `src-tauri/src/libsync/membership.rs` (inspect, join, ensure, leave), `sync.rs`
+(`inspect_library`, `join_library`, `leave_library`, the `.manplay/` file calls of `LogStore`),
+`src/components/shared-library.tsx` (dialogs, badge, Sync tab row), `device-settings.tsx`.
+
+Differences from the plan above:
+
+- **Membership is `sync_targets.libsync`**, not `settings.shared_target_id`: the switch's column
+  from step 2 now means "this destination holds my library". The library's id and name are in
+  `settings.library_id` / `library_name`. The "Library data" switch and `set_target_libsync` as a
+  command are gone; the db function stays as the join's last step.
+- **`ChunkStore`** got `read_meta`, `write_meta`, `delete_meta`, `list_meta` for the small files
+  under `.manplay/` (the in-memory store in the tests implements them and counts calls, so tests
+  can show a destination was never touched).
+- **Files** written: `library.json` `{format, libraryId, name, createdAt}`, `.ignore` (empty),
+  `devices/<id>.json` `{name, lastSeen, analysisVersion}` (analysis version is `analysis::VERSION`,
+  for step 6). The device file is rewritten at the start of every sync (that is `lastSeen`). The
+  dialog's "last change" is the newest `lastSeen` of the members: there is no per-op timestamp
+  to read without downloading chunks.
+- **Snapshots** do not exist yet (step 6): joining loads every chunk from the start, as a sync
+  does.
+- **Join** order: (Start only) write `library.json` and `.ignore`, then the local changes in one
+  transaction, then `set_target_libsync` (seeds), then one sync and the device file. A failure in
+  that first sync is reported in the result but the device is joined; the next sync repeats it.
+  - Merge: nothing changes locally; mine that are `shared` are sent, same names become clashes.
+  - Keep mine local: every tag, playlist and smart playlist gets scope `local` first. BPM, key,
+    beat grids and Tag Database values are still shared (they have no scope).
+  - Replace: deletes all my tags, playlists and smart playlists (local ones too, the confirm says
+    how many), their ops and registers, and the cursors, then joins. Songs, files and BPM/key
+    are untouched. A rescan can make tags from file tags again.
+  - Files only: no backend call at all. The only read before the choice is `library.json` and
+    `devices/`.
+- **Adding a destination** opens the join dialog first (then the Pull drawer), unless the device
+  is already in a library; the destination is then files only and the Sync tab has "Join or
+  start…". Turning sharing on for an existing destination is the same button.
+- **One library per device**: joining while in another is refused by the backend; the dialog
+  first shows "Leave X to join Y?" (the leave choices), then the join dialog.
+- **Leave** runs one last sync first (sends my edits, pulls theirs). If the destination cannot be
+  reached the leaving stops and the dialog offers "Leave without syncing". Then in one transaction:
+  - Keep a copy: shared items become `local` with **new uids** (rules of smart playlists follow),
+    so joining again meets them as clashes, never as the same item.
+  - Keep only my local items: shared tags, playlists, smart playlists and their members are
+    deleted. A local smart playlist that used a shared tag then shows "Unknown tag".
+  - Both: the op log, registers, cursors, clashes and unknown ops are cleared, `libsync` is off,
+    the library id/name settings go, and `devices/<me>.json` is deleted (best effort). BPM, key
+    and grids stay as plain values; waveforms are marked to be checked again on a later join.
+- **Removing a destination, or changing its folder,** leaves its library with a copy and without
+  asking it (before, changing the folder only switched the switch off and left the op state).
+- **Device name**: `settings.device_name`, default the computer's name (`scutil --get
+  ComputerName` on macOS, `COMPUTERNAME` on Windows, else `hostname`). Settings, "This device".
+- **Badges**: "Shared library" / "Files only" in the destination list and on the Sync tab.
+- **Existing users with the switch on** are treated as joined. At their next library sync
+  (`membership::ensure`) the device adopts the `library.json` it finds, or writes one named
+  after the destination (with `.ignore`), then writes its device file. Nothing is re-sent or
+  re-scoped. Until that sync the Sync tab shows the destination's name for the library.
+- **A destination that now holds another library** (different `libraryId` than the one this
+  device joined) stops the sync with an error asking to leave and join again.
+
+Breaking changes to stored data: none to old formats. New settings keys `library_id`,
+`library_name`, `device_name` (additive); a destination's `library.json` and `devices/` are new
+files under `.manplay/`. Old builds ignore them. The user-visible change is that the Library data
+switch is replaced by the join / leave flow.
+
+Known gaps: two devices that both carry over at the same moment can each write a
+`library.json` (step 7); a stale `devices/<id>.json` stays if its device never leaves; the member
+list has no "remove device"; Replace does not stop a rescan from recreating tags from file tags.

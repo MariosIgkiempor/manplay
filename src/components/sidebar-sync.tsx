@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { CloudUpload, Download, FolderOpen, RefreshCw, Upload } from "lucide-react";
+import { CloudUpload, Download, FolderOpen, RefreshCw, TriangleAlert, Upload } from "lucide-react";
 import type { ReactNode } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { useDownloadsEnabled } from "#/components/downloads-source.tsx";
@@ -12,7 +12,7 @@ import { type SyncKind, useSyncActions } from "#/context/sync-actions-context.ts
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { isR2 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
-import { useSyncTargets } from "#/lib/queries.ts";
+import { useClashes, useSyncTargets } from "#/lib/queries.ts";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
@@ -157,12 +157,24 @@ function ExportItems() {
 						active={isView(detail.view, view)}
 						browse={t.id}
 						trailing={
-							syncing.has(t.id) && (
-								<span
-									role="img"
-									aria-label="Syncing"
-									className="block size-2 animate-pulse rounded-full bg-primary"
-								/>
+							(t.libsync || syncing.has(t.id)) && (
+								<span className="flex items-center gap-1.5">
+									{t.libsync && (
+										<span
+											title="Holds your shared library"
+											className="rounded-full bg-primary/15 px-1.5 py-px font-medium text-[10px] text-primary leading-4"
+										>
+											Shared
+										</span>
+									)}
+									{syncing.has(t.id) && (
+										<span
+											role="img"
+											aria-label="Syncing"
+											className="block size-2 animate-pulse rounded-full bg-primary"
+										/>
+									)}
+								</span>
 							)
 						}
 						onOpen={() => detail.open(view)}
@@ -193,6 +205,31 @@ function ExportItems() {
 	);
 }
 
+/** Items with the same name on two sides, with their count; opens them in Settings. */
+function ClashesRow() {
+	const count = useClashes().data?.length ?? 0;
+	const inLibrary = useSyncTargets().data?.some((t) => t.libsync) ?? false;
+	if (!inLibrary || count === 0) {
+		return null;
+	}
+	return (
+		<div className={rowClass(false)}>
+			<Link
+				to="/settings"
+				className={cn(rowBase, "text-left outline-none")}
+				style={{ paddingLeft: "8px" }}
+			>
+				<TriangleAlert className="size-4 shrink-0 text-warning" />
+				<span className="truncate">Clashes</span>
+				<span className="ml-auto rounded-full bg-warning/15 px-1.5 text-warning text-xs tabular-nums">
+					{count}
+				</span>
+			</Link>
+			<span className="size-5 shrink-0" />
+		</div>
+	);
+}
+
 /**
  * Import and Export with their sources and destinations folded under them, and pull, push and
  * sync on the heading. Choosing a source or destination opens it in the side panel.
@@ -204,6 +241,7 @@ export function SidebarSync() {
 	return (
 		<section className="space-y-0.5">
 			<SectionLabel action={<QuickActions />}>Sync</SectionLabel>
+			<ClashesRow />
 			<GroupHeading
 				to="/import"
 				label="Import"

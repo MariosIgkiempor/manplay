@@ -75,3 +75,23 @@ Keep `ensure_unchanged` (`sync.rs:781`): refuse if the destination changed since
 ## Done when
 
 Two machines edit different tags of one file, both sync, and both end with both edits.
+
+## As built
+
+Differences from the plan above:
+
+- Update, Merge and Conflict are plan actions like Replace, applied by `sync_apply` (with a new
+  `resolutions` argument for choices). They are listed in the Pull section of the Sync tab, so the
+  Pull switch gates them, but they run in the push phase of a sync.
+- A conflict is `Kind::Conflict` (no tick; "Keep mine" pushes, "Keep theirs" updates).
+- A merge writes the merged tags into the library file, then pushes it. The old library file is
+  copied to the sync backup folder (`target-N/library/`), the old destination file is backed up as
+  for Replace. An update sends the old library file to the Trash/Recycle Bin.
+- The base is also written for files found identical during a review (UPDATE of existing
+  `synced_files` rows only), so existing destinations get a base without a sync.
+- Pairs with a different size are only read (4 range reads each) when they have a base.
+- "Audio differs" for a both-edited file downloads the destination copy to the temp folder and
+  compares `audioprint` of both. Both sides' tag fields equal but signatures different (artwork)
+  is a conflict. A both-edited file without base tags falls back to an unticked Replace.
+- No-base files keep today's rule (modified time vs `synced_at`), with the note "Differs from the
+  destination (no earlier sync to compare with)" instead of the old "tick to overwrite" text.

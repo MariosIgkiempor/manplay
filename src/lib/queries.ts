@@ -9,33 +9,50 @@ import {
 	auditFix,
 	auditLibrary,
 	auditPlace,
+	carryOver,
 	DEFAULT_PANEL_TABS,
+	dismissCarry,
 	fsCopy,
 	fsMakeDir,
 	fsMove,
 	fsRename,
 	fsTrash,
+	getDefaultScope,
+	getDeviceName,
 	getLibraryRoot,
 	getLibraryView,
 	getPanelTabs,
 	getTagClipboard,
 	getUiSetting,
+	type ItemKind,
 	itunesImport,
 	itunesPending,
+	type JoinChoice,
+	type LeaveChoice,
 	libraryStatus,
+	libsyncJoin,
+	libsyncLeave,
+	listCarryCandidates,
+	listClashes,
+	listDuplicates,
 	listMissing,
+	listRecentlyDeleted,
 	listSyncTargets,
 	listTracks,
 	migrateLibraryTags,
 	type PanelTabs,
 	pickAndScan,
+	type Resolution,
 	removeMissingNow,
 	rescanLibrary,
 	resetLibrary,
+	restoreDeleted,
 	type ServiceId,
 	saveAnalysisToFiles,
 	serviceFlags,
 	setAnalysisSettings,
+	setDefaultScope,
+	setDeviceName,
 	setLibraryView,
 	setPanelTabs,
 	setServiceEnabled,
@@ -77,6 +94,101 @@ export function useSyncTargets() {
 	return useQuery({ queryKey: ["sync-targets"], queryFn: listSyncTargets });
 }
 
+/** Whether some destination shares library data: until then nothing is sent to anyone. */
+export function useSharingOn() {
+	return (useSyncTargets().data ?? []).some((t) => t.libsync);
+}
+
+export const CLASHES_KEY = ["clashes"] as const;
+
+/** Two items with one name, waiting for the user (tags, playlists, smart playlists). */
+export function useClashes() {
+	return useQuery({ queryKey: CLASHES_KEY, queryFn: listClashes });
+}
+
+export const DELETED_KEY = ["recently-deleted"] as const;
+
+/** Shared items deleted in the last 90 days, who deleted them and when. */
+export function useRecentlyDeleted() {
+	return useQuery({ queryKey: DELETED_KEY, queryFn: listRecentlyDeleted });
+}
+
+/** Everything a share, a make-private, a hide or a clash choice can change in the lists. */
+export function useRefreshItems() {
+	const queryClient = useQueryClient();
+	return async () => {
+		await Promise.all(
+			[
+				CLASHES_KEY,
+				DELETED_KEY,
+				["tags"],
+				["playlists"],
+				["smart-playlists"],
+				["tracks"],
+				["playlist-tracks"],
+			].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+		);
+	};
+}
+
+/** Takes a deleted item back; the lists and the deleted list refresh. */
+export function useRestoreDeleted() {
+	const refresh = useRefreshItems();
+	return useMutation({
+		mutationFn: ({ kind, uid }: { kind: ItemKind; uid: string }) => restoreDeleted(kind, uid),
+		onSettled: refresh,
+	});
+}
+
+/** Joins or starts a shared library on a destination. Everything shared changes in the lists. */
+export function useJoinLibrary() {
+	const queryClient = useQueryClient();
+	const refresh = useRefreshItems();
+	return useMutation({
+		mutationFn: ({ id, choice }: { id: number; choice: JoinChoice }) => libsyncJoin(id, choice),
+		onSettled: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
+			await refresh();
+		},
+	});
+}
+
+/** Leaves the shared library; the lists drop or keep the shared items. */
+export function useLeaveLibrary() {
+	const queryClient = useQueryClient();
+	const refresh = useRefreshItems();
+	return useMutation({
+		mutationFn: ({ choice, sync }: { choice: LeaveChoice; sync: boolean }) =>
+			libsyncLeave(choice, sync),
+		onSettled: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
+			await refresh();
+		},
+	});
+}
+
+/** This device's name as other members of a shared library see it. */
+export function useDeviceName() {
+	const queryClient = useQueryClient();
+	const name = useQuery({ queryKey: ["device-name"], queryFn: getDeviceName });
+	const save = useMutation({
+		mutationFn: setDeviceName,
+		onSuccess: (next) => queryClient.setQueryData(["device-name"], next),
+	});
+	return { name, save };
+}
+
+/** The scope new tags and playlists get, and the means to change it. */
+export function useDefaultScope() {
+	const queryClient = useQueryClient();
+	const scope = useQuery({ queryKey: ["default-scope"], queryFn: getDefaultScope });
+	const save = useMutation({
+		mutationFn: setDefaultScope,
+		onSuccess: (_, next) => queryClient.setQueryData(["default-scope"], next),
+	});
+	return { scope, save };
+}
+
 export const SYNC_KEY = ["sync-run"] as const;
 
 /** Reads what a sync of the given target ids (or every enabled target) would do. Changes nothing. */
@@ -92,8 +204,15 @@ export function useSyncApply() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationKey: SYNC_KEY,
-		mutationFn: ({ planId, actionIds }: { planId: string; actionIds: number[] }) =>
-			syncApply(planId, actionIds),
+		mutationFn: ({
+			planId,
+			actionIds,
+			resolutions,
+		}: {
+			planId: string;
+			actionIds: number[];
+			resolutions?: Record<number, Resolution>;
+		}) => syncApply(planId, actionIds, resolutions),
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["sync-history"] });
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
@@ -113,6 +232,39 @@ export function useLibraryStatus() {
 /** Tracks whose files are gone; only fetched while `enabled` (the list drawer is open). */
 export function useMissingTracks(enabled: boolean) {
 	return useQuery({ queryKey: ["missing-tracks"], queryFn: listMissing, enabled });
+}
+
+/** Songs stored more than once (same audio); re-run after any file change. */
+export function useDuplicates() {
+	return useQuery({
+		queryKey: ["duplicates"],
+		queryFn: listDuplicates,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+}
+
+/** Re-encoded songs whose old audio has tags or playlists to carry over. */
+export function useCarryCandidates() {
+	return useQuery({
+		queryKey: ["carry"],
+		queryFn: listCarryCandidates,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+}
+
+/** Carries tags and playlists over to the new audio, or leaves them (`trackId` null). */
+export function useCarryDecision() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async ({ oldFp, trackId }: { oldFp: string; trackId: number | null }) => {
+			if (trackId === null) {
+				await dismissCarry(oldFp);
+			} else {
+				await carryOver(oldFp, trackId);
+			}
+		},
+		onSettled: () => refreshAfterFsChange(queryClient),
+	});
 }
 
 /** Ends the grace period for missing tracks. Their remote copies are offered for deletion at the next sync review. */
@@ -261,9 +413,17 @@ export function useItunesImport() {
 /** Everything that can change when files move on disk (the backend rescans afterwards). */
 export async function refreshAfterFsChange(queryClient: ReturnType<typeof useQueryClient>) {
 	await Promise.all(
-		["fs", "tracks", "playlists", "tags", "library-status", "audit", "tag-values"].map((k) =>
-			queryClient.invalidateQueries({ queryKey: [k] }),
-		),
+		[
+			"fs",
+			"tracks",
+			"playlists",
+			"tags",
+			"library-status",
+			"audit",
+			"tag-values",
+			"duplicates",
+			"carry",
+		].map((k) => queryClient.invalidateQueries({ queryKey: [k] })),
 	);
 }
 

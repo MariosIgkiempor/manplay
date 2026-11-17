@@ -21,34 +21,42 @@ import {
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { LinkButton } from "#/components/check-list.tsx";
 import { ErrorText } from "#/components/error-text.tsx";
+import { LocalTagsDialog } from "#/components/item-sharing.tsx";
 import { Picker, type PickerOption } from "#/components/picker.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import {
 	type AddedRule,
+	type LocalTagUse,
 	listTags,
 	type SmartPlaylist,
 	type SmartPreview,
 	type SmartRules,
 	saveSmartPlaylist,
+	shareItem,
+	smartLocalTags,
 } from "#/lib/api.ts";
 import { plural } from "#/lib/export-selection.ts";
 import { duration, formatBytes } from "#/lib/format.ts";
+import { useRefreshItems } from "#/lib/queries.ts";
 import {
 	type AddedKind,
 	addedKind,
 	autoName,
+	DEVICE_ONLY_FILTERS,
 	dateInput,
 	describeParts,
 	describeRules,
 	type FilterKind,
 	fromDateInput,
+	isUnknownTag,
 	type Part,
 	placeTag,
 	ROLE_FIELD,
 	removeTag,
 	roleOf,
+	ruleTagLabel,
 	sameRules,
 	type TagRole,
 	withAddedKind,
@@ -216,6 +224,16 @@ const ARROWS: Record<string, number> = { ArrowDown: 1, ArrowUp: -1 };
 
 /** A tag path with its parents quiet: Genre › **House**. */
 function TagPath({ name }: { name: string }) {
+	if (isUnknownTag(name)) {
+		return (
+			<span
+				className="min-w-0 truncate text-muted-foreground italic"
+				title="Not a tag on this device"
+			>
+				Unknown tag
+			</span>
+		);
+	}
 	const parts = name.split(TAG_SEP);
 	const leaf = parts.pop();
 	return (
@@ -486,6 +504,14 @@ function FilterRow({
 			</span>
 			<div className="flex flex-wrap items-center gap-2">
 				{children}
+				{DEVICE_ONLY_FILTERS[kind] && (
+					<span
+						className="rounded border px-1.5 py-px text-muted-foreground text-xs"
+						title={DEVICE_ONLY_NOTE}
+					>
+						This device only
+					</span>
+				)}
 				{onClear && (
 					<Button
 						size="xs"
@@ -644,6 +670,9 @@ const TAG_LOOK: Record<TagRole, { icon: LucideIcon; text: string }> = {
 	none: { icon: Ban, text: "text-destructive" },
 };
 
+const DEVICE_ONLY_NOTE =
+	"Counts when a song reached this device. Other devices sharing this playlist count their own, so they can list different songs.";
+
 const FILTER_LOOK: Record<FilterKind, { icon: LucideIcon; text: string; label: string }> = {
 	added: { icon: CalendarClock, text: "text-warning", label: "Added" },
 	bpm: { icon: Metronome, text: "text-success", label: "Tempo" },
@@ -658,7 +687,7 @@ function RuleWord({
 }: {
 	icon: LucideIcon;
 	className: string;
-	title?: string;
+	title?: string | undefined;
 	children: ReactNode;
 }) {
 	return (
@@ -674,14 +703,18 @@ function SentencePart({ part }: { part: Part }) {
 		const look = TAG_LOOK[part.role];
 		return (
 			<RuleWord icon={look.icon} className={look.text} title={part.tag}>
-				{tagLeaf(part.tag)}
+				{ruleTagLabel(part.tag)}
 			</RuleWord>
 		);
 	}
 	if ("filter" in part) {
 		const look = FILTER_LOOK[part.filter];
 		return (
-			<RuleWord icon={look.icon} className={look.text}>
+			<RuleWord
+				icon={look.icon}
+				className={look.text}
+				title={DEVICE_ONLY_FILTERS[part.filter] ? DEVICE_ONLY_NOTE : undefined}
+			>
 				{part.text}
 			</RuleWord>
 		);
@@ -795,6 +828,43 @@ function FilterSection({ rules, setRules }: SectionProps) {
 export function SmartRulesEditor({ playlist }: { playlist: SmartPlaylist }) {
 	const queryClient = useQueryClient();
 	const [rules, setRules] = useState(playlist.rules);
+	const refresh = useRefreshItems();
+	/** Rules that would put a local tag in a shared playlist, waiting for the user's choice. */
+	const [asking, setAsking] = useState<{ next: SmartRules; tags: LocalTagUse[] } | null>(null);
+	const [askError, setAskError] = useState<string | null>(null);
+	const change = async (next: SmartRules) => {
+		if (playlist.scope === "local") {
+			setRules(next);
+			return;
+		}
+		const tags = await smartLocalTags(next);
+		if (tags.length === 0) {
+			setRules(next);
+		} else {
+			setAskError(null);
+			setAsking({ next, tags });
+		}
+	};
+	const settle = async (choices: Record<string, "share" | "remove">) => {
+		if (!asking) {
+			return;
+		}
+		try {
+			let next = asking.next;
+			for (const t of asking.tags) {
+				if (choices[t.tag] === "share") {
+					await shareItem("tag", t.id);
+				} else {
+					next = removeTag(next, t.tag);
+				}
+			}
+			await refresh();
+			setRules(next);
+			setAsking(null);
+		} catch (e) {
+			setAskError(String(e));
+		}
+	};
 	const latest = useRef(playlist);
 	latest.current = playlist;
 	const autosave = useAutosave({
@@ -823,9 +893,19 @@ export function SmartRulesEditor({ playlist }: { playlist: SmartPlaylist }) {
 				<Readout rules={rules} preview={preview.data} />
 				<SaveState status={autosave.status} error={autosave.error} />
 			</div>
-			<TagSection rules={rules} setRules={setRules} />
+			<TagSection rules={rules} setRules={(next) => void change(next)} />
 			<FilterSection rules={rules} setRules={setRules} />
 			{preview.isError && <ErrorText message={String(preview.error)} />}
+			{asking && (
+				<LocalTagsDialog
+					title={`“${playlist.name}” is shared. Use local tags in it?`}
+					tags={asking.tags}
+					confirmLabel="Use in shared playlist"
+					onCancel={() => setAsking(null)}
+					onConfirm={(choices) => void settle(choices)}
+				/>
+			)}
+			{askError && <ErrorText message={askError} />}
 		</div>
 	);
 }

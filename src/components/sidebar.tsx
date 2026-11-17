@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { createContext, type ReactNode, useContext, useEffect } from "react";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
+import { SidebarRecentlyDeleted } from "#/components/sidebar-deleted.tsx";
 import { SectionLabel } from "#/components/sidebar-parts.tsx";
 import { SidebarPlaylists } from "#/components/sidebar-playlists.tsx";
 import { SidebarSmartPlaylists } from "#/components/sidebar-smart-playlists.tsx";
@@ -19,6 +20,7 @@ import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { keyLabel } from "#/lib/platform.ts";
+import { useClashes } from "#/lib/queries.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
 import { usePaneWidth, useStoredFlag } from "#/lib/use-pane-width.ts";
 import { cn } from "#/lib/utils.ts";
@@ -81,6 +83,7 @@ function NavLink({
 
 /** Folded away, Import and Export are plain icons; otherwise they live in the Sync section. */
 function RailSyncLinks({ syncing }: { syncing: boolean }) {
+	const clashes = (useClashes().data?.length ?? 0) > 0;
 	return (
 		<>
 			<NavLink to="/import" label="Import" icon={<Download />} />
@@ -88,7 +91,13 @@ function RailSyncLinks({ syncing }: { syncing: boolean }) {
 				to="/export"
 				label="Export"
 				icon={<Upload />}
-				badge={syncing && <span className="ml-auto size-2 animate-pulse rounded-full bg-primary" />}
+				badge={
+					syncing ? (
+						<span className="ml-auto size-2 animate-pulse rounded-full bg-primary" />
+					) : (
+						clashes && <span className="ml-auto size-2 rounded-full bg-warning" />
+					)
+				}
 			/>
 		</>
 	);
@@ -172,6 +181,7 @@ export function Sidebar() {
 							<SidebarPlaylists />
 							<SidebarSmartPlaylists />
 							<SidebarTagTree />
+							<SidebarRecentlyDeleted />
 						</section>
 					</div>
 				)}

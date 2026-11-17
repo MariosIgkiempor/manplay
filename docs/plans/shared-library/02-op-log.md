@@ -98,3 +98,59 @@ Runs as part of the existing sync, before files:
 
 Device A tags a song and adds it to a playlist, both sync, and device B shows the same tag and
 playlist, in the same order.
+
+## As built
+
+Code: `src-tauri/src/libsync/` (`ops.rs`, `clock.rs`, `frac.rs`, `state.rs`, `apply.rs`,
+`write.rs`, `seed.rs`, `remote.rs`, `schema.rs`, `tests.rs`); `sync.rs` holds the WebDAV/R2 chunk
+store (`LogStore`) and `run_library_data`.
+
+- **Off by default, per destination.** `sync_targets.libsync` (additive column, default 0) and a
+  "Library data" switch on the destination's Sync tab. Until some destination has it on, no edit
+  writes an op and nothing is created under `.manplay/`. Only one destination can have it on
+  (one local log, one cursor set); step 5's join/leave replaces the switch. Changing a
+  destination's folder switches it off.
+- **Switching on seeds the log** (`seed::seed`): an op for every shared tag, playlist and
+  membership that has none, and the whole own log is marked unuploaded and the cursors cleared,
+  because the destination may be a new one (replaying is idempotent). Removals made while sharing
+  was off are not sent, only what exists now.
+- **Op store.** Besides `oplog` (own ops, `uploaded`) and `op_cursor`, a table `op_state` holds
+  the winning op per `(e, id, f)` from everyone, with `ref` (the `audio_fp` of a membership).
+  Replay writes the registers first, then rebuilds only the affected rows from the registers, so
+  order never matters, and ops for songs the library lacks simply wait there: after a scan
+  `apply::materialize_pending` applies them. Ops with `v` above 1 go to `op_unknown` untouched;
+  unknown entities and fields are stored in `op_state` and forwarded, never applied.
+- **One write path.** Edits in `db.rs` collect their ops in a `libsync::Batch` and commit them in
+  the same transaction as the row change (`write::record` is the only place an op gets a clock).
+  A batch does nothing when sharing is off or the item's `scope` is `local`.
+- **Tags.** Each level (`Genre`, `Genre/House`) is its own tag with its own uid, as in the
+  tables. Rename/merge (`migrate_tags`) is written as: name op for a new target, `present` ops for
+  the moved songs on the target (taken from the local rows and from waiting ops), `_delete` on the
+  old tag. `_merge` is in the format but not written yet. Deleting a tag is a tombstone for that
+  tag only, as before.
+- **Same name, two uids** (two devices created `House`): same item. The row keeps the lowest uid;
+  the other uid is an alias whose memberships land on that row. Different case counts as the same
+  name for tags. This is a stopgap for step 4's clashes list. A same-named item that is `local`
+  is never merged into; the shared one is left out of the tables until step 4.
+- **Playlists.** `playlist_tracks.pos` holds the fractional index (base 62, `frac.rs`);
+  `position` stays as the song's rank, renumbered after replay, so queries and exports are
+  unchanged. Old rows get keys at open. A song whose audio is already in the playlist (another
+  copy) joins at the same key and sends nothing. Removing a song removes every copy of its audio
+  from that playlist (a playlist holds each audio once).
+- **Copies of one audio.** A membership is per `audio_fp`: replay tags or lists every file with
+  that audio, but a local edit only touches the file it was made on until the next replay.
+- **Device ID** is made on first use (`settings.device_id`, UUID v7). The display name and
+  `devices/<id>.json` are left to step 5; `library.json` and `.ignore` too.
+- **Chunks.** `.manplay/log/<device>/<seq 8 digits>.jsonl.gz`. WebDAV: written as `<seq>.part`
+  then `MOVE`d (never overwrites); R2: one `PUT` after a check that the chunk does not exist. A
+  device reads another's chunks only in order without gaps (a missing chunk stops that device
+  until it appears) and never reads its own. Crash between upload and marking `uploaded` re-sends
+  those ops in the next chunk; replay absorbs it.
+- **Run.** The frontend calls `libsync_run` first in a Sync (before pull and push), also when
+  nothing else is ticked ("Sync library data"); the result screen has a "Library data" block
+  (sent, received, errors). The ops go through `sync::Backend`'s existing calls (`list`, `get`,
+  `put`, `rename`, `mkdir`, `remote_size`) via a small async `ChunkStore` trait, so tests use an
+  in-memory store.
+- **Clock.** `Hlc` kept in `settings.hlc`; the 4-digit counter rolls over into the next
+  millisecond instead of overflowing (bulk seeding writes thousands of ops per millisecond).
+- **Smart playlists** only got `uid`, `scope`, `hidden` this step (their ops are step 3).

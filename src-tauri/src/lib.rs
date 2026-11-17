@@ -10,6 +10,7 @@ mod error;
 mod fsops;
 mod import;
 mod itunes;
+mod libsync;
 mod onelib;
 mod pdb;
 mod playback;
@@ -52,6 +53,12 @@ struct AppState {
     cancel_analysis: AtomicBool,
     /// The last sync review, awaiting the user's confirmation.
     plan: Mutex<Option<sync::Plan>>,
+    /// Waveforms the sharing destination did not have since the last sync.
+    wf_misses: libsync::waveforms::Misses,
+    /// Held while waveforms are being downloaded in the background.
+    wf_filling: AtomicBool,
+    /// A sync asked for a waveform transfer while one was running: run again when it ends.
+    wf_again: AtomicBool,
 }
 
 const SETTING_ROOT: &str = "library_root";
@@ -71,11 +78,95 @@ async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error>
     let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
     detect_moves(&mut conn, &state.data_dir, &root, &result)?;
     db::upsert(&mut conn, &result.tracks)?;
+    db::rekey_legacy(&mut conn)?;
+    // Shared tags and playlists that were waiting for these songs.
+    libsync::apply::materialize_pending(&mut conn)?;
     db::replace_tag_values(&mut conn, &result.values)?;
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
     reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
     drop(conn);
     Ok(result.tracks.len())
+}
+
+/// Fingerprints the audio of present tracks that have no `audio_fp` yet (libraries from before
+/// scans did it) and re-keys the old fingerprint-keyed analysis and cues onto them. Scans do
+/// this for every file they read, so this only matters until the first scan after an update.
+async fn fill_audio_fps(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let todo = match state.db.lock().map_err(|_| Error::Lock) {
+        Ok(conn) => db::tracks_without_audio_fp(&conn),
+        Err(e) => Err(e),
+    };
+    let Ok(todo) = todo else { return };
+    let printed = tauri::async_runtime::spawn_blocking(move || {
+        todo.into_iter()
+            .map(|(id, path)| {
+                let fp = audioprint::audio_print_path(Path::new(&path)).unwrap_or_default();
+                (id, fp)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
+    let Ok(printed) = printed else { return };
+    let Ok(mut conn) = state.db.lock() else {
+        return;
+    };
+    let stored = db::set_audio_fps(&mut conn, &printed)
+        .and_then(|()| db::rekey_legacy(&mut conn))
+        .and_then(|()| libsync::apply::materialize_pending(&mut conn).map(|_| ()));
+    if let Err(e) = stored {
+        log::warn!("could not fingerprint the library's audio: {e}");
+    }
+}
+
+/// After an update that changed the audio fingerprint algorithm (`audioprint::VERSION`): prints
+/// every present song again, moves its analysis, cues and shared edits from the old print to the
+/// new one (`libsync::remap`), and only then records the new version. A song that cannot be read
+/// holds the whole move back until the next start, so a half-moved library never syncs.
+async fn reprint_audio_fps(app: AppHandle) {
+    let want = i64::from(audioprint::VERSION);
+    let state = app.state::<AppState>();
+    let todo = match state.db.lock().map_err(|_| Error::Lock) {
+        Ok(conn) => match libsync::remap::local_version(&conn) {
+            Ok(have) if have >= want => return,
+            Ok(_) => db::tracks_with_audio_fp(&conn),
+            Err(e) => Err(e),
+        },
+        Err(e) => Err(e),
+    };
+    let Ok(todo) = todo else { return };
+    let printed = tauri::async_runtime::spawn_blocking(move || {
+        todo.into_iter()
+            .map(|(id, path, old)| {
+                let fp = audioprint::audio_print_path(Path::new(&path)).unwrap_or_default();
+                (id, old, fp)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
+    let Ok(printed) = printed else { return };
+    if printed.iter().any(|(_, _, fp)| fp.is_empty()) {
+        log::warn!("some songs could not be fingerprinted again; trying at the next start");
+        return;
+    }
+    let Ok(mut conn) = state.db.lock() else {
+        return;
+    };
+    let pairs: Vec<(String, String)> = printed
+        .iter()
+        .map(|(_, old, new)| (old.clone(), new.clone()))
+        .collect();
+    let stored = db::set_audio_fps(
+        &mut conn,
+        &printed
+            .iter()
+            .map(|(id, _, fp)| (*id, fp.clone()))
+            .collect::<Vec<_>>(),
+    )
+    .and_then(|()| libsync::remap::remap_tracks(&mut conn, &pairs, want));
+    if let Err(e) = stored {
+        log::warn!("could not move the library to the new audio fingerprint: {e}");
+    }
 }
 
 /// Path relative to the library root, as it appears on sync destinations.
@@ -197,6 +288,40 @@ fn library_status(state: State<'_, AppState>) -> Result<LibraryStatus, Error> {
         missing: db::missing_count(&conn)?,
         grace_days: GRACE_DAYS,
     })
+}
+
+/// Groups of present songs with the same audio (see `db::duplicate_groups`).
+#[tauri::command]
+fn list_duplicates(state: State<'_, AppState>) -> Result<Vec<db::DuplicateGroup>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::duplicate_groups(&conn)
+}
+
+/// Songs re-encoded under the same name whose old audio has tags or playlists to carry over.
+#[tauri::command]
+fn list_carry_candidates(
+    state: State<'_, AppState>,
+) -> Result<Vec<libsync::carry::Candidate>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    libsync::carry::candidates(&conn)
+}
+
+/// Moves tags, playlist places and hand-set tempo of the old audio to the song `track_id`.
+#[tauri::command]
+fn carry_over(
+    state: State<'_, AppState>,
+    old_fp: String,
+    track_id: i64,
+) -> Result<libsync::carry::Carried, Error> {
+    let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
+    libsync::carry::carry_over(&mut conn, &old_fp, track_id)
+}
+
+/// Leaves the old audio's tags and playlists where they are.
+#[tauri::command]
+fn dismiss_carry(state: State<'_, AppState>, old_fp: String) -> Result<(), Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    libsync::carry::dismiss(&conn, &old_fp)
 }
 
 #[derive(serde::Serialize)]
@@ -634,13 +759,7 @@ fn run_analysis(
         for (i, result, readable) in rx {
             if readable {
                 let conn = state.db.lock().map_err(|_| Error::Lock)?;
-                db::store_analysis(
-                    &conn,
-                    &jobs[i].fingerprint,
-                    &result,
-                    unix_now(),
-                    replace_edits,
-                )?;
+                db::store_analysis(&conn, &jobs[i].audio_fp, &result, unix_now(), replace_edits)?;
             }
             if result.is_ok() {
                 out.analyzed += 1;
@@ -657,6 +776,49 @@ fn run_analysis(
     })?;
     out.cancelled = total - out.analyzed - out.failed;
     Ok(out)
+}
+
+/// Songs another device already analysed have their result (from its ops) but no waveform here
+/// yet: their waveform is fetched from the sharing destination instead of analysing them again.
+/// What could not be fetched stays in `jobs`.
+async fn drop_analysed_elsewhere(
+    state: &AppState,
+    jobs: Vec<db::AnalysisJob>,
+) -> Vec<db::AnalysisJob> {
+    let waiting: Vec<String> = state.db.lock().map_or_else(
+        |_| Vec::new(),
+        |c| {
+            jobs.iter()
+                .filter(|j| {
+                    c.query_row(
+                        "SELECT EXISTS (SELECT 1 FROM analysis WHERE audio_fp = ?1
+                             AND version >= ?2 AND waveform IS NULL)",
+                        rusqlite::params![j.audio_fp, analysis::VERSION],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .unwrap_or(false)
+                })
+                .map(|j| j.audio_fp.clone())
+                .collect()
+        },
+    );
+    for fp in &waiting {
+        fetch_shared_waveform(state, fp).await;
+    }
+    let Ok(c) = state.db.lock() else {
+        return jobs;
+    };
+    jobs.into_iter()
+        .filter(|j| {
+            !waiting.contains(&j.audio_fp)
+                || c.query_row(
+                    "SELECT waveform IS NULL FROM analysis WHERE audio_fp = ?1",
+                    [&j.audio_fp],
+                    |r| r.get::<_, bool>(0),
+                )
+                .unwrap_or(true)
+        })
+        .collect()
 }
 
 /// Detects BPM and key for the tracks in `track_ids` (every track when `None`). Unless
@@ -679,14 +841,16 @@ async fn analyze_tracks(
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let replace_edits = replace_edits.unwrap_or(analysis_settings_of(&conn)?.replace_edits);
         let jobs = db::analysis_jobs(&conn, track_ids.as_deref(), force)?;
-        let ids = db::track_ids_with_fingerprints(
+        let ids = db::track_ids_with_audio_fps(
             &conn,
-            &jobs
-                .iter()
-                .map(|j| j.fingerprint.as_str())
-                .collect::<Vec<_>>(),
+            &jobs.iter().map(|j| j.audio_fp.as_str()).collect::<Vec<_>>(),
         )?;
         (jobs, ids, replace_edits)
+    };
+    let jobs = if force {
+        jobs
+    } else {
+        drop_analysed_elsewhere(&state, jobs).await
     };
     if jobs.is_empty() {
         return Ok(AnalysisReport::default());
@@ -738,9 +902,38 @@ fn list_playlists(state: State<'_, AppState>) -> Result<Vec<Playlist>, Error> {
 }
 
 #[tauri::command]
-fn create_playlist(state: State<'_, AppState>, name: String) -> Result<i64, Error> {
-    let id = with_db!(state, |c| db::create_playlist(c, name.trim()))?;
+fn create_playlist(
+    state: State<'_, AppState>,
+    name: String,
+    scope: Option<String>,
+) -> Result<i64, Error> {
+    let id = with_db!(state, |c| db::create_playlist(
+        c,
+        name.trim(),
+        scope.as_deref()
+    ))?;
     Ok(id)
+}
+
+/// A new empty tag, shared or only on this device.
+#[tauri::command]
+fn create_tag(
+    state: State<'_, AppState>,
+    name: String,
+    scope: Option<String>,
+) -> Result<(), Error> {
+    with_db!(state, |c| db::create_tag(c, name.trim(), scope.as_deref()))
+}
+
+/// The scope new tags and playlists get: `shared` or `local`.
+#[tauri::command]
+fn default_scope(state: State<'_, AppState>) -> Result<String, Error> {
+    with_db!(state, |c| libsync::default_scope(c).map(str::to_owned))
+}
+
+#[tauri::command]
+fn set_default_scope(state: State<'_, AppState>, scope: String) -> Result<(), Error> {
+    with_db!(state, |c| libsync::set_default_scope(c, &scope))
 }
 
 #[tauri::command]
@@ -1363,8 +1556,8 @@ fn chosen_smart(conn: &Connection, ids: &[i64]) -> Result<Vec<db::ExportPlaylist
 
 /// Every smart playlist in the library.
 #[tauri::command]
-fn smart_playlists(state: State<'_, AppState>) -> Result<Vec<smart::SmartPlaylist>, Error> {
-    with_db!(state, |c| db::smart_playlists(c))
+fn smart_playlists(state: State<'_, AppState>) -> Result<Vec<db::SmartListing>, Error> {
+    with_db!(state, |c| db::smart_listing(c))
 }
 
 /// Adds (`id` 0) or changes a smart playlist. Only its rules are kept; its songs are worked out
@@ -1439,10 +1632,10 @@ fn usb_inputs(
                 }
             }),
             cues: t
-                .fingerprint
+                .audio_fp
                 .as_deref()
                 .and_then(|fp| db::cues_of(&conn, fp).ok().flatten()),
-            fingerprint: t.fingerprint,
+            audio_fp: t.audio_fp,
             grid_edited: t.grid_edited,
         })
         .collect();
@@ -1661,9 +1854,21 @@ async fn track_analysis(
     state: State<'_, AppState>,
     track_id: i64,
 ) -> Result<Option<TrackAnalysisView>, Error> {
-    let stored = with_db!(state, |c| {
-        db::fingerprint_of(c, track_id).map(|fp| fp.and_then(|fp| anlz::load(c, &fp)))
+    let (fp, stored) = with_db!(state, |c| {
+        db::audio_fp_of(c, track_id).map(|fp| {
+            let stored = fp.as_deref().and_then(|fp| anlz::load(c, fp));
+            (fp, stored)
+        })
     })?;
+    let stored = match (stored, fp) {
+        (Some(s), _) => Some(s),
+        // Analysed on another device: the waveform comes from the sharing destination.
+        (None, Some(fp)) => {
+            fetch_shared_waveform(&state, &fp).await;
+            with_db!(state, |c| Ok::<_, Error>(anlz::load(c, &fp)))?
+        }
+        (None, None) => None,
+    };
     Ok(stored.map(|s| TrackAnalysisView {
         grid_bpm: s.grid_bpm,
         first_beat: s.first_beat,
@@ -1672,6 +1877,32 @@ async fn track_analysis(
         rate: analysis::WAVEFORM_RATE,
         detail: s.detail,
     }))
+}
+
+/// Asks the sharing destination for the waveform of audio that has an analysis here but no
+/// waveform (it was analysed on another device). Failing is fine: the song shows without one.
+async fn fetch_shared_waveform(state: &AppState, audio_fp: &str) {
+    let target = state.db.lock().ok().and_then(|c| {
+        let waiting = c
+            .query_row(
+                "SELECT EXISTS (SELECT 1 FROM analysis WHERE audio_fp = ?1 AND waveform IS NULL)",
+                [audio_fp],
+                |r| r.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
+        if !waiting {
+            return None;
+        }
+        db::get_targets(&c, None)
+            .ok()
+            .and_then(|t| t.into_iter().find(|t| t.libsync))
+    });
+    if let Some(target) = target
+        && let Err(e) =
+            sync::fetch_waveform(&state.http, &target, &state.db, &state.wf_misses, audio_fp).await
+    {
+        log::debug!("no waveform from the destination: {e}");
+    }
 }
 
 /// Replaces a track's kept beat grid, as edited in the grid editor, and makes its BPM match.
@@ -1684,7 +1915,7 @@ async fn set_beat_grid(
     first_beat: f64,
     bar_offset: u8,
 ) -> Result<Option<TrackAnalysisView>, Error> {
-    let Some(fp) = with_db!(state, |c| db::fingerprint_of(c, track_id))? else {
+    let Some(fp) = with_db!(state, |c| db::audio_fp_of(c, track_id))? else {
         return Err(Error::Msg(
             "This song has no audio to keep a grid for.".into(),
         ));
@@ -1717,7 +1948,7 @@ async fn set_beat_grid(
 #[tauri::command]
 fn track_cues(state: State<'_, AppState>, track_id: i64) -> Result<Vec<db::Cue>, Error> {
     with_db!(state, |c| {
-        match db::fingerprint_of(c, track_id)? {
+        match db::audio_fp_of(c, track_id)? {
             Some(fp) => Ok(db::cues_of(c, &fp)?.unwrap_or_default()),
             None => Ok(Vec::new()),
         }
@@ -1836,7 +2067,7 @@ async fn sync_plan(
     state: State<'_, AppState>,
     target_ids: Option<Vec<i64>>,
 ) -> Result<sync::Plan, Error> {
-    let (targets, items, known, synced, prints) = {
+    let (targets, items, known, synced, prints, bases) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let targets = db::get_targets(&conn, target_ids.as_deref())?;
         let synced = targets
@@ -1847,12 +2078,17 @@ async fn sync_plan(
             .iter()
             .map(|t| Ok((t.id, db::remote_prints(&conn, t.id)?)))
             .collect::<Result<HashMap<_, _>, Error>>()?;
+        let bases = targets
+            .iter()
+            .map(|t| Ok((t.id, db::synced_bases(&conn, t.id)?)))
+            .collect::<Result<HashMap<_, _>, Error>>()?;
         (
             targets,
             collect_items(&conn)?,
             collect_known(&conn)?,
             synced,
             prints,
+            bases,
         )
     };
     if targets.is_empty() {
@@ -1874,20 +2110,30 @@ async fn sync_plan(
     for target in &targets {
         let times = synced.get(&target.id).cloned().unwrap_or_default();
         let cached = prints.get(&target.id).cloned().unwrap_or_default();
-        let plan = sync::plan_target(
+        let target_bases = bases.get(&target.id).cloned().unwrap_or_default();
+        let mut plan = sync::plan_target(
             &app,
             &state.http,
             target,
-            &items,
-            &known,
-            &times,
-            &cached,
+            &sync::Inputs {
+                items: &items,
+                known: &known,
+                synced_at: &times,
+                cached: &cached,
+                bases: &target_bases,
+            },
             &mut next_id,
         )
         .await;
         if !plan.fresh_prints.is_empty() {
             let conn = state.db.lock().map_err(|_| Error::Lock)?;
             db::store_remote_prints(&conn, target.id, &plan.fresh_prints)?;
+        }
+        // Files found identical get a base now, so the next review knows who edits what.
+        let seeds = sync::seed_bases(std::mem::take(&mut plan.seeds)).await;
+        if !seeds.is_empty() {
+            let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
+            db::store_bases(&mut conn, target.id, &seeds)?;
         }
         plans.push(plan);
     }
@@ -1907,6 +2153,7 @@ async fn sync_apply(
     state: State<'_, AppState>,
     plan_id: String,
     action_ids: Vec<u32>,
+    resolutions: Option<HashMap<u32, sync::Resolution>>,
 ) -> Result<Vec<sync::ApplySummary>, Error> {
     let plan = {
         let mut slot = state.plan.lock().map_err(|_| Error::Lock)?;
@@ -1922,6 +2169,8 @@ async fn sync_apply(
     let _guard = SyncGuard(&state.syncing);
 
     let selected: HashSet<u32> = action_ids.into_iter().collect();
+    let resolutions = resolutions.unwrap_or_default();
+    let root = library_root(&state)?;
     let ids: Vec<i64> = plan.targets.iter().map(|t| t.target_id).collect();
     let targets = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
@@ -1946,14 +2195,19 @@ async fn sync_apply(
             continue;
         }
         let started_at = unix_now();
-        let applied =
-            sync::apply_target(&app, &state.http, target, tp, &selected, &backup_dir).await;
+        let review = sync::Review {
+            selected: &selected,
+            resolutions: &resolutions,
+            backup_dir: &backup_dir,
+            root: &root,
+        };
+        let applied = sync::apply_target(&app, &state.http, target, tp, &review).await;
         let s = &applied.summary;
         let record = db::RunRecord {
             target_id: target.id,
             started_at,
             finished_at: unix_now(),
-            uploaded: s.uploaded + s.moved,
+            uploaded: s.uploaded + s.moved + s.merged,
             skipped: tp.in_sync,
             failed: s.failed_total,
             deleted: s.deleted,
@@ -1970,10 +2224,282 @@ async fn sync_apply(
         summaries.push(applied.summary);
     }
 
+    // Library files rewritten by an update or merge: read them again.
+    if summaries.iter().any(|s| s.updated + s.merged > 0) {
+        scan_and_store(&state, root).await?;
+    }
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     purge_expired(&conn, &state.data_dir.join("backups"), unix_now())?;
     sync::prune_backups(&backups, unix_now(), SYNC_BACKUP_KEEP_SECS);
     Ok(summaries)
+}
+
+/// Clashes waiting for the user: two items with one name.
+#[tauri::command]
+fn list_clashes(state: State<'_, AppState>) -> Result<Vec<libsync::clashes::Clash>, Error> {
+    with_db!(state, |c| libsync::clashes::list(c))
+}
+
+/// Shared items deleted in the last 90 days, newest first.
+#[tauri::command]
+fn list_recently_deleted(
+    state: State<'_, AppState>,
+) -> Result<Vec<libsync::recent::Deleted>, Error> {
+    with_db!(state, |c| libsync::recent::list(
+        c,
+        libsync::clock::now_ms()
+    ))
+}
+
+/// Takes a deleted item back with its old uid and its songs.
+#[tauri::command]
+fn restore_deleted(state: State<'_, AppState>, kind: String, uid: String) -> Result<(), Error> {
+    with_db!(state, |c| libsync::recent::restore(
+        c,
+        &kind,
+        &uid,
+        libsync::clock::now_ms()
+    ))
+}
+
+/// What combining the two sides of a clash would share and remove.
+#[tauri::command]
+fn clash_combine_preview(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<libsync::clashes::CombinePreview, Error> {
+    with_db!(state, |c| libsync::clashes::combine_preview(c, id))
+}
+
+/// Settles a clash: combine the two, or rename one side (`new_name`).
+#[tauri::command]
+fn resolve_clash(
+    state: State<'_, AppState>,
+    id: i64,
+    choice: libsync::clashes::Choice,
+    new_name: Option<String>,
+) -> Result<(), Error> {
+    with_db!(state, |c| libsync::clashes::resolve(
+        c,
+        id,
+        choice,
+        new_name.as_deref()
+    ))
+}
+
+/// What sharing a local tag, playlist or smart playlist would send.
+#[tauri::command]
+fn share_preview(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+) -> Result<libsync::share::SharePreview, Error> {
+    with_db!(state, |c| libsync::share::share_preview(c, &kind, id))
+}
+
+/// Makes a local item shared. `tags` says what to do with each local tag a smart playlist uses.
+#[tauri::command]
+fn share_item(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    tags: std::collections::BTreeMap<String, libsync::share::TagChoice>,
+) -> Result<(), Error> {
+    with_db!(state, |c| libsync::share::share(c, &kind, id, &tags))
+}
+
+/// Which shared smart playlists would lose a rule if the tag became private.
+#[tauri::command]
+fn private_preview(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+) -> Result<libsync::share::PrivatePreview, Error> {
+    with_db!(state, |c| libsync::share::private_preview(c, &kind, id))
+}
+
+/// Makes a shared item private: others lose it, this device keeps a local copy.
+#[tauri::command]
+fn make_private(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    remove_rules: bool,
+) -> Result<(), Error> {
+    with_db!(state, |c| libsync::share::make_private(
+        c,
+        &kind,
+        id,
+        remove_rules
+    ))
+}
+
+/// Hides an item on this device only, or shows it again.
+#[tauri::command]
+fn set_item_hidden(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    hidden: bool,
+) -> Result<(), Error> {
+    with_db!(state, |c| libsync::share::set_hidden(c, &kind, id, hidden))
+}
+
+/// Local tags the rules (as the editor shows them) use, for a smart playlist that is shared.
+#[tauri::command]
+fn smart_local_tags(
+    state: State<'_, AppState>,
+    rules: smart::Rules,
+) -> Result<Vec<libsync::share::LocalTagUse>, Error> {
+    with_db!(state, |c| libsync::share::local_tags_of_editor_rules(
+        c, &rules
+    ))
+}
+
+/// What a destination holds: a shared library with its members, or none.
+#[tauri::command]
+async fn libsync_inspect(
+    state: State<'_, AppState>,
+    target_id: i64,
+) -> Result<Option<libsync::membership::Found>, Error> {
+    let target = shared_target(&state, target_id)?;
+    sync::inspect_library(&state.http, &target, &state.db).await
+}
+
+/// How many tags, playlists and smart playlists "Join and replace mine" would drop.
+#[tauri::command]
+fn libsync_replace_count(state: State<'_, AppState>) -> Result<i64, Error> {
+    with_db!(state, |c| libsync::membership::replace_count(c))
+}
+
+/// Joins the shared library on a destination, or starts one there, and syncs it once.
+#[tauri::command]
+async fn libsync_join(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: i64,
+    choice: libsync::membership::JoinChoice,
+) -> Result<sync::LibraryOutcome, Error> {
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    let target = shared_target(&state, target_id)?;
+    state.wf_misses.clear();
+    let out = sync::join_library(&state.http, &target, &state.db, choice).await?;
+    let target = shared_target(&state, target_id)?;
+    tauri::async_runtime::spawn(transfer_waveforms(app, target));
+    Ok(out)
+}
+
+/// Leaves the shared library. `sync` sends and receives one last time first.
+#[tauri::command]
+async fn libsync_leave(
+    state: State<'_, AppState>,
+    choice: libsync::membership::LeaveChoice,
+    sync: bool,
+) -> Result<(), Error> {
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    let target = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::list_targets(&conn)?.into_iter().find(|t| t.libsync)
+    }
+    .ok_or_else(|| Error::Msg("This device is not in a shared library.".to_owned()))?;
+    sync::leave_library(&state.http, &target, &state.db, choice, sync).await
+}
+
+fn shared_target(state: &AppState, id: i64) -> Result<db::SyncTarget, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::list_targets(&conn)?
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| Error::Msg("That destination no longer exists.".to_owned()))
+}
+
+/// The name other members see this device as.
+#[tauri::command]
+fn get_device_name(state: State<'_, AppState>) -> Result<String, Error> {
+    with_db!(state, |c| libsync::membership::device_name(c))
+}
+
+/// Names this device; an empty name goes back to the machine's own.
+#[tauri::command]
+fn set_device_name(state: State<'_, AppState>, name: String) -> Result<String, Error> {
+    with_db!(state, |c| {
+        libsync::membership::set_device_name(c, &name)?;
+        libsync::membership::device_name(c)
+    })
+}
+
+/// Shares library data with the destinations that have it switched on: sends this device's
+/// edits and applies everyone else's. Run before the files of a sync.
+#[tauri::command]
+async fn libsync_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_ids: Vec<i64>,
+) -> Result<Vec<sync::LibraryOutcome>, Error> {
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.syncing);
+    let targets = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::get_targets(&conn, Some(&target_ids))?
+    };
+    let mut out = Vec::new();
+    state.wf_misses.clear();
+    for target in targets.iter().filter(|t| t.libsync) {
+        out.push(sync::run_library_data(&state.http, target, &state.db).await);
+    }
+    if let Some(target) = targets.into_iter().find(|t| t.libsync) {
+        tauri::async_runtime::spawn(transfer_waveforms(app, target));
+    }
+    Ok(out)
+}
+
+/// Uploads this device's waveforms and downloads everyone else's after a sync, all of them, in
+/// the background, with `waveform-progress` events for the status bar. Problems are only logged:
+/// what is left goes after the next sync, and a missing waveform is fetched when its song shows.
+async fn transfer_waveforms(app: AppHandle, target: db::SyncTarget) {
+    let state = app.state::<AppState>();
+    if state.wf_filling.swap(true, Ordering::SeqCst) {
+        // The running transfer goes round again for what this sync brought.
+        state.wf_again.store(true, Ordering::SeqCst);
+        return;
+    }
+    let _guard = SyncGuard(&state.wf_filling);
+    loop {
+        state.wf_again.store(false, Ordering::SeqCst);
+        let report = |p: libsync::waveforms::Progress| {
+            let _ = app.emit("waveform-progress", p);
+        };
+        match sync::transfer_waveforms(&state.http, &target, &state.db, &state.wf_misses, report)
+            .await
+        {
+            Ok(t) => {
+                log::info!(
+                    "waveforms on {}: {} sent, {} fetched",
+                    sync::target_name(&target),
+                    t.sent,
+                    t.fetched
+                );
+                if let Some(e) = t.upload_error {
+                    log::warn!("waveform uploads stopped early: {e}");
+                }
+            }
+            Err(e) => {
+                log::warn!("could not move waveforms: {e}");
+                let _ = app.emit("waveform-progress", libsync::waveforms::Progress::done());
+            }
+        }
+        if !state.wf_again.load(Ordering::SeqCst) {
+            break;
+        }
+    }
 }
 
 #[tauri::command]
@@ -2643,14 +3169,14 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
         let (mut tracks, mut playlists) = db::export_data(&conn)?;
         for t in &mut tracks {
             t.cues = t
-                .fingerprint
+                .audio_fp
                 .as_deref()
                 .map(|fp| db::cues_of(&conn, fp))
                 .transpose()?
                 .flatten()
                 .unwrap_or_default();
             t.grid = t
-                .fingerprint
+                .audio_fp
                 .as_deref()
                 .and_then(|fp| anlz::load(&conn, fp))
                 .and_then(|s| {
@@ -3058,10 +3584,6 @@ pub fn run() {
             if let Some(root) = db::get_setting(&conn, SETTING_ROOT)? {
                 allow_assets(app.handle(), Path::new(&root));
             }
-            // Beat grids and waveforms used to be kept as files; they live in the database now.
-            if let Err(e) = anlz::import_files(&conn, &dir) {
-                log::warn!("importing kept analyses: {e}");
-            }
             let http = reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .build()
@@ -3076,7 +3598,12 @@ pub fn run() {
                 usb_exporting: AtomicBool::new(false),
                 cancel_analysis: AtomicBool::new(false),
                 plan: Mutex::new(None),
+                wf_misses: libsync::waveforms::Misses::default(),
+                wf_filling: AtomicBool::new(false),
+                wf_again: AtomicBool::new(false),
             });
+            tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
+            tauri::async_runtime::spawn(reprint_audio_fps(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3084,6 +3611,10 @@ pub fn run() {
             get_library_root,
             library_status,
             list_missing,
+            list_duplicates,
+            list_carry_candidates,
+            carry_over,
+            dismiss_carry,
             remove_missing_now,
             rescan_library,
             reset_library,
@@ -3114,6 +3645,9 @@ pub fn run() {
             set_tempo_key,
             list_playlists,
             create_playlist,
+            create_tag,
+            default_scope,
+            set_default_scope,
             rename_playlist,
             delete_playlist,
             add_to_playlist,
@@ -3130,6 +3664,24 @@ pub fn run() {
             add_sync_target,
             add_r2_target,
             update_sync_target,
+            libsync_inspect,
+            libsync_replace_count,
+            libsync_join,
+            libsync_leave,
+            get_device_name,
+            set_device_name,
+            list_clashes,
+            list_recently_deleted,
+            restore_deleted,
+            clash_combine_preview,
+            resolve_clash,
+            share_preview,
+            share_item,
+            private_preview,
+            make_private,
+            set_item_hidden,
+            smart_local_tags,
+            libsync_run,
             remove_sync_target,
             sync_history,
             activity_history,
@@ -3358,7 +3910,7 @@ mod tests {
         f.apply(&f.scan_of(&["1", "2"], 0));
         let id = db::list(&f.conn).expect("list")[0].id;
         db::tag_tracks(&mut f.conn, "keep", &[id]).expect("tag");
-        let pl = db::create_playlist(&f.conn, "p").expect("playlist");
+        let pl = db::create_playlist(&f.conn, "p", None).expect("playlist");
         db::add_to_playlist(&mut f.conn, pl, &[id]).expect("add");
 
         f.apply(&f.scan_of(&["2"], 0)); // track 1 disappears
@@ -3456,7 +4008,13 @@ mod tests {
             errors: Vec::new(),
             batch: 0,
         };
-        db::record_run(&mut f.conn, &record, &[(ids[0], 1), (ids[1], 1)], &[]).expect("run");
+        db::record_run(
+            &mut f.conn,
+            &record,
+            &[db::Synced::kept(ids[0], 1), db::Synced::kept(ids[1], 1)],
+            &[],
+        )
+        .expect("run");
 
         f.apply(&f.scan_of(&["2"], 0)); // track 1 now missing, marked just now
         assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
@@ -3476,6 +4034,70 @@ mod tests {
         assert_eq!(db::missing_count(&f.conn).expect("count"), 0);
     }
 
+    #[test]
+    fn a_sync_stores_replaces_keeps_and_clears_the_base_of_a_file() {
+        let mut f = Fixture::new("base");
+        f.apply(&f.scan_of(&["1"], 0));
+        let id = ids_by_title(&f)["1"];
+        let target = db::add_target(
+            &f.conn,
+            &db::NewTarget {
+                tailnet: "t".into(),
+                machine: "m".into(),
+                path: vec!["s".into()],
+            },
+        )
+        .expect("target");
+        let record = db::RunRecord {
+            target_id: target,
+            started_at: 0,
+            finished_at: 1,
+            uploaded: 0,
+            skipped: 0,
+            failed: 0,
+            deleted: 0,
+            first_error: None,
+            errors: Vec::new(),
+            batch: 0,
+        };
+        let base = |sig: &str| db::Base {
+            local_sig: sig.to_owned(),
+            remote_sig: sig.to_owned(),
+            tags: Some("{}".to_owned()),
+        };
+        let synced = |update| db::Synced {
+            track_id: id,
+            size: 1,
+            base: update,
+        };
+        db::record_run(
+            &mut f.conn,
+            &record,
+            &[synced(db::BaseUpdate::Set(base("a")))],
+            &[],
+        )
+        .expect("set");
+        assert_eq!(
+            db::synced_bases(&f.conn, target).expect("read")[&id],
+            base("a")
+        );
+        // A file nothing happened to keeps its base.
+        db::record_run(&mut f.conn, &record, &[synced(db::BaseUpdate::Keep)], &[]).expect("keep");
+        assert_eq!(
+            db::synced_bases(&f.conn, target).expect("read")[&id],
+            base("a")
+        );
+        // Seeding replaces it in place.
+        db::store_bases(&mut f.conn, target, &[(id, base("b"))]).expect("seed");
+        assert_eq!(
+            db::synced_bases(&f.conn, target).expect("read")[&id],
+            base("b")
+        );
+        // A file the sync may have left different forgets it: rows without a base fall back.
+        db::record_run(&mut f.conn, &record, &[synced(db::BaseUpdate::Clear)], &[]).expect("clear");
+        assert_eq!(db::synced_bases(&f.conn, target).expect("read").len(), 0);
+    }
+
     fn ids_by_title(f: &Fixture) -> HashMap<String, i64> {
         db::list(&f.conn)
             .expect("list")
@@ -3490,7 +4112,7 @@ mod tests {
         f.apply(&f.scan_of(&["1", "2"], 0));
         let id = ids_by_title(&f)["1"];
         db::tag_tracks(&mut f.conn, "keep", &[id]).expect("tag");
-        let pl = db::create_playlist(&f.conn, "p").expect("playlist");
+        let pl = db::create_playlist(&f.conn, "p", None).expect("playlist");
         db::add_to_playlist(&mut f.conn, pl, &[id]).expect("add");
 
         f.apply(&f.scan_of(&["new/1", "2"], 0)); // "1" moved to new/1
@@ -3562,7 +4184,7 @@ mod tests {
             errors: Vec::new(),
             batch: 0,
         };
-        db::record_run(&mut f.conn, &record, &[(id, 1)], &[]).expect("run");
+        db::record_run(&mut f.conn, &record, &[db::Synced::kept(id, 1)], &[]).expect("run");
         assert_eq!(db::list(&f.conn).expect("list")[0].synced_count, 1);
 
         f.apply(&f.scan_of(&["new/1", "2"], 0));
@@ -3589,7 +4211,7 @@ mod tests {
             .iter()
             .map(|t| t.id)
             .collect();
-        let pl = db::create_playlist(&f.conn, "Friday").expect("playlist");
+        let pl = db::create_playlist(&f.conn, "Friday", None).expect("playlist");
         db::add_to_playlist(&mut f.conn, pl, &[ids[2], ids[0]]).expect("add");
 
         let out = f.dir.join("out").join("rekordbox.xml");
@@ -3608,6 +4230,9 @@ mod tests {
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
+            wf_misses: libsync::waveforms::Misses::default(),
+            wf_filling: AtomicBool::new(false),
+            wf_again: AtomicBool::new(false),
         };
         assert!(export_inner(&state, false).expect("export"));
 
@@ -3645,8 +4270,8 @@ mod tests {
             .iter()
             .map(|t| t.id)
             .collect();
-        let keep = db::create_playlist(&f.conn, "Keep").expect("playlist");
-        let skip = db::create_playlist(&f.conn, "Skip").expect("playlist");
+        let keep = db::create_playlist(&f.conn, "Keep", None).expect("playlist");
+        let skip = db::create_playlist(&f.conn, "Skip", None).expect("playlist");
         db::add_to_playlist(&mut f.conn, keep, &[ids[0]]).expect("add");
         db::add_to_playlist(&mut f.conn, skip, &[ids[1]]).expect("add");
         db::tag_tracks(&mut f.conn, "Genre/House", &[ids[0], ids[2]]).expect("tag");
@@ -3699,6 +4324,9 @@ mod tests {
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
+            wf_misses: libsync::waveforms::Misses::default(),
+            wf_filling: AtomicBool::new(false),
+            wf_again: AtomicBool::new(false),
         };
         assert!(export_inner(&state, false).expect("export"));
 
@@ -3737,6 +4365,9 @@ mod tests {
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
             plan: Mutex::new(None),
+            wf_misses: libsync::waveforms::Misses::default(),
+            wf_filling: AtomicBool::new(false),
+            wf_again: AtomicBool::new(false),
         };
         assert!(!export_inner(&state, false).expect("no-op"));
     }

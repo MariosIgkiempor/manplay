@@ -43,6 +43,9 @@ pub struct NewTrack {
     pub size: i64,
     /// See `scan::fingerprint`; `None` when the file could not be sampled.
     pub fingerprint: Option<String>,
+    /// See `audioprint`; an empty string when the audio could not be fingerprinted, `None` when
+    /// it was not tried.
+    pub audio_fp: Option<String>,
     pub duration_ms: Option<i64>,
     pub bitrate: Option<i64>,
     pub sample_rate: Option<i64>,
@@ -75,7 +78,11 @@ fn create_tag_values(conn: &Connection) -> Result<(), Error> {
 /// Tag tables that live outside the main schema, plus any parent tag levels that are missing.
 fn prepare_tags(conn: &Connection) -> Result<(), Error> {
     create_tag_values(conn)?;
-    restore_tag_parents(conn)
+    let tx = conn.unchecked_transaction()?;
+    let mut ops = crate::libsync::Batch::new(&tx)?;
+    restore_tag_parents(&tx, &mut ops)?;
+    ops.commit(&tx)?;
+    Ok(tx.commit()?)
 }
 
 // ---- export selections -------------------------------------------------------
@@ -199,14 +206,88 @@ pub fn export_selection(
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
-    Ok(
-        row.map(|(playlists, tags, smart, usb_mode)| ExportSelection {
-            playlists: serde_json::from_str(&playlists).unwrap_or_default(),
-            tags: serde_json::from_str(&tags).unwrap_or_default(),
-            smart: serde_json::from_str(&smart).unwrap_or_default(),
-            usb_mode: mode_from(&usb_mode),
-        }),
-    )
+    let Some((playlists, tags, smart, usb_mode)) = row else {
+        return Ok(None);
+    };
+    Ok(Some(ExportSelection {
+        playlists: ids_from_stored(conn, "playlists", &playlists)?,
+        tags: serde_json::from_str(&tags).unwrap_or_default(),
+        smart: ids_from_stored(conn, "smart_playlists", &smart)?,
+        usb_mode: mode_from(&usb_mode),
+    }))
+}
+
+/// Selections keep playlists by uid, so a choice survives the ids being different on another
+/// install (restored backup, joined library). Callers see this device's row ids.
+fn ids_from_stored(conn: &Connection, table: &str, raw: &str) -> Result<Vec<i64>, Error> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(raw).unwrap_or_default();
+    let mut ids = Vec::new();
+    for entry in entries {
+        let id: Option<i64> = match &entry {
+            serde_json::Value::String(uid) => conn
+                .query_row(
+                    &format!("SELECT id FROM {table} WHERE uid = ?1"),
+                    params![uid],
+                    |r| r.get(0),
+                )
+                .optional()?,
+            // Saved before selections held uids; `migrate_selection_uids` rewrites these.
+            serde_json::Value::Number(n) => n.as_i64(),
+            _ => None,
+        };
+        if let Some(id) = id {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+/// The uids of the rows with these ids; a row that is gone is left out.
+fn uids_for(conn: &Connection, table: &str, ids: &[i64]) -> Result<Vec<String>, Error> {
+    let mut uids = Vec::new();
+    for id in ids {
+        let uid: Option<Option<String>> = conn
+            .query_row(
+                &format!("SELECT uid FROM {table} WHERE id = ?1"),
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(Some(uid)) = uid {
+            uids.push(uid);
+        }
+    }
+    Ok(uids)
+}
+
+/// Selections saved with integer ids (older versions) become uids, once. A playlist that no
+/// longer exists is dropped from the selection, as it already was in effect.
+pub(crate) fn migrate_selection_uids(conn: &Connection) -> Result<(), Error> {
+    let rows: Vec<(String, String, String)> = conn
+        .prepare("SELECT destination, playlists, smart FROM export_selections")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    for (destination, playlists, smart) in rows {
+        let legacy = |raw: &str| {
+            serde_json::from_str::<Vec<serde_json::Value>>(raw)
+                .is_ok_and(|v| v.iter().any(serde_json::Value::is_number))
+        };
+        if !legacy(&playlists) && !legacy(&smart) {
+            continue;
+        }
+        let as_uids = |table: &str, raw: &str| -> Result<String, Error> {
+            let ids = ids_from_stored(conn, table, raw)?;
+            serde_json::to_string(&uids_for(conn, table, &ids)?)
+                .map_err(|e| Error::Msg(e.to_string()))
+        };
+        let playlists = as_uids("playlists", &playlists)?;
+        let smart = as_uids("smart_playlists", &smart)?;
+        conn.execute(
+            "UPDATE export_selections SET playlists = ?2, smart = ?3 WHERE destination = ?1",
+            params![destination, playlists, smart],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn set_export_selection(
@@ -214,10 +295,11 @@ pub fn set_export_selection(
     destination: &str,
     selection: &ExportSelection,
 ) -> Result<(), Error> {
-    let playlists =
-        serde_json::to_string(&selection.playlists).map_err(|e| Error::Msg(e.to_string()))?;
+    let playlists = serde_json::to_string(&uids_for(conn, "playlists", &selection.playlists)?)
+        .map_err(|e| Error::Msg(e.to_string()))?;
     let tags = serde_json::to_string(&selection.tags).map_err(|e| Error::Msg(e.to_string()))?;
-    let smart = serde_json::to_string(&selection.smart).map_err(|e| Error::Msg(e.to_string()))?;
+    let smart = serde_json::to_string(&uids_for(conn, "smart_playlists", &selection.smart)?)
+        .map_err(|e| Error::Msg(e.to_string()))?;
     conn.execute(
         "INSERT INTO export_selections (destination, playlists, tags, smart, usb_mode)
          VALUES (?1, ?2, ?3, ?4, ?5)
@@ -235,51 +317,191 @@ pub fn set_export_selection(
     Ok(())
 }
 
+/// Rules as the editor sees them (tag names) turned into what is stored and shared (tag uids).
+/// A name that is no tag here stays as typed; an unknown-tag marker goes back to its uid.
+pub(crate) fn rules_to_stored(
+    conn: &Connection,
+    rules: &crate::smart::Rules,
+) -> Result<crate::smart::Rules, Error> {
+    let mut failure = None;
+    let out = rules.map_tags(|entry| {
+        if let Some(uid) = entry.strip_prefix(crate::smart::UNKNOWN_PREFIX)
+            && crate::smart::is_uid(uid)
+        {
+            return uid.to_owned();
+        }
+        if crate::smart::is_uid(entry) {
+            return entry.to_owned();
+        }
+        match conn
+            .query_row(
+                "SELECT uid FROM tags WHERE name = ?1 AND uid IS NOT NULL",
+                params![entry],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+        {
+            Ok(uid) => uid.unwrap_or_else(|| entry.to_owned()),
+            Err(e) => {
+                failure = Some(e);
+                entry.to_owned()
+            }
+        }
+    });
+    failure.map_or(Ok(out), |e| Err(e.into()))
+}
+
+/// Stored rules turned into tag names for the editor and for working out songs. A uid this
+/// device has no tag for (a tag that is local to another device, or was deleted) comes back as
+/// `?<uid>`, which matches no song and is saved back as the same uid.
+fn rules_from_stored(
+    conn: &Connection,
+    rules: &crate::smart::Rules,
+) -> Result<crate::smart::Rules, Error> {
+    let mut failure = None;
+    let out = rules.map_tags(|entry| {
+        if !crate::smart::is_uid(entry) {
+            return entry.to_owned();
+        }
+        match conn
+            .query_row(
+                "SELECT name FROM tags WHERE uid = ?1",
+                params![entry],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+        {
+            Ok(name) => name.unwrap_or_else(|| format!("{}{entry}", crate::smart::UNKNOWN_PREFIX)),
+            Err(e) => {
+                failure = Some(e);
+                entry.to_owned()
+            }
+        }
+    });
+    failure.map_or(Ok(out), |e| Err(e.into()))
+}
+
+pub(crate) fn rules_json(rules: &crate::smart::Rules) -> Result<serde_json::Value, Error> {
+    serde_json::to_value(rules).map_err(|e| Error::Msg(e.to_string()))
+}
+
 /// Every smart playlist, by name.
 pub fn smart_playlists(conn: &Connection) -> Result<Vec<crate::smart::SmartPlaylist>, Error> {
     let mut stmt =
         conn.prepare("SELECT id, name, rules FROM smart_playlists ORDER BY name COLLATE NOCASE")?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, i64>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
-        ))
-    })?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
     let mut out = Vec::new();
-    for row in rows {
-        let (id, name, rules) = row?;
+    for (id, name, rules) in rows {
+        let stored: crate::smart::Rules = serde_json::from_str(&rules).unwrap_or_default();
         out.push(crate::smart::SmartPlaylist {
             id,
             name,
-            rules: serde_json::from_str(&rules).unwrap_or_default(),
+            rules: rules_from_stored(conn, &stored)?,
         });
     }
     Ok(out)
 }
 
-/// Adds a smart playlist (`id` 0) or changes one; returns it as stored.
+/// A smart playlist as the sidebar lists it, with where it is shared and whether it is hidden or
+/// held under another name.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartListing {
+    #[serde(flatten)]
+    pub playlist: crate::smart::SmartPlaylist,
+    pub scope: String,
+    pub hidden: bool,
+    pub held: bool,
+}
+
+pub fn smart_listing(conn: &Connection) -> Result<Vec<SmartListing>, Error> {
+    let mut out = Vec::new();
+    for playlist in smart_playlists(conn)? {
+        let (scope, hidden, held): (String, bool, bool) = conn.query_row(
+            "SELECT scope, hidden,
+                    EXISTS (SELECT 1 FROM clashes c WHERE c.kind = 'smart_playlist' AND c.held = uid)
+             FROM smart_playlists WHERE id = ?1",
+            params![playlist.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        out.push(SmartListing {
+            playlist,
+            scope,
+            hidden,
+            held,
+        });
+    }
+    Ok(out)
+}
+
+/// Adds a smart playlist (`id` 0) or changes one; returns it as stored. Shared ones also write
+/// their ops.
 pub fn save_smart_playlist(
     conn: &Connection,
     playlist: &crate::smart::SmartPlaylist,
 ) -> Result<crate::smart::SmartPlaylist, Error> {
-    let rules = serde_json::to_string(&playlist.rules).map_err(|e| Error::Msg(e.to_string()))?;
+    let tx = conn.unchecked_transaction()?;
+    let stored = rules_to_stored(&tx, &playlist.rules)?;
+    let value = rules_json(&stored)?;
+    let rules = value.to_string();
+    let mut ops = crate::libsync::Batch::new(&tx)?;
     let id = if playlist.id == 0 {
-        conn.execute(
-            "INSERT INTO smart_playlists (name, rules) VALUES (?1, ?2)",
-            params![playlist.name, rules],
+        let uid = crate::libsync::new_uid();
+        let scope = crate::libsync::default_scope(&tx)?;
+        if scope == "shared" {
+            crate::libsync::share::refuse_local_tags(&tx, &stored)?;
+        }
+        tx.execute(
+            "INSERT INTO smart_playlists (name, rules, uid, scope) VALUES (?1, ?2, ?3, ?4)",
+            params![playlist.name, rules, uid, scope],
         )?;
-        conn.last_insert_rowid()
+        if scope == "shared" {
+            ops.smart_playlist(&uid, &playlist.name, &value);
+        }
+        tx.last_insert_rowid()
     } else {
-        let changed = conn.execute(
+        let old: Option<(String, String, String, String)> = tx
+            .query_row(
+                "SELECT COALESCE(uid, ''), scope, name, rules FROM smart_playlists WHERE id = ?1",
+                params![playlist.id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let Some((uid, scope, old_name, old_rules)) = old else {
+            return Err(Error::Msg("That smart playlist no longer exists.".into()));
+        };
+        if scope == "shared" {
+            crate::libsync::share::refuse_local_tags(&tx, &stored)?;
+        }
+        tx.execute(
             "UPDATE smart_playlists SET name = ?2, rules = ?3 WHERE id = ?1",
             params![playlist.id, playlist.name, rules],
         )?;
-        if changed == 0 {
-            return Err(Error::Msg("That smart playlist no longer exists.".into()));
+        if scope == "shared" && !uid.is_empty() {
+            if old_name != playlist.name {
+                ops.smart_playlist(&uid, &playlist.name, &value);
+            } else if serde_json::from_str::<serde_json::Value>(&old_rules)
+                .ok()
+                .as_ref()
+                != Some(&value)
+            {
+                ops.smart_playlist_rules(&uid, &value);
+            }
         }
         playlist.id
     };
+    ops.commit(&tx)?;
+    crate::libsync::clashes::refresh(&tx)?;
+    tx.commit()?;
     Ok(crate::smart::SmartPlaylist {
         id,
         ..playlist.clone()
@@ -287,7 +509,117 @@ pub fn save_smart_playlist(
 }
 
 pub fn delete_smart_playlist(conn: &Connection, id: i64) -> Result<(), Error> {
-    conn.execute("DELETE FROM smart_playlists WHERE id = ?1", params![id])?;
+    let tx = conn.unchecked_transaction()?;
+    let ident: Option<(String, String)> = tx
+        .query_row(
+            "SELECT COALESCE(uid, ''), scope FROM smart_playlists WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    tx.execute("DELETE FROM smart_playlists WHERE id = ?1", params![id])?;
+    if let Some((uid, scope)) = ident
+        && scope == "shared"
+        && !uid.is_empty()
+    {
+        let mut ops = crate::libsync::Batch::new(&tx)?;
+        ops.smart_playlist_deleted(&uid);
+        ops.commit(&tx)?;
+    }
+    crate::libsync::clashes::refresh(&tx)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// A tag moved to another tag (rename or merge): smart playlists that used its uid use the new
+/// one, so the rules keep working.
+pub(crate) fn repoint_smart_rules(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    ops: &mut crate::libsync::Batch,
+) -> Result<(), Error> {
+    if from.is_empty() || to.is_empty() || from == to {
+        return Ok(());
+    }
+    let rows: Vec<(i64, String, String, String)> = conn
+        .prepare(
+            "SELECT id, COALESCE(uid, ''), scope, rules FROM smart_playlists
+             WHERE instr(rules, ?1) > 0",
+        )?
+        .query_map(params![from], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    for (id, uid, scope, rules) in rows {
+        let rules: crate::smart::Rules = serde_json::from_str(&rules).unwrap_or_default();
+        let moved = rules.map_tags(|t| {
+            if t == from {
+                to.to_owned()
+            } else {
+                t.to_owned()
+            }
+        });
+        if moved == rules {
+            continue;
+        }
+        let value = rules_json(&moved)?;
+        conn.execute(
+            "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
+            params![id, value.to_string()],
+        )?;
+        if scope == "shared" && !uid.is_empty() {
+            ops.smart_playlist_rules(&uid, &value);
+        }
+    }
+    Ok(())
+}
+
+/// A tag was deleted: smart playlists on this device stop asking for it (it can never match
+/// again), instead of showing an unknown tag for good. No op is written: the deletion itself is
+/// shared, and every device drops the tag from the rules the same way, so Restore can bring the
+/// rule back.
+fn drop_smart_rule_tag(conn: &Connection, tag_uid: &str) -> Result<(), Error> {
+    if tag_uid.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<(i64, String)> = conn
+        .prepare("SELECT id, rules FROM smart_playlists WHERE instr(rules, ?1) > 0")?
+        .query_map(params![tag_uid], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (id, rules) in rows {
+        let rules: crate::smart::Rules = serde_json::from_str(&rules).unwrap_or_default();
+        let kept = rules.without_tag(tag_uid);
+        if kept != rules {
+            conn.execute(
+                "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
+                params![id, rules_json(&kept)?.to_string()],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Rules saved before they were kept by tag uid hold tag names: each name that is a tag here is
+/// replaced by its uid. A name that is no tag stays as it is (it matched nothing before and
+/// still does not). Safe to repeat.
+fn convert_smart_rules(conn: &Connection) -> Result<(), Error> {
+    let rows: Vec<(i64, String)> = conn
+        .prepare("SELECT id, rules FROM smart_playlists")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (id, rules) in rows {
+        let Ok(old) = serde_json::from_str::<crate::smart::Rules>(&rules) else {
+            continue;
+        };
+        let new = rules_to_stored(conn, &old)?;
+        if new != old {
+            conn.execute(
+                "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
+                params![id, rules_json(&new)?.to_string()],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -353,6 +685,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              PRIMARY KEY (track_id, tag_id)
          );",
     )?;
+    prepare_sharing(&conn)?;
     add_column(&conn, "tracks", "missing_since", "INTEGER")?;
     add_column(&conn, "tracks", "fingerprint", "TEXT")?;
     add_column(&conn, "tracks", "duration_ms", "INTEGER")?;
@@ -364,10 +697,16 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     // Unix seconds the song first came into the library; NULL for songs from before this column
     // (they sort by id, which follows the order they were added).
     add_column(&conn, "tracks", "added_at", "INTEGER")?;
-    // Fingerprint of the audio alone (see `audioprint`), filled in as imports need it.
+    // Fingerprint of the audio alone (see `audioprint`): the key of a song's analysis and cues.
     add_column(&conn, "tracks", "audio_fp", "TEXT")?;
+    retire_fingerprint_keys(&conn)?;
+    // What each side of a destination looked like at the last successful sync (see `Base`).
+    add_column(&conn, "synced_files", "local_sig", "TEXT")?;
+    add_column(&conn, "synced_files", "remote_sig", "TEXT")?;
+    add_column(&conn, "synced_files", "base_tags", "TEXT")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
+         CREATE INDEX IF NOT EXISTS tracks_audio_fp ON tracks(audio_fp);
          CREATE TABLE IF NOT EXISTS import_cache (
              folder TEXT PRIMARY KEY,
              data   TEXT NOT NULL
@@ -400,7 +739,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
          -- BPM and key detection results, by audio content: they follow a file through renames,
          -- moves, tag edits and library resets, and duplicates share them.
          CREATE TABLE IF NOT EXISTS analysis (
-             fingerprint TEXT PRIMARY KEY,
+             audio_fp    TEXT PRIMARY KEY,
              bpm         REAL,
              musical_key TEXT,
              error       TEXT,
@@ -410,7 +749,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
          -- Hot and memory cues set in manplay, by audio content like the analysis.
          CREATE TABLE IF NOT EXISTS cues (
              id          INTEGER PRIMARY KEY,
-             fingerprint TEXT NOT NULL,
+             audio_fp    TEXT NOT NULL,
              -- 0-7 for hot cues A-H, NULL for a memory cue.
              slot        INTEGER,
              start       REAL NOT NULL,
@@ -420,7 +759,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              -- The memory cue the song starts from (rekordbox's main cue on load).
              main        INTEGER NOT NULL DEFAULT 0
          );
-         CREATE INDEX IF NOT EXISTS cues_fingerprint ON cues(fingerprint);
+         CREATE INDEX IF NOT EXISTS cues_audio_fp ON cues(audio_fp);
          CREATE TABLE IF NOT EXISTS stale_remote (
              target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
              track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
@@ -431,26 +770,115 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "sync_runs", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
     add_column(&conn, "sync_runs", "errors", "TEXT NOT NULL DEFAULT '[]'")?;
     add_column(&conn, "sync_runs", "batch", "INTEGER NOT NULL DEFAULT 0")?;
-    // Values set by hand, which a new analysis keeps unless told to replace them.
-    add_column(
-        &conn,
-        "analysis",
-        "bpm_edited",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column(
-        &conn,
-        "analysis",
-        "key_edited",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    add_column(
-        &conn,
-        "analysis",
-        "grid_edited",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
+    add_analysis_columns(&conn, "analysis")?;
     add_column(&conn, "cues", "main", "INTEGER NOT NULL DEFAULT 0")?;
+    if get_setting(&conn, SETTING_AUDIO_FP_VERSION)?.is_none() {
+        set_setting(
+            &conn,
+            SETTING_AUDIO_FP_VERSION,
+            Some(&crate::audioprint::VERSION.to_string()),
+        )?;
+    }
+    prepare_tags(&conn)?;
+    create_export_selections(&conn)?;
+    prepare_smart_sharing(&conn)?;
+    migrate_selection_uids(&conn)?;
+    crate::libsync::seed::catch_up(&conn)?;
+    crate::libsync::clashes::migrate(&conn)?;
+    retry_unnamed_waveforms(&conn)?;
+    Ok(conn)
+}
+
+/// Waveforms of prints like `a1:<hex>` could not be named as files before, and were marked as on
+/// the destination without being sent. Once, they are marked to be sent again.
+fn retry_unnamed_waveforms(conn: &Connection) -> Result<(), Error> {
+    const KEY: &str = "libsync_wf_names";
+    if get_setting(conn, KEY)?.is_none() {
+        conn.execute("UPDATE analysis SET wf_pushed = 0", [])?;
+        set_setting(conn, KEY, Some("1"))?;
+    }
+    Ok(())
+}
+
+/// Columns and tables for sharing library data (see `libsync`): a uid per shareable item, its
+/// scope and whether it is hidden here, the position keys of playlists, and the op log.
+fn prepare_sharing(conn: &Connection) -> Result<(), Error> {
+    for table in ["tags", "playlists"] {
+        add_sharing_columns(conn, table)?;
+    }
+    // Fractional index of a song in a playlist; `position` is its rank, kept for queries.
+    add_column(conn, "playlist_tracks", "pos", "TEXT")?;
+    // Whether this destination receives and sends library data (off until switched on).
+    add_column(
+        conn,
+        "sync_targets",
+        "libsync",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    crate::libsync::schema::create(conn)?;
+    // The chunk an op was uploaded in, so ops a snapshot covers can be pruned.
+    add_column(conn, "oplog", "seq", "INTEGER")?;
+    backfill_positions(conn)
+}
+
+fn prepare_smart_sharing(conn: &Connection) -> Result<(), Error> {
+    add_sharing_columns(conn, "smart_playlists")?;
+    convert_smart_rules(conn)
+}
+
+fn add_sharing_columns(conn: &Connection, table: &str) -> Result<(), Error> {
+    add_column(conn, table, "uid", "TEXT")?;
+    add_column(conn, table, "scope", "TEXT NOT NULL DEFAULT 'shared'")?;
+    add_column(conn, table, "hidden", "INTEGER NOT NULL DEFAULT 0")?;
+    let ids: Vec<i64> = conn
+        .prepare(&format!("SELECT id FROM {table} WHERE uid IS NULL"))?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for id in ids {
+        conn.execute(
+            &format!("UPDATE {table} SET uid = ?1 WHERE id = ?2"),
+            params![crate::libsync::new_uid(), id],
+        )?;
+    }
+    conn.execute_batch(&format!(
+        "CREATE UNIQUE INDEX IF NOT EXISTS {table}_uid ON {table}(uid)"
+    ))?;
+    Ok(())
+}
+
+/// Gives songs in playlists from before position keys one, in their current order.
+fn backfill_positions(conn: &Connection) -> Result<(), Error> {
+    let lists: Vec<i64> = conn
+        .prepare("SELECT DISTINCT playlist_id FROM playlist_tracks WHERE pos IS NULL")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for list in lists {
+        let tracks: Vec<i64> = conn
+            .prepare("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position, track_id")?
+            .query_map(params![list], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        let keys = crate::libsync::frac::spread(None, None, tracks.len());
+        for (track, key) in tracks.iter().zip(keys) {
+            conn.execute(
+                "UPDATE playlist_tracks SET pos = ?1 WHERE playlist_id = ?2 AND track_id = ?3",
+                params![key, list, track],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Setting that records which version of `audioprint` made the stored `audio_fp` values. A new
+/// algorithm needs a remap of `tracks.audio_fp`, `analysis` and `cues` before it is used.
+pub const SETTING_AUDIO_FP_VERSION: &str = "audio_fp_version";
+
+/// The columns of `analysis` added after its first version (also for `analysis_legacy`, so the
+/// old table is complete before it is re-keyed).
+fn add_analysis_columns(conn: &Connection, table: &str) -> Result<(), Error> {
+    // Values set by hand, which a new analysis keeps unless told to replace them.
+    for column in ["bpm_edited", "key_edited", "grid_edited"] {
+        add_column(conn, table, column, "INTEGER NOT NULL DEFAULT 0")?;
+    }
     // The beat grid (seconds to the first beat, its place in the bar) and the detail waveform
     // (`analysis::WAVEFORM_RATE` columns per second, each whiteness << 5 | height) that the
     // library shows and USB drives and rekordbox get. A NULL waveform: not analysed that far.
@@ -461,17 +889,103 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
         ("duration", "REAL"),
         ("waveform", "BLOB"),
     ] {
-        add_column(&conn, "analysis", column, decl)?;
+        add_column(conn, table, column, decl)?;
     }
     // Cues were set in manplay (possibly to none): they replace a drive's own on export.
-    add_column(
-        &conn,
-        "analysis",
-        "cues_edited",
-        "INTEGER NOT NULL DEFAULT 0",
+    add_column(conn, table, "cues_edited", "INTEGER NOT NULL DEFAULT 0")?;
+    // Whether the waveform is known to be on the sharing destination (see `libsync::waveforms`).
+    add_column(conn, table, "wf_pushed", "INTEGER NOT NULL DEFAULT 0")?;
+    Ok(())
+}
+
+/// Older databases keyed `analysis` and `cues` by `tracks.fingerprint` (the whole file, which
+/// every tag edit changes). Those tables are set aside as `analysis_legacy` and `cues_legacy`;
+/// [`rekey_legacy`] copies what maps to a track's `audio_fp` into the new ones.
+fn retire_fingerprint_keys(conn: &Connection) -> Result<(), Error> {
+    if has_column(conn, "analysis", "fingerprint")? {
+        add_analysis_columns(conn, "analysis")?;
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS analysis_legacy;
+             ALTER TABLE analysis RENAME TO analysis_legacy;",
+        )?;
+    }
+    if has_column(conn, "cues", "fingerprint")? {
+        add_column(conn, "cues", "main", "INTEGER NOT NULL DEFAULT 0")?;
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS cues_fingerprint;
+             DROP TABLE IF EXISTS cues_legacy;
+             ALTER TABLE cues RENAME TO cues_legacy;",
+        )?;
+    }
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, name: &str) -> Result<bool, Error> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![name],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+/// Finishes the move of `analysis` and `cues` to `audio_fp` keys: every old row whose track now
+/// has an audio fingerprint is copied under it (hand edits, grids, waveforms and cues included).
+/// Once every present track has been fingerprinted the old tables are dropped, and rows that map
+/// to no track go with them. Does nothing on a database without them.
+pub fn rekey_legacy(conn: &mut Connection) -> Result<(), Error> {
+    let has_analysis = table_exists(conn, "analysis_legacy")?;
+    let has_cues = table_exists(conn, "cues_legacy")?;
+    if !has_analysis && !has_cues {
+        return Ok(());
+    }
+    let tx = conn.transaction()?;
+    if has_analysis {
+        // Present tracks first, then the newest analysis, win when duplicates disagree.
+        tx.execute(
+            "INSERT OR IGNORE INTO analysis
+                 (audio_fp, bpm, musical_key, error, version, analyzed_at, bpm_edited, key_edited,
+                  grid_edited, cues_edited, grid_bpm, first_beat, bar_offset, duration, waveform)
+             SELECT t.audio_fp, a.bpm, a.musical_key, a.error, a.version, a.analyzed_at,
+                    a.bpm_edited, a.key_edited, a.grid_edited, a.cues_edited,
+                    a.grid_bpm, a.first_beat, a.bar_offset, a.duration, a.waveform
+             FROM analysis_legacy a JOIN tracks t ON t.fingerprint = a.fingerprint
+             WHERE t.audio_fp IS NOT NULL AND t.audio_fp <> ''
+             ORDER BY t.missing_since IS NOT NULL, a.analyzed_at DESC",
+            [],
+        )?;
+    }
+    if has_cues {
+        // One legacy fingerprint's cues per audio, and never over cues set since.
+        tx.execute(
+            "INSERT INTO cues (audio_fp, slot, start, name, color, main)
+             SELECT p.audio_fp, c.slot, c.start, c.name, c.color, c.main
+             FROM (SELECT t.audio_fp AS audio_fp, MIN(t.fingerprint) AS fingerprint
+                   FROM tracks t
+                   WHERE t.audio_fp IS NOT NULL AND t.audio_fp <> ''
+                     AND t.fingerprint IN (SELECT fingerprint FROM cues_legacy)
+                   GROUP BY t.audio_fp) p
+             JOIN cues_legacy c ON c.fingerprint = p.fingerprint
+             WHERE NOT EXISTS (SELECT 1 FROM cues n WHERE n.audio_fp = p.audio_fp)",
+            [],
+        )?;
+    }
+    let pending: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM tracks WHERE missing_since IS NULL AND audio_fp IS NULL",
+        [],
+        |r| r.get(0),
     )?;
-    prepare_tags(&conn)?;
-    create_export_selections(&conn).map(|()| conn)
+    if pending == 0 {
+        tx.execute_batch(
+            "DROP TABLE IF EXISTS analysis_legacy; DROP TABLE IF EXISTS cues_legacy;",
+        )?;
+    }
+    tx.commit()?;
+    // Analysis that came back from the old tables after sharing started was never sent.
+    crate::libsync::seed::send_missing_analysis(conn)?;
+    Ok(())
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, Error> {
@@ -482,7 +996,12 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, Erro
         .any(|name| name == column))
 }
 
-fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), Error> {
+pub(crate) fn add_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    decl: &str,
+) -> Result<(), Error> {
     if !has_column(conn, table, column)? {
         conn.execute(
             &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
@@ -495,37 +1014,12 @@ fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Resul
 pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
     let tx = conn.transaction()?;
     {
-        // Writing tags can change a file's fingerprint (its size changes); its analysis (BPM,
-        // key, beat grid, waveform) follows it to the new one rather than being lost.
-        let mut carry = tx.prepare(
-            "INSERT OR IGNORE INTO analysis
-                 (fingerprint, bpm, musical_key, error, version, analyzed_at,
-                  bpm_edited, key_edited, grid_edited, cues_edited,
-                  grid_bpm, first_beat, bar_offset, duration, waveform)
-             SELECT ?2, a.bpm, a.musical_key, a.error, a.version, a.analyzed_at,
-                    a.bpm_edited, a.key_edited, a.grid_edited, a.cues_edited,
-                    a.grid_bpm, a.first_beat, a.bar_offset, a.duration, a.waveform
-             FROM tracks t JOIN analysis a ON a.fingerprint = t.fingerprint
-             WHERE t.path = ?1 AND t.fingerprint <> ?2",
-        )?;
-        let mut carry_cues = tx.prepare(
-            "INSERT INTO cues (fingerprint, slot, start, name, color, main)
-             SELECT ?2, c.slot, c.start, c.name, c.color, c.main
-             FROM tracks t JOIN cues c ON c.fingerprint = t.fingerprint
-             WHERE t.path = ?1 AND t.fingerprint <> ?2
-               AND NOT EXISTS (SELECT 1 FROM cues WHERE fingerprint = ?2)",
-        )?;
-        for t in tracks {
-            if let Some(fp) = &t.fingerprint {
-                carry.execute(params![t.path, fp])?;
-                carry_cues.execute(params![t.path, fp])?;
-            }
-        }
         let mut stmt = tx.prepare(
             "INSERT INTO tracks (path, artist, album, title, size, fingerprint,
                                  duration_ms, bitrate, sample_rate, tag_bpm, tag_key, fields,
-                                 added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CAST(strftime('%s', 'now') AS INTEGER))
+                                 audio_fp, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                     CAST(strftime('%s', 'now') AS INTEGER))
              ON CONFLICT(path) DO UPDATE SET
                  artist = excluded.artist,
                  album = excluded.album,
@@ -538,9 +1032,12 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                  tag_bpm = excluded.tag_bpm,
                  tag_key = excluded.tag_key,
                  fields = COALESCE(excluded.fields, fields),
+                 audio_fp = CASE WHEN excluded.audio_fp <> '' THEN excluded.audio_fp
+                     ELSE COALESCE(audio_fp, excluded.audio_fp) END,
                  missing_since = NULL",
         )?;
         for t in tracks {
+            note_audio_change(&tx, &t.path, t.audio_fp.as_deref())?;
             stmt.execute(params![
                 t.path,
                 t.artist,
@@ -553,11 +1050,53 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                 t.sample_rate,
                 t.tag_bpm,
                 t.tag_key,
-                t.fields
+                t.fields,
+                t.audio_fp
             ])?;
         }
     }
     tx.commit()?;
+    Ok(())
+}
+
+/// A file whose audio changed in place (re-encoded over the same path) keeps its row, so its
+/// tags and playlists stay; this remembers the audio it had, so other devices' edits about the
+/// old audio can be carried over to the new one (`libsync::carry`).
+fn note_audio_change(conn: &Connection, path: &str, new_fp: Option<&str>) -> Result<(), Error> {
+    let Some(new_fp) = new_fp.filter(|fp| !fp.is_empty()) else {
+        return Ok(());
+    };
+    let old: Option<(i64, Option<String>)> = conn
+        .query_row(
+            "SELECT id, audio_fp FROM tracks WHERE path = ?1",
+            params![path],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((id, Some(old_fp))) = old else {
+        return Ok(());
+    };
+    if old_fp.is_empty() || old_fp == new_fp {
+        return Ok(());
+    }
+    // Several changes in a row still start from the first audio; a change back clears it.
+    let first: Option<String> = conn
+        .query_row(
+            "SELECT old_fp FROM audio_changes WHERE track_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let first = first.unwrap_or(old_fp);
+    if first == new_fp {
+        conn.execute("DELETE FROM audio_changes WHERE track_id = ?1", params![id])?;
+    } else {
+        conn.execute(
+            "INSERT INTO audio_changes (track_id, old_fp, new_fp) VALUES (?1, ?2, ?3)
+             ON CONFLICT(track_id) DO UPDATE SET new_fp = excluded.new_fp",
+            params![id, first, new_fp],
+        )?;
+    }
     Ok(())
 }
 
@@ -572,7 +1111,7 @@ const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
     t.added_at";
 
 /// Joined wherever [`TRACK_COLS`] is selected.
-const ANALYSIS_JOIN: &str = "LEFT JOIN analysis a ON a.fingerprint = t.fingerprint";
+const ANALYSIS_JOIN: &str = "LEFT JOIN analysis a ON a.audio_fp = t.audio_fp";
 
 fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
     let tags: Option<String> = r.get(6)?;
@@ -659,10 +1198,15 @@ pub fn tag_values(conn: &Connection, field: &str) -> Result<Vec<TagValue>, Error
 
 /// Adds a value by hand so it shows up in pick lists before any song uses it.
 pub fn create_tag_value(conn: &Connection, field: &str, value: &str) -> Result<(), Error> {
-    conn.execute(
+    let added = conn.execute(
         "INSERT OR IGNORE INTO tag_custom (field, value) VALUES (?1, ?2)",
         params![field, value],
     )?;
+    if added > 0 {
+        let mut ops = crate::libsync::Batch::new(conn)?;
+        ops.custom_value(field, value, true);
+        ops.commit(conn)?;
+    }
     Ok(())
 }
 
@@ -675,12 +1219,18 @@ pub fn migrate_custom_values(
     to: Option<&str>,
 ) -> Result<(), Error> {
     let mut had = false;
+    let mut ops = crate::libsync::Batch::new(conn)?;
     for name in from {
-        had |= conn.execute(
+        let gone = conn.execute(
             "DELETE FROM tag_custom WHERE field = ?1 AND value = ?2",
             params![field, name],
         )? > 0;
+        if gone {
+            ops.custom_value(field, name, false);
+        }
+        had |= gone;
     }
+    ops.commit(conn)?;
     if let (true, Some(to)) = (had, to) {
         create_tag_value(conn, field, to)?;
     }
@@ -708,13 +1258,32 @@ pub struct Playlist {
     pub id: i64,
     pub name: String,
     pub track_count: i64,
+    /// `shared` (everyone on the destination has it) or `local` (this device only).
+    pub scope: String,
+    /// Hidden on this device only.
+    pub hidden: bool,
+    /// Shown under a held name because another playlist has the name (see Clashes).
+    pub held: bool,
 }
+
+/// Extra condition for queries over `playlist_tracks pt JOIN tracks t`: a song whose audio
+/// appears more than once in a playlist (copies share one `audio_fp`) is listed once, at its
+/// first place.
+const ONE_PER_AUDIO: &str = "AND NOT EXISTS (
+        SELECT 1 FROM playlist_tracks p2 JOIN tracks t2 ON t2.id = p2.track_id
+        WHERE p2.playlist_id = pt.playlist_id AND p2.position < pt.position
+          AND t2.missing_since IS NULL AND t2.audio_fp <> '' AND t2.audio_fp = t.audio_fp)";
 
 pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT p.id, p.name, COUNT(t.id)
+        "SELECT p.id, p.name, COUNT(t.id), p.scope, p.hidden,
+                EXISTS (SELECT 1 FROM clashes c WHERE c.kind = 'playlist' AND c.held = p.uid)
          FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
          LEFT JOIN tracks t ON t.id = pt.track_id AND t.missing_since IS NULL
+             AND NOT EXISTS (
+                SELECT 1 FROM playlist_tracks p2 JOIN tracks t2 ON t2.id = p2.track_id
+                WHERE p2.playlist_id = pt.playlist_id AND p2.position < pt.position
+                  AND t2.missing_since IS NULL AND t2.audio_fp <> '' AND t2.audio_fp = t.audio_fp)
          GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -722,66 +1291,194 @@ pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>, Error> {
             id: r.get(0)?,
             name: r.get(1)?,
             track_count: r.get(2)?,
+            scope: r.get(3)?,
+            hidden: r.get(4)?,
+            held: r.get(5)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn create_playlist(conn: &Connection, name: &str) -> Result<i64, Error> {
-    conn.execute("INSERT INTO playlists (name) VALUES (?1)", params![name])?;
-    Ok(conn.last_insert_rowid())
+/// `(uid, scope)` of a playlist.
+fn playlist_ident(conn: &Connection, id: i64) -> Result<(String, String), Error> {
+    conn.query_row(
+        "SELECT COALESCE(uid, ''), scope FROM playlists WHERE id = ?1",
+        params![id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => {
+            Error::Msg("That playlist no longer exists.".into())
+        }
+        e => e.into(),
+    })
+}
+
+/// A new empty playlist. `scope` is `shared` or `local`; `None` takes the library default.
+pub fn create_playlist(conn: &Connection, name: &str, scope: Option<&str>) -> Result<i64, Error> {
+    let tx = conn.unchecked_transaction()?;
+    let uid = crate::libsync::new_uid();
+    let scope = match scope {
+        Some(s) => crate::libsync::scope_of(s)?,
+        None => crate::libsync::default_scope(&tx)?,
+    };
+    tx.execute(
+        "INSERT INTO playlists (name, uid, scope) VALUES (?1, ?2, ?3)",
+        params![name, uid, scope],
+    )?;
+    let id = tx.last_insert_rowid();
+    let mut ops = crate::libsync::Batch::new(&tx)?;
+    if scope == "shared" {
+        ops.playlist(&uid, name);
+    }
+    ops.commit(&tx)?;
+    tx.commit()?;
+    Ok(id)
 }
 
 pub fn rename_playlist(conn: &Connection, id: i64, name: &str) -> Result<(), Error> {
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    let changed = tx.execute(
         "UPDATE playlists SET name = ?2 WHERE id = ?1",
         params![id, name],
     )?;
+    if changed > 0 {
+        let (uid, scope) = playlist_ident(&tx, id)?;
+        let mut ops = crate::libsync::Batch::new(&tx)?;
+        if scope == "shared" {
+            ops.playlist(&uid, name);
+        }
+        ops.commit(&tx)?;
+    }
+    crate::libsync::clashes::refresh(&tx)?;
+    tx.commit()?;
     Ok(())
 }
 
 pub fn delete_playlist(conn: &Connection, id: i64) -> Result<(), Error> {
-    conn.execute("DELETE FROM playlists WHERE id = ?1", params![id])?;
+    let tx = conn.unchecked_transaction()?;
+    let ident = playlist_ident(&tx, id).ok();
+    tx.execute("DELETE FROM playlists WHERE id = ?1", params![id])?;
+    if let Some((uid, scope)) = ident {
+        let mut ops = crate::libsync::Batch::new(&tx)?;
+        if scope == "shared" {
+            ops.playlist_deleted(&uid);
+        }
+        ops.commit(&tx)?;
+    }
+    crate::libsync::clashes::refresh(&tx)?;
+    tx.commit()?;
     Ok(())
 }
 
-/// Appends tracks to the end; tracks already in the playlist are skipped.
+/// Appends tracks to the end; tracks already in the playlist are skipped. A song whose audio is
+/// already in the playlist (another copy) joins at the same place and sends nothing new.
 pub fn add_to_playlist(
     conn: &mut Connection,
     playlist_id: i64,
     track_ids: &[i64],
 ) -> Result<(), Error> {
     let tx = conn.transaction()?;
-    {
-        let mut stmt = tx.prepare(
-            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position)
-             VALUES (?1, ?2, (SELECT COALESCE(MAX(position), -1) + 1
-                              FROM playlist_tracks WHERE playlist_id = ?1))",
+    let (uid, scope) = playlist_ident(&tx, playlist_id)?;
+    let last: Option<String> = tx
+        .query_row(
+            "SELECT pos FROM playlist_tracks WHERE playlist_id = ?1 AND pos IS NOT NULL
+             ORDER BY pos DESC LIMIT 1",
+            params![playlist_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    // One place per audio: `(audio_fp, key already in the playlist)`.
+    let mut places: Vec<(String, Option<String>)> = Vec::new();
+    let mut adds: Vec<(i64, usize)> = Vec::new();
+    for &id in track_ids {
+        let member: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2)",
+            params![playlist_id, id],
+            |r| r.get(0),
         )?;
-        for id in track_ids {
-            stmt.execute(params![playlist_id, id])?;
+        if member {
+            continue;
         }
+        let fp = audio_fp_of(&tx, id)?.unwrap_or_default();
+        let known = (!fp.is_empty())
+            .then(|| places.iter().position(|(f, _)| *f == fp))
+            .flatten();
+        let place = if let Some(place) = known {
+            place
+        } else {
+            let existing: Option<String> = if fp.is_empty() {
+                None
+            } else {
+                tx.query_row(
+                    "SELECT pt.pos FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
+                     WHERE pt.playlist_id = ?1 AND t.audio_fp = ?2 AND pt.pos IS NOT NULL LIMIT 1",
+                    params![playlist_id, fp],
+                    |r| r.get(0),
+                )
+                .optional()?
+            };
+            places.push((fp, existing));
+            places.len() - 1
+        };
+        adds.push((id, place));
     }
+    let fresh: Vec<usize> = (0..places.len())
+        .filter(|&i| places[i].1.is_none())
+        .collect();
+    let keys = crate::libsync::frac::spread(last.as_deref(), None, fresh.len());
+    let mut ops = crate::libsync::Batch::new(&tx)?;
+    for (&place, key) in fresh.iter().zip(keys) {
+        if scope == "shared" {
+            ops.playlist_add(&uid, &places[place].0, &key);
+        }
+        places[place].1 = Some(key);
+    }
+    for (id, place) in adds {
+        tx.execute(
+            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position, pos)
+             VALUES (?1, ?2, (SELECT COALESCE(MAX(position), -1) + 1
+                              FROM playlist_tracks WHERE playlist_id = ?1), ?3)",
+            params![playlist_id, id, places[place].1],
+        )?;
+    }
+    ops.commit(&tx)?;
     tx.commit()?;
     Ok(())
 }
 
+/// Takes a song out of a playlist, with every other copy of the same audio (a playlist holds
+/// each audio once).
 pub fn remove_from_playlist(
     conn: &Connection,
     playlist_id: i64,
     track_id: i64,
 ) -> Result<(), Error> {
-    conn.execute(
-        "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2",
-        params![playlist_id, track_id],
+    let tx = conn.unchecked_transaction()?;
+    let fp = audio_fp_of(&tx, track_id)?.unwrap_or_default();
+    let removed = tx.execute(
+        "DELETE FROM playlist_tracks WHERE playlist_id = ?1
+         AND (track_id = ?2 OR (?3 <> '' AND track_id IN (SELECT id FROM tracks WHERE audio_fp = ?3)))",
+        params![playlist_id, track_id, fp],
     )?;
+    if removed > 0
+        && !fp.is_empty()
+        && let Ok((uid, scope)) = playlist_ident(&tx, playlist_id)
+        && scope == "shared"
+    {
+        let mut ops = crate::libsync::Batch::new(&tx)?;
+        ops.playlist_remove(&uid, &fp);
+        ops.commit(&tx)?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
 pub fn playlist_tracks(conn: &Connection, playlist_id: i64) -> Result<Vec<Track>, Error> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {TRACK_COLS} FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
-         {ANALYSIS_JOIN} WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL ORDER BY pt.position"
+         {ANALYSIS_JOIN} WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL {ONE_PER_AUDIO}
+         ORDER BY pt.position"
     ))?;
     let rows = stmt.query_map(params![playlist_id], track_from_row)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -795,6 +1492,12 @@ pub struct Tag {
     pub name: String,
     /// Songs tagged with this tag or any tag below it.
     pub track_count: i64,
+    /// `shared` (everyone on the destination has it) or `local` (this device only).
+    pub scope: String,
+    /// Hidden on this device only.
+    pub hidden: bool,
+    /// Shown under a held name because another tag has the name (see Clashes).
+    pub held: bool,
 }
 
 /// Tidies a tag path: trims each level and drops empty ones (`" a / /b "` becomes `a/b`).
@@ -812,13 +1515,56 @@ fn tag_ancestry(name: &str) -> Vec<String> {
     (1..=parts.len()).map(|n| parts[..n].join("/")).collect()
 }
 
+/// Adds one tag row if there is none by that name, with a uid, and says so in `ops`. `scope` is
+/// `shared` or `local`; `None` takes the library default.
+fn insert_tag(
+    conn: &Connection,
+    name: &str,
+    scope: Option<&str>,
+    ops: &mut crate::libsync::Batch,
+) -> Result<(), Error> {
+    let uid = crate::libsync::new_uid();
+    let scope = match scope {
+        Some(s) => crate::libsync::scope_of(s)?,
+        None => crate::libsync::default_scope(conn)?,
+    };
+    let added = conn.execute(
+        "INSERT OR IGNORE INTO tags (name, uid, scope) VALUES (?1, ?2, ?3)",
+        params![name, uid, scope],
+    )?;
+    if added > 0 && scope == "shared" {
+        ops.tag(&uid, name);
+    }
+    Ok(())
+}
+
 /// Creates the tag and every parent level it names; returns the tag's id.
-fn ensure_tag(tx: &Connection, name: &str) -> Result<i64, Error> {
+fn ensure_tag(tx: &Connection, name: &str, ops: &mut crate::libsync::Batch) -> Result<i64, Error> {
+    ensure_tag_as(tx, name, None, ops)
+}
+
+/// [`ensure_tag`], with the scope for levels that do not exist yet. Below a local level every new
+/// level is local too: a shared tag under a parent other devices never get would arrive there
+/// without its parent.
+fn ensure_tag_as(
+    tx: &Connection,
+    name: &str,
+    scope: Option<&str>,
+    ops: &mut crate::libsync::Batch,
+) -> Result<i64, Error> {
+    let mut under_local = false;
     for level in tag_ancestry(name) {
-        tx.execute(
-            "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
-            params![level],
-        )?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT scope FROM tags WHERE name = ?1",
+                params![level],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match existing {
+            Some(s) => under_local |= s == "local",
+            None => insert_tag(tx, &level, under_local.then_some("local").or(scope), ops)?,
+        }
     }
     Ok(
         tx.query_row("SELECT id FROM tags WHERE name = ?1", params![name], |r| {
@@ -827,19 +1573,17 @@ fn ensure_tag(tx: &Connection, name: &str) -> Result<i64, Error> {
     )
 }
 
-/// Recreates any missing parent level (e.g. after `a` moved into `a/b`, or for tags named with
-/// `/` before tags were hierarchical).
-fn restore_tag_parents(conn: &Connection) -> Result<(), Error> {
+/// Recreates any missing parent level (e.g. after `a` moved into `a/b`). A recreated level is
+/// local: a parent that is missing here was deleted or made private elsewhere, and sending it
+/// again would bring it back for everyone under a new uid.
+fn restore_tag_parents(conn: &Connection, ops: &mut crate::libsync::Batch) -> Result<(), Error> {
     let names: Vec<String> = conn
         .prepare("SELECT name FROM tags WHERE instr(name, '/') > 0")?
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     for name in names {
         for level in tag_ancestry(&name) {
-            conn.execute(
-                "INSERT OR IGNORE INTO tags (name) VALUES (?1)",
-                params![level],
-            )?;
+            insert_tag(conn, &level, Some("local"), ops)?;
         }
     }
     Ok(())
@@ -851,7 +1595,8 @@ const IN_SUBTREE: &str =
 
 pub fn list_tags(conn: &Connection) -> Result<Vec<Tag>, Error> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT g.id, g.name, COUNT(DISTINCT t.id)
+        "SELECT g.id, g.name, COUNT(DISTINCT t.id), g.scope, g.hidden,
+                EXISTS (SELECT 1 FROM clashes k WHERE k.kind = 'tag' AND k.held = g.uid)
          FROM tags g
          JOIN tags c ON {IN_SUBTREE}
          LEFT JOIN track_tags tt ON tt.tag_id = c.id
@@ -863,9 +1608,38 @@ pub fn list_tags(conn: &Connection) -> Result<Vec<Tag>, Error> {
             id: r.get(0)?,
             name: r.get(1)?,
             track_count: r.get(2)?,
+            scope: r.get(3)?,
+            hidden: r.get(4)?,
+            held: r.get(5)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// `(id, uid, scope)` of the tag with this name.
+fn tag_by_name(conn: &Connection, name: &str) -> Result<Option<(i64, String, String)>, Error> {
+    Ok(conn
+        .query_row(
+            "SELECT id, COALESCE(uid, ''), scope FROM tags WHERE name = ?1",
+            params![name],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?)
+}
+
+/// A new empty tag (and any parent level it names that is missing), shared or local (`None`: the
+/// library default). An existing tag keeps its scope.
+pub fn create_tag(conn: &mut Connection, name: &str, scope: Option<&str>) -> Result<(), Error> {
+    let name = normalize_tag(name);
+    if name.is_empty() {
+        return Ok(());
+    }
+    let tx = conn.transaction()?;
+    let mut ops = crate::libsync::Batch::new(&tx)?;
+    ensure_tag_as(&tx, &name, scope, &mut ops)?;
+    ops.commit(&tx)?;
+    tx.commit()?;
+    Ok(())
 }
 
 /// Creates the tag (and its parent levels) if needed and attaches it to every given track.
@@ -875,49 +1649,123 @@ pub fn tag_tracks(conn: &mut Connection, name: &str, track_ids: &[i64]) -> Resul
         return Ok(());
     }
     let tx = conn.transaction()?;
-    let tag_id = ensure_tag(&tx, &name)?;
-    {
-        let mut stmt =
-            tx.prepare("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?1, ?2)")?;
-        for id in track_ids {
-            stmt.execute(params![id, tag_id])?;
+    let mut ops = crate::libsync::Batch::new(&tx)?;
+    let tag_id = ensure_tag(&tx, &name, &mut ops)?;
+    let (uid, scope): (String, String) = tx.query_row(
+        "SELECT COALESCE(uid, ''), scope FROM tags WHERE id = ?1",
+        params![tag_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    for &id in track_ids {
+        let added = tx.execute(
+            "INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?1, ?2)",
+            params![id, tag_id],
+        )?;
+        if added > 0 && scope == "shared" && ops.is_on() {
+            ops.track_tag(&uid, &audio_fp_of(&tx, id)?.unwrap_or_default(), true);
+        }
+    }
+    ops.commit(&tx)?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn untag_track(conn: &Connection, name: &str, track_id: i64) -> Result<(), Error> {
+    let tx = conn.unchecked_transaction()?;
+    if let Some((tag_id, uid, scope)) = tag_by_name(&tx, &normalize_tag(name))? {
+        let removed = tx.execute(
+            "DELETE FROM track_tags WHERE track_id = ?1 AND tag_id = ?2",
+            params![track_id, tag_id],
+        )?;
+        if removed > 0 && scope == "shared" {
+            let mut ops = crate::libsync::Batch::new(&tx)?;
+            ops.track_tag(
+                &uid,
+                &audio_fp_of(&tx, track_id)?.unwrap_or_default(),
+                false,
+            );
+            ops.commit(&tx)?;
         }
     }
     tx.commit()?;
     Ok(())
 }
 
-pub fn untag_track(conn: &Connection, name: &str, track_id: i64) -> Result<(), Error> {
-    conn.execute(
-        "DELETE FROM track_tags WHERE track_id = ?1
-         AND tag_id = (SELECT id FROM tags WHERE name = ?2)",
-        params![track_id, normalize_tag(name)],
+/// The `audio_fp` of every song tagged with the tag, including ones this library has not got yet
+/// (their ops wait in the register store).
+fn tag_members(tx: &Connection, tag_id: i64, uid: &str) -> Result<Vec<String>, Error> {
+    let mut stmt = tx.prepare(
+        "SELECT t.audio_fp FROM track_tags tt JOIN tracks t ON t.id = tt.track_id
+         WHERE tt.tag_id = ?1 AND t.audio_fp <> ''
+         UNION
+         SELECT ref FROM op_state WHERE e = 'track_tag' AND f = 'present' AND val = 'true'
+           AND ref IS NOT NULL AND id >= ?2 AND id < ?3",
     )?;
-    Ok(())
+    let rows = stmt.query_map(params![tag_id, format!("{uid}/"), format!("{uid}0")], |r| {
+        r.get(0)
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// Moves one tag's songs onto `to` (created with its parents) and drops it. `None` just drops it.
-fn move_tag(tx: &Connection, id: i64, to: Option<&str>) -> Result<(), Error> {
+fn move_tag(
+    tx: &Connection,
+    id: i64,
+    to: Option<&str>,
+    ops: &mut crate::libsync::Batch,
+) -> Result<(), Error> {
+    let (current, uid, scope): (String, String, String) = tx.query_row(
+        "SELECT name, COALESCE(uid, ''), scope FROM tags WHERE id = ?1",
+        params![id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let shared = scope == "shared";
     let Some(to) = to else {
         tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+        if shared {
+            ops.tag_deleted(&uid);
+        }
+        drop_smart_rule_tag(tx, &uid)?;
         return Ok(());
     };
-    let current: String =
-        tx.query_row("SELECT name FROM tags WHERE id = ?1", params![id], |r| {
-            r.get(0)
-        })?;
     if current.eq_ignore_ascii_case(to) {
         // Same tag (names compare NOCASE): only the capitalisation can differ.
         tx.execute("UPDATE tags SET name = ?1 WHERE id = ?2", params![to, id])?;
+        if shared {
+            ops.tag(&uid, to);
+        }
         return Ok(());
     }
-    let target = ensure_tag(tx, to)?;
+    let target = ensure_tag(tx, to, ops)?;
+    let (target_uid, target_scope): (String, String) = tx.query_row(
+        "SELECT COALESCE(uid, ''), scope FROM tags WHERE id = ?1",
+        params![target],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let members = if ops.is_on() && target_scope == "shared" {
+        tag_members(tx, id, &uid)?
+    } else {
+        Vec::new()
+    };
     tx.execute(
         "INSERT OR IGNORE INTO track_tags (track_id, tag_id)
          SELECT track_id, ?1 FROM track_tags WHERE tag_id = ?2",
         params![target, id],
     )?;
     tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+    for fp in members {
+        ops.track_tag(&target_uid, &fp, true);
+    }
+    repoint_smart_rules(tx, &uid, &target_uid, ops)?;
+    if shared {
+        // Merged, not deleted, so devices that still have rules or songs under the old uid
+        // follow it to the new one.
+        if target_scope == "shared" {
+            ops.tag_merged(&uid, &target_uid);
+        } else {
+            ops.tag_deleted(&uid);
+        }
+    }
     Ok(())
 }
 
@@ -928,6 +1776,7 @@ fn move_tag(tx: &Connection, id: i64, to: Option<&str>) -> Result<(), Error> {
 pub fn migrate_tags(conn: &mut Connection, from: &[String], to: Option<&str>) -> Result<(), Error> {
     let to = to.map(normalize_tag).filter(|t| !t.is_empty());
     let tx = conn.transaction()?;
+    let mut ops = crate::libsync::Batch::new(&tx)?;
     // (id, new name) for every tag in each `from` subtree, deepest first so children move
     // before the parent they hang under disappears.
     let mut moves: Vec<(i64, usize, Option<String>)> = Vec::new();
@@ -963,16 +1812,36 @@ pub fn migrate_tags(conn: &mut Connection, from: &[String], to: Option<&str>) ->
             })
             .optional()?;
         if exists.is_some() {
-            move_tag(&tx, id, target.as_deref())?;
+            move_tag(&tx, id, target.as_deref(), &mut ops)?;
         }
     }
-    restore_tag_parents(&tx)?;
+    restore_tag_parents(&tx, &mut ops)?;
+    ops.commit(&tx)?;
+    crate::libsync::clashes::refresh(&tx)?;
     tx.commit()?;
     Ok(())
 }
 
 pub fn delete_tag(conn: &Connection, id: i64) -> Result<(), Error> {
-    conn.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+    let tx = conn.unchecked_transaction()?;
+    let ident: Option<(String, String)> = tx
+        .query_row(
+            "SELECT COALESCE(uid, ''), scope FROM tags WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
+    if let Some((uid, scope)) = ident {
+        let mut ops = crate::libsync::Batch::new(&tx)?;
+        if scope == "shared" {
+            ops.tag_deleted(&uid);
+        }
+        ops.commit(&tx)?;
+        drop_smart_rule_tag(&tx, &uid)?;
+    }
+    crate::libsync::clashes::refresh(&tx)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -1049,6 +1918,94 @@ pub fn synced_times(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// A file as it was at its last successful sync with a destination: the common ancestor that
+/// tells whose edit is whose. Only stored when both copies were identical.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Base {
+    /// `sync::local_signature` of the library file, equal to `remote_sig`.
+    pub local_sig: String,
+    pub remote_sig: String,
+    /// JSON of the tag fields (`tags::fields_json`); `None` when they could not be read.
+    pub tags: Option<String>,
+}
+
+/// What a finished sync does to a file's base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseUpdate {
+    /// The file was not touched; keep what is stored.
+    Keep,
+    Set(Base),
+    /// The copies may differ now: forget the base.
+    Clear,
+}
+
+/// A library file confirmed on a destination by a sync.
+#[derive(Debug, Clone)]
+pub struct Synced {
+    pub track_id: i64,
+    pub size: i64,
+    pub base: BaseUpdate,
+}
+
+impl Synced {
+    /// A file confirmed on the destination whose base stays as it is.
+    pub fn kept(track_id: i64, size: i64) -> Self {
+        Self {
+            track_id,
+            size,
+            base: BaseUpdate::Keep,
+        }
+    }
+}
+
+/// `track id -> base` for every synced file of a destination that has one.
+pub fn synced_bases(
+    conn: &Connection,
+    target_id: i64,
+) -> Result<std::collections::HashMap<i64, Base>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT track_id, local_sig, remote_sig, base_tags FROM synced_files
+         WHERE target_id = ?1 AND local_sig IS NOT NULL AND remote_sig IS NOT NULL",
+    )?;
+    let rows = stmt.query_map(params![target_id], |r| {
+        Ok((
+            r.get(0)?,
+            Base {
+                local_sig: r.get(1)?,
+                remote_sig: r.get(2)?,
+                tags: r.get(3)?,
+            },
+        ))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Stores bases for files that are already recorded as synced.
+pub fn store_bases(
+    conn: &mut Connection,
+    target_id: i64,
+    bases: &[(i64, Base)],
+) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "UPDATE synced_files SET local_sig = ?3, remote_sig = ?4, base_tags = ?5
+             WHERE target_id = ?1 AND track_id = ?2",
+        )?;
+        for (track_id, b) in bases {
+            stmt.execute(params![
+                target_id,
+                track_id,
+                b.local_sig,
+                b.remote_sig,
+                b.tags
+            ])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Fingerprints of destination files read on earlier runs, keyed by `(path, size)`.
 pub fn remote_prints(
     conn: &Connection,
@@ -1094,24 +2051,39 @@ pub fn set_tempo_key(
     // A song never analysed gets a row (version 0, so it is still analysed later) to hold the
     // value; the analysis then fills in the rest around it.
     conn.execute(
-        "INSERT OR IGNORE INTO analysis (fingerprint, version, analyzed_at)
-         SELECT fingerprint, 0, 0 FROM tracks WHERE id = ?1 AND fingerprint IS NOT NULL",
+        "INSERT OR IGNORE INTO analysis (audio_fp, version, analyzed_at)
+         SELECT audio_fp, 0, 0 FROM tracks WHERE id = ?1 AND audio_fp <> ''",
         params![id],
     )?;
     if let Some(bpm) = bpm {
         conn.execute(
             "UPDATE analysis SET bpm = ?2, bpm_edited = 1, error = NULL
-             WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
+             WHERE audio_fp = (SELECT audio_fp FROM tracks WHERE id = ?1)",
             params![id, bpm],
         )?;
     }
     if let Some(key) = key {
         conn.execute(
             "UPDATE analysis SET musical_key = ?2, key_edited = 1, error = NULL
-             WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
+             WHERE audio_fp = (SELECT audio_fp FROM tracks WHERE id = ?1)",
             params![id, key],
         )?;
     }
+    let mut ops = crate::libsync::Batch::new(conn)?;
+    if ops.is_on()
+        && let Some(fp) = audio_fp_of(conn, id)?
+    {
+        use crate::libsync::ops::{A_BPM_EDITED, A_BPM_HAND, A_KEY_EDITED, A_KEY_HAND};
+        if let Some(bpm) = bpm {
+            ops.analysis(&fp, A_BPM_HAND, serde_json::json!(bpm));
+            ops.analysis(&fp, A_BPM_EDITED, serde_json::json!(true));
+        }
+        if let Some(key) = key {
+            ops.analysis(&fp, A_KEY_HAND, serde_json::json!(key));
+            ops.analysis(&fp, A_KEY_EDITED, serde_json::json!(true));
+        }
+    }
+    ops.commit(conn)?;
     Ok(())
 }
 
@@ -1131,13 +2103,13 @@ pub struct Cue {
     pub main: bool,
 }
 
-/// The cues set in manplay for audio with this fingerprint, hot cues first; `None` when cues
+/// The cues set in manplay for audio with this `audio_fp`, hot cues first; `None` when cues
 /// were never set here (so a drive's own cues are left alone).
-pub fn cues_of(conn: &Connection, fingerprint: &str) -> Result<Option<Vec<Cue>>, Error> {
+pub fn cues_of(conn: &Connection, audio_fp: &str) -> Result<Option<Vec<Cue>>, Error> {
     let edited: bool = conn
         .query_row(
-            "SELECT cues_edited FROM analysis WHERE fingerprint = ?1",
-            params![fingerprint],
+            "SELECT cues_edited FROM analysis WHERE audio_fp = ?1",
+            params![audio_fp],
             |r| r.get(0),
         )
         .optional()?
@@ -1146,10 +2118,10 @@ pub fn cues_of(conn: &Connection, fingerprint: &str) -> Result<Option<Vec<Cue>>,
         return Ok(None);
     }
     let mut stmt = conn.prepare(
-        "SELECT slot, start, name, color, main FROM cues WHERE fingerprint = ?1
+        "SELECT slot, start, name, color, main FROM cues WHERE audio_fp = ?1
          ORDER BY slot IS NULL, slot, start",
     )?;
-    let rows = stmt.query_map(params![fingerprint], |r| {
+    let rows = stmt.query_map(params![audio_fp], |r| {
         Ok(Cue {
             slot: r.get(0)?,
             start: r.get(1)?,
@@ -1166,7 +2138,7 @@ pub fn set_cues(conn: &mut Connection, track_id: i64, cues: &[Cue]) -> Result<()
     let tx = conn.transaction()?;
     let fp: Option<String> = tx
         .query_row(
-            "SELECT fingerprint FROM tracks WHERE id = ?1",
+            "SELECT audio_fp FROM tracks WHERE id = ?1 AND audio_fp <> ''",
             params![track_id],
             |r| r.get(0),
         )
@@ -1178,17 +2150,17 @@ pub fn set_cues(conn: &mut Connection, track_id: i64, cues: &[Cue]) -> Result<()
         ));
     };
     tx.execute(
-        "INSERT OR IGNORE INTO analysis (fingerprint, version, analyzed_at) VALUES (?1, 0, 0)",
+        "INSERT OR IGNORE INTO analysis (audio_fp, version, analyzed_at) VALUES (?1, 0, 0)",
         params![fp],
     )?;
     tx.execute(
-        "UPDATE analysis SET cues_edited = 1 WHERE fingerprint = ?1",
+        "UPDATE analysis SET cues_edited = 1 WHERE audio_fp = ?1",
         params![fp],
     )?;
-    tx.execute("DELETE FROM cues WHERE fingerprint = ?1", params![fp])?;
+    tx.execute("DELETE FROM cues WHERE audio_fp = ?1", params![fp])?;
     {
         let mut ins = tx.prepare(
-            "INSERT INTO cues (fingerprint, slot, start, name, color, main)
+            "INSERT INTO cues (audio_fp, slot, start, name, color, main)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
         // One start cue at most, and only as a memory cue.
@@ -1214,9 +2186,31 @@ pub fn set_cues(conn: &mut Connection, track_id: i64, cues: &[Cue]) -> Result<()
 pub fn mark_grid_edited(conn: &Connection, id: i64) -> Result<(), Error> {
     conn.execute(
         "UPDATE analysis SET grid_edited = 1
-         WHERE fingerprint = (SELECT fingerprint FROM tracks WHERE id = ?1)",
+         WHERE audio_fp = (SELECT audio_fp FROM tracks WHERE id = ?1)",
         params![id],
     )?;
+    let mut ops = crate::libsync::Batch::new(conn)?;
+    if ops.is_on()
+        && let Some(fp) = audio_fp_of(conn, id)?
+    {
+        use crate::libsync::ops::{A_GRID_EDITED, A_GRID_HAND};
+        let grid: Option<(Option<f64>, Option<f64>, Option<i64>)> = conn
+            .query_row(
+                "SELECT grid_bpm, first_beat, bar_offset FROM analysis WHERE audio_fp = ?1",
+                params![fp],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        if let Some((bpm, first, bar)) = grid {
+            ops.analysis(
+                &fp,
+                A_GRID_HAND,
+                serde_json::json!({"grid_bpm": bpm, "first_beat": first, "bar_offset": bar}),
+            );
+            ops.analysis(&fp, A_GRID_EDITED, serde_json::json!(true));
+        }
+    }
+    ops.commit(conn)?;
     Ok(())
 }
 
@@ -1247,6 +2241,11 @@ pub struct SyncTarget {
     pub machine: String,
     pub path: Vec<String>,
     pub synced_tracks: i64,
+    /// This device's shared library lives on this destination.
+    pub libsync: bool,
+    /// Name of that library, once known (a device that shared before libraries existed learns it
+    /// at its next sync).
+    pub library_name: Option<String>,
 }
 
 fn parse_path(raw: &str) -> Vec<String> {
@@ -1276,6 +2275,9 @@ pub fn set_target_path(conn: &mut Connection, id: i64, path: &[String]) -> Resul
         params![id, raw],
     )?;
     if changed > 0 {
+        // Another place has none of the library data: this device leaves the library it had
+        // here (keeping a copy) and can join again from the new folder.
+        crate::libsync::membership::detach_target(&tx, id)?;
         tx.execute("DELETE FROM synced_files WHERE target_id = ?1", params![id])?;
         tx.execute("DELETE FROM stale_remote WHERE target_id = ?1", params![id])?;
     }
@@ -1283,16 +2285,48 @@ pub fn set_target_path(conn: &mut Connection, id: i64, path: &[String]) -> Resul
     Ok(())
 }
 
-pub fn remove_target(conn: &Connection, id: i64) -> Result<(), Error> {
-    conn.execute("DELETE FROM sync_targets WHERE id = ?1", params![id])?;
+/// Switches library data sharing for one destination. Only one destination shares it at a time.
+/// Switching on writes ops for what the library holds and sends the whole log again.
+pub fn set_target_libsync(conn: &mut Connection, id: i64, enabled: bool) -> Result<(), Error> {
+    if enabled {
+        let other: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM sync_targets WHERE libsync = 1 AND id <> ?1)",
+            params![id],
+            |r| r.get(0),
+        )?;
+        if other {
+            return Err(Error::Msg(
+                "Library data syncs with one destination at a time. Switch it off on the other first."
+                    .into(),
+            ));
+        }
+    }
+    let changed = conn.execute(
+        "UPDATE sync_targets SET libsync = ?2 WHERE id = ?1",
+        params![id, enabled],
+    )?;
+    if changed == 0 {
+        return Err(Error::Msg("That destination no longer exists.".into()));
+    }
+    if enabled {
+        crate::libsync::seed::seed(conn)?;
+    }
     Ok(())
+}
+
+pub fn remove_target(conn: &Connection, id: i64) -> Result<(), Error> {
+    let tx = conn.unchecked_transaction()?;
+    crate::libsync::membership::detach_target(&tx, id)?;
+    tx.execute("DELETE FROM sync_targets WHERE id = ?1", params![id])?;
+    Ok(tx.commit()?)
 }
 
 pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
     let mut stmt = conn.prepare(
         "SELECT st.id, st.tailnet, st.machine, st.path,
                 (SELECT COUNT(*) FROM synced_files sf JOIN tracks t ON t.id = sf.track_id
-                 WHERE sf.target_id = st.id AND sf.size = t.size AND t.missing_since IS NULL)
+                 WHERE sf.target_id = st.id AND sf.size = t.size AND t.missing_since IS NULL),
+                st.libsync
          FROM sync_targets st ORDER BY st.machine COLLATE NOCASE, st.path",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -1303,9 +2337,18 @@ pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
             machine: r.get(2)?,
             path: parse_path(&raw),
             synced_tracks: r.get(4)?,
+            libsync: r.get(5)?,
+            library_name: None,
         })
     })?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    let mut targets = rows.collect::<Result<Vec<_>, _>>()?;
+    if targets.iter().any(|t| t.libsync) {
+        let name = crate::libsync::membership::library_name(conn)?;
+        for t in targets.iter_mut().filter(|t| t.libsync) {
+            t.library_name.clone_from(&name);
+        }
+    }
+    Ok(targets)
 }
 
 /// The services a user can switch on or off.
@@ -1385,7 +2428,7 @@ pub struct RunRecord {
 pub fn record_run(
     conn: &mut Connection,
     run: &RunRecord,
-    synced: &[(i64, i64)],
+    synced: &[Synced],
     deleted_tracks: &[i64],
 ) -> Result<(), Error> {
     let tx = conn.transaction()?;
@@ -1397,13 +2440,31 @@ pub fn record_run(
     }
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO synced_files (target_id, track_id, size, synced_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO synced_files
+                 (target_id, track_id, size, synced_at, local_sig, remote_sig, base_tags)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(target_id, track_id) DO UPDATE SET
-                 size = excluded.size, synced_at = excluded.synced_at",
+                 size = excluded.size, synced_at = excluded.synced_at,
+                 local_sig = IIF(?8, excluded.local_sig, local_sig),
+                 remote_sig = IIF(?8, excluded.remote_sig, remote_sig),
+                 base_tags = IIF(?8, excluded.base_tags, base_tags)",
         )?;
-        for (track_id, size) in synced {
-            stmt.execute(params![run.target_id, track_id, size, run.finished_at])?;
+        for s in synced {
+            let (sigs, replace) = match &s.base {
+                BaseUpdate::Keep => (None, false),
+                BaseUpdate::Set(b) => (Some(b), true),
+                BaseUpdate::Clear => (None, true),
+            };
+            stmt.execute(params![
+                run.target_id,
+                s.track_id,
+                s.size,
+                run.finished_at,
+                sigs.map(|b| &b.local_sig),
+                sigs.map(|b| &b.remote_sig),
+                sigs.and_then(|b| b.tags.as_ref()),
+                replace
+            ])?;
         }
     }
     tx.execute(
@@ -1724,7 +2785,8 @@ pub fn apply_move(
         "UPDATE tracks SET path = ?2, artist = ?3, album = ?4, title = ?5, size = ?6,
                 fingerprint = ?7, missing_since = NULL,
                 duration_ms = COALESCE(?8, duration_ms), bitrate = COALESCE(?9, bitrate),
-                sample_rate = COALESCE(?10, sample_rate), fields = COALESCE(?11, fields)
+                sample_rate = COALESCE(?10, sample_rate), fields = COALESCE(?11, fields),
+                audio_fp = CASE WHEN ?12 <> '' THEN ?12 ELSE COALESCE(audio_fp, ?12) END
          WHERE id = ?1",
         params![
             id,
@@ -1737,7 +2799,8 @@ pub fn apply_move(
             new.duration_ms,
             new.bitrate,
             new.sample_rate,
-            new.fields
+            new.fields,
+            new.audio_fp
         ],
     )?;
     tx.commit()?;
@@ -1783,7 +2846,8 @@ pub struct ExportTrack {
     pub sample_rate: Option<i64>,
     pub bpm: Option<f64>,
     pub key: Option<String>,
-    pub fingerprint: Option<String>,
+    /// Under which the song's analysis and cues are kept.
+    pub audio_fp: Option<String>,
     /// The kept beat grid, written as a rekordbox `TEMPO` marker; filled in by the caller.
     pub grid: Option<crate::rekordbox::Grid>,
     /// The beat grid was set by hand in manplay.
@@ -1804,8 +2868,8 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
     let mut stmt = conn.prepare(
         "SELECT t.id, t.path, t.artist, t.album, t.title, t.size, t.duration_ms, t.bitrate,
                 t.sample_rate, COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key),
-                t.fingerprint, COALESCE(a.grid_edited, 0)
-         FROM tracks t LEFT JOIN analysis a ON a.fingerprint = t.fingerprint
+                NULLIF(t.audio_fp, ''), COALESCE(a.grid_edited, 0)
+         FROM tracks t LEFT JOIN analysis a ON a.audio_fp = t.audio_fp
          WHERE t.missing_since IS NULL ORDER BY t.artist, t.album, t.path",
     )?;
     let tracks = stmt
@@ -1822,7 +2886,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
                 sample_rate: r.get(8)?,
                 bpm: r.get(9)?,
                 key: r.get(10)?,
-                fingerprint: r.get(11)?,
+                audio_fp: r.get(11)?,
                 grid: None,
                 grid_edited: r.get(12)?,
                 cues: Vec::new(),
@@ -1835,10 +2899,11 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
     let heads = pl_stmt
         .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut member_stmt = conn.prepare(
+    let mut member_stmt = conn.prepare(&format!(
         "SELECT pt.track_id FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
-         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL ORDER BY pt.position",
-    )?;
+         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL {ONE_PER_AUDIO}
+         ORDER BY pt.position"
+    ))?;
     let mut playlists = Vec::new();
     for (id, name) in heads {
         let track_ids = member_stmt
@@ -1915,6 +2980,74 @@ pub fn audio_index(conn: &Connection) -> Result<std::collections::HashMap<String
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// One file of a [`DuplicateGroup`].
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateTrack {
+    pub id: i64,
+    pub path: String,
+    pub artist: String,
+    pub album: String,
+    pub title: String,
+    pub size: i64,
+}
+
+/// Present songs that share one `audio_fp`: the same recording stored more than once. They share
+/// tags, analysis and playlist entries.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateGroup {
+    pub audio_fp: String,
+    pub tracks: Vec<DuplicateTrack>,
+}
+
+/// Every group of present songs with the same audio, files in path order.
+pub fn duplicate_groups(conn: &Connection) -> Result<Vec<DuplicateGroup>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT t.audio_fp, t.id, t.path, t.artist, t.album, t.title, t.size FROM tracks t
+         WHERE t.missing_since IS NULL AND t.audio_fp <> '' AND t.audio_fp IN (
+             SELECT audio_fp FROM tracks
+             WHERE missing_since IS NULL AND audio_fp IS NOT NULL AND audio_fp <> ''
+             GROUP BY audio_fp HAVING COUNT(*) > 1)
+         ORDER BY t.audio_fp, t.path",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            DuplicateTrack {
+                id: r.get(1)?,
+                path: r.get(2)?,
+                artist: r.get(3)?,
+                album: r.get(4)?,
+                title: r.get(5)?,
+                size: r.get(6)?,
+            },
+        ))
+    })?;
+    let mut groups: Vec<DuplicateGroup> = Vec::new();
+    for row in rows {
+        let (audio_fp, track) = row?;
+        match groups.last_mut() {
+            Some(g) if g.audio_fp == audio_fp => g.tracks.push(track),
+            _ => groups.push(DuplicateGroup {
+                audio_fp,
+                tracks: vec![track],
+            }),
+        }
+    }
+    Ok(groups)
+}
+
+/// Present songs with an audio fingerprint: `(id, path, audio_fp)`.
+pub fn tracks_with_audio_fp(conn: &Connection) -> Result<Vec<(i64, String, String)>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, audio_fp FROM tracks
+         WHERE missing_since IS NULL AND audio_fp IS NOT NULL AND audio_fp <> ''",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// Present library songs whose audio has not been fingerprinted yet.
 pub fn tracks_without_audio_fp(conn: &Connection) -> Result<Vec<(i64, String)>, Error> {
     let mut stmt = conn
@@ -1960,7 +3093,7 @@ pub fn put_import_cache(conn: &Connection, folder: &str, data: &str) -> Result<(
 /// A file waiting for BPM and key detection.
 pub struct AnalysisJob {
     pub path: String,
-    pub fingerprint: String,
+    pub audio_fp: String,
 }
 
 /// Present tracks to analyse: those in `ids` (every track when `None`), one per distinct audio
@@ -1972,10 +3105,10 @@ pub fn analysis_jobs(
 ) -> Result<Vec<AnalysisJob>, Error> {
     let wanted: Option<std::collections::HashSet<i64>> = ids.map(|i| i.iter().copied().collect());
     let mut stmt = conn.prepare(
-        "SELECT t.id, t.path, t.fingerprint, a.version, a.waveform IS NULL AND a.error IS NULL
+        "SELECT t.id, t.path, t.audio_fp, a.version, a.waveform IS NULL AND a.error IS NULL
          FROM tracks t
-         LEFT JOIN analysis a ON a.fingerprint = t.fingerprint
-         WHERE t.missing_since IS NULL AND t.fingerprint IS NOT NULL
+         LEFT JOIN analysis a ON a.audio_fp = t.audio_fp
+         WHERE t.missing_since IS NULL AND t.audio_fp <> ''
          ORDER BY t.artist, t.album, t.path",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -1990,7 +3123,7 @@ pub fn analysis_jobs(
     let mut seen = std::collections::HashSet::new();
     let mut jobs = Vec::new();
     for row in rows {
-        let (id, path, fingerprint, version, no_waveform) = row?;
+        let (id, path, audio_fp, version, no_waveform) = row?;
         if wanted.as_ref().is_some_and(|w| !w.contains(&id)) {
             continue;
         }
@@ -2000,18 +3133,18 @@ pub fn analysis_jobs(
         if !force && version.is_some_and(|v| v >= crate::analysis::VERSION) && !no_waveform {
             continue;
         }
-        if seen.insert(fingerprint.clone()) {
-            jobs.push(AnalysisJob { path, fingerprint });
+        if seen.insert(audio_fp.clone()) {
+            jobs.push(AnalysisJob { path, audio_fp });
         }
     }
     Ok(jobs)
 }
 
-/// The audio fingerprint of a track, if it has been read.
-pub fn fingerprint_of(conn: &Connection, track_id: i64) -> Result<Option<String>, Error> {
+/// The `audio_fp` of a track, if it has been read.
+pub fn audio_fp_of(conn: &Connection, track_id: i64) -> Result<Option<String>, Error> {
     Ok(conn
         .query_row(
-            "SELECT fingerprint FROM tracks WHERE id = ?1",
+            "SELECT audio_fp FROM tracks WHERE id = ?1 AND audio_fp <> ''",
             params![track_id],
             |r| r.get::<_, Option<String>>(0),
         )
@@ -2034,7 +3167,7 @@ pub fn analysis_results(
     let wanted: Option<std::collections::HashSet<i64>> = ids.map(|i| i.iter().copied().collect());
     let mut stmt = conn.prepare(
         "SELECT t.id, t.path, a.bpm, a.musical_key FROM tracks t
-         JOIN analysis a ON a.fingerprint = t.fingerprint
+         JOIN analysis a ON a.audio_fp = t.audio_fp
          WHERE t.missing_since IS NULL AND (a.bpm IS NOT NULL OR a.musical_key IS NOT NULL)
          ORDER BY t.path",
     )?;
@@ -2058,10 +3191,10 @@ pub fn analysis_results(
     Ok(out)
 }
 
-/// Ids of present tracks holding any of these audio fingerprints (duplicates included).
-pub fn track_ids_with_fingerprints(conn: &Connection, prints: &[&str]) -> Result<Vec<i64>, Error> {
+/// Ids of present tracks holding any of these `audio_fp`s (duplicates included).
+pub fn track_ids_with_audio_fps(conn: &Connection, prints: &[&str]) -> Result<Vec<i64>, Error> {
     let mut stmt =
-        conn.prepare("SELECT id FROM tracks WHERE fingerprint = ?1 AND missing_since IS NULL")?;
+        conn.prepare("SELECT id FROM tracks WHERE audio_fp = ?1 AND missing_since IS NULL")?;
     let mut ids = Vec::new();
     for fp in prints {
         for id in stmt.query_map(params![fp], |r| r.get(0))? {
@@ -2074,7 +3207,7 @@ pub fn track_ids_with_fingerprints(conn: &Connection, prints: &[&str]) -> Result
 /// Present tracks whose last analysis failed, with the reason.
 pub fn analysis_failures(conn: &Connection) -> Result<Vec<crate::audit::FixFailure>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT t.path, a.error FROM tracks t JOIN analysis a ON a.fingerprint = t.fingerprint
+        "SELECT t.path, a.error FROM tracks t JOIN analysis a ON a.audio_fp = t.audio_fp
          WHERE t.missing_since IS NULL AND a.error IS NOT NULL ORDER BY t.path",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -2086,12 +3219,12 @@ pub fn analysis_failures(conn: &Connection) -> Result<Vec<crate::audit::FixFailu
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-/// Stores the outcome of analysing the audio with this fingerprint: BPM, key, and the beat
+/// Stores the outcome of analysing the audio with this `audio_fp`: BPM, key, and the beat
 /// grid and waveform in `stored`. BPM, key and grid set by hand stay, unless `replace_edits`,
 /// which also forgets that they were set by hand. A failed analysis keeps any earlier waveform.
 pub fn store_analysis(
     conn: &Connection,
-    fingerprint: &str,
+    audio_fp: &str,
     result: &Result<(crate::analysis::Analysis, crate::anlz::Stored), String>,
     now: i64,
     replace_edits: bool,
@@ -2100,10 +3233,22 @@ pub fn store_analysis(
         Ok((a, _)) => (a.bpm, a.key.as_deref(), None),
         Err(e) => (None, None, Some(e.as_str())),
     };
+    // Which hand edits this forgets, so other devices forget them too.
+    let forgotten: (bool, bool, bool) = if replace_edits {
+        conn.query_row(
+            "SELECT bpm_edited, key_edited, grid_edited FROM analysis WHERE audio_fp = ?1",
+            params![audio_fp],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?
+        .unwrap_or_default()
+    } else {
+        (false, false, false)
+    };
     conn.execute(
-        "INSERT INTO analysis (fingerprint, bpm, musical_key, error, version, analyzed_at)
+        "INSERT INTO analysis (audio_fp, bpm, musical_key, error, version, analyzed_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(fingerprint) DO UPDATE SET
+         ON CONFLICT(audio_fp) DO UPDATE SET
              bpm = CASE WHEN analysis.bpm_edited AND NOT ?7 THEN analysis.bpm ELSE excluded.bpm END,
              musical_key = CASE WHEN analysis.key_edited AND NOT ?7
                  THEN analysis.musical_key ELSE excluded.musical_key END,
@@ -2113,7 +3258,7 @@ pub fn store_analysis(
              key_edited = analysis.key_edited AND NOT ?7,
              grid_edited = analysis.grid_edited AND NOT ?7",
         params![
-            fingerprint,
+            audio_fp,
             bpm,
             key,
             error,
@@ -2122,18 +3267,18 @@ pub fn store_analysis(
             replace_edits
         ],
     )?;
-    if let Ok((_, stored)) = result {
+    if let Ok((a, stored)) = result {
         conn.execute(
-            "UPDATE analysis SET duration = ?2, waveform = ?3,
+            "UPDATE analysis SET duration = ?2, waveform = ?3, wf_pushed = 0,
                  grid_bpm = CASE WHEN grid_edited AND waveform IS NOT NULL
                      THEN grid_bpm ELSE ?4 END,
                  first_beat = CASE WHEN grid_edited AND waveform IS NOT NULL
                      THEN first_beat ELSE ?5 END,
                  bar_offset = CASE WHEN grid_edited AND waveform IS NOT NULL
                      THEN bar_offset ELSE ?6 END
-             WHERE fingerprint = ?1",
+             WHERE audio_fp = ?1",
             params![
-                fingerprint,
+                audio_fp,
                 stored.duration,
                 stored.detail,
                 stored.grid_bpm,
@@ -2141,8 +3286,43 @@ pub fn store_analysis(
                 stored.bar_offset
             ],
         )?;
+        let mut ops = crate::libsync::Batch::new(conn)?;
+        if ops.is_on() {
+            use crate::libsync::ops::{
+                A_BPM, A_BPM_EDITED, A_GRID_EDITED, A_KEY, A_KEY_EDITED, A_VERSION,
+            };
+            use serde_json::json;
+            ops.analysis(audio_fp, A_BPM, json!(a.bpm));
+            ops.analysis(audio_fp, A_KEY, json!(a.key));
+            ops.analysis(audio_fp, A_VERSION, json!(crate::analysis::VERSION));
+            share_auto_grid(&mut ops, audio_fp, stored);
+            for (was, flag) in [
+                (forgotten.0, A_BPM_EDITED),
+                (forgotten.1, A_KEY_EDITED),
+                (forgotten.2, A_GRID_EDITED),
+            ] {
+                if was {
+                    ops.analysis(audio_fp, flag, json!(false));
+                }
+            }
+        }
+        ops.commit(conn)?;
     }
     Ok(())
+}
+
+/// Writes the automatic beat grid and duration of a finished analysis as ops.
+pub fn share_auto_grid(
+    ops: &mut crate::libsync::Batch,
+    audio_fp: &str,
+    stored: &crate::anlz::Stored,
+) {
+    use crate::libsync::ops::{A_BAR_OFFSET, A_DURATION, A_FIRST_BEAT, A_GRID_BPM};
+    use serde_json::json;
+    ops.analysis(audio_fp, A_GRID_BPM, json!(stored.grid_bpm));
+    ops.analysis(audio_fp, A_FIRST_BEAT, json!(stored.first_beat));
+    ops.analysis(audio_fp, A_BAR_OFFSET, json!(stored.bar_offset));
+    ops.analysis(audio_fp, A_DURATION, json!(stored.duration));
 }
 
 #[cfg(test)]
@@ -2151,7 +3331,13 @@ mod tests {
     use super::*;
     use crate::analysis::Analysis;
 
-    fn track(path: &str, fp: &str, tag_bpm: Option<f64>) -> NewTrack {
+    /// A file whose audio is `audio` (its `audio_fp`).
+    fn track(path: &str, audio: &str, tag_bpm: Option<f64>) -> NewTrack {
+        track_with(path, &format!("file-of-{audio}"), audio, tag_bpm)
+    }
+
+    /// A file with whole-file fingerprint `fp` and `audio_fp` `audio`.
+    fn track_with(path: &str, fp: &str, audio: &str, tag_bpm: Option<f64>) -> NewTrack {
         NewTrack {
             path: path.into(),
             artist: "A".into(),
@@ -2159,6 +3345,7 @@ mod tests {
             title: path.into(),
             size: 1,
             fingerprint: Some(fp.into()),
+            audio_fp: Some(audio.into()),
             tag_bpm,
             tag_key: tag_bpm.map(|_| "Fm".to_owned()),
             ..NewTrack::default()
@@ -2194,19 +3381,50 @@ mod tests {
         assert_eq!(kept[0].name, "Drop", "hot cues first, names trimmed");
         assert_eq!(kept[1], memory);
 
-        // A tag write changes the fingerprint; the cues come along.
-        upsert(&mut conn, &[track("/a.mp3", "x2", None)]).expect("upsert");
-        assert_eq!(
-            cues_of(&conn, "x2").expect("cues").map(|c| c.len()),
-            Some(2)
-        );
+        // A tag write changes the fingerprint but not the audio; the cues stay.
+        upsert(&mut conn, &[track_with("/a.mp3", "f2", "x", None)]).expect("upsert");
+        assert_eq!(cues_of(&conn, "x").expect("cues").map(|c| c.len()), Some(2));
 
         set_cues(&mut conn, 1, &[]).expect("clear");
         assert_eq!(
-            cues_of(&conn, "x2").expect("cues"),
+            cues_of(&conn, "x").expect("cues"),
             Some(Vec::new()),
             "cleared, not unset"
         );
+    }
+
+    #[test]
+    fn saved_rules_with_tag_names_become_uids_and_keep_working() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(&mut conn, &[track("/a.mp3", "fp-a", None)]).expect("upsert");
+        let id: i64 = conn
+            .query_row("SELECT id FROM tracks", [], |r| r.get(0))
+            .expect("id");
+        tag_tracks(&mut conn, "Genre/House", &[id]).expect("tag");
+        conn.execute(
+            "INSERT INTO smart_playlists (name, rules, uid) VALUES ('Old', ?1, 'u')",
+            params![r#"{"allTags":["genre/house"],"anyTags":["Ghost"],"noneTags":[]}"#],
+        )
+        .expect("legacy row");
+        convert_smart_rules(&conn).expect("convert");
+        let stored: String = conn
+            .query_row("SELECT rules FROM smart_playlists", [], |r| r.get(0))
+            .expect("rules");
+        let parsed: crate::smart::Rules = serde_json::from_str(&stored).expect("json");
+        assert!(crate::smart::is_uid(&parsed.all_tags[0]), "{stored}");
+        assert_eq!(
+            parsed.any_tags,
+            ["Ghost"],
+            "a name that is no tag stays as it was"
+        );
+        let shown = smart_playlists(&conn).expect("list").remove(0);
+        assert_eq!(shown.rules.all_tags, ["Genre/House"]);
+        // Converting again changes nothing.
+        convert_smart_rules(&conn).expect("again");
+        let again: String = conn
+            .query_row("SELECT rules FROM smart_playlists", [], |r| r.get(0))
+            .expect("rules");
+        assert_eq!(again, stored);
     }
 
     fn kept(bpm: Option<f64>) -> crate::anlz::Stored {
@@ -2225,7 +3443,7 @@ mod tests {
         upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
         // BPM and key from before the waveform was kept in the database.
         conn.execute(
-            "INSERT INTO analysis (fingerprint, bpm, version, analyzed_at) VALUES ('x', 120, ?1, 1)",
+            "INSERT INTO analysis (audio_fp, bpm, version, analyzed_at) VALUES ('x', 120, ?1, 1)",
             params![crate::analysis::VERSION],
         )
         .expect("row");
@@ -2237,15 +3455,138 @@ mod tests {
     }
 
     #[test]
-    fn analysis_follows_a_tag_edit_to_the_new_fingerprint() {
+    fn analysis_survives_a_retag() {
         let mut conn = open(Path::new(":memory:")).expect("db");
-        upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
-        crate::anlz::save(&conn, "x", &kept(Some(124.0))).expect("save");
-        upsert(&mut conn, &[track("/a.mp3", "x2", None)]).expect("retag");
+        upsert(&mut conn, &[track_with("/a.mp3", "f1", "x", None)]).expect("upsert");
+        let found = Ok((
+            Analysis {
+                bpm: Some(124.0),
+                key: None,
+            },
+            kept(Some(124.0)),
+        ));
+        store_analysis(&conn, "x", &found, 1, false).expect("store");
+        assert!(list(&conn).expect("list")[0].analyzed);
+        // A retag: new whole-file fingerprint, same audio.
+        upsert(&mut conn, &[track_with("/a.mp3", "f2", "x", None)]).expect("retag");
         assert_eq!(
-            crate::anlz::load(&conn, "x2").expect("carried").grid_bpm,
+            crate::anlz::load(&conn, "x").expect("kept").grid_bpm,
             Some(124.0)
         );
+        assert!(list(&conn).expect("list")[0].analyzed, "still joins");
+        assert!(analysis_jobs(&conn, None, false).expect("jobs").is_empty());
+    }
+
+    #[test]
+    fn duplicates_are_present_tracks_with_the_same_audio() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(
+            &mut conn,
+            &[
+                track("/a.mp3", "x", None),
+                track_with("/a copy.mp3", "other", "x", None),
+                track("/b.mp3", "y", None),
+                track_with("/gone.mp3", "g", "y", None),
+                track_with("/c.mp3", "c1", "", None),
+                track_with("/d.mp3", "d1", "", None),
+            ],
+        )
+        .expect("upsert");
+        mark_missing(&mut conn, &[4], 1).expect("missing");
+        let groups = duplicate_groups(&conn).expect("groups");
+        assert_eq!(
+            groups.len(),
+            1,
+            "a missing copy and unreadable audio do not count"
+        );
+        assert_eq!(groups[0].audio_fp, "x");
+        let paths: Vec<&str> = groups[0].tracks.iter().map(|t| t.path.as_str()).collect();
+        assert_eq!(paths, ["/a copy.mp3", "/a.mp3"]);
+    }
+
+    #[test]
+    fn playlists_list_one_entry_per_audio() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(
+            &mut conn,
+            &[
+                track("/a.mp3", "x", None),
+                track_with("/a copy.mp3", "other", "x", None),
+                track("/b.mp3", "y", None),
+            ],
+        )
+        .expect("upsert");
+        let pl = create_playlist(&conn, "P", None).expect("playlist");
+        add_to_playlist(&mut conn, pl, &[2, 1, 3]).expect("add");
+        let names: Vec<String> = playlist_tracks(&conn, pl)
+            .expect("tracks")
+            .into_iter()
+            .map(|t| t.path)
+            .collect();
+        assert_eq!(names, ["/a copy.mp3", "/b.mp3"]);
+        assert_eq!(list_playlists(&conn).expect("lists")[0].track_count, 2);
+    }
+
+    #[test]
+    fn old_analysis_and_cues_are_rekeyed_through_their_tracks() {
+        let dir = std::env::temp_dir().join(format!("manplay-rekey-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("library.db");
+        {
+            // A database from before `audio_fp` keyed the analysis.
+            let conn = open(&path).expect("db");
+            conn.execute_batch(
+                "DROP TABLE analysis; DROP TABLE cues;
+                 CREATE TABLE analysis (fingerprint TEXT PRIMARY KEY, bpm REAL, musical_key TEXT,
+                     error TEXT, version INTEGER NOT NULL, analyzed_at INTEGER NOT NULL);
+                 CREATE TABLE cues (id INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL, slot INTEGER,
+                     start REAL NOT NULL, name TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '');
+                 INSERT INTO analysis VALUES ('f-a', 120, 'Am', NULL, 3, 5), ('f-orphan', 90, NULL, NULL, 3, 5);
+                 INSERT INTO cues (fingerprint, slot, start) VALUES ('f-a', 0, 1.5), ('f-orphan', 1, 2.0);",
+            )
+            .expect("old shape");
+            let mut conn = conn;
+            let mut a = track_with("/a.mp3", "f-a", "", None);
+            a.audio_fp = None;
+            upsert(&mut conn, &[a]).expect("upsert");
+        }
+        let mut conn = open(&path).expect("migrates");
+        assert!(table_exists(&conn, "analysis_legacy").expect("legacy"));
+        assert!(table_exists(&conn, "cues_legacy").expect("legacy"));
+        // Not fingerprinted yet: nothing maps, the old rows wait.
+        rekey_legacy(&mut conn).expect("rekey");
+        assert!(table_exists(&conn, "analysis_legacy").expect("legacy"));
+        assert_eq!(analysis_results(&conn, None).expect("results").len(), 0);
+
+        set_audio_fps(&mut conn, &[(1, "audio-a".into())]).expect("fps");
+        rekey_legacy(&mut conn).expect("rekey");
+        let t = &list(&conn).expect("list")[0];
+        assert_eq!(t.bpm, Some(120.0), "analysis follows the audio");
+        let cues = cues_of(&conn, "audio-a").expect("cues");
+        assert_eq!(
+            cues, None,
+            "cues_edited was never set before, so they stay unset"
+        );
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM cues WHERE audio_fp = 'audio-a'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(n, 1, "the cue moved; the orphan's did not");
+        let all: i64 = conn
+            .query_row("SELECT COUNT(*) FROM analysis", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(all, 1, "the row without a track is dropped");
+        assert!(!table_exists(&conn, "analysis_legacy").expect("gone"));
+        assert!(!table_exists(&conn, "cues_legacy").expect("gone"));
+        assert_eq!(
+            get_setting(&conn, SETTING_AUDIO_FP_VERSION).expect("setting"),
+            Some(crate::audioprint::VERSION.to_string())
+        );
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2348,20 +3689,20 @@ mod tests {
             "/b.mp3"
         );
 
-        // Tags written into /a.mp3 changed its size and so its fingerprint.
-        upsert(&mut conn, &[track("/a.mp3", "x2", Some(128.0))]).expect("rescan");
+        // Tags written into /a.mp3 changed its size and so its fingerprint, not its audio.
+        upsert(&mut conn, &[track_with("/a.mp3", "x2", "x", Some(128.0))]).expect("rescan");
         let tracks = list(&conn).expect("list");
         let a = tracks.iter().find(|t| t.path == "/a.mp3").expect("a");
-        assert!(a.analyzed, "analysis follows the new fingerprint");
+        assert!(a.analyzed, "analysis stays with the audio");
         assert_eq!(a.key.as_deref(), Some("Am"));
     }
 
     #[test]
     fn old_rekordbox_choice_becomes_the_list_of_exported_playlists() {
         let conn = open(Path::new(":memory:")).expect("db");
-        let a = create_playlist(&conn, "A").expect("a");
-        let b = create_playlist(&conn, "B").expect("b");
-        let c = create_playlist(&conn, "C").expect("c");
+        let a = create_playlist(&conn, "A", None).expect("a");
+        let b = create_playlist(&conn, "B", None).expect("b");
+        let c = create_playlist(&conn, "C", None).expect("c");
         assert_eq!(export_selection(&conn, RB_DESTINATION).expect("none"), None);
         set_setting(
             &conn,
@@ -2382,10 +3723,20 @@ mod tests {
         );
         assert_eq!(get_setting(&conn, LEGACY_RB_SELECTION).expect("gone"), None);
 
+        let smart = save_smart_playlist(
+            &conn,
+            &crate::smart::SmartPlaylist {
+                id: 0,
+                name: "S".into(),
+                rules: crate::smart::Rules::default(),
+            },
+        )
+        .expect("smart")
+        .id;
         let usb = ExportSelection {
             playlists: vec![b],
             tags: vec![],
-            smart: vec![7],
+            smart: vec![smart],
             usb_mode: crate::usb_export::Mode::ReplaceAll,
         };
         set_export_selection(&conn, "usb:1234", &usb).expect("save");
