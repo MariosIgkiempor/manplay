@@ -15,7 +15,7 @@ use super::apply::{PLAYLISTS, SMARTS, TAGS};
 use super::entities;
 use super::remote::{ChunkStore, RunSummary, run_at};
 use super::write::{active, device_id, new_uid};
-use super::{clock, compact, snapshot};
+use super::{clock, compact, remap, skew, snapshot};
 use crate::db;
 use crate::error::Error;
 
@@ -55,6 +55,14 @@ pub struct LibraryFile {
     pub name: String,
     /// Unix seconds, UTC.
     pub created_at: i64,
+    /// The version of the audio fingerprint algorithm every song here is named with. A device
+    /// that knows only an older one cannot sync (see `remap.rs`).
+    #[serde(default = "first_fp_version")]
+    pub audio_fp_version: i64,
+}
+
+fn first_fp_version() -> i64 {
+    1
 }
 
 /// `.manplay/devices/<id>.json`: who is in the library, and when they last synced.
@@ -67,6 +75,9 @@ pub struct DeviceFile {
     /// The analysis version this device writes waveforms and grids with.
     #[serde(default)]
     pub analysis_version: i64,
+    /// Devices whose edits this one is holding back because their clock is far ahead.
+    #[serde(default)]
+    pub skewed: Vec<String>,
 }
 
 fn device_path(id: &str) -> String {
@@ -91,6 +102,17 @@ async fn read_library<S: ChunkStore>(store: &S) -> Result<Option<LibraryFile>, E
 /// The `format` in `library.json`, if the file is there and readable.
 pub async fn library_format<S: ChunkStore>(store: &S) -> Result<Option<u32>, Error> {
     Ok(read_library(store).await?.map(|f| f.format))
+}
+
+/// Refuses a library written by a newer format than this build understands.
+fn check_format(file: &LibraryFile) -> Result<(), Error> {
+    if file.format > LIBRARY_FORMAT {
+        return Err(Error::Msg(format!(
+            "The shared library “{}” was set up by a newer version of manplay. Update manplay to use it.",
+            file.name
+        )));
+    }
+    Ok(())
 }
 
 /// Writes `library.json` and `.ignore`.
@@ -316,9 +338,12 @@ pub async fn join<S: ChunkStore>(
                 library_id: new_uid(),
                 name: new_name.trim().to_owned(),
                 created_at: now(),
+                audio_fp_version: fp_version_of(db)?,
             };
             write_library(store, &file).await?;
-            file
+            // Another device may have started one at the same moment; the last write stands, and
+            // everyone goes by what is there now.
+            read_library(store).await?.unwrap_or(file)
         }
         (JoinChoice::Start, Some(_)) => {
             return Err(Error::Msg(
@@ -332,6 +357,7 @@ pub async fn join<S: ChunkStore>(
             ));
         }
     };
+    check_format(&file)?;
     {
         let mut conn = lock(db)?;
         let tx = conn.transaction()?;
@@ -349,7 +375,8 @@ pub async fn join<S: ChunkStore>(
 }
 
 /// Before each sync of a joined device: makes sure the destination still holds this device's
-/// library, and says that this device is a member (`devices/<id>.json`).
+/// library (and that this build can read it), and says that this device is a member
+/// (`devices/<id>.json`). Returns the devices that member file says are being held back.
 ///
 /// A device that had library data on before libraries existed carries over as joined: it adopts
 /// the `library.json` it finds, or writes one named `fallback_name`.
@@ -357,53 +384,94 @@ async fn ensure<S: ChunkStore>(
     db: &Mutex<Connection>,
     store: &S,
     fallback_name: &str,
-) -> Result<(), Error> {
-    let (known, id, name) = {
+    build_fp_version: i64,
+) -> Result<Vec<String>, Error> {
+    let (known, local_fp) = {
         let conn = lock(db)?;
         (
             db::get_setting(&conn, SETTING_LIBRARY_ID)?,
-            device_id(&conn)?,
-            device_name(&conn)?,
+            remap::local_version(&conn)?,
         )
     };
     let found = read_library(store).await?;
-    match (known, found) {
+    let mut file = match (known.as_deref(), found) {
         (Some(mine), Some(file)) if file.library_id != mine => {
             return Err(Error::Msg(format!(
                 "This destination now holds another shared library (“{}”). Leave this one and join it again.",
                 file.name
             )));
         }
-        (None, Some(file)) => {
-            let conn = lock(db)?;
-            remember(&conn, &file)?;
-        }
+        (_, Some(file)) => file,
         (known, None) => {
-            let (library_id, library) = {
+            let library = {
                 let conn = lock(db)?;
-                (
-                    known.unwrap_or_else(new_uid),
-                    library_name(&conn)?.unwrap_or_else(|| fallback_name.to_owned()),
-                )
+                library_name(&conn)?.unwrap_or_else(|| fallback_name.to_owned())
             };
             let file = LibraryFile {
                 format: LIBRARY_FORMAT,
-                library_id,
+                library_id: known.map_or_else(new_uid, str::to_owned),
                 name: library,
                 created_at: now(),
+                audio_fp_version: local_fp,
             };
             write_library(store, &file).await?;
-            let conn = lock(db)?;
-            remember(&conn, &file)?;
+            // Another device may be writing one at the same moment: the last write stands.
+            read_library(store).await?.unwrap_or(file)
         }
-        (Some(_), Some(_)) => {}
+    };
+    check_format(&file)?;
+    if file.audio_fp_version > build_fp_version {
+        return Err(Error::Msg(
+            "This shared library names songs in a newer way than this version of manplay knows. Update manplay to keep syncing."
+                .into(),
+        ));
     }
+    if file.audio_fp_version > local_fp {
+        return Err(Error::Msg(
+            "This shared library names songs in a newer way. Scan the library once so this device does too, then sync again."
+                .into(),
+        ));
+    }
+    if known.as_deref() != Some(file.library_id.as_str()) {
+        let conn = lock(db)?;
+        remember(&conn, &file)?;
+    }
+    if file.audio_fp_version < local_fp {
+        // The first device on the new fingerprint: everyone else waits for it.
+        file.audio_fp_version = local_fp;
+        write_library(store, &file).await?;
+    }
+    write_device(db, store).await
+}
+
+/// Writes this device's member file; returns the devices it lists as held back.
+async fn write_device<S: ChunkStore>(
+    db: &Mutex<Connection>,
+    store: &S,
+) -> Result<Vec<String>, Error> {
+    let (id, name, skewed) = {
+        let conn = lock(db)?;
+        (
+            device_id(&conn)?,
+            device_name(&conn)?,
+            skew::skewed_devices(&conn)?.into_iter().collect::<Vec<_>>(),
+        )
+    };
     let device = DeviceFile {
         name,
         last_seen: now(),
         analysis_version: crate::analysis::VERSION,
+        skewed: skewed.clone(),
     };
-    store.write_meta(&device_path(&id), to_json(&device)?).await
+    store
+        .write_meta(&device_path(&id), to_json(&device)?)
+        .await?;
+    Ok(skewed)
+}
+
+fn fp_version_of(db: &Mutex<Connection>) -> Result<i64, Error> {
+    let conn = lock(db)?;
+    remap::local_version(&conn)
 }
 
 fn remember(conn: &Connection, file: &LibraryFile) -> Result<(), Error> {
@@ -428,6 +496,25 @@ pub async fn run_joined_at<S: ChunkStore>(
     fallback_name: &str,
     now_ms: i64,
 ) -> RunSummary {
+    run_joined_as(
+        db,
+        store,
+        fallback_name,
+        now_ms,
+        i64::from(crate::audioprint::VERSION),
+    )
+    .await
+}
+
+/// [`run_joined_at`] for a build whose fingerprint algorithm is `build_fp_version` (a test can
+/// pretend to be a newer or older build).
+pub async fn run_joined_as<S: ChunkStore>(
+    db: &Mutex<Connection>,
+    store: &S,
+    fallback_name: &str,
+    now_ms: i64,
+    build_fp_version: i64,
+) -> RunSummary {
     match lock(db).and_then(|c| active(&c)) {
         Ok(true) => {}
         Ok(false) => return RunSummary::default(),
@@ -438,28 +525,48 @@ pub async fn run_joined_at<S: ChunkStore>(
             };
         }
     }
-    if let Err(e) = ensure(db, store, fallback_name).await {
-        return RunSummary {
-            error: Some(e.to_string()),
-            ..RunSummary::default()
-        };
-    }
-    let summary = run_at(db, store, now_ms).await;
+    let written = match ensure(db, store, fallback_name, build_fp_version).await {
+        Ok(written) => written,
+        Err(e) => {
+            return RunSummary {
+                error: Some(e.to_string()),
+                ..RunSummary::default()
+            };
+        }
+    };
+    let mut summary = run_at(db, store, now_ms).await;
     if summary.error.is_none() {
-        // Neither is needed for the sync itself: a failure here is tried again next time.
+        // None of this is needed for the sync itself: a failure here is tried again next time.
+        let skewed = lock(db)
+            .and_then(|c| skew::skewed_devices(&c))
+            .map(|s| s.into_iter().collect::<Vec<_>>());
+        if (summary.new_device_id || skewed.as_ref().is_ok_and(|s| *s != written))
+            && let Err(e) = write_device(db, store).await
+        {
+            log::warn!("could not update this device's member file: {e}");
+        }
         if let Err(e) = refresh_devices(db, store).await {
             log::warn!("could not read the member list: {e}");
         }
         if let Err(e) = compact::maybe(db, store, now_ms, compact::THRESHOLD).await {
             log::warn!("could not compact the shared library: {e}");
         }
+        summary.clock_wrong = lock(db)
+            .and_then(|c| skew::clock_wrong(&c))
+            .unwrap_or(false);
     }
     summary
 }
 
-/// Remembers the names of the other members, for Recently deleted.
+/// Remembers the names of the other members, for Recently deleted, and whether any of them says
+/// this device's clock is wrong.
 async fn refresh_devices<S: ChunkStore>(db: &Mutex<Connection>, store: &S) -> Result<(), Error> {
+    let me = {
+        let conn = lock(db)?;
+        device_id(&conn)?
+    };
     let mut names = Vec::new();
+    let mut wrong = false;
     for file in store.list_meta(DEVICES_DIR).await? {
         let Some(id) = file.strip_suffix(".json") else {
             continue;
@@ -467,6 +574,9 @@ async fn refresh_devices<S: ChunkStore>(db: &Mutex<Connection>, store: &S) -> Re
         if let Some(bytes) = store.read_meta(&device_path(id)).await?
             && let Ok(d) = serde_json::from_slice::<DeviceFile>(&bytes)
         {
+            if id != me && d.skewed.contains(&me) {
+                wrong = true;
+            }
             names.push((id.to_owned(), d.name));
         }
     }
@@ -479,6 +589,7 @@ async fn refresh_devices<S: ChunkStore>(db: &Mutex<Connection>, store: &S) -> Re
             params![id, name],
         )?;
     }
+    skew::set_clock_wrong(&tx, wrong)?;
     tx.commit()?;
     Ok(())
 }

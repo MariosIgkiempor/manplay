@@ -8,18 +8,22 @@
 //! matters. See `docs/plans/shared-library/02-op-log.md`.
 
 pub mod apply;
+pub mod carry;
 pub mod clashes;
 pub mod clock;
 pub mod compact;
 pub mod entities;
 pub mod frac;
+pub mod identity;
 pub mod membership;
 pub mod ops;
 pub mod recent;
+pub mod remap;
 pub mod remote;
 pub mod schema;
 pub mod seed;
 pub mod share;
+pub mod skew;
 pub mod snapshot;
 pub mod state;
 pub mod waveforms;

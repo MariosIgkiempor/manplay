@@ -8,6 +8,27 @@ import { TRASH } from "#/lib/platform.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** One figure of the result: a big number in its tone's colour and what it counts. */
+/** Things worth knowing about a library sync that are not errors. */
+function libraryNotes(l: LibraryOutcome): string[] {
+	const notes: string[] = [];
+	if (l.clockWrong) {
+		notes.push(
+			"This device's clock is wrong. Set its date, time and time zone (automatic if you can). Until then the other devices hold back what you edit here.",
+		);
+	}
+	if (l.held > 0) {
+		notes.push(
+			`${l.held.toLocaleString()} edits from another device are held back because its clock is ahead of yours.`,
+		);
+	}
+	if (l.newDeviceId) {
+		notes.push(
+			"Another copy of manplay was using this device's ID (copied app data or a restored backup). This one has a new ID now; nothing was lost.",
+		);
+	}
+	return notes;
+}
+
 function Stat({ tone, count, label }: { tone: Tone; count: number; label: string }) {
 	return (
 		<div className="min-w-0">
@@ -130,8 +151,8 @@ export function SyncResult({
 								{ tone: "change", count: l.received, label: "received" },
 								{ tone: "add", count: l.waveformsSent, label: "waveforms uploaded" },
 							]}
-							failed={l.error ? [l.error] : []}
-							failedTotal={l.error ? 1 : 0}
+							failed={[...(l.error ? [l.error] : []), ...libraryNotes(l)]}
+							failedTotal={(l.error ? 1 : 0) + libraryNotes(l).length}
 							outcome="not shared"
 						/>
 					))}

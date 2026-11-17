@@ -206,14 +206,88 @@ pub fn export_selection(
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
-    Ok(
-        row.map(|(playlists, tags, smart, usb_mode)| ExportSelection {
-            playlists: serde_json::from_str(&playlists).unwrap_or_default(),
-            tags: serde_json::from_str(&tags).unwrap_or_default(),
-            smart: serde_json::from_str(&smart).unwrap_or_default(),
-            usb_mode: mode_from(&usb_mode),
-        }),
-    )
+    let Some((playlists, tags, smart, usb_mode)) = row else {
+        return Ok(None);
+    };
+    Ok(Some(ExportSelection {
+        playlists: ids_from_stored(conn, "playlists", &playlists)?,
+        tags: serde_json::from_str(&tags).unwrap_or_default(),
+        smart: ids_from_stored(conn, "smart_playlists", &smart)?,
+        usb_mode: mode_from(&usb_mode),
+    }))
+}
+
+/// Selections keep playlists by uid, so a choice survives the ids being different on another
+/// install (restored backup, joined library). Callers see this device's row ids.
+fn ids_from_stored(conn: &Connection, table: &str, raw: &str) -> Result<Vec<i64>, Error> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(raw).unwrap_or_default();
+    let mut ids = Vec::new();
+    for entry in entries {
+        let id: Option<i64> = match &entry {
+            serde_json::Value::String(uid) => conn
+                .query_row(
+                    &format!("SELECT id FROM {table} WHERE uid = ?1"),
+                    params![uid],
+                    |r| r.get(0),
+                )
+                .optional()?,
+            // Saved before selections held uids; `migrate_selection_uids` rewrites these.
+            serde_json::Value::Number(n) => n.as_i64(),
+            _ => None,
+        };
+        if let Some(id) = id {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+/// The uids of the rows with these ids; a row that is gone is left out.
+fn uids_for(conn: &Connection, table: &str, ids: &[i64]) -> Result<Vec<String>, Error> {
+    let mut uids = Vec::new();
+    for id in ids {
+        let uid: Option<Option<String>> = conn
+            .query_row(
+                &format!("SELECT uid FROM {table} WHERE id = ?1"),
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(Some(uid)) = uid {
+            uids.push(uid);
+        }
+    }
+    Ok(uids)
+}
+
+/// Selections saved with integer ids (older versions) become uids, once. A playlist that no
+/// longer exists is dropped from the selection, as it already was in effect.
+pub(crate) fn migrate_selection_uids(conn: &Connection) -> Result<(), Error> {
+    let rows: Vec<(String, String, String)> = conn
+        .prepare("SELECT destination, playlists, smart FROM export_selections")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    for (destination, playlists, smart) in rows {
+        let legacy = |raw: &str| {
+            serde_json::from_str::<Vec<serde_json::Value>>(raw)
+                .is_ok_and(|v| v.iter().any(serde_json::Value::is_number))
+        };
+        if !legacy(&playlists) && !legacy(&smart) {
+            continue;
+        }
+        let as_uids = |table: &str, raw: &str| -> Result<String, Error> {
+            let ids = ids_from_stored(conn, table, raw)?;
+            serde_json::to_string(&uids_for(conn, table, &ids)?)
+                .map_err(|e| Error::Msg(e.to_string()))
+        };
+        let playlists = as_uids("playlists", &playlists)?;
+        let smart = as_uids("smart_playlists", &smart)?;
+        conn.execute(
+            "UPDATE export_selections SET playlists = ?2, smart = ?3 WHERE destination = ?1",
+            params![destination, playlists, smart],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn set_export_selection(
@@ -221,10 +295,11 @@ pub fn set_export_selection(
     destination: &str,
     selection: &ExportSelection,
 ) -> Result<(), Error> {
-    let playlists =
-        serde_json::to_string(&selection.playlists).map_err(|e| Error::Msg(e.to_string()))?;
+    let playlists = serde_json::to_string(&uids_for(conn, "playlists", &selection.playlists)?)
+        .map_err(|e| Error::Msg(e.to_string()))?;
     let tags = serde_json::to_string(&selection.tags).map_err(|e| Error::Msg(e.to_string()))?;
-    let smart = serde_json::to_string(&selection.smart).map_err(|e| Error::Msg(e.to_string()))?;
+    let smart = serde_json::to_string(&uids_for(conn, "smart_playlists", &selection.smart)?)
+        .map_err(|e| Error::Msg(e.to_string()))?;
     conn.execute(
         "INSERT INTO export_selections (destination, playlists, tags, smart, usb_mode)
          VALUES (?1, ?2, ?3, ?4, ?5)
@@ -500,6 +575,31 @@ pub(crate) fn repoint_smart_rules(
     Ok(())
 }
 
+/// A tag was deleted: smart playlists on this device stop asking for it (it can never match
+/// again), instead of showing an unknown tag for good. No op is written: the deletion itself is
+/// shared, and every device drops the tag from the rules the same way, so Restore can bring the
+/// rule back.
+fn drop_smart_rule_tag(conn: &Connection, tag_uid: &str) -> Result<(), Error> {
+    if tag_uid.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<(i64, String)> = conn
+        .prepare("SELECT id, rules FROM smart_playlists WHERE instr(rules, ?1) > 0")?
+        .query_map(params![tag_uid], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (id, rules) in rows {
+        let rules: crate::smart::Rules = serde_json::from_str(&rules).unwrap_or_default();
+        let kept = rules.without_tag(tag_uid);
+        if kept != rules {
+            conn.execute(
+                "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
+                params![id, rules_json(&kept)?.to_string()],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Rules saved before they were kept by tag uid hold tag names: each name that is a tag here is
 /// replaced by its uid. A name that is no tag stays as it is (it matched nothing before and
 /// still does not). Safe to repeat.
@@ -682,6 +782,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     prepare_tags(&conn)?;
     create_export_selections(&conn)?;
     prepare_smart_sharing(&conn)?;
+    migrate_selection_uids(&conn)?;
     crate::libsync::seed::catch_up(&conn)?;
     crate::libsync::clashes::migrate(&conn)?;
     Ok(conn)
@@ -703,6 +804,8 @@ fn prepare_sharing(conn: &Connection) -> Result<(), Error> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
     crate::libsync::schema::create(conn)?;
+    // The chunk an op was uploaded in, so ops a snapshot covers can be pruned.
+    add_column(conn, "oplog", "seq", "INTEGER")?;
     backfill_positions(conn)
 }
 
@@ -868,6 +971,8 @@ pub fn rekey_legacy(conn: &mut Connection) -> Result<(), Error> {
         )?;
     }
     tx.commit()?;
+    // Analysis that came back from the old tables after sharing started was never sent.
+    crate::libsync::seed::send_missing_analysis(conn)?;
     Ok(())
 }
 
@@ -879,7 +984,12 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, Erro
         .any(|name| name == column))
 }
 
-fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), Error> {
+pub(crate) fn add_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    decl: &str,
+) -> Result<(), Error> {
     if !has_column(conn, table, column)? {
         conn.execute(
             &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
@@ -915,6 +1025,7 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                  missing_since = NULL",
         )?;
         for t in tracks {
+            note_audio_change(&tx, &t.path, t.audio_fp.as_deref())?;
             stmt.execute(params![
                 t.path,
                 t.artist,
@@ -933,6 +1044,47 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
         }
     }
     tx.commit()?;
+    Ok(())
+}
+
+/// A file whose audio changed in place (re-encoded over the same path) keeps its row, so its
+/// tags and playlists stay; this remembers the audio it had, so other devices' edits about the
+/// old audio can be carried over to the new one (`libsync::carry`).
+fn note_audio_change(conn: &Connection, path: &str, new_fp: Option<&str>) -> Result<(), Error> {
+    let Some(new_fp) = new_fp.filter(|fp| !fp.is_empty()) else {
+        return Ok(());
+    };
+    let old: Option<(i64, Option<String>)> = conn
+        .query_row(
+            "SELECT id, audio_fp FROM tracks WHERE path = ?1",
+            params![path],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((id, Some(old_fp))) = old else {
+        return Ok(());
+    };
+    if old_fp.is_empty() || old_fp == new_fp {
+        return Ok(());
+    }
+    // Several changes in a row still start from the first audio; a change back clears it.
+    let first: Option<String> = conn
+        .query_row(
+            "SELECT old_fp FROM audio_changes WHERE track_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let first = first.unwrap_or(old_fp);
+    if first == new_fp {
+        conn.execute("DELETE FROM audio_changes WHERE track_id = ?1", params![id])?;
+    } else {
+        conn.execute(
+            "INSERT INTO audio_changes (track_id, old_fp, new_fp) VALUES (?1, ?2, ?3)
+             ON CONFLICT(track_id) DO UPDATE SET new_fp = excluded.new_fp",
+            params![id, first, new_fp],
+        )?;
+    }
     Ok(())
 }
 
@@ -1509,6 +1661,7 @@ fn move_tag(
         if shared {
             ops.tag_deleted(&uid);
         }
+        drop_smart_rule_tag(tx, &uid)?;
         return Ok(());
     };
     if current.eq_ignore_ascii_case(to) {
@@ -1615,12 +1768,13 @@ pub fn delete_tag(conn: &Connection, id: i64) -> Result<(), Error> {
         )
         .optional()?;
     tx.execute("DELETE FROM tags WHERE id = ?1", params![id])?;
-    if let Some((uid, scope)) = ident
-        && scope == "shared"
-    {
+    if let Some((uid, scope)) = ident {
         let mut ops = crate::libsync::Batch::new(&tx)?;
-        ops.tag_deleted(&uid);
+        if scope == "shared" {
+            ops.tag_deleted(&uid);
+        }
         ops.commit(&tx)?;
+        drop_smart_rule_tag(&tx, &uid)?;
     }
     crate::libsync::clashes::refresh(&tx)?;
     tx.commit()?;
@@ -2820,6 +2974,16 @@ pub fn duplicate_groups(conn: &Connection) -> Result<Vec<DuplicateGroup>, Error>
     Ok(groups)
 }
 
+/// Present songs with an audio fingerprint: `(id, path, audio_fp)`.
+pub fn tracks_with_audio_fp(conn: &Connection) -> Result<Vec<(i64, String, String)>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, audio_fp FROM tracks
+         WHERE missing_since IS NULL AND audio_fp IS NOT NULL AND audio_fp <> ''",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// Present library songs whose audio has not been fingerprinted yet.
 pub fn tracks_without_audio_fp(conn: &Connection) -> Result<Vec<(i64, String)>, Error> {
     let mut stmt = conn
@@ -3495,10 +3659,20 @@ mod tests {
         );
         assert_eq!(get_setting(&conn, LEGACY_RB_SELECTION).expect("gone"), None);
 
+        let smart = save_smart_playlist(
+            &conn,
+            &crate::smart::SmartPlaylist {
+                id: 0,
+                name: "S".into(),
+                rules: crate::smart::Rules::default(),
+            },
+        )
+        .expect("smart")
+        .id;
         let usb = ExportSelection {
             playlists: vec![b],
             tags: vec![],
-            smart: vec![7],
+            smart: vec![smart],
             usb_mode: crate::usb_export::Mode::ReplaceAll,
         };
         set_export_selection(&conn, "usb:1234", &usb).expect("save");

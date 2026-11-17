@@ -56,6 +56,25 @@ pub fn create(conn: &Connection) -> Result<(), Error> {
          CREATE TABLE IF NOT EXISTS libsync_devices (
              id   TEXT PRIMARY KEY,
              name TEXT NOT NULL
+         );
+         -- Ops from other devices whose clock is far ahead of this device's own and of everything
+         -- already applied (a wrong clock over there). Kept, not applied; tried again every sync
+         -- (see `skew.rs`).
+         CREATE TABLE IF NOT EXISTS op_future (
+             clock TEXT PRIMARY KEY,
+             dev   TEXT NOT NULL,
+             op    TEXT NOT NULL
+         );
+         -- Songs whose audio changed in place (a re-encode over the same file) and the audio they
+         -- had before: offered \"Carry over tags and playlists\" (see `carry.rs`).
+         CREATE TABLE IF NOT EXISTS audio_changes (
+             track_id INTEGER PRIMARY KEY,
+             old_fp   TEXT NOT NULL,
+             new_fp   TEXT NOT NULL
+         );
+         -- Audio the user turned down carrying tags and playlists over from.
+         CREATE TABLE IF NOT EXISTS carry_dismissed (
+             old_fp TEXT PRIMARY KEY
          );",
     )?;
     Ok(())

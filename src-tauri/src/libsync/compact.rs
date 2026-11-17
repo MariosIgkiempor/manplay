@@ -30,6 +30,8 @@ pub struct Outcome {
     pub chunks_deleted: usize,
     pub snapshots_deleted: usize,
     pub waveforms_deleted: usize,
+    /// Rows of this device's own op log dropped because a snapshot holds what they said.
+    pub ops_pruned: usize,
 }
 
 fn lock(db: &Mutex<Connection>) -> Result<std::sync::MutexGuard<'_, Connection>, Error> {
@@ -162,6 +164,15 @@ async fn clean_up<S: ChunkStore>(
     {
         store.delete_chunk(&c.chunk).await?;
         out.chunks_deleted += 1;
+    }
+    // The local log only has to hold what is not on the destination yet: what an uploaded chunk
+    // said is now in the snapshot (and in `op_state`).
+    {
+        let conn = lock(db)?;
+        out.ops_pruned = conn.execute(
+            "DELETE FROM oplog WHERE uploaded = 1 AND seq IS NOT NULL AND seq <= ?1 AND dev = ?2",
+            rusqlite::params![i64::try_from(upto).unwrap_or(i64::MAX), me],
+        )?;
     }
     if wrote {
         out.chunks_deleted += clean_abandoned(store, &me, &covers, listed, now_ms).await?;

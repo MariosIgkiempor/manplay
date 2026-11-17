@@ -158,6 +158,9 @@ pub fn restore(conn: &mut Connection, kind: &str, uid: &str, now_ms: i64) -> Res
     batch.commit(&tx)?;
     let mut touched = BTreeSet::new();
     apply::materialize_item(&tx, apply_kind, uid, &mut touched)?;
+    if kind == "tag" {
+        entities::rematerialize_rules_using(&tx, uid)?;
+    }
     if kind == "smart_playlist" {
         entities::materialize_smart_rules(&tx, uid)?;
     }

@@ -9,7 +9,9 @@ import {
 	auditFix,
 	auditLibrary,
 	auditPlace,
+	carryOver,
 	DEFAULT_PANEL_TABS,
+	dismissCarry,
 	fsCopy,
 	fsMakeDir,
 	fsMove,
@@ -29,6 +31,7 @@ import {
 	libraryStatus,
 	libsyncJoin,
 	libsyncLeave,
+	listCarryCandidates,
 	listClashes,
 	listDuplicates,
 	listMissing,
@@ -227,6 +230,30 @@ export function useDuplicates() {
 	});
 }
 
+/** Re-encoded songs whose old audio has tags or playlists to carry over. */
+export function useCarryCandidates() {
+	return useQuery({
+		queryKey: ["carry"],
+		queryFn: listCarryCandidates,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+}
+
+/** Carries tags and playlists over to the new audio, or leaves them (`trackId` null). */
+export function useCarryDecision() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async ({ oldFp, trackId }: { oldFp: string; trackId: number | null }) => {
+			if (trackId === null) {
+				await dismissCarry(oldFp);
+			} else {
+				await carryOver(oldFp, trackId);
+			}
+		},
+		onSettled: () => refreshAfterFsChange(queryClient),
+	});
+}
+
 /** Ends the grace period for missing tracks. Their remote copies are offered for deletion at the next sync review. */
 export function useRemoveMissing() {
 	const queryClient = useQueryClient();
@@ -382,6 +409,7 @@ export async function refreshAfterFsChange(queryClient: ReturnType<typeof useQue
 			"audit",
 			"tag-values",
 			"duplicates",
+			"carry",
 		].map((k) => queryClient.invalidateQueries({ queryKey: [k] })),
 	);
 }

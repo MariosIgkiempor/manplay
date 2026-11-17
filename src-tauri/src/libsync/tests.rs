@@ -564,6 +564,8 @@ struct Memory {
     meta: Mutex<BTreeMap<String, Vec<u8>>>,
     /// Every call of any kind, so a test can show a destination was never talked to.
     calls: std::sync::atomic::AtomicUsize,
+    /// A `library.json` another device writes right after the next one written here.
+    rival_library: Mutex<Option<Vec<u8>>>,
 }
 
 impl Memory {
@@ -682,10 +684,13 @@ impl ChunkStore for Memory {
 
     async fn write_meta(&self, path: &str, bytes: Vec<u8>) -> Result<(), Error> {
         self.touch();
-        self.meta
-            .lock()
-            .expect("lock")
-            .insert(path.to_owned(), bytes);
+        let mut meta = self.meta.lock().expect("lock");
+        meta.insert(path.to_owned(), bytes);
+        if path == membership::LIBRARY_FILE
+            && let Some(rival) = self.rival_library.lock().expect("lock").take()
+        {
+            meta.insert(path.to_owned(), rival);
+        }
         Ok(())
     }
 
@@ -1303,8 +1308,7 @@ async fn a_local_smart_playlist_and_a_tag_this_device_lacks_stay_safe() {
         "blocked until the tag is shared or dropped"
     );
 
-    // A tag deleted on A while B still has a rule on it: B cannot name the tag, and the rule
-    // keeps its uid when B saves it again.
+    // A tag deleted on A while B still has a rule on it: the rule stops asking for it on B too.
     tag(&a, "Pub", &[1]);
     smart(&a, "Shared", &["Pub"]);
     assert!(run(&a, &store).await.error.is_none());
@@ -1320,14 +1324,11 @@ async fn a_local_smart_playlist_and_a_tag_this_device_lacks_stay_safe() {
     let seen = db::smart_playlists(&b.lock().expect("lock"))
         .expect("list")
         .remove(0);
-    assert!(seen.rules.all_tags[0].starts_with('?'), "{:?}", seen.rules);
-    db::save_smart_playlist(&b.lock().expect("lock"), &seen).expect("save back");
-    let stored: String = b
-        .lock()
-        .expect("lock")
-        .query_row("SELECT rules FROM smart_playlists", [], |r| r.get(0))
-        .expect("rules");
-    assert!(stored.contains(&seen.rules.all_tags[0][1..]), "{stored}");
+    assert!(
+        seen.rules.all_tags.is_empty(),
+        "the deleted tag leaves the rule: {:?}",
+        seen.rules
+    );
 }
 
 fn analysis_ops(ops: &[(i64, &str, &str, Value)]) -> Vec<Op> {
@@ -2456,6 +2457,7 @@ fn replace_library_file(store: &Memory) {
         library_id: "someone-else".into(),
         name: "Elsewhere".into(),
         created_at: 1,
+        audio_fp_version: 1,
     };
     store.meta.lock().expect("lock").insert(
         membership::LIBRARY_FILE.to_owned(),
@@ -3055,7 +3057,10 @@ async fn a_deleted_item_can_be_restored_with_its_old_uid_and_songs() {
         membership::run_joined_at(d, &store, "dest", now).await;
     }
     assert!(!shown(&a).contains("House"));
-    assert!(smart_shown(&a).contains('?'), "the rule lost its tag");
+    assert!(
+        !smart_shown(&a).contains('?'),
+        "the rule drops the deleted tag"
+    );
 
     let listed = recent::list(&a.lock().expect("lock"), now).expect("list");
     let line = |d: &recent::Deleted| format!("{} {} by {} ({})", d.kind, d.name, d.by, d.songs);
@@ -3156,3 +3161,5 @@ async fn years_of_edits_leave_about_one_snapshot_on_the_destination() {
     assert_eq!(everything(&c), everything(&a));
     assert_eq!(everything(&a), everything(&b));
 }
+
+mod edge;

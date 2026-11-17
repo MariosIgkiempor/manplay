@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::entities;
-use super::ops::{Entity, F_MERGE, F_NAME, F_POS, F_PRESENT, FORMAT, Op, member_id};
+use super::ops::{Entity, F_DELETE, F_MERGE, F_NAME, F_POS, F_PRESENT, FORMAT, Op, member_id};
 use super::state;
 use crate::error::Error;
 
@@ -101,12 +101,16 @@ pub fn find(
 }
 
 /// Applies ops read from other devices. Run it inside a transaction.
+#[allow(clippy::too_many_lines)]
 pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
     let mut items: BTreeSet<(&'static str, String)> = BTreeSet::new();
     let mut merges: BTreeSet<(&'static str, String)> = BTreeSet::new();
     let mut members: BTreeSet<(Entity, String, String)> = BTreeSet::new();
     let mut customs = BTreeSet::new();
     let mut analyses = BTreeSet::new();
+    let mut remaps: Vec<(String, String)> = Vec::new();
+    let mut deleted_tags: BTreeSet<String> = BTreeSet::new();
+    let mut resets: Vec<(String, i64)> = Vec::new();
     let mut won = 0;
     for op in ops {
         if op.v > FORMAT {
@@ -134,6 +138,9 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
                 if op.f == F_MERGE {
                     merges.insert((kind.entity, op.id.clone()));
                 }
+                if op.f == F_DELETE && kind.table == TAGS.table {
+                    deleted_tags.insert(op.id.clone());
+                }
             }
             e @ (Entity::TrackTag | Entity::PlaylistTrack) => {
                 if let Some((parent, fp)) = op.id.split_once('/') {
@@ -146,8 +153,30 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
             Entity::Analysis => {
                 analyses.insert(op.id.clone());
             }
-            Entity::Other(_) => {}
+            Entity::Other(name) => {
+                if name == super::remap::E_REMAP
+                    && let Some(new) = op.val.as_str()
+                {
+                    remaps.push((op.id.clone(), new.to_owned()));
+                } else if name == super::skew::E_RESET
+                    && let Some(ms) = op.val.as_i64()
+                {
+                    resets.push((op.id.clone(), ms));
+                }
+            }
         }
+    }
+    for (dev, ms) in &resets {
+        super::skew::release(conn, dev, *ms)?;
+    }
+    // The audio fingerprint algorithm changed: what is known about the old audio is about the new.
+    for (old, new) in &remaps {
+        for (entity, parent) in super::remap::apply_pair(conn, old, new)? {
+            let entity = Entity::parse(&entity);
+            members.insert((entity.clone(), parent.clone(), new.clone()));
+            members.insert((entity, parent, old.clone()));
+        }
+        analyses.insert(new.clone());
     }
     for id in &customs {
         entities::materialize_custom(conn, id)?;
@@ -162,6 +191,13 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
             if kind.entity == SMARTS.entity {
                 entities::materialize_smart_rules(conn, uid)?;
             }
+        }
+    }
+    for uid in &deleted_tags {
+        if state::is_dead(conn, "tag", uid)? {
+            entities::drop_dead_tag(conn, uid)?;
+        } else {
+            entities::rematerialize_rules_using(conn, uid)?;
         }
     }
     for (entity, uid) in &merges {

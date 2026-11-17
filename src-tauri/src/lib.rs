@@ -117,6 +117,56 @@ async fn fill_audio_fps(app: AppHandle) {
     }
 }
 
+/// After an update that changed the audio fingerprint algorithm (`audioprint::VERSION`): prints
+/// every present song again, moves its analysis, cues and shared edits from the old print to the
+/// new one (`libsync::remap`), and only then records the new version. A song that cannot be read
+/// holds the whole move back until the next start, so a half-moved library never syncs.
+async fn reprint_audio_fps(app: AppHandle) {
+    let want = i64::from(audioprint::VERSION);
+    let state = app.state::<AppState>();
+    let todo = match state.db.lock().map_err(|_| Error::Lock) {
+        Ok(conn) => match libsync::remap::local_version(&conn) {
+            Ok(have) if have >= want => return,
+            Ok(_) => db::tracks_with_audio_fp(&conn),
+            Err(e) => Err(e),
+        },
+        Err(e) => Err(e),
+    };
+    let Ok(todo) = todo else { return };
+    let printed = tauri::async_runtime::spawn_blocking(move || {
+        todo.into_iter()
+            .map(|(id, path, old)| {
+                let fp = audioprint::audio_print_path(Path::new(&path)).unwrap_or_default();
+                (id, old, fp)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
+    let Ok(printed) = printed else { return };
+    if printed.iter().any(|(_, _, fp)| fp.is_empty()) {
+        log::warn!("some songs could not be fingerprinted again; trying at the next start");
+        return;
+    }
+    let Ok(mut conn) = state.db.lock() else {
+        return;
+    };
+    let pairs: Vec<(String, String)> = printed
+        .iter()
+        .map(|(_, old, new)| (old.clone(), new.clone()))
+        .collect();
+    let stored = db::set_audio_fps(
+        &mut conn,
+        &printed
+            .iter()
+            .map(|(id, _, fp)| (*id, fp.clone()))
+            .collect::<Vec<_>>(),
+    )
+    .and_then(|()| libsync::remap::remap_tracks(&mut conn, &pairs, want));
+    if let Err(e) = stored {
+        log::warn!("could not move the library to the new audio fingerprint: {e}");
+    }
+}
+
 /// Path relative to the library root, as it appears on sync destinations.
 fn rel_path(root: &Path, path: &str) -> Option<Vec<String>> {
     Path::new(path)
@@ -243,6 +293,33 @@ fn library_status(state: State<'_, AppState>) -> Result<LibraryStatus, Error> {
 fn list_duplicates(state: State<'_, AppState>) -> Result<Vec<db::DuplicateGroup>, Error> {
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     db::duplicate_groups(&conn)
+}
+
+/// Songs re-encoded under the same name whose old audio has tags or playlists to carry over.
+#[tauri::command]
+fn list_carry_candidates(
+    state: State<'_, AppState>,
+) -> Result<Vec<libsync::carry::Candidate>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    libsync::carry::candidates(&conn)
+}
+
+/// Moves tags, playlist places and hand-set tempo of the old audio to the song `track_id`.
+#[tauri::command]
+fn carry_over(
+    state: State<'_, AppState>,
+    old_fp: String,
+    track_id: i64,
+) -> Result<libsync::carry::Carried, Error> {
+    let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
+    libsync::carry::carry_over(&mut conn, &old_fp, track_id)
+}
+
+/// Leaves the old audio's tags and playlists where they are.
+#[tauri::command]
+fn dismiss_carry(state: State<'_, AppState>, old_fp: String) -> Result<(), Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    libsync::carry::dismiss(&conn, &old_fp)
 }
 
 #[derive(serde::Serialize)]
@@ -3468,6 +3545,7 @@ pub fn run() {
                 wf_filling: AtomicBool::new(false),
             });
             tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
+            tauri::async_runtime::spawn(reprint_audio_fps(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3476,6 +3554,9 @@ pub fn run() {
             library_status,
             list_missing,
             list_duplicates,
+            list_carry_candidates,
+            carry_over,
+            dismiss_carry,
             remove_missing_now,
             rescan_library,
             reset_library,

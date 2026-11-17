@@ -16,7 +16,9 @@ use serde::Serialize;
 
 use super::apply::apply_ops;
 use super::clock;
+use super::identity;
 use super::ops::Op;
+use super::skew;
 use super::snapshot;
 use super::state;
 use super::waveforms::WaveformRef;
@@ -139,6 +141,12 @@ pub struct RunSummary {
     pub received: usize,
     /// Lines in other devices' chunks that could not be read.
     pub unreadable: usize,
+    /// Ops kept back because the device that wrote them has a clock far ahead (see `skew.rs`).
+    pub held: usize,
+    /// Another device says this device's clock is wrong.
+    pub clock_wrong: bool,
+    /// This install found a second copy of itself and took a new device ID.
+    pub new_device_id: bool,
     /// Set when something stopped the run part-way; what was done before it stays done.
     pub error: Option<String>,
 }
@@ -215,16 +223,18 @@ async fn upload<S: ChunkStore>(
     let mut conn = lock(db)?;
     let tx = conn.transaction()?;
     {
-        let mut stmt = tx.prepare("UPDATE oplog SET uploaded = 1 WHERE clock = ?1")?;
+        let mut stmt = tx.prepare("UPDATE oplog SET uploaded = 1, seq = ?2 WHERE clock = ?1")?;
         for op in pending {
-            stmt.execute(params![op.clock])?;
+            stmt.execute(params![op.clock, i64::try_from(seq).unwrap_or(i64::MAX)])?;
         }
     }
     state::set_cursor(&tx, own, seq)?;
+    identity::set_sent(&tx, seq)?;
     tx.commit()?;
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_inner<S: ChunkStore>(
     db: &Mutex<Connection>,
     store: &S,
@@ -234,10 +244,15 @@ async fn run_inner<S: ChunkStore>(
     // 0. A newer snapshot than this device has seen: load it first, so a device that is behind
     // chunks that were cleaned up, or is new, starts from it. It can also drop what this device
     // sent too long ago, so what is uploaded is read after it.
-    let known = snapshot::sync_in(db, store).await?;
-    let (own, pending) = {
+    {
+        // Wrong time on this device, fixed since: what it wrote then gets a time from now.
         let conn = lock(db)?;
-        (device_id(&conn)?, unuploaded(&conn)?)
+        skew::restamp(&conn, now_ms)?;
+    }
+    let known = snapshot::sync_in(db, store).await?;
+    let mut own = {
+        let conn = lock(db)?;
+        device_id(&conn)?
     };
     let listed: Vec<ChunkRef> = store
         .list_chunks()
@@ -245,6 +260,18 @@ async fn run_inner<S: ChunkStore>(
         .into_iter()
         .map(|c| c.chunk)
         .collect();
+
+    // A second copy of this device (copied app data, a restored backup) writes under the same
+    // ID: this install moves to a new one and sends what it has under it.
+    if let Some(fresh) = identity::check(db, store, &own, &listed).await? {
+        own = fresh;
+        summary.new_device_id = true;
+    }
+    // Read again: either way the check may have changed what is left to send.
+    let pending = {
+        let conn = lock(db)?;
+        unuploaded(&conn)?
+    };
 
     // 1. Upload own new ops as one chunk.
     if !pending.is_empty() {
@@ -308,19 +335,33 @@ async fn run_inner<S: ChunkStore>(
     }
 
     // 3. Apply everything in clock order and move the cursors, in one transaction.
-    if !fetched.is_empty() {
+    if fetched.is_empty() {
+        // Held ops may have come due as time passed.
+        let mut conn = lock(db)?;
+        if !skew::skewed_devices(&conn)?.is_empty() {
+            let tx = conn.transaction()?;
+            let screened = skew::screen(&tx, Vec::new(), now_ms)?;
+            summary.held = screened.held;
+            apply_ops(&tx, &screened.accepted)?;
+            summary.received += screened.accepted.len();
+            tx.commit()?;
+        }
+    } else {
         let mut conn = lock(db)?;
         let tx = conn.transaction()?;
         let mut all: Vec<&Op> = fetched.iter().flat_map(|(_, _, ops)| ops).collect();
         all.sort_by(|a, b| a.clock.cmp(&b.clock));
+        // Ops from a device whose clock is far ahead are held, not applied, and do not move this
+        // device's own clock.
+        let screened = skew::screen(&tx, all.into_iter().cloned().collect(), now_ms)?;
+        summary.held = screened.held;
         let mut hlc = clock::load(&tx)?;
-        for op in &all {
+        for op in &screened.accepted {
             hlc.observe(&op.clock);
         }
         clock::save(&tx, hlc)?;
-        let ops: Vec<Op> = all.into_iter().cloned().collect();
-        summary.received = ops.len();
-        apply_ops(&tx, &ops)?;
+        summary.received = screened.accepted.len();
+        apply_ops(&tx, &screened.accepted)?;
         for (dev, seq, _) in &fetched {
             state::set_cursor(&tx, dev, *seq)?;
         }

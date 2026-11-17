@@ -496,6 +496,12 @@ pub struct LibraryOutcome {
     pub sent: usize,
     pub received: usize,
     pub unreadable: usize,
+    /// Ops kept back because the device that wrote them has a clock far ahead.
+    pub held: usize,
+    /// Another device says this device's clock is wrong.
+    pub clock_wrong: bool,
+    /// This install found a second copy of itself and took a new device ID.
+    pub new_device_id: bool,
     /// Waveform files uploaded.
     pub waveforms_sent: usize,
     pub error: Option<String>,
@@ -520,6 +526,9 @@ pub async fn run_library_data(
         sent: 0,
         received: 0,
         unreadable: 0,
+        held: 0,
+        clock_wrong: false,
+        new_device_id: false,
         waveforms_sent: 0,
         error: None,
     };
@@ -550,6 +559,9 @@ pub async fn run_library_data(
     out.sent = summary.sent;
     out.received = summary.received;
     out.unreadable = summary.unreadable;
+    out.held = summary.held;
+    out.clock_wrong = summary.clock_wrong;
+    out.new_device_id = summary.new_device_id;
     out.error = summary.error;
     if out.error.is_none() {
         match libsync::waveforms::push(db, &store, WAVEFORMS_PER_RUN).await {
@@ -614,6 +626,9 @@ pub async fn join_library(
         sent: summary.sent,
         received: summary.received,
         unreadable: summary.unreadable,
+        held: summary.held,
+        clock_wrong: summary.clock_wrong,
+        new_device_id: summary.new_device_id,
         waveforms_sent: 0,
         error: summary.error,
     };

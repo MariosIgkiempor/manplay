@@ -48,11 +48,63 @@ pub fn materialize_smart_rules(conn: &Connection, uid: &str) -> Result<(), Error
     if let Some(e) = failure {
         return Err(e);
     }
+    // A tag that was deleted (not merged) can never match again: the rule stops asking for it,
+    // the same on every device because it follows the tombstone.
+    let mut moved = moved;
+    let mut entries: Vec<String> = Vec::new();
+    for list in [&moved.all_tags, &moved.any_tags, &moved.none_tags] {
+        entries.extend(list.iter().filter(|t| crate::smart::is_uid(t)).cloned());
+    }
+    for entry in entries {
+        if state::is_dead(conn, "tag", &entry)? {
+            moved = moved.without_tag(&entry);
+        }
+    }
     let json = serde_json::to_string(&moved).map_err(|e| Error::Msg(e.to_string()))?;
     conn.execute(
         "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
         params![id, json],
     )?;
+    Ok(())
+}
+
+/// A tag was deleted: every smart playlist row on this device stops asking for it. Shared ones
+/// reach the same result from their registers (`materialize_smart_rules`); this is for the rows
+/// of local playlists, and for shared ones until their next replay.
+pub fn drop_dead_tag(conn: &Connection, uid: &str) -> Result<(), Error> {
+    if uid.is_empty() || !state::is_dead(conn, "tag", uid)? {
+        return Ok(());
+    }
+    let rows: Vec<(i64, String)> = conn
+        .prepare("SELECT id, rules FROM smart_playlists WHERE instr(rules, ?1) > 0")?
+        .query_map(params![uid], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (id, rules) in rows {
+        let old: crate::smart::Rules = serde_json::from_str(&rules).unwrap_or_default();
+        let kept = old.without_tag(uid);
+        if kept != old {
+            let json = serde_json::to_string(&kept).map_err(|e| Error::Msg(e.to_string()))?;
+            conn.execute(
+                "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
+                params![id, json],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// A deleted tag came back (Restore): shared smart playlists that name it by their registers ask
+/// for it again.
+pub fn rematerialize_rules_using(conn: &Connection, uid: &str) -> Result<(), Error> {
+    let ids: Vec<String> = conn
+        .prepare(
+            "SELECT id FROM op_state WHERE e = 'smart_playlist' AND f = ?2 AND instr(val, ?1) > 0",
+        )?
+        .query_map(params![uid, F_RULES], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for id in ids {
+        materialize_smart_rules(conn, &id)?;
+    }
     Ok(())
 }
 

@@ -223,6 +223,36 @@ export async function listDuplicates(): Promise<DuplicateGroup[]> {
 	return z.array(duplicateGroupSchema).parse(await invoke("list_duplicates"));
 }
 
+const carryCandidateSchema = z.object({
+	oldFp: z.string(),
+	trackId: int,
+	title: z.string(),
+	artist: z.string(),
+	path: z.string(),
+	oldPath: z.string().nullable(),
+	tags: int,
+	playlists: int,
+	edits: z.boolean(),
+});
+export type CarryCandidate = z.infer<typeof carryCandidateSchema>;
+
+/** Songs re-encoded under the same name whose old audio still has tags or playlists. */
+export async function listCarryCandidates(): Promise<CarryCandidate[]> {
+	return z.array(carryCandidateSchema).parse(await invoke("list_carry_candidates"));
+}
+
+/** Moves tags, playlist places and hand-set tempo from the old audio to the song's new audio. */
+export async function carryOver(oldFp: string, trackId: number) {
+	return z
+		.object({ tags: int, playlists: int, edits: int })
+		.parse(await invoke("carry_over", { oldFp, trackId }));
+}
+
+/** Leaves the old audio's tags and playlists where they are. */
+export async function dismissCarry(oldFp: string): Promise<void> {
+	await invoke("dismiss_carry", { oldFp });
+}
+
 /** Ends the grace period for missing tracks; the next sync removes their remote copies. */
 export async function removeMissingNow(): Promise<void> {
 	await invoke("remove_missing_now");
@@ -441,6 +471,9 @@ const libraryOutcomeSchema = z.object({
 	sent: int,
 	received: int,
 	unreadable: int,
+	held: int,
+	clockWrong: z.boolean(),
+	newDeviceId: z.boolean(),
 	waveformsSent: int,
 	error: z.string().nullable(),
 });

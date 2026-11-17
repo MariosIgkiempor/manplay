@@ -30,13 +30,26 @@ pub fn seed(conn: &mut Connection) -> Result<usize, Error> {
     seed_more(&tx, &mut batch)?;
     let written = batch.len();
     batch.commit(&tx)?;
-    tx.execute("UPDATE oplog SET uploaded = 0", [])?;
+    tx.execute("UPDATE oplog SET uploaded = 0, seq = NULL", [])?;
     tx.execute("DELETE FROM op_cursor", params![])?;
     // The destination may be a new one: every waveform has to be checked against it again.
     tx.execute("UPDATE analysis SET wf_pushed = 0", [])?;
     db::set_setting(&tx, SETTING_SEEDED, Some(SEEDED))?;
     tx.commit()?;
     Ok(written)
+}
+
+/// Writes ops for analysis rows that exist here but were never shared (rows made after sharing
+/// was on, for example by the move of old analysis to `audio_fp` keys).
+pub fn send_missing_analysis(conn: &Connection) -> Result<(), Error> {
+    if !active(conn)? {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    let mut batch = Batch::new(&tx)?;
+    seed_analysis(&tx, &mut batch)?;
+    batch.commit(&tx)?;
+    Ok(tx.commit()?)
 }
 
 /// A library that had library data on before smart playlists, analysis and Tag Database values

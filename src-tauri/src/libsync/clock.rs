@@ -32,6 +32,11 @@ impl Hlc {
         (self.ms, self.counter)
     }
 
+    /// The newest millisecond this device has made or seen.
+    pub fn ms(&self) -> i64 {
+        self.ms
+    }
+
     /// Takes in a clock read from another device, so the next stamp is later than it.
     pub fn observe(&mut self, clock: &str) {
         if let Some((ms, counter)) = parse(clock)
