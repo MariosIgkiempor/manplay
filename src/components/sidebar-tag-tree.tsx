@@ -6,6 +6,7 @@ import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { HiddenItems, ScopeMark } from "#/components/item-sharing.tsx";
 import { RowMenu } from "#/components/menu.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
 import { GroupHeading, RowCount } from "#/components/sidebar-parts.tsx";
 import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
@@ -300,7 +301,7 @@ export function SidebarTagTree() {
 				/>
 			)}
 			{sharing.dialogs}
-			{move.isError && <p className="px-2 text-destructive text-xs">{String(move.error)}</p>}
+			{move.isError && <ErrorLine className="px-2">{String(move.error)}</ErrorLine>}
 			{ask && (
 				<ConfirmDialog
 					title={

@@ -13,8 +13,7 @@ import {
 import { type ReactNode, useId, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { DestinationHeader, SettingLabel, UsageBar } from "#/components/destination-header.tsx";
-import { ErrorText } from "#/components/error-text.tsx";
-import { EmptyState } from "#/components/page.tsx";
+import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -88,7 +87,7 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 			>
 				{tab === "contents" ? (
 					<>
-						{library.isError && <ErrorText message={String(library.error)} />}
+						{library.isError && <ErrorLine>{String(library.error)}</ErrorLine>}
 						{!drive.hasLibrary && (
 							<EmptyState icon={<LibraryBig />} title="No rekordbox library yet">
 								Export playlists or tags to create one.
@@ -167,8 +166,8 @@ function DriveHeader({
 				}
 				tabs={tabs}
 			/>
-			{reveal.isError && <ErrorText message={String(reveal.error)} />}
-			{eject.isError && <ErrorText message={String(eject.error)} />}
+			{reveal.isError && <ErrorLine>{String(reveal.error)}</ErrorLine>}
+			{eject.isError && <ErrorLine>{String(eject.error)}</ErrorLine>}
 		</div>
 	);
 }
@@ -376,10 +375,10 @@ function BackupsRow({ drive }: { drive: UsbDrive }) {
 						The newest backup stays. The others are deleted from the drive for good, so the space
 						frees up now.
 					</p>
-					{prune.isError && <ErrorText message={String(prune.error)} />}
+					{prune.isError && <ErrorLine>{String(prune.error)}</ErrorLine>}
 				</ConfirmDialog>
 			)}
-			{backups.isError && <ErrorText message={String(backups.error)} />}
+			{backups.isError && <ErrorLine>{String(backups.error)}</ErrorLine>}
 		</SettingRow>
 	);
 }
@@ -460,7 +459,7 @@ function ResetRow({ drive }: { drive: UsbDrive }) {
 								}}
 							/>
 						</div>
-						{reset.isError && <ErrorText message={String(reset.error)} />}
+						{reset.isError && <ErrorLine>{String(reset.error)}</ErrorLine>}
 					</div>
 				</ConfirmDialog>
 			)}

@@ -2,7 +2,7 @@ import {
 	CheckCircle2,
 	FolderOpen,
 	ListPlus,
-	Loader2,
+	LoaderCircle,
 	RefreshCw,
 	RotateCcw,
 	Trash2,
@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useId } from "react";
 import { BrowserHeader, ReleaseRows } from "#/components/import-browser.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { ProgressPill } from "#/components/progress-pill.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -177,7 +178,7 @@ function Toolbar(p: ToolbarProps) {
 				onClick={() => s.add.mutate(s.importable)}
 				disabled={s.add.isPending || ready === 0 || !s.canAdd}
 			>
-				{s.add.isPending ? <Loader2 className="animate-spin" /> : <ListPlus />}
+				{s.add.isPending ? <LoaderCircle className="animate-spin" /> : <ListPlus />}
 				{s.add.isPending ? "Importing…" : `Import${ready > 0 ? ` ${ready.toLocaleString()}` : ""}`}
 			</Button>
 			<ScanBar progress={p.progress} scanning={scanning} />
@@ -198,9 +199,7 @@ function Summary({ scan, report }: { scan: ImportScan; report: ImportReport | nu
 				</p>
 			)}
 			{report?.failed.map((f) => (
-				<p key={`${f.file}${f.error}`} className="break-all text-destructive text-xs">
-					{f.file}: {f.error}
-				</p>
+				<ErrorLine key={`${f.file}${f.error}`}>{`${f.file}: ${f.error}`}</ErrorLine>
 			))}
 			{scan.errors > 0 && (
 				<p className="text-muted-foreground text-xs">
@@ -304,15 +303,11 @@ export function ImportView({ s }: { s: ReturnType<typeof useImport> }) {
 
 	return (
 		<div className="space-y-3">
-			{!s.hasRoot && (
-				<p className="text-destructive text-sm">Choose your library folder first (Library page).</p>
-			)}
+			{!s.hasRoot && <ErrorLine>Choose your library folder first (Library page).</ErrorLine>}
 			{errors.map((e) => (
-				<p key={e} className="text-destructive text-sm">
-					{e}
-				</p>
+				<ErrorLine key={e}>{e}</ErrorLine>
 			))}
-			{s.preview.error && <p className="text-destructive text-sm">{s.preview.error}</p>}
+			{s.preview.error && <ErrorLine>{s.preview.error}</ErrorLine>}
 
 			{/* Clips to its rounded corners; the toolbar and column names stick together at the top. */}
 			<div className="overflow-clip rounded-xl border bg-card">

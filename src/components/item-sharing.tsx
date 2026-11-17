@@ -3,6 +3,7 @@ import { EyeOff, Lock, TriangleAlert, Users } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { RowMenu } from "#/components/menu.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { CHILD_PAD, rowBase } from "#/components/sidebar-row.ts";
 import {
 	type ItemKind,
@@ -239,7 +240,7 @@ export function ShareDialog({
 		) : null;
 	}
 	const error = share.isError ? (
-		<p className="mt-2 break-words text-destructive">{String(share.error)}</p>
+		<ErrorLine className="mt-2">{String(share.error)}</ErrorLine>
 	) : null;
 	if (data.localTags.length > 0) {
 		return (
@@ -320,7 +321,7 @@ export function PrivateDialog({
 					{data.usedBy.length === 1 ? "it" : "them"}.
 				</p>
 			)}
-			{priv.isError && <p className="mt-2 break-words text-destructive">{String(priv.error)}</p>}
+			{priv.isError && <ErrorLine className="mt-2">{String(priv.error)}</ErrorLine>}
 		</ConfirmDialog>
 	);
 }

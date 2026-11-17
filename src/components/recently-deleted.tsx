@@ -1,6 +1,6 @@
 import { History, ListMusic, Sparkles, Tag } from "lucide-react";
 import type { ReactNode } from "react";
-import { Page } from "#/components/page.tsx";
+import { ErrorLine, Page } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import type { DeletedItem, ItemKind } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
@@ -37,9 +37,7 @@ function Row({ item }: { item: DeletedItem }) {
 					Restore
 				</Button>
 			</div>
-			{restore.isError && (
-				<p className="break-words text-destructive text-sm">{String(restore.error)}</p>
-			)}
+			{restore.isError && <ErrorLine>{String(restore.error)}</ErrorLine>}
 		</li>
 	);
 }

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, ListMusic, Sparkles, Tag as TagIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { CheckList, CheckRow, Filter, LinkButton, TagTree } from "#/components/check-list.tsx";
-import { ErrorText } from "#/components/error-text.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { SmartPicker } from "#/components/smart-playlists.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
 import {
@@ -252,8 +252,8 @@ export function ExportChooser({
 					{ value: "destination", label: destination.label, icon: destination.icon },
 				]}
 			/>
-			{playlists.isError && <ErrorText message={String(playlists.error)} />}
-			{tags.isError && <ErrorText message={String(tags.error)} />}
+			{playlists.isError && <ErrorLine>{String(playlists.error)}</ErrorLine>}
+			{tags.isError && <ErrorLine>{String(tags.error)}</ErrorLine>}
 			{tab === "playlists" && playlists.isSuccess && (
 				<PlaylistPicker
 					list={list}

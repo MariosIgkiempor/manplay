@@ -1,6 +1,7 @@
 import { Plus } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { ScopeSwitch } from "#/components/item-sharing.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import type { Scope } from "#/lib/api.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -120,7 +121,7 @@ export function NewRow({
 				/>
 				{scope && <ScopeSwitch compact value={scope.value} onChange={scope.onChange} />}
 			</div>
-			{error && <p className="px-2 pt-0.5 text-destructive text-xs">{error}</p>}
+			{error && <ErrorLine className="px-2 pt-0.5">{error}</ErrorLine>}
 		</div>
 	);
 }

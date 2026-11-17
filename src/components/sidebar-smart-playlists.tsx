@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { HiddenItems, ScopeMark } from "#/components/item-sharing.tsx";
 import { RowMenu } from "#/components/menu.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { AddButton } from "#/components/sidebar-create.tsx";
 import { GroupHeading } from "#/components/sidebar-parts.tsx";
 import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
@@ -106,7 +107,7 @@ export function SidebarSmartPlaylists() {
 				/>
 			)}
 			{sharing.dialogs}
-			{error && <p className="px-2 text-destructive text-xs">{String(error)}</p>}
+			{error && <ErrorLine className="px-2">{String(error)}</ErrorLine>}
 			{deleting && (
 				<ConfirmDialog
 					title={`Delete smart playlist “${deleting.name}”?`}

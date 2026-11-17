@@ -8,6 +8,7 @@ import {
 	ExportFooter,
 	HeldPlaylists,
 } from "#/components/export-chooser.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
@@ -30,7 +31,7 @@ const NOTHING: ReadonlySet<string> = new Set();
 function InFile() {
 	const library = useQuery({ queryKey: ["rekordbox-library"], queryFn: rekordboxLibrary });
 	if (library.isError) {
-		return <p className="text-destructive text-sm">{String(library.error)}</p>;
+		return <ErrorLine>{String(library.error)}</ErrorLine>;
 	}
 	if (library.isPending) {
 		return <p className="text-muted-foreground text-sm">Reading the file…</p>;

@@ -37,8 +37,8 @@ import {
 	DropChip,
 	DropHintBar,
 } from "#/components/drop-feedback.tsx";
-import { ErrorText } from "#/components/error-text.tsx";
 import { IssuePopover } from "#/components/issue-popover.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import type { UndoEntry } from "#/context/undo-context.ts";
@@ -800,12 +800,8 @@ export function EmptyNote({
 export function Banners({ error, listError }: { error: string | null; listError: string | null }) {
 	return (
 		<>
-			{error && (
-				<p className="border-b bg-destructive/10 px-3 py-1.5 text-destructive text-xs">{error}</p>
-			)}
-			{listError && (
-				<ErrorText className="px-3 py-2 text-destructive text-sm" message={listError} />
-			)}
+			{error && <ErrorLine className="border-b bg-destructive/10 px-3 py-1.5">{error}</ErrorLine>}
+			{listError && <ErrorLine className="px-3 py-2">{listError}</ErrorLine>}
 		</>
 	);
 }

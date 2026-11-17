@@ -1,5 +1,9 @@
+import { LoaderCircle, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 import { PageHeader, PageIcon } from "#/components/page-header.tsx";
+import { Button } from "#/components/ui/button.tsx";
+import { openPrivacySettings } from "#/lib/api.ts";
+import { describeError } from "#/lib/errors.ts";
 import { typeScale } from "#/lib/type-scale.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -120,7 +124,61 @@ export function EmptyState({
 	);
 }
 
-/** A failed action, in the place it happened. */
-export function ErrorLine({ children }: { children: ReactNode }) {
-	return <p className="text-destructive text-sm">{children}</p>;
+/** Start of the backend's message when macOS privacy settings block a folder. */
+const MACOS_BLOCKED_ACCESS = "macOS blocked access";
+
+/**
+ * A failed action, in the place it happened: what went wrong in plain words, then what to do.
+ * Text children are rewritten by `describeError`; `compact` keeps one line for rows and tables,
+ * with the full message on hover.
+ */
+export function ErrorLine({
+	children,
+	compact = false,
+	className,
+}: {
+	children: ReactNode;
+	compact?: boolean;
+	className?: string;
+}) {
+	const raw = typeof children === "string" ? children : null;
+	const { title, detail } = raw === null ? { title: children, detail: null } : describeError(raw);
+	const blockedByMacOs = raw?.includes(MACOS_BLOCKED_ACCESS) ?? false;
+	return (
+		<div
+			role="alert"
+			title={compact && raw !== null ? raw : undefined}
+			className={cn("flex min-w-0 items-start gap-2 text-destructive", className)}
+		>
+			<TriangleAlert className="mt-0.5 size-4 shrink-0" />
+			<div className="min-w-0 space-y-0.5">
+				<p className={cn("break-words text-sm", !compact && "font-medium", compact && "truncate")}>
+					{title}
+				</p>
+				{!compact && detail && (
+					<p className="break-words text-muted-foreground text-xs">{detail}</p>
+				)}
+				{!compact && blockedByMacOs && (
+					<Button
+						variant="outline"
+						size="sm"
+						className="mt-2"
+						onClick={() => openPrivacySettings()}
+					>
+						Open Privacy Settings
+					</Button>
+				)}
+			</div>
+		</div>
+	);
+}
+
+/** Something is being fetched or worked on. Say what, in the present tense. */
+export function LoadingLine({ children, className }: { children: ReactNode; className?: string }) {
+	return (
+		<output className={cn("flex items-center gap-2 text-muted-foreground text-sm", className)}>
+			<LoaderCircle className="size-4 shrink-0 animate-spin motion-reduce:animate-none" />
+			{children}
+		</output>
+	);
 }

@@ -2,6 +2,7 @@ import { RefreshCw, TriangleAlert, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Drawer } from "#/components/drawer.tsx";
 import type { FixNotice } from "#/components/library-health.tsx";
+import { ErrorLine, LoadingLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { type AuditIssue, confirmFix } from "#/lib/api.ts";
 import { describeFixes } from "#/lib/audit.ts";
@@ -118,9 +119,11 @@ function FileList({
 	onToggle: (path: string) => void;
 }) {
 	if (files.length === 0) {
-		return (
+		return loading ? (
+			<LoadingLine>Checking library…</LoadingLine>
+		) : (
 			<p className="text-muted-foreground text-sm">
-				{loading ? "Checking library…" : "No issues. The library follows its conventions."}
+				No issues. The library follows its conventions.
 			</p>
 		);
 	}
@@ -249,7 +252,7 @@ function IssuesBody() {
 	};
 
 	if (audit.isError) {
-		return <p className="text-destructive text-sm">{String(audit.error)}</p>;
+		return <ErrorLine>{String(audit.error)}</ErrorLine>;
 	}
 	return (
 		<div className="space-y-4">
@@ -285,7 +288,7 @@ function IssuesBody() {
 
 function ResultLine({ notice }: { notice: FixNotice }) {
 	if (notice.kind === "error") {
-		return <p className="text-destructive text-sm">{notice.message}</p>;
+		return <ErrorLine>{notice.message}</ErrorLine>;
 	}
 	const failed = notice.report.failed;
 	return (

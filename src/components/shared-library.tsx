@@ -1,10 +1,10 @@
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
-import { Loader2, Users } from "lucide-react";
+import { Users } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { ClashList } from "#/components/clashes.tsx";
 import { ConfirmDialog, Dialog } from "#/components/confirm-dialog.tsx";
 import { ScopeSwitch } from "#/components/item-sharing.tsx";
-import { ErrorLine, Panel, Section } from "#/components/page.tsx";
+import { ErrorLine, LoadingLine, Panel, Section } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	type FoundLibrary,
@@ -122,7 +122,7 @@ export function LeaveLibraryDialog({
 						</div>
 					)}
 					<div className="flex items-center justify-end gap-2">
-						{leave.isPending && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+						{leave.isPending && <LoadingLine>Leaving…</LoadingLine>}
 						<Button variant="ghost" onClick={onCancel}>
 							Cancel
 						</Button>
@@ -307,9 +307,7 @@ function LookDialog({
 	if (found.isPending || found.isFetching) {
 		return (
 			<Dialog title={`Looking in ${where}`} onCancel={onClose} footer={null}>
-				<span className="inline-flex items-center gap-2">
-					<Loader2 className="size-4 animate-spin" /> Checking for a shared library…
-				</span>
+				<LoadingLine>Checking for a shared library…</LoadingLine>
 			</Dialog>
 		);
 	}
@@ -350,11 +348,7 @@ function LookDialog({
 							onClick={onClose}
 						/>
 						{join.isError && <ErrorLine>{String(join.error)}</ErrorLine>}
-						{join.isPending && (
-							<span className="inline-flex items-center gap-2 text-muted-foreground text-xs">
-								<Loader2 className="size-4 animate-spin" /> Starting the library…
-							</span>
-						)}
+						{join.isPending && <LoadingLine>Starting the library…</LoadingLine>}
 					</div>
 				}
 			>
@@ -405,11 +399,7 @@ function LookDialog({
 						onClick={onClose}
 					/>
 					{join.isError && <ErrorLine>{String(join.error)}</ErrorLine>}
-					{join.isPending && (
-						<span className="inline-flex items-center gap-2 text-muted-foreground text-xs">
-							<Loader2 className="size-4 animate-spin" /> Joining and syncing…
-						</span>
-					)}
+					{join.isPending && <LoadingLine>Joining and syncing…</LoadingLine>}
 				</div>
 			}
 		>
@@ -434,11 +424,7 @@ function MemberList({ target }: { target: SyncTarget }) {
 		staleTime: 60_000,
 	});
 	if (found.isPending) {
-		return (
-			<p className="inline-flex items-center gap-2 text-muted-foreground text-xs">
-				<Loader2 className="size-3.5 animate-spin" /> Reading members…
-			</p>
-		);
+		return <LoadingLine>Reading members…</LoadingLine>;
 	}
 	if (found.isError || !found.data) {
 		return (

@@ -1,6 +1,7 @@
 import { Copy } from "lucide-react";
 import { useState } from "react";
 import { Drawer } from "#/components/drawer.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { type CarryCandidate, confirmTrash, type DuplicateGroup, fsReveal } from "#/lib/api.ts";
 import { extraCopies } from "#/lib/duplicates.ts";
@@ -52,7 +53,7 @@ function DuplicateList({ groups }: { groups: readonly DuplicateGroup[] }) {
 				them once. Keep one and move the others to the {TRASH}.
 			</p>
 			{(error ?? (trash.isError ? String(trash.error) : null)) && (
-				<p className="text-destructive text-sm">{error ?? String(trash.error)}</p>
+				<ErrorLine>{error ?? String(trash.error)}</ErrorLine>
 			)}
 			<ul className="space-y-4">
 				{groups.map((g) => (
@@ -113,7 +114,7 @@ function CarryList({ items }: { items: readonly CarryCandidate[] }) {
 				These songs have new audio (a re-encode, such as MP3 to FLAC), so the tags, playlists and
 				hand-set tempo of the old audio no longer point at them. Carry them over to keep them.
 			</p>
-			{decide.isError && <p className="text-destructive text-sm">{String(decide.error)}</p>}
+			{decide.isError && <ErrorLine>{String(decide.error)}</ErrorLine>}
 			<ul className="space-y-3">
 				{items.map((c) => (
 					<li key={c.oldFp} className="rounded-md border px-3 py-2">

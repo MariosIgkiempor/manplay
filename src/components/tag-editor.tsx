@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { CoverPicker } from "#/components/cover-picker.tsx";
-import { ErrorText } from "#/components/error-text.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
 import { PropertyRow } from "#/components/property-row.tsx";
 import { SaveState } from "#/components/save-state.tsx";
@@ -171,7 +171,7 @@ function Footer({
 		<>
 			<SaveState status={autosave.status} error={autosave.error} />
 			{notice && !notice.ok && (
-				<p className="border-t px-3 py-2.5 text-destructive text-xs">{notice.text}</p>
+				<ErrorLine className="border-t px-3 py-2.5">{notice.text}</ErrorLine>
 			)}
 		</>
 	);
@@ -263,7 +263,7 @@ function Body({
 		return <p className="p-4 text-muted-foreground text-sm">Reading metadata…</p>;
 	}
 	if (view.isError) {
-		return <ErrorText message={String(view.error)} className="p-4 text-destructive text-sm" />;
+		return <ErrorLine className="p-4">{String(view.error)}</ErrorLine>;
 	}
 	if (view.data.count === 0) {
 		return (

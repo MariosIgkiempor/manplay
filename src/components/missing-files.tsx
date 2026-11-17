@@ -1,5 +1,6 @@
 import { TriangleAlert } from "lucide-react";
 import { Drawer } from "#/components/drawer.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { timeAgo } from "#/lib/format.ts";
 import { useLibraryStatus, useMissingTracks, useRemoveMissing } from "#/lib/queries.ts";
@@ -26,7 +27,7 @@ export function MissingIndicator({ onClick }: { onClick: () => void }) {
 function MissingList() {
 	const missing = useMissingTracks(true);
 	if (missing.isError) {
-		return <p className="text-destructive text-sm">{String(missing.error)}</p>;
+		return <ErrorLine>{String(missing.error)}</ErrorLine>;
 	}
 	if (!missing.data) {
 		return <p className="text-muted-foreground text-sm">Loading…</p>;
@@ -81,7 +82,7 @@ function MissingBody({ onEmpty }: { onEmpty: () => void }) {
 			>
 				Remove now
 			</Button>
-			{remove.isError && <p className="text-destructive text-sm">{String(remove.error)}</p>}
+			{remove.isError && <ErrorLine>{String(remove.error)}</ErrorLine>}
 			<MissingList />
 		</div>
 	);

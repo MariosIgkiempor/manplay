@@ -6,6 +6,7 @@ import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { HiddenItems, ScopeMark } from "#/components/item-sharing.tsx";
 import { RowMenu } from "#/components/menu.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
 import { GroupHeading, RowCount } from "#/components/sidebar-parts.tsx";
 import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
@@ -213,7 +214,7 @@ export function SidebarPlaylists() {
 				/>
 			)}
 			{sharing.dialogs}
-			{error && <p className="px-2 text-destructive text-xs">{String(error)}</p>}
+			{error && <ErrorLine className="px-2">{String(error)}</ErrorLine>}
 			{deleting && (
 				<ConfirmDialog
 					title={`Delete playlist “${deleting.name}”?`}

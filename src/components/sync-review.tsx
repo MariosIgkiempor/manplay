@@ -9,6 +9,7 @@ import {
 	TONE,
 	type Tone,
 } from "#/components/diff-view.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { TagDiffInline } from "#/components/tag-diff.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { formatBytes } from "#/lib/format.ts";
@@ -258,9 +259,9 @@ export function PushList({
 	return (
 		<div>
 			{plan.error && (
-				<p className="mx-[var(--diff-inset,0)] my-3 break-words rounded-md border border-destructive/30 bg-destructive/5 p-3 text-destructive text-sm">
+				<ErrorLine className="mx-[var(--diff-inset,0)] my-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
 					{plan.error}
-				</p>
+				</ErrorLine>
 			)}
 			{!plan.error && plan.actions.length === 0 && (
 				<p className="px-[var(--diff-inset,0)] py-3 text-muted-foreground text-sm">Up to date</p>

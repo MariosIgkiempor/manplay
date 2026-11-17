@@ -1,6 +1,7 @@
 import { Popover } from "@base-ui/react/popover";
 import { TriangleAlert, Wrench } from "lucide-react";
 import { useState } from "react";
+import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { cardFor, type IssueIndex, type PlaceDefaults } from "#/lib/audit.ts";
@@ -108,7 +109,7 @@ function PlaceForm({
 				aria-label="Album"
 				onChange={(ev) => setAlbum(ev.target.value)}
 			/>
-			{place.isError && <p className="text-destructive text-xs">{String(place.error)}</p>}
+			{place.isError && <ErrorLine>{String(place.error)}</ErrorLine>}
 			<Button type="submit" size="sm" className="w-full" disabled={!ready || place.isPending}>
 				{place.isPending ? "Moving…" : "Create folder and move"}
 			</Button>

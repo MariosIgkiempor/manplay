@@ -9,6 +9,7 @@ import {
 	useState,
 } from "react";
 import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { PullList } from "#/components/pull-review.tsx";
 import { IncomingList } from "#/components/sync-incoming.tsx";
 import { SyncResult } from "#/components/sync-result.tsx";
@@ -212,6 +213,9 @@ interface Ui {
 
 /** What a destination's pull holds: songs the library lacks and songs edited over there. */
 function PullSummary({ t }: { t: Row }) {
+	if (t.pullError !== null) {
+		return <span className="text-destructive text-sm">Could not check</span>;
+	}
 	if (t.missing.length + t.incoming.length === 0) {
 		return <span className="text-muted-foreground text-sm">Nothing to pull</span>;
 	}
@@ -319,8 +323,13 @@ function TargetBlock({
 					</span>
 				</div>
 			)}
-			{t.pullError && (
-				<p className="break-words px-[var(--diff-inset)] text-destructive text-sm">{t.pullError}</p>
+			{[...new Set([t.pullError, t.plan.error])].map(
+				(message) =>
+					message && (
+						<ErrorLine key={message} className="px-[var(--diff-inset)] py-2">
+							{message}
+						</ErrorLine>
+					),
 			)}
 			<Section
 				icon={<Download />}
@@ -371,7 +380,7 @@ function TargetBlock({
 				onOpen={() => toggleOpen("push")}
 				summary={
 					t.plan.error ? (
-						<span className="break-words text-destructive text-sm">{t.plan.error}</span>
+						<span className="text-destructive text-sm">Could not check</span>
 					) : t.pushActions.length === 0 ? (
 						<span className="text-muted-foreground text-sm">Up to date</span>
 					) : (
@@ -470,7 +479,7 @@ function notReady({
 		return (
 			<SyncShell variant={variant}>
 				<div className="space-y-3 px-[var(--diff-inset)] py-4">
-					<p className="break-words text-destructive text-sm">{error}</p>
+					<ErrorLine>{error}</ErrorLine>
 					<Button variant="outline" className="w-full" onClick={onRefresh}>
 						Try again
 					</Button>

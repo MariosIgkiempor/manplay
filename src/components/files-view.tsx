@@ -5,6 +5,7 @@ import { FilesHeader } from "#/components/files-header.tsx";
 import { FilesSourcePicker } from "#/components/files-source-picker.tsx";
 import { type FixNotice, HealthBar } from "#/components/library-health.tsx";
 import { NoticeBar } from "#/components/notice-bar.tsx";
+import { LoadingLine } from "#/components/page.tsx";
 import { RemotePane } from "#/components/remote-pane.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TagCopyDialog } from "#/components/tag-copy-dialog.tsx";
@@ -138,9 +139,11 @@ async function pasteTagsOnto(
 function NoFolderNote({ loaded }: { loaded: boolean }) {
 	return (
 		<div className="p-6">
-			<p className="text-muted-foreground text-sm">
-				{loaded ? "Choose a library folder in Library first." : "Loading…"}
-			</p>
+			{loaded ? (
+				<p className="text-muted-foreground text-sm">Choose a library folder in Library first.</p>
+			) : (
+				<LoadingLine>Loading…</LoadingLine>
+			)}
 		</div>
 	);
 }

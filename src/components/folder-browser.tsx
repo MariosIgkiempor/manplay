@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Folder } from "lucide-react";
+import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { driveList } from "#/lib/api.ts";
 
@@ -46,7 +47,7 @@ export function FolderBrowser({ tailnet, machine, path, setPath, onPick, picking
 					Sync to this folder
 				</Button>
 			</div>
-			{entries.isError && <p className="text-destructive text-sm">{String(entries.error)}</p>}
+			{entries.isError && <ErrorLine>{String(entries.error)}</ErrorLine>}
 			<ul className="grid gap-1 sm:grid-cols-2">
 				{dirs.map((e) => (
 					<li key={e.name}>

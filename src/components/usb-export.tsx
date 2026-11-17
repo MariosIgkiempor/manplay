@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Drawer } from "#/components/drawer.tsx";
-import { ErrorText } from "#/components/error-text.tsx";
 import {
 	type ChooserTab,
 	ExportChooser,
@@ -20,6 +19,7 @@ import {
 	type HeldPlaylist,
 	HeldPlaylists,
 } from "#/components/export-chooser.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ButtonGroup } from "#/components/ui/button-group.tsx";
 import { type PlaylistSource, Review, ReviewCounts } from "#/components/usb-review.tsx";
@@ -324,10 +324,9 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 				)}
 			</dl>
 			{report.oneLibraryError && (
-				<p className="text-destructive text-xs">
-					The OneLibrary for the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo could not be written, so
-					the old one was removed: {report.oneLibraryError}
-				</p>
+				<ErrorLine>
+					{`The OneLibrary for the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo could not be written, so the old one was removed: ${report.oneLibraryError}`}
+				</ErrorLine>
 			)}
 			{report.failed.length > 0 && (
 				<div className="space-y-1">
@@ -734,8 +733,8 @@ export function UsbExportButton({
 							<SpaceMeter drive={drive} adding={x.run.isSuccess ? 0 : x.estimate.bytes} />
 						</div>
 						<Body x={x} onLeave={close} />
-						{x.review.isError && <ErrorText message={String(x.review.error)} />}
-						{x.run.isError && <ErrorText message={String(x.run.error)} />}
+						{x.review.isError && <ErrorLine>{String(x.review.error)}</ErrorLine>}
+						{x.run.isError && <ErrorLine>{String(x.run.error)}</ErrorLine>}
 					</div>
 					<Footer x={x} onClose={close} />
 				</div>

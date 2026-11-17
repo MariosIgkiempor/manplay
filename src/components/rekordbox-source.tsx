@@ -1,8 +1,8 @@
 import { Copy, FileCode, FolderOpen, History, Settings2, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { DestinationHeader, SettingLabel } from "#/components/destination-header.tsx";
-import { ErrorText } from "#/components/error-text.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { RekordboxExportButton } from "#/components/rekordbox-view.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
@@ -181,7 +181,7 @@ export function RekordboxPanel() {
 					/>
 				}
 			/>
-			{data?.error && <ErrorText message={data.error} />}
+			{data?.error && <ErrorLine>{data.error}</ErrorLine>}
 			<MutationErrors mutations={[choose, stop]} />
 			{tab === "history" ? (
 				<HistoryList

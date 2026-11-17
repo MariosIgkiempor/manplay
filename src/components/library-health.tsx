@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { ErrorText } from "#/components/error-text.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import type { FixReport } from "#/lib/api.ts";
 
@@ -26,12 +26,7 @@ export function HealthBar({ error, notice, onDismiss }: BarProps) {
 	}
 	return (
 		<div className="border-b text-sm">
-			{error && (
-				<ErrorText
-					className="bg-destructive/10 px-3 py-1.5 text-destructive text-xs"
-					message={error}
-				/>
-			)}
+			{error && <ErrorLine className="bg-destructive/10 px-3 py-1.5">{error}</ErrorLine>}
 			{notice && <Notice notice={notice} onDismiss={onDismiss} />}
 		</div>
 	);

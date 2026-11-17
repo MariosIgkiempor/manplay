@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, FileAudio, FolderOpen, Music, RefreshCw, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { DestinationHeader, FolderFigure, SettingLabel } from "#/components/destination-header.tsx";
-import { ErrorText } from "#/components/error-text.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { PlacePage } from "#/components/place-page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
@@ -152,7 +152,7 @@ export function ItunesPanel() {
 						}
 					/>
 					{root.data === null && (
-						<ErrorText message="Choose your library folder first (Library page)." />
+						<ErrorLine>Choose your library folder first (Library page).</ErrorLine>
 					)}
 					<MutationErrors mutations={[choose, stop, run]} />
 				</>

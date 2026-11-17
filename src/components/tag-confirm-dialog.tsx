@@ -1,6 +1,7 @@
 import { useQueries } from "@tanstack/react-query";
 import { ChevronRight, Tags } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
+import { ErrorLine } from "#/components/page.tsx";
 import { TagChanges, TagRow } from "#/components/tag-diff.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { tagsPreview } from "#/lib/api.ts";
@@ -118,7 +119,7 @@ function Body({
 	files: FileChanges[];
 }) {
 	if (error) {
-		return <p className="text-destructive">{String(error)}</p>;
+		return <ErrorLine>{String(error)}</ErrorLine>;
 	}
 	if (loading) {
 		return (

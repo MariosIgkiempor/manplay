@@ -3,6 +3,7 @@ import { ListMusic, Sparkles, Tag, TriangleAlert } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { type Clash, clashCombinePreview, type ItemKind, resolveClash } from "#/lib/api.ts";
 import { useClashes, useRefreshItems } from "#/lib/queries.ts";
@@ -67,9 +68,7 @@ function CombineDialog({
 					? `Your local smart playlist is replaced by the shared one, which keeps its rules.`
 					: `${songs(data.songs)} from your local ${word} become visible to everyone on the destination. The shared ${word} keeps the name and your local one goes away.`
 				: `The two ${word}s become one for everyone on the destination, with the songs of both.`}
-			{combine.isError && (
-				<p className="mt-2 break-words text-destructive">{String(combine.error)}</p>
-			)}
+			{combine.isError && <ErrorLine className="mt-2">{String(combine.error)}</ErrorLine>}
 		</ConfirmDialog>
 	);
 }
@@ -149,9 +148,7 @@ function ClashRow({ clash, onDone }: { clash: Clash; onDone: () => Promise<void>
 					}}
 				/>
 			))}
-			{rename.isError && (
-				<p className="break-words text-destructive text-sm">{String(rename.error)}</p>
-			)}
+			{rename.isError && <ErrorLine>{String(rename.error)}</ErrorLine>}
 			{combining && (
 				<CombineDialog clash={clash} onClose={() => setCombining(false)} onDone={onDone} />
 			)}

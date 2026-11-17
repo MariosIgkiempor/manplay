@@ -23,10 +23,9 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
-import { ErrorText } from "#/components/error-text.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
-import { EmptyState, Page } from "#/components/page.tsx";
+import { EmptyState, ErrorLine, Page } from "#/components/page.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -381,7 +380,7 @@ function Notices({
 					{notice.text}
 				</p>
 			)}
-			{error != null && <ErrorText message={String(error)} className="text-destructive text-sm" />}
+			{error != null && <ErrorLine>{String(error)}</ErrorLine>}
 		</>
 	);
 }

@@ -11,6 +11,7 @@ import {
 	type Tone,
 } from "#/components/diff-view.tsx";
 import { FailureList } from "#/components/failure-list.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	onPullProgress,
@@ -126,7 +127,7 @@ export function PullReview({ targetId, onDone }: { targetId: number; onDone: () 
 	if (scan.isError) {
 		return (
 			<div className="space-y-3">
-				<p className="text-destructive text-sm">{String(scan.error)}</p>
+				<ErrorLine>{String(scan.error)}</ErrorLine>
 				<Button variant="outline" className="w-full" onClick={onDone}>
 					Skip
 				</Button>
@@ -401,8 +402,8 @@ function Picker({
 			</div>
 
 			<div className={REVIEW_FOOTER}>
-				{verify.isError && <p className="text-destructive text-sm">{String(verify.error)}</p>}
-				{pull.isError && <p className="text-destructive text-sm">{String(pull.error)}</p>}
+				{verify.isError && <ErrorLine>{String(verify.error)}</ErrorLine>}
+				{pull.isError && <ErrorLine>{String(pull.error)}</ErrorLine>}
 				<div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
 					<Tally
 						items={[{ tone: "add", label: "to pull", count: chosen.length }]}

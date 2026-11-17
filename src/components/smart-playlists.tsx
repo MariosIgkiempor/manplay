@@ -20,8 +20,8 @@ import {
 } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { LinkButton } from "#/components/check-list.tsx";
-import { ErrorText } from "#/components/error-text.tsx";
 import { LocalTagsDialog } from "#/components/item-sharing.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { Picker, type PickerOption } from "#/components/picker.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -172,7 +172,7 @@ export function SmartPicker({
 					</div>
 				)}
 			</div>
-			{list.isError && <ErrorText message={String(list.error)} />}
+			{list.isError && <ErrorLine>{String(list.error)}</ErrorLine>}
 			{all.length > 0 && (
 				<div className="max-h-72 space-y-0.5 overflow-y-auto rounded-lg border bg-background p-1">
 					{all.map((p) => (
@@ -212,7 +212,7 @@ export function SmartPicker({
 			>
 				<Plus /> New smart playlist
 			</Button>
-			{create.isError && <ErrorText message={String(create.error)} />}
+			{create.isError && <ErrorLine>{String(create.error)}</ErrorLine>}
 		</div>
 	);
 }
@@ -895,7 +895,7 @@ export function SmartRulesEditor({ playlist }: { playlist: SmartPlaylist }) {
 			</div>
 			<TagSection rules={rules} setRules={(next) => void change(next)} />
 			<FilterSection rules={rules} setRules={setRules} />
-			{preview.isError && <ErrorText message={String(preview.error)} />}
+			{preview.isError && <ErrorLine>{String(preview.error)}</ErrorLine>}
 			{asking && (
 				<LocalTagsDialog
 					title={`“${playlist.name}” is shared. Use local tags in it?`}
@@ -905,7 +905,7 @@ export function SmartRulesEditor({ playlist }: { playlist: SmartPlaylist }) {
 					onConfirm={(choices) => void settle(choices)}
 				/>
 			)}
-			{askError && <ErrorText message={askError} />}
+			{askError && <ErrorLine>{askError}</ErrorLine>}
 		</div>
 	);
 }
