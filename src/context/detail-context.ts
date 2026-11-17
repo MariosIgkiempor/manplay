@@ -1,9 +1,5 @@
 import { type ComponentType, createContext, type ReactNode, useCallback, useContext } from "react";
 import type { TagTarget } from "#/components/tag-editor.tsx";
-import type { ServiceId } from "#/lib/api.ts";
-
-/** Kinds of export destination. */
-export type DestinationService = "tailscale" | "r2" | "rekordbox" | "usb";
 
 /** The two tabs of a song's view. */
 export type SongTab = "grid" | "metadata";
@@ -16,13 +12,6 @@ export type DetailView =
 	| { kind: "artist"; name: string }
 	/** Tag editor for several songs (a selection or a value's songs). */
 	| { kind: "edit"; target: TagTarget }
-	| { kind: "service"; service: ServiceId }
-	/** One Tailscale or R2 export destination. */
-	| { kind: "target"; id: number }
-	/** A plugged-in CDJ USB drive and the rekordbox library on it. */
-	| { kind: "usb"; mount: string }
-	/** Adding an export destination; without `service`, the step that picks one. */
-	| { kind: "add-destination"; service?: DestinationService }
 	/** Songs holding one value of a tag field, e.g. every song in the genre "House". */
 	| { kind: "value"; field: string; value: string };
 

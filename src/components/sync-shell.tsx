@@ -1,17 +1,20 @@
 import type { ReactNode } from "react";
 import { cn } from "#/lib/utils.ts";
 
+/** Where a sync screen is shown: the slide-over, or a destination's own page. */
+export type SyncShellVariant = "drawer" | "page";
+
 /**
  * The frame of every sync screen: a scrolling area with a footer under it that never scrolls and
- * runs to the edges of its container, border included. `panel` is the destination panel, which
- * pads its content by 1.25rem; `drawer` is the slide-over, which gives its content all the room.
+ * runs to the edges of its container, border included. `page` is a destination's page, whose
+ * content lines up with the page header's 1.5rem padding; `drawer` is the slide-over.
  */
 export function SyncShell({
 	variant,
 	footer,
 	children,
 }: {
-	variant: "drawer" | "panel";
+	variant: SyncShellVariant;
 	footer?: ReactNode;
 	children: ReactNode;
 }) {
@@ -19,7 +22,7 @@ export function SyncShell({
 		<div
 			className={cn(
 				"flex h-full min-h-0 flex-col [--sync-top:0px]",
-				variant === "panel" ? "-mx-5 [--diff-inset:1.25rem]" : "[--diff-inset:1rem]",
+				variant === "page" ? "[--diff-inset:1.5rem]" : "[--diff-inset:1rem]",
 			)}
 		>
 			<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>

@@ -1,5 +1,14 @@
-import { Link } from "@tanstack/react-router";
-import { CloudUpload, Download, FolderOpen, RefreshCw, TriangleAlert, Upload } from "lucide-react";
+import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
+import {
+	Check,
+	CloudUpload,
+	Download,
+	FolderOpen,
+	Loader2,
+	RefreshCw,
+	TriangleAlert,
+	Upload,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { useDownloadsEnabled } from "#/components/downloads-source.tsx";
@@ -7,12 +16,13 @@ import { useItunesOn } from "#/components/itunes-source.tsx";
 import { AddButton } from "#/components/sidebar-create.tsx";
 import { GroupHeading, SectionLabel } from "#/components/sidebar-parts.tsx";
 import { CHILD_INDENT, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
-import { type DetailView, useDetail } from "#/context/detail-context.ts";
 import { type SyncKind, useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { isR2 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
-import { useClashes, useSyncTargets } from "#/lib/queries.ts";
+import { useClashes, useItunesPending, useSyncScans, useSyncTargets } from "#/lib/queries.ts";
+import { type DestinationStatus, destinationStatus } from "#/lib/sync-status.ts";
+import { useDownloadsNewCount } from "#/lib/use-import.ts";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
@@ -51,7 +61,7 @@ function QuickActions() {
 	);
 }
 
-/** A source or destination: opens in the side panel without leaving the page you are on. */
+/** A source or destination: opens its page. */
 function ChildRow({
 	brand,
 	label,
@@ -106,39 +116,119 @@ function ChildRow({
 	);
 }
 
-const isView = (view: DetailView | null, match: DetailView) =>
-	view !== null && JSON.stringify(view) === JSON.stringify(match);
+/** Songs waiting to be imported, as a count after the source's name. */
+function PendingCount({ count, what }: { count: number | null; what: string }) {
+	if (count === null || count === 0) {
+		return null;
+	}
+	return (
+		<span
+			title={`${count.toLocaleString()} ${what}`}
+			className="rounded-full bg-primary/15 px-1.5 py-px font-medium text-[10px] text-primary leading-4"
+		>
+			{count.toLocaleString()}
+		</span>
+	);
+}
 
 function ImportItems() {
-	const detail = useDetail();
+	const navigate = useNavigate();
+	const matchRoute = useMatchRoute();
 	const downloads = useDownloadsEnabled().enabled;
+	const downloadsNew = useDownloadsNewCount(downloads);
 	const itunes = useItunesOn();
-	const rows: { service: "downloads" | "itunes"; brand: Brand; label: string; on: boolean }[] = [
-		{ service: "downloads", brand: "downloads", label: "Downloads", on: downloads },
-		{ service: "itunes", brand: "itunes", label: "iTunes", on: itunes },
-	];
+	const itunesPending = useItunesPending(itunes).data?.length ?? null;
+	const rows = [
+		{
+			to: "/import/downloads",
+			brand: "downloads",
+			label: "Downloads",
+			on: downloads,
+			pending: <PendingCount count={downloadsNew} what="new songs found" />,
+		},
+		{
+			to: "/import/itunes",
+			brand: "itunes",
+			label: "iTunes",
+			on: itunes,
+			pending: <PendingCount count={itunesPending} what="songs not imported yet" />,
+		},
+	] as const satisfies readonly {
+		to: "/import/downloads" | "/import/itunes";
+		brand: Brand;
+		label: string;
+		on: boolean;
+		pending: ReactNode;
+	}[];
 	return (
 		<>
-			{rows.map((r) => {
-				const view: DetailView = { kind: "service", service: r.service };
-				return (
-					<ChildRow
-						key={r.service}
-						brand={r.brand}
-						label={r.label}
-						active={isView(detail.view, view)}
-						dim={!r.on}
-						trailing={r.on ? undefined : "Off"}
-						onOpen={() => detail.open(view)}
-					/>
-				);
-			})}
+			{rows.map((r) => (
+				<ChildRow
+					key={r.to}
+					brand={r.brand}
+					label={r.label}
+					active={Boolean(matchRoute({ to: r.to }))}
+					dim={!r.on}
+					trailing={r.on ? r.pending : "Off"}
+					onOpen={() => void navigate({ to: r.to })}
+				/>
+			))}
 		</>
 	);
 }
 
+const SCAN_TEXT: Record<DestinationStatus["kind"], string> = {
+	scanning: "Reading the destination…",
+	waiting: "Waiting to be read",
+	error: "Could not be read",
+	upToDate: "Up to date",
+	changes: "Changes to sync",
+};
+
+/** How the destination compares with the library, from its last background read. */
+function ScanIndicator({ status }: { status: DestinationStatus | null }) {
+	if (status === null || status.kind === "waiting") {
+		return null;
+	}
+	if (status.kind === "scanning") {
+		return (
+			<Loader2
+				role="img"
+				aria-label={SCAN_TEXT.scanning}
+				className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none"
+			/>
+		);
+	}
+	if (status.kind === "error") {
+		return (
+			<span role="img" aria-label={`${SCAN_TEXT.error}: ${status.message}`} title={status.message}>
+				<TriangleAlert className="size-3 text-destructive" />
+			</span>
+		);
+	}
+	if (status.kind === "upToDate") {
+		return (
+			<span role="img" aria-label={SCAN_TEXT.upToDate} title={SCAN_TEXT.upToDate}>
+				<Check className="size-3 text-success" />
+			</span>
+		);
+	}
+	const parts = [
+		status.toPull > 0 && `${status.toPull.toLocaleString()} to pull`,
+		status.toPush > 0 && `${status.toPush.toLocaleString()} to push`,
+	].filter(Boolean);
+	return (
+		<span title={parts.join(", ")} className="flex items-center gap-1 text-[11px] tabular-nums">
+			{status.toPull > 0 && <span className="text-success">↓{status.toPull.toLocaleString()}</span>}
+			{status.toPush > 0 && <span className="text-primary">↑{status.toPush.toLocaleString()}</span>}
+		</span>
+	);
+}
+
 function ExportItems() {
-	const detail = useDetail();
+	const navigate = useNavigate();
+	const matchRoute = useMatchRoute();
+	const scans = useSyncScans().data;
 	const targets = useSyncTargets().data ?? [];
 	const drives = useUsbDrives().data ?? [];
 	const rekordbox = useRekordbox().status.data;
@@ -147,17 +237,17 @@ function ExportItems() {
 	return (
 		<>
 			{targets.map((t) => {
-				const view: DetailView = { kind: "target", id: t.id };
+				const status = destinationStatus(scans, t.id);
 				return (
 					<ChildRow
 						key={t.id}
 						brand={isR2(t) ? "cloudflare" : "tailscale"}
 						label={t.machine}
 						title={`${t.machine}: ${t.path.join(" / ") || "bucket root"}`}
-						active={isView(detail.view, view)}
+						active={Boolean(matchRoute({ to: "/export/$targetId", params: { targetId: t.id } }))}
 						browse={t.id}
 						trailing={
-							(t.libsync || syncing.has(t.id)) && (
+							(t.libsync || syncing.has(t.id) || status !== null) && (
 								<span className="flex items-center gap-1.5">
 									{t.libsync && (
 										<span
@@ -167,17 +257,19 @@ function ExportItems() {
 											Shared
 										</span>
 									)}
-									{syncing.has(t.id) && (
+									{syncing.has(t.id) ? (
 										<span
 											role="img"
 											aria-label="Syncing"
 											className="block size-2 animate-pulse rounded-full bg-primary"
 										/>
+									) : (
+										<ScanIndicator status={status} />
 									)}
 								</span>
 							)
 						}
-						onOpen={() => detail.open(view)}
+						onOpen={() => void navigate({ to: "/export/$targetId", params: { targetId: t.id } })}
 					/>
 				);
 			})}
@@ -186,8 +278,8 @@ function ExportItems() {
 					brand="rekordbox"
 					label="Rekordbox XML"
 					title={rekordbox.path}
-					active={isView(detail.view, { kind: "service", service: "rekordbox" })}
-					onOpen={() => detail.open({ kind: "service", service: "rekordbox" })}
+					active={Boolean(matchRoute({ to: "/export/rekordbox" }))}
+					onOpen={() => void navigate({ to: "/export/rekordbox" })}
 				/>
 			)}
 			{drives.map((d) => (
@@ -196,9 +288,9 @@ function ExportItems() {
 					brand="usb"
 					label={d.name}
 					title={`${d.name}, ${formatBytes(d.freeBytes)} free`}
-					active={isView(detail.view, { kind: "usb", mount: d.mount })}
+					active={Boolean(matchRoute({ to: "/export/usb", search: { mount: d.mount } }))}
 					trailing={formatBytes(d.freeBytes)}
-					onOpen={() => detail.open({ kind: "usb", mount: d.mount })}
+					onOpen={() => void navigate({ to: "/export/usb", search: { mount: d.mount } })}
 				/>
 			))}
 		</>
@@ -232,10 +324,10 @@ function ClashesRow() {
 
 /**
  * Import and Export with their sources and destinations folded under them, and pull, push and
- * sync on the heading. Choosing a source or destination opens it in the side panel.
+ * sync on the heading. Choosing a source or destination opens its page.
  */
 export function SidebarSync() {
-	const detail = useDetail();
+	const navigate = useNavigate();
 	const [importClosed, setImportClosed] = useStoredFlag("manplay.sidebar.importClosed");
 	const [exportClosed, setExportClosed] = useStoredFlag("manplay.sidebar.exportClosed");
 	return (
@@ -259,7 +351,7 @@ export function SidebarSync() {
 				action={
 					<AddButton
 						label="Add destination"
-						onClick={() => detail.open({ kind: "add-destination" })}
+						onClick={() => void navigate({ to: "/export/add", search: {} })}
 						className={HOVER_ACTION}
 					/>
 				}

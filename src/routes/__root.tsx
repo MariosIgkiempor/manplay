@@ -7,6 +7,7 @@ import { DuplicatesIndicator } from "#/components/duplicates.tsx";
 import { IssuesIndicator } from "#/components/issues-drawer.tsx";
 import { MissingIndicator } from "#/components/missing-files.tsx";
 import { StatusBarHost, StatusScopeProvider } from "#/components/status-bar.tsx";
+import { SyncScanEvents } from "#/components/sync-scan-events.tsx";
 import { StatusSlotContext } from "#/context/detail-context.ts";
 import { DetailProvider } from "#/context/detail-provider.tsx";
 import { PlayerProvider } from "#/context/player-provider.tsx";
@@ -52,6 +53,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 											<StatusSlotContext.Provider value={statusSlot}>
 												<SaveSlotContext.Provider value={saveSlot}>
 													<AutoRefresh />
+													<SyncScanEvents />
 													<Shell
 														missingOpen={missingOpen}
 														issuesOpen={issuesOpen}

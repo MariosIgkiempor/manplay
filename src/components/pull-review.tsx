@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Download, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
@@ -19,11 +19,11 @@ import {
 	type PullProgress,
 	type RemoteFile,
 	remotePull,
-	remoteScan,
 	remoteVerify,
 	type Verified,
 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
+import { useTargetScan } from "#/lib/queries.ts";
 
 const key = (f: RemoteFile) => f.rel.join("/");
 const dirOf = (f: RemoteFile) => f.rel.slice(0, -1).join("/") || "(top level)";
@@ -113,32 +113,30 @@ function PullResult({ outcome: r, onDone }: { outcome: PullOutcome; onDone: () =
 /**
  * Shown right after a destination is added: lists audio files that already sit on the
  * destination but are missing from the library, and lets the user pull them in before the first sync.
+ * Adding the destination queued its first background read; this waits for it.
  */
 export function PullReview({ targetId, onDone }: { targetId: number; onDone: () => void }) {
-	const scan = useQuery({
-		queryKey: ["remote-scan", targetId],
-		queryFn: () => remoteScan(targetId),
-		gcTime: 0,
-		retry: false,
-	});
-	if (scan.isPending) {
+	const read = useTargetScan(targetId);
+	const error = read.isError ? String(read.error) : (read.data?.pull.error ?? null);
+	if (error === null && !read.data) {
 		return <p className="py-6 text-center text-muted-foreground text-sm">Checking the folder…</p>;
 	}
-	if (scan.isError) {
+	if (error !== null || !read.data) {
 		return (
 			<div className="space-y-3">
-				<ErrorLine>{String(scan.error)}</ErrorLine>
+				<ErrorLine>{error}</ErrorLine>
 				<Button variant="outline" className="w-full" onClick={onDone}>
 					Skip
 				</Button>
 			</div>
 		);
 	}
-	if (scan.data.missing.length === 0) {
+	const scan = read.data.pull;
+	if (scan.missing.length === 0) {
 		return (
 			<Notice
 				text={
-					scan.data.total === 0
+					scan.total === 0
 						? "The folder is empty. The first sync will fill it."
 						: "Your library already has every audio file in this folder."
 				}
@@ -146,7 +144,7 @@ export function PullReview({ targetId, onDone }: { targetId: number; onDone: () 
 			/>
 		);
 	}
-	return <Picker targetId={targetId} missing={scan.data.missing} onDone={onDone} />;
+	return <Picker targetId={targetId} missing={scan.missing} onDone={onDone} />;
 }
 
 const filterFiles = (files: RemoteFile[], needle: string) =>

@@ -7,7 +7,7 @@ import { EmptyState, Page, Section } from "#/components/page.tsx";
 import { typeScale } from "#/lib/type-scale.ts";
 import { useImport } from "#/lib/use-import.ts";
 
-export const Route = createFileRoute("/import")({ component: ImportPage });
+export const Route = createFileRoute("/import/")({ component: ImportPage });
 
 function ImportPage() {
 	const { enabled } = useDownloadsEnabled();

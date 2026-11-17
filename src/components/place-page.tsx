@@ -5,6 +5,34 @@ import { Segmented } from "#/components/view-toggle.tsx";
 import { cn } from "#/lib/utils.ts";
 
 /**
+ * A source's or destination's page: its header across the top, and what is under it filling the
+ * rest. By default the rest scrolls inside the page's width; `fill` hands it all the room, for
+ * screens with their own scrolling and pinned footer (a sync review, a drive's library browser).
+ */
+export function PlaceFrame({
+	header,
+	children,
+	fill = false,
+}: {
+	header: ReactNode;
+	children: ReactNode;
+	fill?: boolean;
+}) {
+	return (
+		<main className="flex h-full min-h-0 flex-col">
+			{header}
+			{fill ? (
+				<div className="min-h-0 flex-1">{children}</div>
+			) : (
+				<div className="min-h-0 flex-1 overflow-y-auto">
+					<div className="mx-auto w-full max-w-5xl space-y-5 px-6 pt-6 pb-10">{children}</div>
+				</div>
+			)}
+		</main>
+	);
+}
+
+/**
  * Body of a source or destination page under its header: History and Settings tabs. A switched-off
  * source shows both faded and out of reach until it is switched back on.
  */
@@ -22,8 +50,8 @@ export function PlacePage({
 }) {
 	const [tab, setTab] = useState<PlaceTab>("history");
 	return (
-		<div className="space-y-5 pb-6">
-			{header(
+		<PlaceFrame
+			header={header(
 				<Segmented
 					className="border-b-0"
 					value={tab}
@@ -35,9 +63,10 @@ export function PlacePage({
 					]}
 				/>,
 			)}
+		>
 			<div className={cn(!enabled && "opacity-50")} inert={!enabled}>
 				{tab === "history" ? history : settings}
 			</div>
-		</div>
+		</PlaceFrame>
 	);
 }

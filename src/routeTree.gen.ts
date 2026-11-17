@@ -11,11 +11,17 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DeletedRouteImport } from './routes/deleted'
-import { Route as ExportRouteImport } from './routes/export'
 import { Route as FilesRouteImport } from './routes/files'
-import { Route as ImportRouteImport } from './routes/import'
 import { Route as MetadataRouteImport } from './routes/metadata'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as ExportIndexRouteImport } from './routes/export.index'
+import { Route as ExportTargetIdRouteImport } from './routes/export.$targetId'
+import { Route as ExportAddRouteImport } from './routes/export.add'
+import { Route as ExportRekordboxRouteImport } from './routes/export.rekordbox'
+import { Route as ExportUsbRouteImport } from './routes/export.usb'
+import { Route as ImportIndexRouteImport } from './routes/import.index'
+import { Route as ImportDownloadsRouteImport } from './routes/import.downloads'
+import { Route as ImportItunesRouteImport } from './routes/import.itunes'
 import { Route as PlaylistsIdRouteImport } from './routes/playlists.$id'
 import { Route as SmartIdRouteImport } from './routes/smart.$id'
 import { Route as TagsSplatRouteImport } from './routes/tags.$'
@@ -30,19 +36,9 @@ const DeletedRoute = DeletedRouteImport.update({
   path: '/deleted',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ExportRoute = ExportRouteImport.update({
-  id: '/export',
-  path: '/export',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const FilesRoute = FilesRouteImport.update({
   id: '/files',
   path: '/files',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ImportRoute = ImportRouteImport.update({
-  id: '/import',
-  path: '/import',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MetadataRoute = MetadataRouteImport.update({
@@ -53,6 +49,46 @@ const MetadataRoute = MetadataRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExportIndexRoute = ExportIndexRouteImport.update({
+  id: '/export/',
+  path: '/export/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExportTargetIdRoute = ExportTargetIdRouteImport.update({
+  id: '/export/$targetId',
+  path: '/export/$targetId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExportAddRoute = ExportAddRouteImport.update({
+  id: '/export/add',
+  path: '/export/add',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExportRekordboxRoute = ExportRekordboxRouteImport.update({
+  id: '/export/rekordbox',
+  path: '/export/rekordbox',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExportUsbRoute = ExportUsbRouteImport.update({
+  id: '/export/usb',
+  path: '/export/usb',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ImportIndexRoute = ImportIndexRouteImport.update({
+  id: '/import/',
+  path: '/import/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ImportDownloadsRoute = ImportDownloadsRouteImport.update({
+  id: '/import/downloads',
+  path: '/import/downloads',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ImportItunesRoute = ImportItunesRouteImport.update({
+  id: '/import/itunes',
+  path: '/import/itunes',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PlaylistsIdRoute = PlaylistsIdRouteImport.update({
@@ -74,90 +110,132 @@ const TagsSplatRoute = TagsSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/deleted': typeof DeletedRoute
-  '/export': typeof ExportRoute
   '/files': typeof FilesRoute
-  '/import': typeof ImportRoute
   '/metadata': typeof MetadataRoute
   '/settings': typeof SettingsRoute
+  '/export/$targetId': typeof ExportTargetIdRoute
+  '/export/add': typeof ExportAddRoute
+  '/export/rekordbox': typeof ExportRekordboxRoute
+  '/export/usb': typeof ExportUsbRoute
+  '/import/downloads': typeof ImportDownloadsRoute
+  '/import/itunes': typeof ImportItunesRoute
   '/playlists/$id': typeof PlaylistsIdRoute
   '/smart/$id': typeof SmartIdRoute
   '/tags/$': typeof TagsSplatRoute
+  '/export/': typeof ExportIndexRoute
+  '/import/': typeof ImportIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/deleted': typeof DeletedRoute
-  '/export': typeof ExportRoute
   '/files': typeof FilesRoute
-  '/import': typeof ImportRoute
   '/metadata': typeof MetadataRoute
   '/settings': typeof SettingsRoute
+  '/export/$targetId': typeof ExportTargetIdRoute
+  '/export/add': typeof ExportAddRoute
+  '/export/rekordbox': typeof ExportRekordboxRoute
+  '/export/usb': typeof ExportUsbRoute
+  '/import/downloads': typeof ImportDownloadsRoute
+  '/import/itunes': typeof ImportItunesRoute
   '/playlists/$id': typeof PlaylistsIdRoute
   '/smart/$id': typeof SmartIdRoute
   '/tags/$': typeof TagsSplatRoute
+  '/export': typeof ExportIndexRoute
+  '/import': typeof ImportIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/deleted': typeof DeletedRoute
-  '/export': typeof ExportRoute
   '/files': typeof FilesRoute
-  '/import': typeof ImportRoute
   '/metadata': typeof MetadataRoute
   '/settings': typeof SettingsRoute
+  '/export/$targetId': typeof ExportTargetIdRoute
+  '/export/add': typeof ExportAddRoute
+  '/export/rekordbox': typeof ExportRekordboxRoute
+  '/export/usb': typeof ExportUsbRoute
+  '/import/downloads': typeof ImportDownloadsRoute
+  '/import/itunes': typeof ImportItunesRoute
   '/playlists/$id': typeof PlaylistsIdRoute
   '/smart/$id': typeof SmartIdRoute
   '/tags/$': typeof TagsSplatRoute
+  '/export/': typeof ExportIndexRoute
+  '/import/': typeof ImportIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/deleted'
-    | '/export'
     | '/files'
-    | '/import'
     | '/metadata'
     | '/settings'
+    | '/export/$targetId'
+    | '/export/add'
+    | '/export/rekordbox'
+    | '/export/usb'
+    | '/import/downloads'
+    | '/import/itunes'
     | '/playlists/$id'
     | '/smart/$id'
     | '/tags/$'
+    | '/export/'
+    | '/import/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/deleted'
-    | '/export'
     | '/files'
-    | '/import'
     | '/metadata'
     | '/settings'
+    | '/export/$targetId'
+    | '/export/add'
+    | '/export/rekordbox'
+    | '/export/usb'
+    | '/import/downloads'
+    | '/import/itunes'
     | '/playlists/$id'
     | '/smart/$id'
     | '/tags/$'
+    | '/export'
+    | '/import'
   id:
     | '__root__'
     | '/'
     | '/deleted'
-    | '/export'
     | '/files'
-    | '/import'
     | '/metadata'
     | '/settings'
+    | '/export/$targetId'
+    | '/export/add'
+    | '/export/rekordbox'
+    | '/export/usb'
+    | '/import/downloads'
+    | '/import/itunes'
     | '/playlists/$id'
     | '/smart/$id'
     | '/tags/$'
+    | '/export/'
+    | '/import/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DeletedRoute: typeof DeletedRoute
-  ExportRoute: typeof ExportRoute
   FilesRoute: typeof FilesRoute
-  ImportRoute: typeof ImportRoute
   MetadataRoute: typeof MetadataRoute
   SettingsRoute: typeof SettingsRoute
+  ExportTargetIdRoute: typeof ExportTargetIdRoute
+  ExportAddRoute: typeof ExportAddRoute
+  ExportRekordboxRoute: typeof ExportRekordboxRoute
+  ExportUsbRoute: typeof ExportUsbRoute
+  ImportDownloadsRoute: typeof ImportDownloadsRoute
+  ImportItunesRoute: typeof ImportItunesRoute
   PlaylistsIdRoute: typeof PlaylistsIdRoute
   SmartIdRoute: typeof SmartIdRoute
   TagsSplatRoute: typeof TagsSplatRoute
+  ExportIndexRoute: typeof ExportIndexRoute
+  ImportIndexRoute: typeof ImportIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -176,25 +254,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DeletedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/export': {
-      id: '/export'
-      path: '/export'
-      fullPath: '/export'
-      preLoaderRoute: typeof ExportRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/files': {
       id: '/files'
       path: '/files'
       fullPath: '/files'
       preLoaderRoute: typeof FilesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/import': {
-      id: '/import'
-      path: '/import'
-      fullPath: '/import'
-      preLoaderRoute: typeof ImportRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/metadata': {
@@ -209,6 +273,62 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/export/': {
+      id: '/export/'
+      path: '/export'
+      fullPath: '/export/'
+      preLoaderRoute: typeof ExportIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/export/$targetId': {
+      id: '/export/$targetId'
+      path: '/export/$targetId'
+      fullPath: '/export/$targetId'
+      preLoaderRoute: typeof ExportTargetIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/export/add': {
+      id: '/export/add'
+      path: '/export/add'
+      fullPath: '/export/add'
+      preLoaderRoute: typeof ExportAddRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/export/rekordbox': {
+      id: '/export/rekordbox'
+      path: '/export/rekordbox'
+      fullPath: '/export/rekordbox'
+      preLoaderRoute: typeof ExportRekordboxRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/export/usb': {
+      id: '/export/usb'
+      path: '/export/usb'
+      fullPath: '/export/usb'
+      preLoaderRoute: typeof ExportUsbRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/import/': {
+      id: '/import/'
+      path: '/import'
+      fullPath: '/import/'
+      preLoaderRoute: typeof ImportIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/import/downloads': {
+      id: '/import/downloads'
+      path: '/import/downloads'
+      fullPath: '/import/downloads'
+      preLoaderRoute: typeof ImportDownloadsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/import/itunes': {
+      id: '/import/itunes'
+      path: '/import/itunes'
+      fullPath: '/import/itunes'
+      preLoaderRoute: typeof ImportItunesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/playlists/$id': {
@@ -238,14 +358,20 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DeletedRoute: DeletedRoute,
-  ExportRoute: ExportRoute,
   FilesRoute: FilesRoute,
-  ImportRoute: ImportRoute,
   MetadataRoute: MetadataRoute,
   SettingsRoute: SettingsRoute,
+  ExportTargetIdRoute: ExportTargetIdRoute,
+  ExportAddRoute: ExportAddRoute,
+  ExportRekordboxRoute: ExportRekordboxRoute,
+  ExportUsbRoute: ExportUsbRoute,
+  ImportDownloadsRoute: ImportDownloadsRoute,
+  ImportItunesRoute: ImportItunesRoute,
   PlaylistsIdRoute: PlaylistsIdRoute,
   SmartIdRoute: SmartIdRoute,
   TagsSplatRoute: TagsSplatRoute,
+  ExportIndexRoute: ExportIndexRoute,
+  ImportIndexRoute: ImportIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

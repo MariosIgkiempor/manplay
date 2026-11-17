@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useUndo } from "#/context/undo-context.ts";
 import {
 	type ActivitySource,
@@ -41,6 +41,7 @@ import {
 	listTracks,
 	migrateLibraryTags,
 	type PanelTabs,
+	type PlanId,
 	pickAndScan,
 	type Resolution,
 	removeMissingNow,
@@ -60,7 +61,9 @@ import {
 	setUiSetting,
 	syncApply,
 	syncHistory,
-	syncPlan,
+	syncRescan,
+	syncScan,
+	syncScans,
 	type TagPaths,
 	tagsPreview,
 	tagsRead,
@@ -191,12 +194,32 @@ export function useDefaultScope() {
 
 export const SYNC_KEY = ["sync-run"] as const;
 
-/** Reads what a sync of the given target ids (or every enabled target) would do. Changes nothing. */
-export function useSyncPlan() {
-	return useMutation({
-		mutationKey: SYNC_KEY,
-		mutationFn: (ids?: number[]) => syncPlan(ids),
-	});
+/** Every query fed by the background reads of the destinations; refetched on `sync-scan` events. */
+export const SYNC_SCANS_KEY = ["sync-scans"] as const;
+
+/** What the background reads found per destination, and which are waiting or being read. */
+export function useSyncScans() {
+	return useQuery({ queryKey: [...SYNC_SCANS_KEY, "status"], queryFn: syncScans });
+}
+
+const targetScanQuery = (targetId: number) => ({
+	queryKey: [...SYNC_SCANS_KEY, "target", targetId],
+	queryFn: () => syncScan(targetId),
+});
+
+/** The latest read of one destination in full; null before its first read. */
+export function useTargetScan(targetId: number) {
+	return useQuery(targetScanQuery(targetId));
+}
+
+/** The latest reads of several destinations, in the order given. */
+export function useTargetScans(targetIds: readonly number[]) {
+	return useQueries({ queries: targetIds.map(targetScanQuery) });
+}
+
+/** Reads destinations again ahead of anything else waiting, e.g. on Refresh. */
+export function useSyncRescan() {
+	return useMutation({ mutationFn: (ids: number[]) => syncRescan(ids) });
 }
 
 /** Runs the actions of a reviewed plan that the user confirmed. */
@@ -205,14 +228,14 @@ export function useSyncApply() {
 	return useMutation({
 		mutationKey: SYNC_KEY,
 		mutationFn: ({
-			planId,
+			planIds,
 			actionIds,
 			resolutions,
 		}: {
-			planId: string;
+			planIds: PlanId[];
 			actionIds: number[];
 			resolutions?: Record<number, Resolution>;
-		}) => syncApply(planId, actionIds, resolutions),
+		}) => syncApply(planIds, actionIds, resolutions),
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["sync-history"] });
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });

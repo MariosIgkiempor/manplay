@@ -244,12 +244,12 @@ impl R2 {
         }
     }
 
-    /// Every object below `prefix` as `(full key, size)`.
+    /// Every object below `prefix` as `(full key, size, ETag)`.
     pub async fn list(
         &self,
         client: &Client,
         prefix: &[String],
-    ) -> Result<Vec<(String, u64)>, Error> {
+    ) -> Result<Vec<(String, u64, Option<String>)>, Error> {
         let prefix = if prefix.is_empty() {
             String::new()
         } else {
@@ -284,7 +284,7 @@ impl R2 {
             for c in doc.descendants().filter(|n| n.has_tag_name("Contents")) {
                 if let Some(key) = text(c, "Key") {
                     let size = text(c, "Size").and_then(|s| s.parse().ok()).unwrap_or(0);
-                    out.push((key, size));
+                    out.push((key, size, text(c, "ETag")));
                 }
             }
             let root = doc.root_element();

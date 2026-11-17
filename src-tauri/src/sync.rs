@@ -136,19 +136,25 @@ impl<'a> Backend<'a> {
             Self::Dav(c) => Ok(webdav::list_files(c, base)
                 .await?
                 .into_iter()
-                .map(|(rel, size)| Remote { rel, size })
+                .map(|(rel, size, modified)| Remote {
+                    rel,
+                    size,
+                    version: modified.map(|m| m.to_string()),
+                })
                 .collect()),
             Self::R2(c, r) => Ok(r
                 .list(c, base)
                 .await?
                 .into_iter()
-                .filter_map(|(key, size)| {
+                .filter_map(|(key, size, etag)| {
                     let rel: Vec<String> =
                         key.split('/').skip(base.len()).map(str::to_owned).collect();
                     // Folder placeholder keys end in "/" and leave an empty last segment.
-                    rel.iter()
-                        .all(|s| !s.is_empty())
-                        .then_some(Remote { rel, size })
+                    rel.iter().all(|s| !s.is_empty()).then_some(Remote {
+                        rel,
+                        size,
+                        version: etag,
+                    })
                 })
                 .collect()),
         }
@@ -810,13 +816,37 @@ pub struct TargetPlan {
     /// Fingerprints read from the destination this time: `(path, size, fingerprint)`, to cache.
     #[serde(skip)]
     pub fresh_prints: Vec<(String, u64, String)>,
+    /// Every destination signature this plan used, read now or cached, to cache for the next.
+    #[serde(skip)]
+    pub signatures: Vec<RemoteSignature>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Plan {
-    pub id: String,
-    pub targets: Vec<TargetPlan>,
+impl TargetPlan {
+    /// A plan with nothing in it yet.
+    fn empty(target: &SyncTarget) -> Self {
+        Self {
+            target_id: target.id,
+            name: target_name(target),
+            error: None,
+            actions: Vec::new(),
+            held: Vec::new(),
+            in_sync: 0,
+            remote_total: 0,
+            unchecked: 0,
+            present: Vec::new(),
+            seeds: Vec::new(),
+            fresh_prints: Vec::new(),
+            signatures: Vec::new(),
+        }
+    }
+
+    /// A destination that could not be compared, with the reason.
+    pub fn failed(target: &SyncTarget, error: String) -> Self {
+        Self {
+            error: Some(error),
+            ..Self::empty(target)
+        }
+    }
 }
 
 struct Diff<'a> {
@@ -924,13 +954,30 @@ pub struct Inputs<'a> {
     pub cached: &'a HashMap<(String, u64), String>,
     /// How each file looked at its last sync.
     pub bases: &'a HashMap<i64, Base>,
+    /// Destination signatures read on earlier runs, by path.
+    pub signatures: &'a SignatureCache,
 }
+
+/// A [`remote_signature`] read earlier, valid while the file keeps its size and change marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSignature {
+    pub path: String,
+    pub size: u64,
+    /// [`Remote::version`] when it was read.
+    pub version: String,
+    pub signature: String,
+}
+
+/// Destination signatures read earlier, by path.
+pub type SignatureCache = HashMap<String, RemoteSignature>;
 
 /// A library file and the destination copy at the same path.
 #[derive(Clone, Copy)]
 struct Pair<'a> {
     item: &'a Item,
     remote_size: u64,
+    /// [`Remote::version`] of the destination copy.
+    remote_version: Option<&'a str>,
 }
 
 /// A pair that differs, sorted by who edited it since the last sync.
@@ -943,11 +990,14 @@ struct Differing<'a> {
 
 /// Compares the destination with the library and lists what a sync would do. Reads only.
 #[allow(clippy::too_many_lines)]
+/// `listing` is the destination's [`list_remote`], read once by the caller so the pull side can use
+/// it too.
 pub async fn plan_target(
     app: &AppHandle,
     client: &Client,
     target: &SyncTarget,
     inputs: &Inputs<'_>,
+    listing: Result<&[Remote], &Error>,
     next_id: &mut u32,
 ) -> TargetPlan {
     let Inputs {
@@ -956,21 +1006,10 @@ pub async fn plan_target(
         synced_at,
         cached,
         bases,
+        signatures,
     } = *inputs;
-    let mut plan = TargetPlan {
-        target_id: target.id,
-        name: target_name(target),
-        error: None,
-        actions: Vec::new(),
-        held: Vec::new(),
-        in_sync: 0,
-        remote_total: 0,
-        unchecked: 0,
-        present: Vec::new(),
-        seeds: Vec::new(),
-        fresh_prints: Vec::new(),
-    };
-    let remote = match list_remote(client, target).await {
+    let mut plan = TargetPlan::empty(target);
+    let remote = match listing {
         Ok(r) => r,
         Err(e) => {
             plan.error = Some(format!("destination unreachable: {e}"));
@@ -978,7 +1017,12 @@ pub async fn plan_target(
         }
     };
     plan.remote_total = remote.len();
-    let d = diff(items, &remote);
+    let versions: HashMap<&[String], &str> = remote
+        .iter()
+        .filter_map(|r| Some((r.rel.as_slice(), r.version.as_deref()?)))
+        .collect();
+    let version_of = |item: &Item| versions.get(item.rel.as_slice()).copied();
+    let d = diff(items, remote);
     // Every same-size pair is compared: same path and size can still differ in tags or audio.
     // Other pairs are only read when a base says who edited them.
     let pairs: Vec<Pair> = d
@@ -987,6 +1031,7 @@ pub async fn plan_target(
         .map(|i| Pair {
             item: i,
             remote_size: i.size,
+            remote_version: version_of(i),
         })
         .chain(
             d.replaces
@@ -995,10 +1040,13 @@ pub async fn plan_target(
                 .map(|(i, size)| Pair {
                     item: i,
                     remote_size: *size,
+                    remote_version: version_of(i),
                 }),
         )
         .collect();
-    let (cmps, unreadable) = compare_pairs(app, client, target, &pairs).await;
+    let (cmps, unreadable) = compare_pairs(app, client, target, &pairs, signatures).await;
+    plan.signatures = cmps.values().filter_map(|c| c.signature.clone()).collect();
+    let cmps: HashMap<i64, Cmp> = cmps.into_iter().map(|(id, c)| (id, c.cmp)).collect();
     let mut matching: Vec<&Item> = Vec::new();
     let mut pushes: Vec<Differing> = Vec::new();
     let mut updates: Vec<Differing> = Vec::new();
@@ -1047,6 +1095,7 @@ pub async fn plan_target(
                 pair: Pair {
                     item: i,
                     remote_size: *size,
+                    remote_version: version_of(i),
                 },
                 sigs: None,
             }),
@@ -1574,14 +1623,35 @@ fn classify(base: Option<&Base>, local: &str, remote: &str) -> Verdict {
     }
 }
 
+/// The cached signature of a destination file, while it has the size and change marker it had
+/// when read. A file without a change marker is always read.
+fn cached_signature<'c>(
+    cache: &'c SignatureCache,
+    path: &str,
+    size: u64,
+    version: Option<&str>,
+) -> Option<&'c str> {
+    let cached = cache.get(path)?;
+    (cached.size == size && version == Some(cached.version.as_str()))
+        .then_some(cached.signature.as_str())
+}
+
+/// One pair compared, with the destination signature to cache when its file has a change marker.
+struct Compared {
+    cmp: Cmp,
+    signature: Option<RemoteSignature>,
+}
+
 /// Compares the tags region and audio samples of every pair. Returns what each showed (a pair
-/// that could not be read is missing) and how many could not be read.
+/// that could not be read is missing) and how many could not be read. A destination file whose
+/// size and change marker match `cache` is not read again.
 async fn compare_pairs(
     app: &AppHandle,
     client: &Client,
     target: &SyncTarget,
     pairs: &[Pair<'_>],
-) -> (HashMap<i64, Cmp>, usize) {
+    cache: &SignatureCache,
+) -> (HashMap<i64, Compared>, usize) {
     use futures_util::stream::{FuturesUnordered, StreamExt};
     let mut out = HashMap::new();
     let Ok(backend) = Backend::for_target(client, target) else {
@@ -1592,12 +1662,12 @@ async fn compare_pairs(
     let mut queue = pairs.iter().copied();
     let mut running = FuturesUnordered::new();
     for pair in queue.by_ref().take(COMPARE_AT_ONCE) {
-        running.push(compare_one(&backend, &base, pair));
+        running.push(compare_one(&backend, &base, pair, cache));
     }
     let (mut done, mut unreadable) = (0, 0);
     while let Some((item, result)) = running.next().await {
         if let Some(next) = queue.next() {
-            running.push(compare_one(&backend, &base, next));
+            running.push(compare_one(&backend, &base, next, cache));
         }
         done += 1;
         let label = item.rel.join("/");
@@ -1623,16 +1693,28 @@ async fn compare_one<'i>(
     backend: &Backend<'_>,
     base: &[String],
     pair: Pair<'i>,
-) -> (&'i Item, Result<Cmp, Error>) {
+    cache: &SignatureCache,
+) -> (&'i Item, Result<Compared, Error>) {
     let result = async {
         let item = pair.item;
-        let remote = remote_signature(backend, &dest_of(base, &item.rel), pair.remote_size).await?;
+        let path = item.rel.join("/");
+        let remote = match cached_signature(cache, &path, pair.remote_size, pair.remote_version) {
+            Some(sig) => sig.to_owned(),
+            None => remote_signature(backend, &dest_of(base, &item.rel), pair.remote_size).await?,
+        };
         let local = local_signature(&item.local, item.size).await?;
-        Ok(if local == remote {
+        let signature = pair.remote_version.map(|version| RemoteSignature {
+            path,
+            size: pair.remote_size,
+            version: version.to_owned(),
+            signature: remote.clone(),
+        });
+        let cmp = if local == remote {
             Cmp::Same(local)
         } else {
             Cmp::Differs { local, remote }
-        })
+        };
+        Ok(Compared { cmp, signature })
     }
     .await;
     (pair.item, result)
@@ -2350,6 +2432,10 @@ pub fn prune_backups(root: &Path, now: i64, keep_secs: i64) {
 pub struct Remote {
     pub rel: Vec<String>,
     pub size: u64,
+    /// What the destination says changes whenever the file does (modified time or `ETag`), when it
+    /// says anything.
+    #[serde(skip)]
+    pub version: Option<String>,
 }
 
 /// Every song and file under the destination folder, without the shared library's own data
@@ -2649,8 +2735,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_cached_signature_holds_while_the_file_is_unchanged() {
+        let cache: SignatureCache = [(
+            "a/one.mp3".to_owned(),
+            RemoteSignature {
+                path: "a/one.mp3".to_owned(),
+                size: 10,
+                version: "v1".to_owned(),
+                signature: "sig".to_owned(),
+            },
+        )]
+        .into();
+        let cases = [
+            CachedCase {
+                name: "unchanged",
+                path: "a/one.mp3",
+                size: 10,
+                version: Some("v1"),
+                expected: Some("sig"),
+            },
+            CachedCase {
+                name: "new change marker",
+                path: "a/one.mp3",
+                size: 10,
+                version: Some("v2"),
+                expected: None,
+            },
+            CachedCase {
+                name: "resized",
+                path: "a/one.mp3",
+                size: 11,
+                version: Some("v1"),
+                expected: None,
+            },
+            CachedCase {
+                name: "no change marker",
+                path: "a/one.mp3",
+                size: 10,
+                version: None,
+                expected: None,
+            },
+            CachedCase {
+                name: "never read",
+                path: "b/two.mp3",
+                size: 10,
+                version: Some("v1"),
+                expected: None,
+            },
+        ];
+        for case in cases {
+            assert_eq!(
+                cached_signature(&cache, case.path, case.size, case.version),
+                case.expected,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    struct CachedCase {
+        name: &'static str,
+        path: &'static str,
+        size: u64,
+        version: Option<&'static str>,
+        expected: Option<&'static str>,
+    }
+
     fn remote(p: &str, size: u64) -> Remote {
-        Remote { rel: rel(p), size }
+        Remote {
+            rel: rel(p),
+            size,
+            version: None,
+        }
     }
 
     #[test]

@@ -1,28 +1,14 @@
 import { type ReactNode, useEffect, useState } from "react";
-import { AddDestinationPanel } from "#/components/add-destination-panel.tsx";
 import { AlbumPanel } from "#/components/album-panel.tsx";
 import { ArtistPanel } from "#/components/artist-panel.tsx";
-import { DownloadsPanel } from "#/components/downloads-source.tsx";
 import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
-import { ItunesPanel } from "#/components/itunes-source.tsx";
 import { PanelBar } from "#/components/panel-header.tsx";
-import { RekordboxPanel } from "#/components/rekordbox-source.tsx";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
 import { SongPanel } from "#/components/song-panel.tsx";
-import { TargetPanel } from "#/components/target-detail.tsx";
-import { UsbDrivePanel } from "#/components/usb-drives.tsx";
 import { ValuePanel } from "#/components/value-panel.tsx";
 import { type DetailView, PanelScopeContext, useDetail } from "#/context/detail-context.ts";
 import { StatusScopeContext, useStatusScopeHandlers } from "#/context/status-context.ts";
-import type { ServiceId } from "#/lib/api.ts";
 import { usePaneWidth } from "#/lib/use-pane-width.ts";
-
-/** Services with a panel of their own; export folders, buckets and drives open one each. */
-const SERVICE_PANELS: Partial<Record<ServiceId, () => ReactNode>> = {
-	downloads: DownloadsPanel,
-	itunes: ItunesPanel,
-	rekordbox: RekordboxPanel,
-};
 
 function Content({ view }: { view: DetailView }) {
 	switch (view.kind) {
@@ -32,16 +18,6 @@ function Content({ view }: { view: DetailView }) {
 			return <AlbumPanel albumKey={view.key} />;
 		case "artist":
 			return <ArtistPanel name={view.name} />;
-		case "service": {
-			const Panel = SERVICE_PANELS[view.service];
-			return Panel ? <Panel /> : null;
-		}
-		case "target":
-			return <TargetPanel id={view.id} />;
-		case "usb":
-			return <UsbDrivePanel mount={view.mount} />;
-		case "add-destination":
-			return <AddDestinationPanel service={view.service} />;
 		case "value":
 			return <ValuePanel field={view.field} value={view.value} />;
 		case "edit":
@@ -69,12 +45,9 @@ function isTyping(target: EventTarget | null): boolean {
 /** Leaves the page at least this much room. */
 const PAGE_ROOM = 480;
 
-/** A drive's library browser needs room for its playlists beside their songs. */
-const USB_MIN_WIDTH = 720;
-
 /**
- * The one side panel beside the page: songs, albums, artists, tag values, tag editing, sources,
- * destinations and drives, with back-history across all of them. The page stays usable next to it:
+ * The one side panel beside the page: songs, albums, artists, tag values and tag editing, with
+ * back-history across all of them. The page stays usable next to it:
  * picking another song title swaps what the panel shows.
  */
 export function SplitPane(): ReactNode {
@@ -124,7 +97,7 @@ export function SplitPane(): ReactNode {
 			data-detail-panel
 			tabIndex={-1}
 			{...scopeHandlers}
-			style={{ width, minWidth: view.kind === "usb" ? USB_MIN_WIDTH : undefined }}
+			style={{ width }}
 			className="relative flex max-w-[70%] shrink-0 flex-col border-l bg-background outline-none"
 		>
 			<ResizeHandle

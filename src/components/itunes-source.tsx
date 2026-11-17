@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { CheckCircle2, FileAudio, FolderOpen, Music, RefreshCw, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { DestinationHeader, FolderFigure, SettingLabel } from "#/components/destination-header.tsx";
@@ -10,7 +11,6 @@ import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { SourceCard } from "#/components/source-card.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
-import { useDetail } from "#/context/detail-context.ts";
 import { type ItunesStatus, itunesStatus, pickItunesFolder, setItunesPath } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
 import { activityEntries } from "#/lib/history.ts";
@@ -67,7 +67,7 @@ function lastLine(status: ItunesStatus | undefined) {
 }
 
 export function ItunesCard() {
-	const detail = useDetail();
+	const navigate = useNavigate();
 	const { status, choose, run, root, enabled, setEnabled } = useItunes();
 	const path = status.data?.path ?? null;
 	return (
@@ -78,7 +78,7 @@ export function ItunesCard() {
 			enabled={enabled}
 			onToggle={setEnabled}
 			status={lastLine(status.data)}
-			onOpen={() => detail.open({ kind: "service", service: "itunes" })}
+			onOpen={() => void navigate({ to: "/import/itunes" })}
 			action={
 				path === null ? (
 					<Button size="sm" onClick={() => choose.mutate()} disabled={choose.isPending}>
@@ -100,7 +100,7 @@ export function ItunesCard() {
 }
 
 /** The iTunes source, laid out like an export destination: header, then History and Settings. */
-export function ItunesPanel() {
+export function ItunesPage() {
 	const { status, choose, stop, run, root, enabled, setEnabled } = useItunes();
 	const history = useActivity("itunes");
 	const path = status.data?.path ?? null;
@@ -120,6 +120,8 @@ export function ItunesPanel() {
 			header={(tabs) => (
 				<>
 					<DestinationHeader
+						section="import"
+						place="itunes"
 						tabs={tabs}
 						brand="itunes"
 						kind={

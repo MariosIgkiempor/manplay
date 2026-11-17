@@ -19,6 +19,7 @@ import {
 	allKeys,
 	applyAdded,
 	buildRequests,
+	countNew,
 	type Edit,
 	editOf,
 	groupKey,
@@ -102,6 +103,17 @@ export function useChooseImportFolder() {
 	});
 }
 
+/** New songs the last scan of the import folder found, from its cache; null when off or unknown. */
+export function useDownloadsNewCount(enabled: boolean): number | null {
+	const folder = useQuery({ queryKey: ["import-folder"], queryFn: importGetFolder }).data ?? null;
+	const cached = useQuery({
+		queryKey: ["import-cached", folder],
+		queryFn: () => (folder === null ? null : importCached(folder)),
+		enabled: enabled && folder !== null,
+	});
+	return cached.data ? countNew(cached.data) : null;
+}
+
 export function useImport(enabled = true) {
 	const queryClient = useQueryClient();
 	const savedFolder = useQuery({ queryKey: ["import-folder"], queryFn: importGetFolder });
@@ -123,7 +135,10 @@ export function useImport(enabled = true) {
 
 	const find = useMutation({
 		mutationFn: ({ dir, fresh }: { dir: string; fresh: boolean }) => importScan(dir, fresh),
-		onSuccess: (next) => show(next, false),
+		onSuccess: (next) => {
+			show(next, false);
+			void queryClient.invalidateQueries({ queryKey: ["import-cached"] });
+		},
 	});
 	const { mutate: startScan } = find;
 
@@ -174,6 +189,7 @@ export function useImport(enabled = true) {
 			}));
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
 			await queryClient.invalidateQueries({ queryKey: ["library-status"] });
+			await queryClient.invalidateQueries({ queryKey: ["import-cached"] });
 		},
 	});
 

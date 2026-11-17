@@ -2,13 +2,18 @@ import { Folder } from "lucide-react";
 import type { ReactNode } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
+import { PlaceCrumb } from "#/components/place-crumb.tsx";
+import type { PlaceKey, PlaceSection } from "#/lib/places.ts";
 import { cn } from "#/lib/utils.ts";
 
 /**
  * Top of an import source's or export destination's page (Downloads, iTunes, USB drive,
- * Tailscale folder, R2 bucket, rekordbox file): the shared header with the brand's tile.
+ * Tailscale folder, R2 bucket, rekordbox file): the shared header with the brand's tile, under
+ * an `Export › <destination ▾>` crumb that jumps between siblings.
  */
 export function DestinationHeader({
+	section,
+	place,
 	brand,
 	kind,
 	title,
@@ -19,6 +24,8 @@ export function DestinationHeader({
 	toggle,
 	tabs,
 }: {
+	section: PlaceSection;
+	place: PlaceKey;
 	brand: Brand;
 	/** What kind of destination, with an icon, e.g. "CDJ USB". */
 	kind: ReactNode;
@@ -37,13 +44,18 @@ export function DestinationHeader({
 }) {
 	return (
 		<PageHeader
-			variant="panel"
-			art={<BrandIcon brand={brand} className="size-24 shrink-0 rounded-xl" />}
-			kind={kind}
+			art={<BrandIcon brand={brand} className="size-28 shrink-0 rounded-xl" />}
+			kind={
+				<>
+					<PlaceCrumb section={section} current={place} />
+					<span aria-hidden="true">·</span>
+					{kind}
+				</>
+			}
 			badge={toggle}
 			title={
 				<h1
-					className={cn("truncate font-semibold text-2xl tracking-tight")}
+					className={cn("truncate font-semibold text-3xl tracking-tight")}
 					title={titleHint ?? title}
 				>
 					{title}

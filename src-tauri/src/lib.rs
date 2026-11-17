@@ -21,6 +21,7 @@ mod scan;
 mod smart;
 mod stream;
 mod sync;
+mod sync_scans;
 mod tag_region;
 mod tags;
 mod tailscale;
@@ -32,18 +33,22 @@ mod webdav;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{NewTarget, Playlist, RunView, SyncTarget, Tag, Track};
 use crate::error::Error;
+use crate::sync_scans::ReadDepth;
 
 struct AppState {
     db: Mutex<Connection>,
     data_dir: PathBuf,
     http: reqwest::Client,
+    /// For background reads: gives up on a destination that stops answering, so a stalled read
+    /// cannot hold the destinations forever.
+    scan_http: reqwest::Client,
     syncing: AtomicBool,
     fixing: AtomicBool,
     analyzing: AtomicBool,
@@ -51,8 +56,16 @@ struct AppState {
     usb_exporting: AtomicBool,
     /// Set to stop the running analysis after the files in progress.
     cancel_analysis: AtomicBool,
-    /// The last sync review, awaiting the user's confirmation.
-    plan: Mutex<Option<sync::Plan>>,
+    /// The background reads of the destinations and the plans they made, awaiting review.
+    scans: Mutex<sync_scans::ScanStore>,
+    /// Wakes the background reader when something was queued.
+    scan_wake: tokio::sync::Notify,
+    /// Held while a destination is read or written, so they are handled one job at a time.
+    destination_io: tokio::sync::Mutex<()>,
+    /// Next id for a planned action, unique across every plan of this run of the app.
+    next_action_id: AtomicU32,
+    /// When the library last changed on disk, until the destinations are checked against it.
+    library_changed: Mutex<Option<std::time::Instant>>,
     /// Waveforms the sharing destination did not have since the last sync.
     wf_misses: libsync::waveforms::Misses,
     /// Held while waveforms are being downloaded in the background.
@@ -85,7 +98,17 @@ async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error>
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
     reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
     drop(conn);
+    library_changed(state);
     Ok(result.tracks.len())
+}
+
+/// Has the destinations checked against the library once it has stopped changing for
+/// [`sync_scans::LIBRARY_SETTLE`], e.g. after a batch of tag edits.
+fn library_changed(state: &AppState) {
+    if let Ok(mut changed) = state.library_changed.lock() {
+        *changed = Some(std::time::Instant::now());
+    }
+    state.scan_wake.notify_one();
 }
 
 /// Fingerprints the audio of present tracks that have no `audio_fp` yet (libraries from before
@@ -1036,12 +1059,19 @@ fn list_sync_targets(state: State<'_, AppState>) -> Result<Vec<SyncTarget>, Erro
 }
 
 #[tauri::command]
-fn add_sync_target(state: State<'_, AppState>, target: NewTarget) -> Result<i64, Error> {
-    with_db!(state, |c| db::add_target(c, &target))
+fn add_sync_target(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target: NewTarget,
+) -> Result<i64, Error> {
+    let id = with_db!(state, |c| db::add_target(c, &target))?;
+    queue_scans(&app, &[id], true, ReadDepth::Full)?;
+    Ok(id)
 }
 
 #[tauri::command]
 async fn add_r2_target(
+    app: AppHandle,
     state: State<'_, AppState>,
     account: String,
     bucket: String,
@@ -1069,6 +1099,7 @@ async fn add_r2_target(
         }
     ))?;
     client.save_credentials(id)?;
+    queue_scans(&app, &[id], true, ReadDepth::Full)?;
     Ok(id)
 }
 
@@ -1076,6 +1107,7 @@ async fn add_r2_target(
 /// for R2, the access key. A blank `secret` keeps the stored credentials.
 #[tauri::command]
 async fn update_sync_target(
+    app: AppHandle,
     state: State<'_, AppState>,
     id: i64,
     path: Vec<String>,
@@ -1107,25 +1139,8 @@ async fn update_sync_target(
         } else {
             e
         }
-    })
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RemoteScan {
-    /// Every file found on the destination, audio or not.
-    total: usize,
-    /// Audio files the library does not have.
-    missing: Vec<MissingFile>,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MissingFile {
-    #[serde(flatten)]
-    file: sync::Remote,
-    /// Extension of a library track with the same name but another format (e.g. `flac`).
-    other_format: Option<String>,
+    })?;
+    queue_scans(&app, &[id], true, ReadDepth::Full)
 }
 
 fn find_target(state: &AppState, id: i64) -> Result<(SyncTarget, PathBuf), Error> {
@@ -1139,18 +1154,6 @@ fn find_target(state: &AppState, id: i64) -> Result<(SyncTarget, PathBuf), Error
     })?;
     Ok((target, PathBuf::from(root)))
 }
-
-fn local_path(root: &Path, rel: &[String]) -> PathBuf {
-    rel.iter().fold(root.to_path_buf(), |p, s| p.join(s))
-}
-
-/// Library lookups for [`remote_scan`]: lower-cased paths, `(file name, size)` pairs, and
-/// file name without extension -> extension.
-type KnownLibrary = (
-    HashSet<String>,
-    HashSet<(String, i64)>,
-    HashMap<String, String>,
-);
 
 /// One folder of a destination, for the file browser. `rel` is relative to the destination folder.
 #[tauri::command]
@@ -1184,65 +1187,6 @@ async fn remote_dir_sizes(
     }
     let (target, _) = find_target(&state, target_id)?;
     sync::remote_dir_sizes(&state.http, &target, &rel).await
-}
-
-/// Looks inside a destination for audio files the library is missing.
-#[tauri::command]
-async fn remote_scan(state: State<'_, AppState>, target_id: i64) -> Result<RemoteScan, Error> {
-    let (target, root) = find_target(&state, target_id)?;
-    // A library file counts as a match by path (any letter case) or by file name plus size,
-    // so tracks that were organised into different folders locally are not offered again.
-    let (known_paths, known_files, known_stems): KnownLibrary = {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        let rows = db::present_sizes(&conn)?;
-        let paths = rows.iter().map(|(p, _)| p.to_lowercase()).collect();
-        let files = rows
-            .iter()
-            .filter_map(|(p, size)| {
-                let name = Path::new(p).file_name()?.to_str()?.to_lowercase();
-                Some((name, *size))
-            })
-            .collect();
-        let stems = rows
-            .iter()
-            .filter_map(|(p, _)| {
-                let p = Path::new(p);
-                let stem = p.file_stem()?.to_str()?.to_lowercase();
-                let ext = p.extension()?.to_str()?.to_lowercase();
-                Some((stem, ext))
-            })
-            .collect();
-        (paths, files, stems)
-    };
-    let remote = sync::list_remote(&state.http, &target).await?;
-    let total = remote.len();
-    let missing = remote
-        .into_iter()
-        .filter(|r| {
-            let name = r.rel.last().map_or("", String::as_str);
-            if name.starts_with('.') || !scan::is_audio(Path::new(name)) {
-                return false;
-            }
-            let path = local_path(&root, &r.rel);
-            let size = i64::try_from(r.size).unwrap_or(i64::MAX);
-            !path.exists()
-                && path
-                    .to_str()
-                    .is_none_or(|p| !known_paths.contains(&p.to_lowercase()))
-                && !known_files.contains(&(name.to_lowercase(), size))
-        })
-        .map(|file| {
-            let p = Path::new(file.rel.last().map_or("", String::as_str));
-            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
-            let other_format = known_stems
-                .get(&stem.to_lowercase())
-                .filter(|e| !e.eq_ignore_ascii_case(ext))
-                .cloned();
-            MissingFile { file, other_format }
-        })
-        .collect();
-    Ok(RemoteScan { total, missing })
 }
 
 #[derive(serde::Serialize)]
@@ -1301,10 +1245,7 @@ async fn remote_pull(
     files: Vec<Vec<String>>,
 ) -> Result<sync::PullOutcome, Error> {
     let (target, root) = find_target(&state, target_id)?;
-    if state.syncing.swap(true, Ordering::SeqCst) {
-        return Err(Error::Msg("a sync is already running".to_owned()));
-    }
-    let _guard = SyncGuard(&state.syncing);
+    let _claim = claim_sync(&state).await?;
     // Only paths the destination really lists are downloaded. A chosen folder brings everything
     // under it.
     let wanted: HashSet<Vec<String>> = files.into_iter().collect();
@@ -1316,6 +1257,8 @@ async fn remote_pull(
     let outcome = sync::pull(&app, &state.http, &target, &root, &chosen).await;
     if outcome.pulled > 0 {
         scan_and_store(&state, root).await?;
+        // The pulled songs no longer count as missing. Plans made before stay applicable.
+        queue_scans(&app, &[target_id], false, ReadDepth::Full)?;
     }
     Ok(outcome)
 }
@@ -1335,10 +1278,7 @@ async fn remote_download(
     if !dest.is_dir() {
         return Err(Error::Msg("destination is not a folder".to_owned()));
     }
-    if state.syncing.swap(true, Ordering::SeqCst) {
-        return Err(Error::Msg("a sync is already running".to_owned()));
-    }
-    let _guard = SyncGuard(&state.syncing);
+    let _claim = claim_sync(&state).await?;
     let outcome = sync::transfer::download(&app, &state.http, &target, &items, &dest).await?;
     if outcome.pulled > 0 {
         scan_and_store(&state, root).await?;
@@ -1402,10 +1342,7 @@ async fn remote_upload(
     let files = tauri::async_runtime::spawn_blocking(move || upload_list(&root, &paths, &dest))
         .await
         .map_err(|e| Error::Msg(e.to_string()))??;
-    if state.syncing.swap(true, Ordering::SeqCst) {
-        return Err(Error::Msg("a sync is already running".to_owned()));
-    }
-    let _guard = SyncGuard(&state.syncing);
+    let _claim = claim_sync(&state).await?;
     sync::transfer::upload(&app, &state.http, &target, &files).await
 }
 
@@ -1418,17 +1355,16 @@ async fn remote_move(
     dest: Vec<String>,
 ) -> Result<usize, Error> {
     let (target, _) = find_target(&state, target_id)?;
-    if state.syncing.swap(true, Ordering::SeqCst) {
-        return Err(Error::Msg("a sync is already running".to_owned()));
-    }
-    let _guard = SyncGuard(&state.syncing);
+    let _claim = claim_sync(&state).await?;
     sync::transfer::move_items(&state.http, &target, &items, &dest).await
 }
 
 #[tauri::command]
-fn remove_sync_target(state: State<'_, AppState>, id: i64) -> Result<(), Error> {
+fn remove_sync_target(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), Error> {
     with_db!(state, |c| db::remove_target(c, id))?;
     r2::forget_credentials(id);
+    state.scans.lock().map_err(|_| Error::Lock)?.forget(id);
+    let _ = app.emit("sync-scan", ());
     Ok(())
 }
 
@@ -2059,119 +1995,460 @@ impl Drop for SyncGuard<'_> {
     }
 }
 
-/// Compares the given targets (or every target of an enabled service) with the library and
-/// returns what a sync would push, rename and delete. Changes nothing on any destination.
-#[tauri::command]
-async fn sync_plan(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    target_ids: Option<Vec<i64>>,
-) -> Result<sync::Plan, Error> {
-    let (targets, items, known, synced, prints, bases) = {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        let targets = db::get_targets(&conn, target_ids.as_deref())?;
-        let synced = targets
-            .iter()
-            .map(|t| Ok((t.id, db::synced_times(&conn, t.id)?)))
-            .collect::<Result<HashMap<_, _>, Error>>()?;
-        let prints = targets
-            .iter()
-            .map(|t| Ok((t.id, db::remote_prints(&conn, t.id)?)))
-            .collect::<Result<HashMap<_, _>, Error>>()?;
-        let bases = targets
-            .iter()
-            .map(|t| Ok((t.id, db::synced_bases(&conn, t.id)?)))
-            .collect::<Result<HashMap<_, _>, Error>>()?;
-        (
-            targets,
-            collect_items(&conn)?,
-            collect_known(&conn)?,
-            synced,
-            prints,
-            bases,
-        )
-    };
-    if targets.is_empty() {
-        return Err(Error::Msg("no sync target selected".to_owned()));
+/// A running sync job: the "sync running" flag, and the destinations to itself once a background
+/// read in progress has finished.
+struct SyncClaim<'a> {
+    _flag: SyncGuard<'a>,
+    _io: tokio::sync::MutexGuard<'a, ()>,
+}
+
+async fn claim_sync(state: &AppState) -> Result<SyncClaim<'_>, Error> {
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a sync is already running".to_owned()));
     }
+    let flag = SyncGuard(&state.syncing);
+    let io = state.destination_io.lock().await;
+    Ok(SyncClaim {
+        _flag: flag,
+        _io: io,
+    })
+}
+
+/// Queues destinations for a background read; `urgent` ones are read next.
+fn queue_scans(app: &AppHandle, ids: &[i64], urgent: bool, depth: ReadDepth) -> Result<(), Error> {
+    let state = app.state::<AppState>();
+    state
+        .scans
+        .lock()
+        .map_err(|_| Error::Lock)?
+        .enqueue(ids, urgent, depth);
+    state.scan_wake.notify_one();
+    let _ = app.emit("sync-scan", ());
+    Ok(())
+}
+
+fn queue_all_scans(app: &AppHandle, depth: ReadDepth) -> Result<(), Error> {
+    let state = app.state::<AppState>();
+    let ids: Vec<i64> = with_db!(state, |c| db::list_targets(c))?
+        .iter()
+        .map(|t| t.id)
+        .collect();
+    queue_scans(app, &ids, false, depth)
+}
+
+/// Reads the destinations in the background, one at a time: every destination in full at launch,
+/// a quick check of each every [`sync_scans::RESCAN_INTERVAL`] and after the library changed,
+/// and any queued by [`queue_scans`]. Waits while a sync runs, so a review is never compared with
+/// a destination halfway through a change; a sync that starts during a read stops it.
+async fn scan_worker(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if let Err(e) = queue_all_scans(&app, ReadDepth::Full) {
+        log::warn!("could not queue destination reads: {e}");
+    }
+    let mut last_round = std::time::Instant::now();
+    loop {
+        let settled = library_settled(&state);
+        if settled || last_round.elapsed() >= sync_scans::RESCAN_INTERVAL {
+            last_round = std::time::Instant::now();
+            if let Err(e) = queue_all_scans(&app, ReadDepth::Quick) {
+                log::warn!("could not queue destination reads: {e}");
+            }
+        }
+        if state.syncing.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            continue;
+        }
+        let next = state.scans.lock().ok().and_then(|mut s| s.start_next());
+        let Some((id, depth)) = next else {
+            let _ = tokio::time::timeout(next_wake(&state, last_round), state.scan_wake.notified())
+                .await;
+            continue;
+        };
+        let _ = app.emit("sync-scan", ());
+        let read = tokio::select! {
+            read = async {
+                let _io = state.destination_io.lock().await;
+                scan_target(&app, &state, id, depth).await
+            } => Some(read),
+            () = sync_started(&state) => None,
+        };
+        let Some(read) = read else {
+            // Stopped for a sync: read again once it is done.
+            if let Ok(mut store) = state.scans.lock() {
+                store.abandon();
+                store.enqueue(&[id], true, depth);
+            }
+            let _ = app.emit("sync-scan", ());
+            continue;
+        };
+        if let Ok(mut store) = state.scans.lock() {
+            match read {
+                Ok(DestinationRead::Read(read)) => {
+                    let FreshRead {
+                        scan,
+                        stored,
+                        stamp,
+                    } = *read;
+                    store.finish(scan, stored, stamp, unix_now());
+                }
+                Ok(DestinationRead::Unchanged) => {}
+                Ok(DestinationRead::Gone) => store.abandon(),
+                Err(e) => {
+                    log::warn!("reading destination {id} failed: {e}");
+                    store.abandon();
+                }
+            }
+        }
+        let _ = app.emit("sync-scan", ());
+    }
+}
+
+/// Whether the library changed and has been still for [`sync_scans::LIBRARY_SETTLE`]; clears the
+/// change when it has.
+fn library_settled(state: &AppState) -> bool {
+    let Ok(mut changed) = state.library_changed.lock() else {
+        return false;
+    };
+    let settled = changed.is_some_and(|at| at.elapsed() >= sync_scans::LIBRARY_SETTLE);
+    if settled {
+        *changed = None;
+    }
+    settled
+}
+
+/// How long the background reader can sleep: until the next round, or until a library change
+/// has settled.
+fn next_wake(state: &AppState, last_round: std::time::Instant) -> std::time::Duration {
+    let round = sync_scans::RESCAN_INTERVAL.saturating_sub(last_round.elapsed());
+    let settle = state
+        .library_changed
+        .lock()
+        .ok()
+        .and_then(|c| *c)
+        .map(|at| sync_scans::LIBRARY_SETTLE.saturating_sub(at.elapsed()));
+    settle.map_or(round, |s| s.min(round))
+}
+
+/// Resolves once a sync has started, so a background read gives way to it.
+async fn sync_started(state: &AppState) {
+    while !state.syncing.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// What a read of one destination compares it with, taken from the database in one go.
+struct ScanInputs {
+    root: PathBuf,
+    items: Vec<sync::Item>,
+    known: HashMap<Vec<String>, sync::Known>,
+    synced_at: HashMap<i64, i64>,
+    cached: HashMap<(String, u64), String>,
+    bases: HashMap<i64, db::Base>,
+    signatures: sync::SignatureCache,
+    library: sync_scans::KnownLibrary,
+    /// `(path, size)` of every track on disk.
+    present: Vec<(String, i64)>,
+}
+
+impl ScanInputs {
+    /// What a [`sync_scans::ReadStamp`] holds of the library, with `bases` as they are now.
+    fn library_hash(&self, bases: &HashMap<i64, db::Base>) -> sync_scans::LibraryHash {
+        sync_scans::LibraryHash::of(
+            &sync_scans::LibraryDigest::of(&self.items, &self.known),
+            &self.synced_at,
+            bases,
+            &self.present,
+        )
+    }
+}
+
+fn scan_inputs(conn: &Connection, target_id: i64) -> Result<ScanInputs, Error> {
+    let root = db::get_setting(conn, SETTING_ROOT)?.ok_or_else(|| {
+        Error::Msg(
+            "library folder unknown: click Scan folder in Library once, then sync".to_owned(),
+        )
+    })?;
+    let items = collect_items(conn)?;
     // An empty library would propose deleting everything on the destination.
     if items.is_empty() {
         return Err(Error::Msg(
             "no tracks under the library folder to sync".to_owned(),
         ));
     }
-    if state.syncing.swap(true, Ordering::SeqCst) {
-        return Err(Error::Msg("a sync is already running".to_owned()));
-    }
-    let _guard = SyncGuard(&state.syncing);
-
-    let mut next_id = 0;
-    let mut plans = Vec::new();
-    for target in &targets {
-        let times = synced.get(&target.id).cloned().unwrap_or_default();
-        let cached = prints.get(&target.id).cloned().unwrap_or_default();
-        let target_bases = bases.get(&target.id).cloned().unwrap_or_default();
-        let mut plan = sync::plan_target(
-            &app,
-            &state.http,
-            target,
-            &sync::Inputs {
-                items: &items,
-                known: &known,
-                synced_at: &times,
-                cached: &cached,
-                bases: &target_bases,
-            },
-            &mut next_id,
-        )
-        .await;
-        if !plan.fresh_prints.is_empty() {
-            let conn = state.db.lock().map_err(|_| Error::Lock)?;
-            db::store_remote_prints(&conn, target.id, &plan.fresh_prints)?;
-        }
-        // Files found identical get a base now, so the next review knows who edits what.
-        let seeds = sync::seed_bases(std::mem::take(&mut plan.seeds)).await;
-        if !seeds.is_empty() {
-            let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
-            db::store_bases(&mut conn, target.id, &seeds)?;
-        }
-        plans.push(plan);
-    }
-    let plan = sync::Plan {
-        id: unix_now().to_string(),
-        targets: plans,
-    };
-    *state.plan.lock().map_err(|_| Error::Lock)? = Some(plan.clone());
-    Ok(plan)
+    let known = collect_known(conn)?;
+    let synced_at = db::synced_times(conn, target_id)?;
+    let bases = db::synced_bases(conn, target_id)?;
+    let present = db::present_sizes(conn)?;
+    Ok(ScanInputs {
+        root: PathBuf::from(root),
+        items,
+        known,
+        synced_at,
+        cached: db::remote_prints(conn, target_id)?,
+        bases,
+        signatures: db::remote_signatures(conn, target_id)?,
+        library: sync_scans::KnownLibrary::of(&present),
+        present,
+    })
 }
 
-/// Executes the actions the user confirmed from the last [`sync_plan`]. Anything that would be
-/// overwritten or deleted is copied to the app's backup folder first.
+/// What a background read of one destination came to.
+enum DestinationRead {
+    /// The destination was removed.
+    Gone,
+    /// A quick read found nothing changed; the latest read stands.
+    Unchanged,
+    Read(Box<FreshRead>),
+}
+
+/// A new read to store, with what it compared when a quick read can keep it.
+struct FreshRead {
+    scan: sync_scans::TargetScan,
+    stored: sync_scans::StoredPlan,
+    stamp: Option<sync_scans::ReadStamp>,
+}
+
+impl FreshRead {
+    /// A read that could not start, e.g. the library folder is unknown.
+    fn failed(target: &SyncTarget, plan_id: sync_scans::PlanId, now: i64, reason: String) -> Self {
+        let plan = sync::TargetPlan::failed(target, reason.clone());
+        Self {
+            scan: sync_scans::TargetScan {
+                target_id: target.id,
+                plan_id: plan_id.clone(),
+                scanned_at: now,
+                plan: plan.clone(),
+                pull: sync_scans::PullScan::failed(reason),
+            },
+            stored: sync_scans::StoredPlan {
+                id: plan_id,
+                target_id: target.id,
+                scanned_at: now,
+                library: sync_scans::LibraryDigest::of(&[], &HashMap::new()),
+                plan,
+            },
+            stamp: None,
+        }
+    }
+}
+
+/// Reads one destination: what a push would do and what the library lacks. Changes nothing on
+/// the destination; remembers fingerprints and bases it learned. A quick read stops after listing
+/// the destination when nothing changed since the latest read.
+async fn scan_target(
+    app: &AppHandle,
+    state: &AppState,
+    target_id: i64,
+    depth: ReadDepth,
+) -> Result<DestinationRead, Error> {
+    let (target, inputs) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let Some(target) = db::get_targets(&conn, Some(&[target_id]))?
+            .into_iter()
+            .next()
+        else {
+            return Ok(DestinationRead::Gone);
+        };
+        let inputs = scan_inputs(&conn, target_id);
+        (target, inputs)
+    };
+    let now = unix_now();
+    let plan_id = state
+        .scans
+        .lock()
+        .map_err(|_| Error::Lock)?
+        .new_plan_id(now);
+    let inputs = match inputs {
+        Ok(inputs) => inputs,
+        Err(e) => {
+            let read = FreshRead::failed(&target, plan_id, now, e.to_string());
+            return Ok(DestinationRead::Read(Box::new(read)));
+        }
+    };
+    let listing = sync::list_remote(&state.scan_http, &target).await;
+    let stamp_with = |bases: &HashMap<i64, db::Base>| {
+        listing
+            .as_deref()
+            .ok()
+            .and_then(|remote| sync_scans::ReadStamp::of(remote, inputs.library_hash(bases)))
+    };
+    if let (ReadDepth::Quick, Some(stamp)) = (depth, stamp_with(&inputs.bases)) {
+        let confirmed =
+            state
+                .scans
+                .lock()
+                .map_err(|_| Error::Lock)?
+                .confirm(target_id, stamp, unix_now());
+        if confirmed {
+            return Ok(DestinationRead::Unchanged);
+        }
+    }
+    let pull = match &listing {
+        Ok(remote) => sync_scans::PullScan {
+            total: remote.len(),
+            missing: sync_scans::missing_files(remote, &inputs.root, &inputs.library),
+            error: None,
+        },
+        Err(e) => sync_scans::PullScan::failed(e.to_string()),
+    };
+    let mut next_id = state.next_action_id.load(Ordering::SeqCst);
+    let mut plan = sync::plan_target(
+        app,
+        &state.scan_http,
+        &target,
+        &sync::Inputs {
+            items: &inputs.items,
+            known: &inputs.known,
+            synced_at: &inputs.synced_at,
+            cached: &inputs.cached,
+            bases: &inputs.bases,
+            signatures: &inputs.signatures,
+        },
+        listing.as_deref(),
+        &mut next_id,
+    )
+    .await;
+    state.next_action_id.store(next_id, Ordering::SeqCst);
+    let bases = remember_read(state, target.id, &mut plan, listing.is_ok()).await?;
+    // New bases change no plan (their files match), so the stamp counts them as already there.
+    let stamp = stamp_with(bases.as_ref().unwrap_or(&inputs.bases));
+    let scan = sync_scans::TargetScan {
+        target_id,
+        plan_id: plan_id.clone(),
+        scanned_at: now,
+        plan: plan.clone(),
+        pull,
+    };
+    let stored = sync_scans::StoredPlan {
+        id: plan_id,
+        target_id,
+        scanned_at: now,
+        library: sync_scans::LibraryDigest::of(&inputs.items, &inputs.known),
+        plan,
+    };
+    // A read that failed part way is tried in full again rather than kept by a quick read.
+    let stamp = stamp.filter(|_| scan.plan.error.is_none() && scan.pull.error.is_none());
+    Ok(DestinationRead::Read(Box::new(FreshRead {
+        scan,
+        stored,
+        stamp,
+    })))
+}
+
+/// Stores what a read learned about a destination: fingerprints, signatures (when it could be
+/// listed) and bases for files found identical, so the next review knows who edits what. Returns
+/// the destination's bases when new ones were stored.
+async fn remember_read(
+    state: &AppState,
+    target_id: i64,
+    plan: &mut sync::TargetPlan,
+    listed: bool,
+) -> Result<Option<HashMap<i64, db::Base>>, Error> {
+    {
+        let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
+        if !plan.fresh_prints.is_empty() {
+            db::store_remote_prints(&conn, target_id, &plan.fresh_prints)?;
+        }
+        if listed {
+            db::replace_remote_signatures(&mut conn, target_id, &plan.signatures)?;
+        }
+    }
+    let seeds = sync::seed_bases(std::mem::take(&mut plan.seeds)).await;
+    if seeds.is_empty() {
+        return Ok(None);
+    }
+    let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::store_bases(&mut conn, target_id, &seeds)?;
+    Ok(Some(db::synced_bases(&conn, target_id)?))
+}
+
+/// What the background reads found for each destination, and which are queued or being read.
+#[tauri::command]
+fn sync_scans(state: State<'_, AppState>) -> Result<sync_scans::ScanStatus, Error> {
+    Ok(state.scans.lock().map_err(|_| Error::Lock)?.status())
+}
+
+/// The latest read of one destination in full, if it has been read yet.
+#[tauri::command]
+fn sync_scan(
+    state: State<'_, AppState>,
+    target_id: i64,
+) -> Result<Option<sync_scans::TargetScan>, Error> {
+    Ok(state
+        .scans
+        .lock()
+        .map_err(|_| Error::Lock)?
+        .latest(target_id)
+        .cloned())
+}
+
+/// Reads the given destinations again, before any other waiting.
+#[tauri::command]
+fn sync_rescan(app: AppHandle, target_ids: Vec<i64>) -> Result<(), Error> {
+    queue_scans(&app, &target_ids, true, ReadDepth::Full)
+}
+
+/// Executes the actions the user confirmed from the reviewed plans (see [`scan_target`]). Each
+/// plan is used once, and refused when it is older than [`sync_scans::MAX_PLAN_AGE_SECS`] or the
+/// library tracks it was compared with have changed. Anything that would be overwritten or
+/// deleted is copied to the app's backup folder first.
 #[tauri::command]
 async fn sync_apply(
     app: AppHandle,
     state: State<'_, AppState>,
-    plan_id: String,
+    plan_ids: Vec<sync_scans::PlanId>,
     action_ids: Vec<u32>,
     resolutions: Option<HashMap<u32, sync::Resolution>>,
 ) -> Result<Vec<sync::ApplySummary>, Error> {
-    let plan = {
-        let mut slot = state.plan.lock().map_err(|_| Error::Lock)?;
-        match slot.as_ref() {
-            Some(p) if p.id == plan_id => slot.take(),
-            _ => None,
+    let plans = state
+        .scans
+        .lock()
+        .map_err(|_| Error::Lock)?
+        .take(&plan_ids, unix_now())?;
+    let claim = claim_sync(&state).await;
+    // Taking the plans dropped these destinations' reads. Queued once this sync holds the
+    // destinations, they are read again after it, whatever its outcome.
+    let ids: Vec<i64> = plans.iter().map(|p| p.target_id).collect();
+    queue_scans(&app, &ids, true, ReadDepth::Full)?;
+    let _claim = claim?;
+    {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let items = collect_items(&conn)?;
+        let known = collect_known(&conn)?;
+        if plans
+            .iter()
+            .any(|p| !p.library.still_matches(&items, &known))
+        {
+            return Err(Error::Msg(sync_scans::OUT_OF_DATE.to_owned()));
         }
     }
-    .ok_or_else(|| Error::Msg("this review is out of date: review the changes again".to_owned()))?;
-    if state.syncing.swap(true, Ordering::SeqCst) {
-        return Err(Error::Msg("a sync is already running".to_owned()));
-    }
-    let _guard = SyncGuard(&state.syncing);
-
     let selected: HashSet<u32> = action_ids.into_iter().collect();
-    let resolutions = resolutions.unwrap_or_default();
-    let root = library_root(&state)?;
-    let ids: Vec<i64> = plan.targets.iter().map(|t| t.target_id).collect();
+    let review = Confirmed {
+        selected: &selected,
+        resolutions: &resolutions.unwrap_or_default(),
+    };
+    apply_plans(&app, &state, &plans, &review).await
+}
+
+/// The actions the user ticked, and how they settled merges and conflicts.
+struct Confirmed<'a> {
+    selected: &'a HashSet<u32>,
+    resolutions: &'a HashMap<u32, sync::Resolution>,
+}
+
+async fn apply_plans(
+    app: &AppHandle,
+    state: &AppState,
+    plans: &[sync_scans::StoredPlan],
+    confirmed: &Confirmed<'_>,
+) -> Result<Vec<sync::ApplySummary>, Error> {
+    let Confirmed {
+        selected,
+        resolutions,
+    } = *confirmed;
+
+    let root = library_root(state)?;
+    let ids: Vec<i64> = plans.iter().map(|p| p.target_id).collect();
     let targets = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         // Safety net for the library records, taken before anything on a destination changes.
@@ -2187,7 +2464,7 @@ async fn sync_apply(
     let batch = unix_now();
     let backup_dir = backups.join(format!("{batch:012}"));
     let mut summaries = Vec::new();
-    for tp in &plan.targets {
+    for tp in plans.iter().map(|p| &p.plan) {
         let Some(target) = targets.iter().find(|t| t.id == tp.target_id) else {
             continue;
         };
@@ -2196,12 +2473,12 @@ async fn sync_apply(
         }
         let started_at = unix_now();
         let review = sync::Review {
-            selected: &selected,
-            resolutions: &resolutions,
+            selected,
+            resolutions,
             backup_dir: &backup_dir,
             root: &root,
         };
-        let applied = sync::apply_target(&app, &state.http, target, tp, &review).await;
+        let applied = sync::apply_target(app, &state.http, target, tp, &review).await;
         let s = &applied.summary;
         let record = db::RunRecord {
             target_id: target.id,
@@ -2226,7 +2503,7 @@ async fn sync_apply(
 
     // Library files rewritten by an update or merge: read them again.
     if summaries.iter().any(|s| s.updated + s.merged > 0) {
-        scan_and_store(&state, root).await?;
+        scan_and_store(state, root).await?;
     }
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     purge_expired(&conn, &state.data_dir.join("backups"), unix_now())?;
@@ -2380,10 +2657,7 @@ async fn libsync_join(
     target_id: i64,
     choice: libsync::membership::JoinChoice,
 ) -> Result<sync::LibraryOutcome, Error> {
-    if state.syncing.swap(true, Ordering::SeqCst) {
-        return Err(Error::Msg("a sync is already running".to_owned()));
-    }
-    let _guard = SyncGuard(&state.syncing);
+    let _claim = claim_sync(&state).await?;
     let target = shared_target(&state, target_id)?;
     state.wf_misses.clear();
     let out = sync::join_library(&state.http, &target, &state.db, choice).await?;
@@ -2399,10 +2673,7 @@ async fn libsync_leave(
     choice: libsync::membership::LeaveChoice,
     sync: bool,
 ) -> Result<(), Error> {
-    if state.syncing.swap(true, Ordering::SeqCst) {
-        return Err(Error::Msg("a sync is already running".to_owned()));
-    }
-    let _guard = SyncGuard(&state.syncing);
+    let _claim = claim_sync(&state).await?;
     let target = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         db::list_targets(&conn)?.into_iter().find(|t| t.libsync)
@@ -2442,10 +2713,7 @@ async fn libsync_run(
     state: State<'_, AppState>,
     target_ids: Vec<i64>,
 ) -> Result<Vec<sync::LibraryOutcome>, Error> {
-    if state.syncing.swap(true, Ordering::SeqCst) {
-        return Err(Error::Msg("a sync is already running".to_owned()));
-    }
-    let _guard = SyncGuard(&state.syncing);
+    let _claim = claim_sync(&state).await?;
     let targets = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         db::get_targets(&conn, Some(&target_ids))?
@@ -3588,22 +3856,33 @@ pub fn run() {
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .build()
                 .map_err(|e| Error::Msg(e.to_string()))?;
+            let scan_http = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .read_timeout(sync_scans::STALLED_AFTER)
+                .build()
+                .map_err(|e| Error::Msg(e.to_string()))?;
             app.manage(AppState {
                 db: Mutex::new(conn),
                 data_dir: dir.clone(),
                 http,
+                scan_http,
                 syncing: AtomicBool::new(false),
                 fixing: AtomicBool::new(false),
                 analyzing: AtomicBool::new(false),
                 usb_exporting: AtomicBool::new(false),
                 cancel_analysis: AtomicBool::new(false),
-                plan: Mutex::new(None),
+                scans: Mutex::new(sync_scans::ScanStore::default()),
+                scan_wake: tokio::sync::Notify::new(),
+                destination_io: tokio::sync::Mutex::new(()),
+                next_action_id: AtomicU32::new(0),
+                library_changed: Mutex::new(None),
                 wf_misses: libsync::waveforms::Misses::default(),
                 wf_filling: AtomicBool::new(false),
                 wf_again: AtomicBool::new(false),
             });
             tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(reprint_audio_fps(app.handle().clone()));
+            tauri::async_runtime::spawn(scan_worker(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3689,9 +3968,10 @@ pub fn run() {
             set_service_enabled,
             dismiss_activity,
             dismiss_sync_runs,
-            sync_plan,
+            sync_scans,
+            sync_scan,
+            sync_rescan,
             sync_apply,
-            remote_scan,
             remote_list,
             remote_download,
             remote_upload,
@@ -4224,12 +4504,17 @@ mod tests {
             db: Mutex::new(conn),
             data_dir: dir,
             http: reqwest::Client::new(),
+            scan_http: reqwest::Client::new(),
             syncing: AtomicBool::new(false),
             fixing: AtomicBool::new(false),
             analyzing: AtomicBool::new(false),
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
-            plan: Mutex::new(None),
+            scans: Mutex::new(sync_scans::ScanStore::default()),
+            scan_wake: tokio::sync::Notify::new(),
+            destination_io: tokio::sync::Mutex::new(()),
+            next_action_id: AtomicU32::new(0),
+            library_changed: Mutex::new(None),
             wf_misses: libsync::waveforms::Misses::default(),
             wf_filling: AtomicBool::new(false),
             wf_again: AtomicBool::new(false),
@@ -4318,12 +4603,17 @@ mod tests {
             db: Mutex::new(conn),
             data_dir: dir,
             http: reqwest::Client::new(),
+            scan_http: reqwest::Client::new(),
             syncing: AtomicBool::new(false),
             fixing: AtomicBool::new(false),
             analyzing: AtomicBool::new(false),
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
-            plan: Mutex::new(None),
+            scans: Mutex::new(sync_scans::ScanStore::default()),
+            scan_wake: tokio::sync::Notify::new(),
+            destination_io: tokio::sync::Mutex::new(()),
+            next_action_id: AtomicU32::new(0),
+            library_changed: Mutex::new(None),
             wf_misses: libsync::waveforms::Misses::default(),
             wf_filling: AtomicBool::new(false),
             wf_again: AtomicBool::new(false),
@@ -4359,12 +4649,17 @@ mod tests {
             db: Mutex::new(conn),
             data_dir: dir,
             http: reqwest::Client::new(),
+            scan_http: reqwest::Client::new(),
             syncing: AtomicBool::new(false),
             fixing: AtomicBool::new(false),
             analyzing: AtomicBool::new(false),
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
-            plan: Mutex::new(None),
+            scans: Mutex::new(sync_scans::ScanStore::default()),
+            scan_wake: tokio::sync::Notify::new(),
+            destination_io: tokio::sync::Mutex::new(()),
+            next_action_id: AtomicU32::new(0),
+            library_changed: Mutex::new(None),
             wf_misses: libsync::waveforms::Misses::default(),
             wf_filling: AtomicBool::new(false),
             wf_again: AtomicBool::new(false),

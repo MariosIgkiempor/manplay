@@ -670,16 +670,9 @@ const targetPlanSchema = z.object({
 });
 export type TargetPlan = z.infer<typeof targetPlanSchema>;
 
-const planSchema = z.object({ id: z.string(), targets: z.array(targetPlanSchema) });
-export type SyncPlan = z.infer<typeof planSchema>;
-
-/**
- * Compares destinations with the library and returns what a sync would push, rename and delete.
- * Changes nothing. Omit `ids` for every target of an enabled service.
- */
-export async function syncPlan(ids?: number[]): Promise<SyncPlan> {
-	return planSchema.parse(await invoke("sync_plan", { targetIds: ids ?? null }));
-}
+/** Names one background read of one destination; a review applies the plans it showed by these. */
+const planIdSchema = z.string().brand<"PlanId">();
+export type PlanId = z.infer<typeof planIdSchema>;
 
 const applySummarySchema = z.object({
 	targetId: int,
@@ -701,24 +694,72 @@ export type ApplySummary = z.infer<typeof applySummarySchema>;
  * and conflicts by action id.
  */
 export async function syncApply(
-	planId: string,
+	planIds: PlanId[],
 	actionIds: number[],
 	resolutions: Record<number, Resolution> = {},
 ): Promise<ApplySummary[]> {
 	return z
 		.array(applySummarySchema)
-		.parse(await invoke("sync_apply", { planId, actionIds, resolutions }));
+		.parse(await invoke("sync_apply", { planIds, actionIds, resolutions }));
 }
 
 const remoteFileSchema = z.object({ rel: z.array(z.string()), size: int });
 export type RemoteFile = z.infer<typeof remoteFileSchema> & { otherFormat?: string | null };
 
 const missingFileSchema = remoteFileSchema.extend({ otherFormat: z.string().nullable() });
-const remoteScanSchema = z.object({ total: int, missing: z.array(missingFileSchema) });
 
-/** Looks inside a destination for audio files the library does not have. */
-export async function remoteScan(targetId: number) {
-	return remoteScanSchema.parse(await invoke("remote_scan", { targetId }));
+/** The pull side of a read: audio files on the destination that the library does not have. */
+const pullScanSchema = z.object({
+	total: int,
+	missing: z.array(missingFileSchema),
+	error: z.string().nullable(),
+});
+
+/** One background read of one destination: what a push would do and what a pull would bring. */
+const targetScanSchema = z.object({
+	targetId: int,
+	planId: planIdSchema,
+	scannedAt: int,
+	plan: targetPlanSchema,
+	pull: pullScanSchema,
+});
+export type TargetScan = z.infer<typeof targetScanSchema>;
+
+const scanSummarySchema = z.object({
+	targetId: int,
+	planId: planIdSchema,
+	scannedAt: int,
+	error: z.string().nullable(),
+	toPull: int,
+	toPush: int,
+});
+export type ScanSummary = z.infer<typeof scanSummarySchema>;
+
+const scanStatusSchema = z.object({
+	scans: z.array(scanSummarySchema),
+	queued: z.array(int),
+	scanning: int.nullable(),
+});
+export type ScanStatus = z.infer<typeof scanStatusSchema>;
+
+/** What the background reads found for each destination, and which are waiting or being read. */
+export async function syncScans(): Promise<ScanStatus> {
+	return scanStatusSchema.parse(await invoke("sync_scans"));
+}
+
+/** The latest read of one destination, or null before its first read. */
+export async function syncScan(targetId: number): Promise<TargetScan | null> {
+	return targetScanSchema.nullable().parse(await invoke("sync_scan", { targetId }));
+}
+
+/** Reads the given destinations again, ahead of anything else waiting. */
+export async function syncRescan(targetIds: number[]): Promise<void> {
+	await invoke("sync_rescan", { targetIds });
+}
+
+/** Fires whenever a background read starts, finishes or is queued. */
+export function onSyncScan(handler: () => void): Promise<() => void> {
+	return listen("sync-scan", () => handler());
 }
 
 const verifiedSchema = z.object({

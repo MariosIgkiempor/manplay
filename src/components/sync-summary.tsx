@@ -1,4 +1,4 @@
-import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, CloudUpload, Download, Loader2, RefreshCw } from "lucide-react";
 import {
 	type Dispatch,
@@ -22,7 +22,7 @@ import {
 	type PushFilter,
 	PushList,
 } from "#/components/sync-review.tsx";
-import { SyncShell } from "#/components/sync-shell.tsx";
+import { SyncShell, type SyncShellVariant } from "#/components/sync-shell.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
@@ -31,17 +31,32 @@ import {
 	type LibraryOutcome,
 	libsyncRun,
 	onPullProgress,
+	type PlanId,
 	type PullOutcome,
 	type PullProgress,
 	type RemoteFile,
 	type Resolution,
 	remotePull,
-	remoteScan,
 	type SyncAction,
 	type TargetPlan,
+	type TargetScan,
 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
-import { DELETED_KEY, useSyncApply, useSyncPlan, useSyncTargets } from "#/lib/queries.ts";
+import {
+	DELETED_KEY,
+	useSyncApply,
+	useSyncRescan,
+	useSyncScans,
+	useSyncTargets,
+	useTargetScans,
+} from "#/lib/queries.ts";
+import {
+	hasNewerRead,
+	latestReads,
+	shownReads,
+	unreadTargets,
+	waitingOnOther,
+} from "#/lib/review-reads.ts";
 import {
 	type Choices,
 	type IncomingAction,
@@ -153,8 +168,9 @@ function Section({
 }
 
 /**
- * Sync with the destinations: reads them as soon as it opens, then shows a pull and a push for
- * each, each with a switch and its full list of changes to tick. Nothing changes until Sync.
+ * Sync with the destinations: shows what their last background read found at once, a pull and a
+ * push for each, each with a switch and its full list of changes to tick. Nothing changes until
+ * Sync. Refresh reads them again and waits for that.
  */
 export function SyncPanel({
 	ids,
@@ -164,18 +180,30 @@ export function SyncPanel({
 }: {
 	ids: number[];
 	mode?: SyncMode;
-	variant?: "drawer" | "panel";
+	variant?: SyncShellVariant;
 	onClose?: () => void;
 }) {
-	const [round, setRound] = useState(0);
+	const rescan = useSyncRescan();
+	// Each round starts the review afresh; reads already shown are not shown again.
+	const [session, setSession] = useState<{ round: number; stale: ReadonlySet<PlanId> }>({
+		round: 0,
+		stale: new Set(),
+	});
+	const { mutate: readAgain } = rescan;
+	const refresh = (shown: readonly PlanId[]) => {
+		readAgain(ids);
+		setSession((s) => ({ round: s.round + 1, stale: new Set([...s.stale, ...shown]) }));
+	};
 	return (
 		<Gather
-			key={round}
+			key={session.round}
 			ids={ids}
+			stale={session.stale}
 			mode={mode}
 			variant={variant}
 			onClose={onClose}
-			onRefresh={() => setRound((r) => r + 1)}
+			onRefresh={refresh}
+			rescanError={rescan.isError ? String(rescan.error) : null}
 		/>
 	);
 }
@@ -448,20 +476,24 @@ async function exchangeLibraryData(
 /** What shows before there is a plan to review, and after the run: loading, errors, the result. */
 function notReady({
 	phase,
-	plan,
-	scanned,
+	ready,
+	error: readError,
+	waiting,
 	progress,
 	onRefresh,
 	onClose,
 	variant,
 }: {
 	phase: Phase;
-	plan: { data?: unknown; isError: boolean; error: unknown };
-	scanned: boolean;
+	/** Every destination has a read to show. */
+	ready: boolean;
+	error: string | null;
+	/** Another destination is being read first. */
+	waiting: boolean;
 	progress: PullProgress | null;
 	onRefresh: () => void;
 	onClose: (() => void) | undefined;
-	variant: "drawer" | "panel";
+	variant: SyncShellVariant;
 }): ReactNode {
 	if (phase.step === "done") {
 		return (
@@ -474,7 +506,7 @@ function notReady({
 			/>
 		);
 	}
-	const error = phase.step === "failed" ? phase.error : plan.isError ? String(plan.error) : null;
+	const error = phase.step === "failed" ? phase.error : readError;
 	if (error !== null) {
 		return (
 			<SyncShell variant={variant}>
@@ -487,15 +519,17 @@ function notReady({
 			</SyncShell>
 		);
 	}
-	if (plan.data) {
+	if (ready) {
 		return null;
 	}
 	return (
 		<SyncShell variant={variant}>
 			<div className="space-y-3 px-[var(--diff-inset)] py-12 text-center text-sm">
 				<Loader2 className="mx-auto size-5 animate-spin text-muted-foreground motion-reduce:animate-none" />
-				<p>{scanned ? "Comparing with your library…" : "Reading the destinations…"}</p>
-				{progress && progress.total > 0 && (
+				<p>
+					{waiting ? "Waiting for another destination to be read…" : "Reading the destinations…"}
+				</p>
+				{!waiting && progress && progress.total > 0 && (
 					<div className="mx-auto max-w-sm">
 						<RunProgress done={progress.done} total={progress.total} current={progress.current} />
 					</div>
@@ -505,44 +539,73 @@ function notReady({
 	);
 }
 
+/**
+ * The reads a review shows, one per destination: the newest, unless it was shown before a Refresh.
+ * While `frozen` (something is ticked, or a run is going) the reads on screen stay put, and
+ * `newer` says a newer one is ready instead of swapping it in under the user's choices. A
+ * destination never read yet (e.g. just added) is queued for a read, unless it already waits.
+ */
+function useReviewReads(ids: readonly number[], stale: ReadonlySet<PlanId>, frozen: boolean) {
+	const reads = useTargetScans(ids);
+	const status = useSyncScans().data;
+	const { mutate: readNow } = useSyncRescan();
+	const latest = latestReads(
+		reads.map((r) => r?.data),
+		stale,
+	);
+	const [pinned, setPinned] = useState<ReadonlyMap<number, TargetScan>>(new Map());
+	const shown = shownReads(ids, latest, pinned, frozen);
+	const shownKey = shown.map((r) => r?.planId ?? "").join(",");
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-pin only when what is shown changes
+	useEffect(() => {
+		setPinned(new Map(shown.flatMap((r) => (r === null ? [] : [[r.targetId, r] as const]))));
+	}, [shownKey]);
+
+	const asked = useRef(false);
+	const unread = unreadTargets(
+		ids,
+		reads.map((r) => r?.data),
+		status,
+	);
+	useEffect(() => {
+		if (unread.length > 0 && !asked.current) {
+			asked.current = true;
+			readNow(unread);
+		}
+	}, [unread, readNow]);
+
+	const queryError = reads.find((r) => r.isError)?.error;
+	return {
+		shown,
+		newer: hasNewerRead(ids, latest, pinned),
+		waiting: waitingOnOther(ids, status),
+		error: queryError === undefined ? null : String(queryError),
+	};
+}
+
 function Gather({
 	ids,
+	stale,
 	mode,
 	variant,
 	onClose,
 	onRefresh,
+	rescanError,
 }: {
 	ids: number[];
+	/** Reads shown before a Refresh: waited past, never shown again. */
+	stale: ReadonlySet<PlanId>;
 	mode: SyncMode;
-	variant: "drawer" | "panel";
+	variant: SyncShellVariant;
 	onClose: (() => void) | undefined;
-	onRefresh: () => void;
+	onRefresh: (shown: readonly PlanId[]) => void;
+	rescanError: string | null;
 }) {
 	const queryClient = useQueryClient();
-	const scans = useQueries({
-		queries: ids.map((id) => ({
-			queryKey: ["remote-scan", id],
-			queryFn: () => remoteScan(id),
-			gcTime: 0,
-			retry: false,
-		})),
-	});
-	const scanned = scans.every((s) => !s.isPending);
-	const plan = useSyncPlan();
 	const apply = useSyncApply();
 	const syncTargets = useSyncTargets();
 	const [phase, setPhase] = useState<Phase>({ step: "review" });
 	const [progress, setProgress] = useState<PullProgress | null>(null);
-
-	// Plan the push once the scans are done, so the destinations are read one job at a time.
-	const started = useRef(false);
-	const { mutate: startPlan } = plan;
-	useEffect(() => {
-		if (scanned && !started.current) {
-			started.current = true;
-			startPlan(ids);
-		}
-	}, [scanned, ids, startPlan]);
 	useEffect(() => {
 		const unlisten = onPullProgress(setProgress);
 		return () => {
@@ -572,15 +635,36 @@ function Gather({
 		return !a.optional !== pushFlips.has(a.id);
 	};
 
-	const early = notReady({ phase, plan, scanned, progress, onRefresh, onClose, variant });
-	if (early || !plan.data) {
+	const busy = phase.step !== "review";
+	const touched = switched.size + pullFlips.size + pushFlips.size + choices.size > 0;
+	const { shown, newer, waiting, error } = useReviewReads(ids, stale, touched || busy);
+	const showLatest = () => {
+		setSwitched(new Map());
+		setPullFlips(new Set());
+		setPushFlips(new Set());
+		setChoices(new Map());
+		setOpen(new Map());
+		setUnderstood(false);
+	};
+
+	const early = notReady({
+		phase,
+		ready: shown.every((r) => r !== null),
+		error: rescanError ?? error,
+		waiting,
+		progress,
+		onRefresh: () => onRefresh(shown.flatMap((r) => (r ? [r.planId] : []))),
+		onClose,
+		variant,
+	});
+	// Not ready means some destination has no read yet: `early` shows the wait.
+	if (early !== null) {
 		return early;
 	}
+	const reviewed = shown.filter((r): r is TargetScan => r !== null);
 
-	const planId = plan.data.id;
-	const targets = plan.data.targets.map((t: TargetPlan) => {
-		const scan = scans[ids.indexOf(t.targetId)];
-		const missing = scan?.data?.missing ?? [];
+	const targets = reviewed.map(({ plan: t, pull }) => {
+		const missing = pull.missing;
 		const pullOn = isOn(t.targetId, "pull");
 		const pushOn = isOn(t.targetId, "push") && !t.error;
 		const pullSel = missing.filter((f) => pullPicked(t.targetId, f));
@@ -591,7 +675,7 @@ function Gather({
 		return {
 			plan: t,
 			missing,
-			pullError: scan?.error ? String(scan.error) : null,
+			pullError: pull.error,
 			pullOn,
 			pushOn,
 			pullSel,
@@ -623,7 +707,12 @@ function Gather({
 	const total = pulls.reduce((n, t) => n + t.pull.length, 0) + applyIds.length;
 	// Destinations that share tags and playlists: they are exchanged first, whatever is ticked.
 	const libraryIds = ids.filter((id) => syncTargets.data?.find((t) => t.id === id)?.libsync);
-	const busy = phase.step !== "review";
+	// Only the plans with something ticked are applied, so an untouched old one cannot refuse.
+	const applying = new Set(applyIds);
+	const planIds = reviewed
+		.filter((r) => r.plan.actions.some((a) => applying.has(a.id)))
+		.map((r) => r.planId);
+	const refresh = () => onRefresh(reviewed.map((r) => r.planId));
 
 	const run = async () => {
 		try {
@@ -645,7 +734,7 @@ function Gather({
 			setPhase({ step: "pushing" });
 			const result =
 				applyIds.length > 0
-					? await apply.mutateAsync({ planId, actionIds: applyIds, resolutions })
+					? await apply.mutateAsync({ planIds, actionIds: applyIds, resolutions })
 					: [];
 			setPhase({ step: "done", pulled, pushed: result, library });
 		} catch (e) {
@@ -707,7 +796,7 @@ function Gather({
 					</div>
 					<RunStatus phase={phase} pulling={progress} />
 					<div className="flex gap-2">
-						<Button variant="outline" onClick={onRefresh} disabled={busy}>
+						<Button variant="outline" onClick={refresh} disabled={busy}>
 							Refresh
 						</Button>
 						{onClose && (
@@ -734,6 +823,7 @@ function Gather({
 			}
 		>
 			<div>
+				<NewerRead show={newer && !busy} onShow={showLatest} />
 				{targets.map((t) => (
 					<TargetBlock
 						key={t.plan.targetId}
@@ -754,6 +844,23 @@ function Gather({
 				))}
 			</div>
 		</SyncShell>
+	);
+}
+
+/** Offers the destination's newer read when the one on screen was kept for the user's ticks. */
+function NewerRead({ show, onShow }: { show: boolean; onShow: () => void }) {
+	if (!show) {
+		return null;
+	}
+	return (
+		<div className="flex items-center justify-between gap-3 border-b bg-muted/40 px-[var(--diff-inset)] py-2 text-sm">
+			<span className="text-muted-foreground">
+				The destination was read again since you started ticking.
+			</span>
+			<Button size="sm" variant="outline" onClick={onShow}>
+				Show the latest
+			</Button>
+		</div>
 	);
 }
 

@@ -67,13 +67,14 @@ async fn expand(
             for f in backend.list(&dest_of(base, &item.rel)).await? {
                 let rel = item.rel.iter().chain(f.rel.iter()).cloned().collect();
                 let local = std::iter::once(name.clone()).chain(f.rel.iter().cloned());
-                out.push((Remote { rel, size: f.size }, local.collect()));
+                out.push((Remote { rel, ..f }, local.collect()));
             }
         } else if let Some(size) = backend.remote_size(&dest_of(base, &item.rel)).await? {
             out.push((
                 Remote {
                     rel: item.rel.clone(),
                     size,
+                    version: None,
                 },
                 vec![name],
             ));

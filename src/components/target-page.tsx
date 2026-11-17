@@ -19,14 +19,15 @@ import {
 	UsageBar,
 } from "#/components/destination-header.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
+import { EmptyState } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
+import { PlaceFrame } from "#/components/place-page.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { SyncPanel } from "#/components/sync-summary.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
-import { useDetail } from "#/context/detail-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { isR2, removeSyncTarget, type SyncTarget, updateSyncTarget } from "#/lib/api.ts";
 import { syncEntries } from "#/lib/history.ts";
@@ -248,82 +249,83 @@ function RemoveRow({ target, onRemoved }: { target: SyncTarget; onRemoved: () =>
 
 type Tab = "sync" | "history" | "settings";
 
-/** One machine/folder or bucket/folder: what it holds, its settings and its own sync history. */
-export function TargetDetail({ id, onRemoved }: { id: number; onRemoved: () => void }) {
+/**
+ * One machine/folder or bucket/folder: what a sync would do (read in the background, so it shows
+ * at once), its own sync history and its settings.
+ */
+export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => void }) {
 	const targets = useSyncTargets();
 	const history = useSyncHistory();
 	const tracks = useTracks();
 	const [tab, setTab] = useState<Tab>("sync");
 	const target = targets.data?.find((t) => t.id === id);
 	if (!target) {
-		return null;
+		return targets.isPending ? null : (
+			<EmptyState icon={<Network />} title="Destination removed">
+				It is no longer in your destinations.
+			</EmptyState>
+		);
 	}
 	const r2 = isR2(target);
 	const total = tracks.data?.length ?? 0;
 	const where = target.path.join(" / ") || "Bucket root";
 	return (
-		<div className="flex h-full min-h-0 flex-col gap-5">
-			<DestinationHeader
-				brand={r2 ? "cloudflare" : "tailscale"}
-				kind={
-					r2 ? (
+		<PlaceFrame
+			fill={tab === "sync"}
+			header={
+				<DestinationHeader
+					section="export"
+					place={`target:${id}`}
+					brand={r2 ? "cloudflare" : "tailscale"}
+					kind={
+						r2 ? (
+							<>
+								<Cloud /> R2 bucket
+							</>
+						) : (
+							<>
+								<Network /> Tailscale folder
+							</>
+						)
+					}
+					title={target.machine}
+					meta={
 						<>
-							<Cloud /> R2 bucket
+							<UsageBar value={target.syncedTracks} total={total} tone="progress">
+								{target.syncedTracks.toLocaleString()} of {total.toLocaleString()} songs synced
+							</UsageBar>
+							<FolderFigure path={where} />
 						</>
-					) : (
-						<>
-							<Network /> Tailscale folder
-						</>
-					)
-				}
-				title={target.machine}
-				meta={
-					<>
-						<UsageBar value={target.syncedTracks} total={total} tone="progress">
-							{target.syncedTracks.toLocaleString()} of {total.toLocaleString()} songs synced
-						</UsageBar>
-						<FolderFigure path={where} />
-					</>
-				}
-				tabs={
-					<Segmented
-						className="border-b-0"
-						value={tab}
-						onChange={setTab}
-						label="Destination view"
-						items={[
-							{ value: "sync", label: "Sync", icon: <RefreshCw /> },
-							{ value: "history", label: "History", icon: <History /> },
-							{ value: "settings", label: "Settings", icon: <Settings2 /> },
-						]}
-					/>
-				}
-			/>
-			{tab === "sync" ? (
-				<div className="min-h-0 flex-1">
-					<SyncPanel key={id} ids={[id]} variant="panel" />
-				</div>
-			) : (
-				<div className="min-h-0 flex-1 overflow-y-auto pb-6">
-					{tab === "history" ? (
-						<HistoryList
-							entries={syncEntries((history.data ?? []).filter((r) => r.targetId === id))}
-							empty="Never synced."
-							titled={false}
+					}
+					tabs={
+						<Segmented
+							className="border-b-0"
+							value={tab}
+							onChange={setTab}
+							label="Destination view"
+							items={[
+								{ value: "sync", label: "Sync", icon: <RefreshCw /> },
+								{ value: "history", label: "History", icon: <History /> },
+								{ value: "settings", label: "Settings", icon: <Settings2 /> },
+							]}
 						/>
-					) : (
-						<SettingsForm key={id} target={target}>
-							<RemoveRow target={target} onRemoved={onRemoved} />
-						</SettingsForm>
-					)}
-				</div>
+					}
+				/>
+			}
+		>
+			{tab === "sync" ? (
+				<SyncPanel key={id} ids={[id]} variant="page" />
+			) : tab === "history" ? (
+				<HistoryList
+					entries={syncEntries((history.data ?? []).filter((r) => r.targetId === id))}
+					empty="Never synced."
+					titled={false}
+				/>
+			) : (
+				<SettingsForm key={id} target={target}>
+					<RemoveRow target={target} onRemoved={onRemoved} />
+				</SettingsForm>
 			)}
-		</div>
+		</PlaceFrame>
 	);
-}
-
-/** A destination in the details panel; removing it closes the panel. */
-export function TargetPanel({ id }: { id: number }) {
-	const { close } = useDetail();
-	return <TargetDetail id={id} onRemoved={close} />;
 }

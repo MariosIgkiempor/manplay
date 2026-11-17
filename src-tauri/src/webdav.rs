@@ -111,11 +111,12 @@ pub async fn list(client: &Client, segments: &[String]) -> Result<Vec<Entry>, Er
     Ok(entries)
 }
 
-/// Every file below `base` as `(path relative to base, size)`, walking folders one level at a time.
+/// Every file below `base` as `(path relative to base, size, modified)`, walking folders one
+/// level at a time.
 pub async fn list_files(
     client: &Client,
     base: &[String],
-) -> Result<Vec<(Vec<String>, u64)>, Error> {
+) -> Result<Vec<(Vec<String>, u64, Option<i64>)>, Error> {
     const MAX_DEPTH: usize = 12;
     let mut out = Vec::new();
     let mut stack: Vec<Vec<String>> = vec![Vec::new()];
@@ -129,7 +130,7 @@ pub async fn list_files(
                     stack.push(child);
                 }
             } else {
-                out.push((child, e.size.unwrap_or(0)));
+                out.push((child, e.size.unwrap_or(0), e.modified));
             }
         }
     }

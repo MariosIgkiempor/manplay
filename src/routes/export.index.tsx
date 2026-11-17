@@ -7,7 +7,7 @@ import { PullButton, PushButton, SyncButton } from "#/components/sync-flow.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { useSyncTargets, useTracks } from "#/lib/queries.ts";
 
-export const Route = createFileRoute("/export")({ component: ExportPage });
+export const Route = createFileRoute("/export/")({ component: ExportPage });
 
 function ExportPage() {
 	const progress = useSyncProgress();

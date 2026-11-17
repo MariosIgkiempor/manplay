@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { Download, FolderOpen, RefreshCw } from "lucide-react";
 import { DestinationHeader, FolderFigure, SettingLabel } from "#/components/destination-header.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
@@ -8,7 +9,6 @@ import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { SourceCard } from "#/components/source-card.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
-import { useDetail } from "#/context/detail-context.ts";
 import { importGetFolder } from "#/lib/api.ts";
 import { activityEntries } from "#/lib/history.ts";
 import { countNew } from "#/lib/import-state.ts";
@@ -37,7 +37,7 @@ function statusLine(s: ReturnType<typeof useImport>): string {
 }
 
 export function DownloadsCard({ s }: { s: ReturnType<typeof useImport> }) {
-	const detail = useDetail();
+	const navigate = useNavigate();
 	const { enabled, setEnabled } = useDownloadsEnabled();
 	return (
 		<SourceCard
@@ -47,7 +47,7 @@ export function DownloadsCard({ s }: { s: ReturnType<typeof useImport> }) {
 			enabled={enabled}
 			onToggle={setEnabled}
 			status={statusLine(s)}
-			onOpen={() => detail.open({ kind: "service", service: "downloads" })}
+			onOpen={() => void navigate({ to: "/import/downloads" })}
 			action={
 				s.folder === null ? (
 					<Button size="sm" onClick={() => s.choose.mutate()} disabled={s.choose.isPending}>
@@ -67,7 +67,7 @@ export function DownloadsCard({ s }: { s: ReturnType<typeof useImport> }) {
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
 /** The Downloads source, laid out like an export destination: header, then History and Settings. */
-export function DownloadsPanel() {
+export function DownloadsPage() {
 	const folder = useQuery({ queryKey: ["import-folder"], queryFn: importGetFolder });
 	const choose = useChooseImportFolder();
 	const history = useActivity("downloads");
@@ -89,6 +89,8 @@ export function DownloadsPanel() {
 			header={(tabs) => (
 				<>
 					<DestinationHeader
+						section="import"
+						place="downloads"
 						tabs={tabs}
 						brand="downloads"
 						kind={

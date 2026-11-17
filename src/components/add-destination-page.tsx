@@ -1,14 +1,17 @@
-import { ChevronRight, FolderOpen, Plus, Upload } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { ChevronRight, FolderOpen, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AddR2, AddTailscale } from "#/components/add-destination.tsx";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { Drawer } from "#/components/drawer.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
+import { PlaceCrumb } from "#/components/place-crumb.tsx";
+import { PlaceFrame } from "#/components/place-page.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
 import { JoinLibraryDialog } from "#/components/shared-library.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { type DestinationService, useDetail } from "#/context/detail-context.ts";
+import type { DestinationService } from "#/lib/places.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { space, useUsbDrives } from "#/lib/use-usb.ts";
@@ -31,21 +34,33 @@ const SERVICES: { id: DestinationService; brand: Brand; title: string; what: str
 ];
 
 function Heading({ brand, title }: { brand?: Brand | undefined; title: string }) {
+	const navigate = useNavigate();
 	return (
 		<PageHeader
-			variant="panel"
 			art={
 				brand ? (
-					<BrandIcon brand={brand} className="size-24 shrink-0 rounded-xl" />
+					<BrandIcon brand={brand} className="size-28 shrink-0 rounded-xl" />
 				) : (
-					<div className="grid size-24 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground [&_svg]:size-9">
+					<div className="grid size-28 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground [&_svg]:size-10">
 						<Plus />
 					</div>
 				)
 			}
 			kind={
 				<>
-					<Upload /> Add destination
+					<PlaceCrumb section="export" current="add" label="Add destination" />
+					{brand && (
+						<>
+							<ChevronRight className="size-3.5 shrink-0" />
+							<button
+								type="button"
+								onClick={() => void navigate({ to: "/export/add", search: {} })}
+								className="hover:text-foreground hover:underline"
+							>
+								Other kinds
+							</button>
+						</>
+					)}
 				</>
 			}
 			title={title}
@@ -55,7 +70,7 @@ function Heading({ brand, title }: { brand?: Brand | undefined; title: string })
 
 /** Step one: pick what kind of destination. */
 function Pick() {
-	const detail = useDetail();
+	const navigate = useNavigate();
 	const rekordbox = useRekordbox().status.data;
 	const drives = useUsbDrives().data ?? [];
 	const note = (id: DestinationService) => {
@@ -68,14 +83,13 @@ function Pick() {
 		return null;
 	};
 	return (
-		<div className="space-y-5 pb-6">
-			<Heading title="Where to?" />
+		<PlaceFrame header={<Heading title="Where to?" />}>
 			<ul className="divide-y overflow-hidden rounded-lg border">
 				{SERVICES.map((s) => (
 					<li key={s.id}>
 						<button
 							type="button"
-							onClick={() => detail.push({ kind: "add-destination", service: s.id })}
+							onClick={() => void navigate({ to: "/export/add", search: { service: s.id } })}
 							className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40"
 						>
 							<BrandIcon brand={s.brand} className="size-9" />
@@ -91,7 +105,7 @@ function Pick() {
 					</li>
 				))}
 			</ul>
-		</div>
+		</PlaceFrame>
 	);
 }
 
@@ -99,7 +113,9 @@ const plural = (n: number) => `${n} plugged in`;
 
 /** Tailscale or R2: the form, then a look at what is already there to pull. */
 function SyncTargetStep({ service }: { service: "tailscale" | "r2" }) {
-	const detail = useDetail();
+	const navigate = useNavigate();
+	const openTarget = (targetId: number) =>
+		void navigate({ to: "/export/$targetId", params: { targetId } });
 	const [added, setAdded] = useState<number | null>(null);
 	// A new destination is first asked what it should be: part of the shared library, or files
 	// only. A device already in a library keeps it files only; Sync has "Join or start".
@@ -123,8 +139,7 @@ function SyncTargetStep({ service }: { service: "tailscale" | "r2" }) {
 	const offer = targets?.find((t) => t.id === offering);
 	const meta = SERVICES.find((s) => s.id === service);
 	return (
-		<div className="space-y-5 pb-6">
-			<Heading brand={meta?.brand} title={meta?.title ?? ""} />
+		<PlaceFrame header={<Heading brand={meta?.brand} title={meta?.title ?? ""} />}>
 			{service === "r2" ? <AddR2 onAdded={setAdded} /> : <AddTailscale onAdded={setAdded} />}
 			{offer && (
 				<JoinLibraryDialog
@@ -137,25 +152,23 @@ function SyncTargetStep({ service }: { service: "tailscale" | "r2" }) {
 			)}
 			<Drawer
 				open={added !== null && added === asked}
-				onClose={() => added !== null && detail.open({ kind: "target", id: added })}
+				onClose={() => added !== null && openTarget(added)}
 				title="Pull existing files"
 				width="w-[44rem]"
 			>
-				{added !== null && (
-					<PullReview targetId={added} onDone={() => detail.open({ kind: "target", id: added })} />
-				)}
+				{added !== null && <PullReview targetId={added} onDone={() => openTarget(added)} />}
 			</Drawer>
-		</div>
+		</PlaceFrame>
 	);
 }
 
 function RekordboxStep() {
-	const detail = useDetail();
+	const navigate = useNavigate();
+	const openRekordbox = () => void navigate({ to: "/export/rekordbox" });
 	const { status, choose } = useRekordbox();
 	const path = status.data?.path ?? null;
 	return (
-		<div className="space-y-5 pb-6">
-			<Heading brand="rekordbox" title="Rekordbox XML" />
+		<PlaceFrame header={<Heading brand="rekordbox" title="Rekordbox XML" />}>
 			<div className="space-y-3 rounded-lg border border-dashed p-5 text-center">
 				<p className="text-sm">
 					{path ? (
@@ -172,30 +185,25 @@ function RekordboxStep() {
 						variant={path ? "outline" : "default"}
 						onClick={() =>
 							choose.mutate(undefined, {
-								onSuccess: (next) => next && detail.open({ kind: "service", service: "rekordbox" }),
+								onSuccess: (next) => next && openRekordbox(),
 							})
 						}
 					>
 						<FolderOpen /> {path ? "Change location…" : "Choose location…"}
 					</Button>
-					{path && (
-						<Button onClick={() => detail.open({ kind: "service", service: "rekordbox" })}>
-							Open
-						</Button>
-					)}
+					{path && <Button onClick={openRekordbox}>Open</Button>}
 				</div>
 			</div>
 			{choose.isError && <ErrorLine>{String(choose.error)}</ErrorLine>}
-		</div>
+		</PlaceFrame>
 	);
 }
 
 function UsbStep() {
-	const detail = useDetail();
+	const navigate = useNavigate();
 	const drives = useUsbDrives().data ?? [];
 	return (
-		<div className="space-y-5 pb-6">
-			<Heading brand="usb" title="CDJ USB drive" />
+		<PlaceFrame header={<Heading brand="usb" title="CDJ USB drive" />}>
 			{drives.length === 0 ? (
 				<div className="rounded-lg border border-dashed">
 					<EmptyState title="Plug in a USB drive">
@@ -208,7 +216,7 @@ function UsbStep() {
 						<li key={d.mount}>
 							<button
 								type="button"
-								onClick={() => detail.open({ kind: "usb", mount: d.mount })}
+								onClick={() => void navigate({ to: "/export/usb", search: { mount: d.mount } })}
 								className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40"
 							>
 								<span className="min-w-0 flex-1">
@@ -224,12 +232,12 @@ function UsbStep() {
 					))}
 				</ul>
 			)}
-		</div>
+		</PlaceFrame>
 	);
 }
 
 /** Add an export destination: pick the service, then set it up. */
-export function AddDestinationPanel({ service }: { service?: DestinationService | undefined }) {
+export function AddDestinationPage({ service }: { service?: DestinationService | undefined }) {
 	if (service === "tailscale" || service === "r2") {
 		return <SyncTargetStep service={service} />;
 	}

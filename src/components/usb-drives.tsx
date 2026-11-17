@@ -14,6 +14,7 @@ import { type ReactNode, useId, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { DestinationHeader, SettingLabel, UsageBar } from "#/components/destination-header.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
+import { PlaceFrame } from "#/components/place-page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -41,7 +42,7 @@ const plural = (n: number, one: string, many: string) =>
 	`${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 /** One plugged-in drive: its space, the rekordbox library on it, and export. */
-export function UsbDrivePanel({ mount }: { mount: string }) {
+export function UsbDrivePage({ mount }: { mount: string }) {
 	const drives = useUsbDrives();
 	const drive = drives.data?.find((d) => d.mount === mount);
 	if (!drive) {
@@ -59,32 +60,32 @@ type Tab = "contents" | "settings";
 function DriveDetail({ drive }: { drive: UsbDrive }) {
 	const library = useUsbLibrary(drive.hasLibrary ? drive.mount : null);
 	const [tab, setTab] = useState<Tab>("contents");
-	// Fills the panel: header and tabs stay put, and what is below scrolls (the browser's two
+	// Fills the page: header and tabs stay put, and what is below scrolls (the browser's two
 	// columns each on their own).
+	const browsing = tab === "contents" && library.data !== undefined && drive.hasLibrary;
 	return (
-		<div className="flex h-full min-h-0 flex-col gap-5">
-			<DriveHeader
-				drive={drive}
-				actions={<UsbExportButton drive={drive} library={library.data} />}
-				tabs={
-					<Segmented
-						className="border-b-0"
-						value={tab}
-						onChange={setTab}
-						label="Drive view"
-						items={[
-							{ value: "contents", label: "Contents", icon: <LibraryBig /> },
-							{ value: "settings", label: "Settings", icon: <Settings2 /> },
-						]}
-					/>
-				}
-			/>
-			<div
-				className={cn(
-					"min-h-0 flex-1",
-					(tab === "settings" || !library.data || !drive.hasLibrary) && "overflow-y-auto pb-6",
-				)}
-			>
+		<PlaceFrame
+			fill={browsing}
+			header={
+				<DriveHeader
+					drive={drive}
+					actions={<UsbExportButton drive={drive} library={library.data} />}
+					tabs={
+						<Segmented
+							className="border-b-0"
+							value={tab}
+							onChange={setTab}
+							label="Drive view"
+							items={[
+								{ value: "contents", label: "Contents", icon: <LibraryBig /> },
+								{ value: "settings", label: "Settings", icon: <Settings2 /> },
+							]}
+						/>
+					}
+				/>
+			}
+		>
+			<div className={cn(browsing && "h-full px-6 pt-5")}>
 				{tab === "contents" ? (
 					<>
 						{library.isError && <ErrorLine>{String(library.error)}</ErrorLine>}
@@ -102,7 +103,7 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 					<DriveSettings drive={drive} />
 				)}
 			</div>
-		</div>
+		</PlaceFrame>
 	);
 }
 
@@ -132,6 +133,8 @@ function DriveHeader({
 	return (
 		<div className="shrink-0 space-y-2">
 			<DestinationHeader
+				section="export"
+				place={`usb:${drive.mount}`}
 				brand="usb"
 				kind={
 					<>

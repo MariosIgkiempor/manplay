@@ -4,6 +4,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 use crate::error::Error;
+use crate::sync::{RemoteSignature, SignatureCache};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -760,6 +761,16 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              main        INTEGER NOT NULL DEFAULT 0
          );
          CREATE INDEX IF NOT EXISTS cues_audio_fp ON cues(audio_fp);
+         -- Signatures of destination files (tags region and audio samples), valid while the file
+         -- keeps the size and change marker (modified time or ETag) it had when read.
+         CREATE TABLE IF NOT EXISTS remote_signatures (
+             target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
+             path      TEXT NOT NULL,
+             size      INTEGER NOT NULL,
+             version   TEXT NOT NULL,
+             signature TEXT NOT NULL,
+             PRIMARY KEY (target_id, path)
+         );
          CREATE TABLE IF NOT EXISTS stale_remote (
              target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
              track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
@@ -2037,6 +2048,57 @@ pub fn store_remote_prints(
         ])?;
     }
     Ok(())
+}
+
+/// Destination signatures read on earlier runs, by path.
+pub fn remote_signatures(conn: &Connection, target_id: i64) -> Result<SignatureCache, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT path, size, version, signature FROM remote_signatures WHERE target_id = ?1",
+    )?;
+    let rows = stmt.query_map(params![target_id], |r| {
+        let size: i64 = r.get(1)?;
+        let path: String = r.get(0)?;
+        Ok((
+            path.clone(),
+            RemoteSignature {
+                path,
+                size: u64::try_from(size).unwrap_or(0),
+                version: r.get(2)?,
+                signature: r.get(3)?,
+            },
+        ))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Replaces a destination's cached signatures with the ones its latest read used, so files gone
+/// from the destination drop out.
+pub fn replace_remote_signatures(
+    conn: &mut Connection,
+    target_id: i64,
+    signatures: &[RemoteSignature],
+) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    tx.execute(
+        "DELETE FROM remote_signatures WHERE target_id = ?1",
+        params![target_id],
+    )?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR REPLACE INTO remote_signatures (target_id, path, size, version, signature)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for s in signatures {
+            stmt.execute(params![
+                target_id,
+                s.path,
+                i64::try_from(s.size).unwrap_or(i64::MAX),
+                s.version,
+                s.signature
+            ])?;
+        }
+    }
+    Ok(tx.commit()?)
 }
 
 /// A hand-set BPM and/or key for one track: replaces the detection result of its audio, so the
@@ -3350,6 +3412,42 @@ mod tests {
             tag_key: tag_bpm.map(|_| "Fm".to_owned()),
             ..NewTrack::default()
         }
+    }
+
+    fn signature(path: &str, version: &str) -> RemoteSignature {
+        RemoteSignature {
+            path: path.to_owned(),
+            size: 10,
+            version: version.to_owned(),
+            signature: format!("sig-{path}-{version}"),
+        }
+    }
+
+    #[test]
+    fn remote_signatures_are_replaced_per_destination_and_go_with_it() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        let target = |machine: &str| NewTarget {
+            tailnet: "t".to_owned(),
+            machine: machine.to_owned(),
+            path: vec!["share".to_owned()],
+        };
+        let one = add_target(&conn, &target("one")).expect("target");
+        let two = add_target(&conn, &target("two")).expect("target");
+        replace_remote_signatures(&mut conn, one, &[signature("a", "1"), signature("b", "1")])
+            .expect("store");
+        replace_remote_signatures(&mut conn, two, &[signature("a", "9")]).expect("store");
+        replace_remote_signatures(&mut conn, one, &[signature("a", "2")]).expect("replace");
+
+        let kept = remote_signatures(&conn, one).expect("read");
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept.get("a"), Some(&signature("a", "2")));
+        assert_eq!(
+            remote_signatures(&conn, two).expect("read").get("a"),
+            Some(&signature("a", "9"))
+        );
+
+        remove_target(&conn, one).expect("remove");
+        assert!(remote_signatures(&conn, one).expect("read").is_empty());
     }
 
     #[test]

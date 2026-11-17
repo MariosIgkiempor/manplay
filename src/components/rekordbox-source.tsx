@@ -1,14 +1,15 @@
+import { useNavigate } from "@tanstack/react-router";
 import { Copy, FileCode, FolderOpen, History, Settings2, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { DestinationHeader, SettingLabel } from "#/components/destination-header.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
+import { PlaceFrame } from "#/components/place-page.tsx";
 import { RekordboxExportButton } from "#/components/rekordbox-view.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
-import { useDetail } from "#/context/detail-context.ts";
 import type { RekordboxStatus } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
 import { activityEntries } from "#/lib/history.ts";
@@ -111,9 +112,9 @@ const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 const plural = (n: number, one: string) => `${n.toLocaleString()} ${n === 1 ? one : `${one}s`}`;
 
 /** The rekordbox XML destination, laid out like a USB drive: header, then History and Settings. */
-export function RekordboxPanel() {
+export function RekordboxPage() {
 	const { status, choose, stop } = useRekordbox();
-	const { close } = useDetail();
+	const navigate = useNavigate();
 	const history = useActivity("rekordbox");
 	const [tab, setTab] = useState<Tab>("history");
 	const [copied, setCopied] = useState(false);
@@ -145,42 +146,47 @@ export function RekordboxPanel() {
 	);
 
 	return (
-		<div className="space-y-5 pb-6">
-			<DestinationHeader
-				brand="rekordbox"
-				kind={
-					<>
-						<FileCode /> rekordbox XML
-					</>
-				}
-				title={path === null ? "rekordbox" : fileName(path)}
-				titleHint={path ?? undefined}
-				meta={<FileFigures status={data} />}
-				actions={
-					path === null ? (
-						chooseButton
-					) : (
+		<PlaceFrame
+			header={
+				<DestinationHeader
+					section="export"
+					place="rekordbox"
+					brand="rekordbox"
+					kind={
 						<>
-							<RekordboxExportButton size="sm" label="Export…" />
-							<Button size="sm" variant="outline" onClick={() => void copy()}>
-								<Copy /> {copied ? "Copied" : "Copy path"}
-							</Button>
+							<FileCode /> rekordbox XML
 						</>
-					)
-				}
-				tabs={
-					<Segmented
-						className="border-b-0"
-						value={tab}
-						onChange={setTab}
-						label="rekordbox view"
-						items={[
-							{ value: "history", label: "History", icon: <History /> },
-							{ value: "settings", label: "Settings", icon: <Settings2 /> },
-						]}
-					/>
-				}
-			/>
+					}
+					title={path === null ? "rekordbox" : fileName(path)}
+					titleHint={path ?? undefined}
+					meta={<FileFigures status={data} />}
+					actions={
+						path === null ? (
+							chooseButton
+						) : (
+							<>
+								<RekordboxExportButton size="sm" label="Export…" />
+								<Button size="sm" variant="outline" onClick={() => void copy()}>
+									<Copy /> {copied ? "Copied" : "Copy path"}
+								</Button>
+							</>
+						)
+					}
+					tabs={
+						<Segmented
+							className="border-b-0"
+							value={tab}
+							onChange={setTab}
+							label="rekordbox view"
+							items={[
+								{ value: "history", label: "History", icon: <History /> },
+								{ value: "settings", label: "Settings", icon: <Settings2 /> },
+							]}
+						/>
+					}
+				/>
+			}
+		>
 			{data?.error && <ErrorLine>{data.error}</ErrorLine>}
 			<MutationErrors mutations={[choose, stop]} />
 			{tab === "history" ? (
@@ -192,10 +198,12 @@ export function RekordboxPanel() {
 				<RekordboxSettings
 					path={path}
 					chooseButton={chooseButton}
-					onStop={() => stop.mutate(undefined, { onSuccess: close })}
+					onStop={() =>
+						stop.mutate(undefined, { onSuccess: () => void navigate({ to: "/export" }) })
+					}
 					stopping={stop.isPending}
 				/>
 			)}
-		</div>
+		</PlaceFrame>
 	);
 }

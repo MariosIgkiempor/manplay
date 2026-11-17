@@ -1,7 +1,7 @@
 import { CheckCircle2, FolderArchive, Trash2, TriangleAlert } from "lucide-react";
 import { TONE, type Tone } from "#/components/diff-view.tsx";
 import { FailureList } from "#/components/failure-list.tsx";
-import { SyncShell } from "#/components/sync-shell.tsx";
+import { SyncShell, type SyncShellVariant } from "#/components/sync-shell.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import type { ApplySummary, LibraryOutcome, PullOutcome } from "#/lib/api.ts";
 import { TRASH } from "#/lib/platform.ts";
@@ -109,7 +109,7 @@ export function SyncResult({
 	pushed: ApplySummary[];
 	/** Tags and playlists exchanged with destinations that share them. */
 	library?: LibraryOutcome[];
-	variant: "drawer" | "panel";
+	variant: SyncShellVariant;
 	onDone: () => void;
 }) {
 	const errors =

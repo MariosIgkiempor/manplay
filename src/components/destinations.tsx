@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, FolderOpen, PanelRightOpen, Plus, Trash2 } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { ArrowRight, ChevronRight, FolderOpen, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
@@ -9,7 +10,6 @@ import { RekordboxExportButton } from "#/components/rekordbox-view.tsx";
 import { LibraryBadge } from "#/components/shared-library.tsx";
 import { SyncButton } from "#/components/sync-flow.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { type DetailView, useDetail } from "#/context/detail-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import {
 	isR2,
@@ -56,11 +56,12 @@ interface RowProps {
 	fill: ReactNode;
 	status: ReactNode;
 	action: ReactNode;
-	open: DetailView;
+	/** Goes to the destination's page. */
+	open: () => void;
 	menu: readonly MenuEntry[];
 }
 
-/** One destination. The row opens its details; the action works without opening it. */
+/** One destination. The row opens its page; the action works without opening it. */
 function Row({
 	brand,
 	name,
@@ -73,12 +74,11 @@ function Row({
 	open,
 	menu,
 }: RowProps) {
-	const detail = useDetail();
-	const go = () => detail.open(open);
+	const go = open;
 	return (
 		<RowMenu
 			label={name}
-			items={[{ label: "Open", icon: <PanelRightOpen />, onSelect: go }, "separator", ...menu]}
+			items={[{ label: "Open", icon: <ArrowRight />, onSelect: go }, "separator", ...menu]}
 		>
 			<div
 				className={cn(
@@ -141,6 +141,7 @@ function TargetRow({
 	librarySize: number;
 	onRemove: () => void;
 }) {
+	const navigate = useNavigate();
 	const progress = useSyncProgress();
 	const history = useSyncHistory();
 	const online = useOnline(target);
@@ -189,13 +190,14 @@ function TargetRow({
 			action={
 				<SyncButton size="sm" variant="outline" ids={[target.id]} disabled={progress.size > 0} />
 			}
-			open={{ kind: "target", id: target.id }}
+			open={() => void navigate({ to: "/export/$targetId", params: { targetId: target.id } })}
 			menu={[{ label: "Remove…", icon: <Trash2 />, destructive: true, onSelect: onRemove }]}
 		/>
 	);
 }
 
 function RekordboxRow() {
+	const navigate = useNavigate();
 	const { status, choose, stop } = useRekordbox();
 	const s = status.data;
 	if (!s?.path) {
@@ -219,7 +221,7 @@ function RekordboxRow() {
 			}
 			status={line}
 			action={<RekordboxExportButton size="sm" variant="outline" />}
-			open={{ kind: "service", service: "rekordbox" }}
+			open={() => void navigate({ to: "/export/rekordbox" })}
 			menu={[
 				{ label: "Change location…", icon: <FolderOpen />, onSelect: () => choose.mutate() },
 				{
@@ -234,7 +236,8 @@ function RekordboxRow() {
 }
 
 function UsbRow({ drive }: { drive: UsbDrive }) {
-	const detail = useDetail();
+	const navigate = useNavigate();
+	const open = () => void navigate({ to: "/export/usb", search: { mount: drive.mount } });
 	const used = drive.totalBytes - drive.freeBytes;
 	return (
 		<Row
@@ -257,15 +260,11 @@ function UsbRow({ drive }: { drive: UsbDrive }) {
 			}
 			status="Plugged in"
 			action={
-				<Button
-					size="sm"
-					variant="outline"
-					onClick={() => detail.open({ kind: "usb", mount: drive.mount })}
-				>
+				<Button size="sm" variant="outline" onClick={open}>
 					Browse
 				</Button>
 			}
-			open={{ kind: "usb", mount: drive.mount }}
+			open={open}
 			menu={[]}
 		/>
 	);
@@ -274,7 +273,7 @@ function UsbRow({ drive }: { drive: UsbDrive }) {
 /** Every export destination in one list: sync folders, the rekordbox file, plugged-in drives. */
 export function Destinations() {
 	const queryClient = useQueryClient();
-	const detail = useDetail();
+	const navigate = useNavigate();
 	const targets = useSyncTargets();
 	const tracks = useTracks();
 	const drives = useUsbDrives();
@@ -292,7 +291,7 @@ export function Destinations() {
 	const plugged = drives.data ?? [];
 	const count = list.length + plugged.length + (rekordbox?.path ? 1 : 0);
 	const librarySize = tracks.data?.length ?? 0;
-	const add = () => detail.open({ kind: "add-destination" });
+	const add = () => void navigate({ to: "/export/add", search: {} });
 
 	return (
 		<Section

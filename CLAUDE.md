@@ -24,6 +24,8 @@ Windows 10/11 x64.
 | Audio identity | `audioprint.rs` (`audio_fp`: audio only), `scan::fingerprint` (whole file) |
 | Analysis, waveforms | `analysis.rs`, `anlz.rs` |
 | Destinations sync (WebDAV over Tailscale, R2) | `sync.rs`, `sync/transfer.rs`, `webdav.rs`, `r2.rs`, `tailscale.rs` |
+| Background destination reads, per-destination plans | `sync_scans.rs`, `scan_worker` in `lib.rs`, `src/lib/sync-status.ts`, `src/lib/review-reads.ts` |
+| Source and destination pages | `src/routes/export.*.tsx`, `src/routes/import.*.tsx`, `src/lib/places.ts`, `src/components/place-crumb.tsx` |
 | Shared library data (op log: tags, playlists, smart playlists, analysis, Tag Database values; waveform files; one shared library per device, joined or left per destination) | `src-tauri/src/libsync/`, `docs/plans/shared-library/` |
 | rekordbox / USB export | `rekordbox.rs`, `usb*.rs`, `pdb/`, `onelib/` |
 | Frontend API wrappers | `src/lib/api.ts`, `src/lib/queries.ts` |
