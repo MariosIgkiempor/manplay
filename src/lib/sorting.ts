@@ -55,6 +55,14 @@ export const ARTIST_SORTS: readonly SortOption<ArtistSort>[] = [
 	{ key: "albums", label: "Number of albums", desc: true, directions: FEW },
 ];
 
+export type ValueSort = "name" | "songs";
+
+/** Orders for the values of one tag field on the Metadata screen. */
+export const VALUE_SORTS: readonly SortOption<ValueSort>[] = [
+	{ key: "name", label: "Name", directions: AZ },
+	{ key: "songs", label: "Number of songs", desc: true, directions: FEW },
+];
+
 const text = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
 
 /** When the newest of these songs came in, as a number that orders like `addedOrder`. */

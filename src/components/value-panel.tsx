@@ -1,38 +1,71 @@
 import { useQuery } from "@tanstack/react-query";
-import { Hash, Tag, TextCursorInput } from "lucide-react";
-import { useMemo } from "react";
+import { Hash, ListMusic, Tag, TextCursorInput } from "lucide-react";
+import { useMemo, useState } from "react";
 import { EmptyState } from "#/components/page.tsx";
 import { Cover } from "#/components/page-header.tsx";
 import { PANEL_ART, PanelHeader } from "#/components/panel-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
-import { Button } from "#/components/ui/button.tsx";
-import { useDetail, useDetailNav } from "#/context/detail-context.ts";
-import { listTags } from "#/lib/api.ts";
+import { TagEditor } from "#/components/tag-editor.tsx";
+import { Segmented } from "#/components/view-toggle.tsx";
+import { listTags, type Track } from "#/lib/api.ts";
 import { songFacts } from "#/lib/panel-facts.tsx";
 import { useTracks } from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
 import { trackHasValue, valueField } from "#/lib/track-fields.ts";
 
-/** Every song holding one value of a tag field, opened from the Metadata screen. */
+type ValueTab = "songs" | "metadata";
+
+/**
+ * Every song holding one value of a tag field, opened from the Metadata screen. The songs are
+ * fixed when the panel opens: editing the value in the metadata tab moves them out of the value
+ * but they stay here, so one edit session covers all of them.
+ */
 export function ValuePanel({ field, value }: { field: string; value: string }) {
 	const tracks = useTracks();
-	const { push } = useDetail();
-	const go = useDetailNav();
+	if (!tracks.data) {
+		return <EmptyState title="Loading songs…" />;
+	}
+	return (
+		<PinnedValuePanel
+			key={`${field}\u0000${value}`}
+			field={field}
+			value={value}
+			all={tracks.data}
+		/>
+	);
+}
+
+function PinnedValuePanel({
+	field,
+	value,
+	all,
+}: {
+	field: string;
+	value: string;
+	all: readonly Track[];
+}) {
 	// Library tags live in the database, so a fresh tag list keeps counts honest after edits.
 	useQuery({ queryKey: ["tags"], queryFn: listTags, enabled: field === "library" });
-	const matching = useMemo(
-		() => (tracks.data ?? []).filter((t) => trackHasValue(t, field, value)),
-		[tracks.data, field, value],
+	const [pinnedPaths] = useState(
+		() => new Set(all.filter((t) => trackHasValue(t, field, value)).map((t) => t.path)),
 	);
+	const [tab, setTab] = useState<ValueTab>("songs");
+	const matching = useMemo(() => all.filter((t) => pinnedPaths.has(t.path)), [all, pinnedPaths]);
 	const isTag = field === "library";
 	const Icon = isTag ? Tag : Hash;
+	const kind = valueField(field)?.one ?? field;
+	const target = useMemo(() => {
+		const t = tagTargetFor(matching);
+		return t?.paths ? { ...t, name: value, kind } : t;
+	}, [matching, value, kind]);
+	const editable = !isTag && target !== null;
 
 	return (
-		<div className="space-y-8 pb-8">
+		<div className="space-y-6 pb-8">
 			<PanelHeader
 				kind={
 					<>
-						<Icon /> {valueField(field)?.one ?? field}
+						<Icon /> {kind}
 					</>
 				}
 				title={value}
@@ -41,33 +74,29 @@ export function ValuePanel({ field, value }: { field: string; value: string }) {
 					<Cover tracks={matching} fallback={<Icon className="size-8" />} className={PANEL_ART} />
 				}
 				tracks={matching}
-				actions={
-					!isTag &&
-					matching.length > 0 && (
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={() => {
-								const only = matching.length === 1 ? matching[0] : undefined;
-								if (only) {
-									go({ kind: "song", trackId: only.id, tab: "metadata" });
-									return;
-								}
-								const target = tagTargetFor(matching);
-								if (target) {
-									push({ kind: "edit", target });
-								}
-							}}
-						>
-							<TextCursorInput /> Edit {matching.length === 1 ? "song" : "all"}
-						</Button>
+				tabs={
+					editable && (
+						<Segmented
+							className="border-b-0"
+							value={tab}
+							onChange={setTab}
+							label={`${kind} view`}
+							items={[
+								{ value: "songs", label: "Songs", icon: <ListMusic /> },
+								{ value: "metadata", label: "Metadata", icon: <TextCursorInput /> },
+							]}
+						/>
 					)
 				}
 			/>
-			<SelectableTrackList
-				tracks={matching}
-				empty={<EmptyState title={tracks.isPending ? "Loading songs…" : "No songs use this yet"} />}
-			/>
+			{tab === "metadata" && editable ? (
+				<TagEditor key={[...pinnedPaths].join("\n")} target={target} embedded />
+			) : (
+				<SelectableTrackList
+					tracks={matching}
+					empty={<EmptyState title="No songs use this yet" />}
+				/>
+			)}
 		</div>
 	);
 }

@@ -1,7 +1,5 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
 import {
-	ArrowDown,
-	ArrowUp,
 	AudioLines,
 	Building2,
 	Database,
@@ -20,21 +18,25 @@ import {
 	Smile,
 	Tags,
 	Trash2,
+	X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
-import { EmptyState, ErrorLine, Page } from "#/components/page.tsx";
+import { EmptyState, ErrorLine } from "#/components/page.tsx";
+import { PageHeader, PageIcon } from "#/components/page-header.tsx";
+import { SortMenu } from "#/components/sort-menu.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
+import { TagCombobox } from "#/components/tag-combobox.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Input } from "#/components/ui/input.tsx";
+import { Segmented } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import { type FixReport, listTags, tagValues } from "#/lib/api.ts";
 import { useTagDatabaseOps, useTracks } from "#/lib/queries.ts";
+import { type ListSort, VALUE_SORTS, type ValueSort } from "#/lib/sorting.ts";
 import { trackHasValue, VALUE_FIELDS, type ValueField } from "#/lib/track-fields.ts";
-import { typeScale } from "#/lib/type-scale.ts";
 import { cn } from "#/lib/utils.ts";
 
 interface Item {
@@ -48,14 +50,13 @@ interface Pending {
 	to: string | null;
 }
 
-interface Order {
-	by: "value" | "count";
-	desc: boolean;
-}
-
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const byName = (a: Item, b: Item) => a.value.localeCompare(b.value);
+
+/** One value's row, laid out like a song row: a hover tint, no rules between rows. */
+const ROW =
+	"group grid min-h-12 grid-cols-[1.25rem_minmax(0,1fr)_auto_auto] items-center gap-3 rounded-md px-2 py-1.5 text-sm";
 
 const FIELD_IDS = VALUE_FIELDS.map((f) => f.id);
 const FILE_FIELDS = VALUE_FIELDS.filter((f) => f.id !== "library");
@@ -92,10 +93,10 @@ function useAllItems(): Lists {
 	}, [files, tags.data, tags.isPending]);
 }
 
-function sorted(items: Item[], order: Order): Item[] {
-	const sign = order.desc ? -1 : 1;
+function sorted(items: Item[], sort: ListSort<ValueSort>): Item[] {
+	const sign = sort.desc ? -1 : 1;
 	return [...items].sort((a, b) =>
-		order.by === "count" ? sign * (a.count - b.count) || byName(a, b) : sign * byName(a, b),
+		sort.key === "songs" ? sign * (a.count - b.count) || byName(a, b) : sign * byName(a, b),
 	);
 }
 
@@ -109,7 +110,7 @@ export function TagDatabase() {
 	const { items, loading } = all[source];
 	const ops = useTagDatabaseOps(source);
 	const [search, setSearch] = useState("");
-	const [order, setOrder] = useState<Order>({ by: "value", desc: false });
+	const [sort, setSort] = useState<ListSort<ValueSort>>({ key: "name", desc: false });
 	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [editing, setEditing] = useState<string | null>(null);
 	const [pending, setPending] = useState<Pending | null>(null);
@@ -136,8 +137,8 @@ export function TagDatabase() {
 	const shown = useMemo(() => {
 		const q = search.trim().toLowerCase();
 		const hits = q === "" ? items : items.filter((i) => i.value.toLowerCase().includes(q));
-		return sorted(hits, order);
-	}, [items, search, order]);
+		return sorted(hits, sort);
+	}, [items, search, sort]);
 	const countOf = (names: string[]) =>
 		items.filter((i) => names.some((n) => same(n, i.value))).reduce((sum, i) => sum + i.count, 0);
 	const openValue = detail.view?.kind === "value" ? detail.view : null;
@@ -151,11 +152,6 @@ export function TagDatabase() {
 			}
 			return next;
 		});
-	const allShownSelected = shown.length > 0 && shown.every((i) => selected.has(i.value));
-	const toggleAll = () =>
-		setSelected(allShownSelected ? new Set() : new Set(shown.map((i) => i.value)));
-	const sortBy = (by: Order["by"]) =>
-		setOrder((o) => (o.by === by ? { by, desc: !o.desc } : { by, desc: by === "count" }));
 
 	const create = async (name: string) => {
 		setNotice(null);
@@ -202,167 +198,140 @@ export function TagDatabase() {
 	};
 
 	const totalValues = FIELD_IDS.reduce((sum, id) => sum + all[id].items.length, 0);
+	const unused = items.filter((i) => i.count === 0).length;
 	return (
-		<Page
-			title="Metadata"
-			icon={<Database />}
-			meta={
-				<>
-					<span>{plural(VALUE_FIELDS.length, "field", "fields")}</span>
-					<span>{plural(totalValues, "value", "values")}</span>
-				</>
-			}
-		>
-			<div className="grid gap-8 md:grid-cols-[12rem_minmax(0,1fr)]">
-				<DatabaseStats
+		<main>
+			<DatabaseStats
+				label={label}
+				total={items.length}
+				shown={shown.length}
+				search={search}
+				selected={selected.size}
+			/>
+			<PageHeader
+				art={
+					<PageIcon>
+						<Database />
+					</PageIcon>
+				}
+				title="Metadata"
+				meta={
+					<>
+						<span>{plural(VALUE_FIELDS.length, "field", "fields")}</span>
+						<span>{plural(totalValues, "value", "values")}</span>
+					</>
+				}
+				actions={
+					<Button variant="outline" disabled={busy || creating} onClick={() => setCreating(true)}>
+						<Plus /> Create
+					</Button>
+				}
+				tabs={<FieldTabs all={all} source={source} onPick={setSource} />}
+			/>
+			{/* Search and any selection stay at hand while the list scrolls. */}
+			<div className="sticky top-0 z-10 space-y-3 border-b bg-background/90 px-6 py-3 backdrop-blur-md">
+				<ValueSearch
 					label={label}
-					total={items.length}
-					shown={shown.length}
 					search={search}
-					selected={selected.size}
+					onSearch={setSearch}
+					sort={sort}
+					onSort={setSort}
 				/>
-				<FieldNav all={all} source={source} onPick={setSource} />
-
-				<div className="min-w-0 space-y-4">
-					<FieldHeading label={label} items={items} loading={loading} isLibrary={isLibrary} />
-					<Notices notice={notice} error={ops.migrate.error ?? ops.create.error} />
-
-					<div className="overflow-clip rounded-lg border bg-card">
-						<div className="sticky top-0 z-10 bg-card">
-							<div className="flex flex-wrap items-center gap-2 border-b p-3">
-								<div className="relative min-w-48 flex-1">
-									<Search className="pointer-events-none absolute top-2 left-2.5 size-4 text-muted-foreground" />
-									<Input
-										value={search}
-										onChange={(e) => setSearch(e.target.value)}
-										placeholder={`Search ${label.toLowerCase()}`}
-										aria-label="Search values"
-										className="pl-8"
-									/>
-								</div>
-								<Button
-									variant="outline"
-									disabled={busy || creating}
-									onClick={() => setCreating(true)}
-								>
-									<Plus /> Create
-								</Button>
-							</div>
-
-							{selected.size > 0 && (
-								<MigrateBar
-									selected={[...selected]}
-									items={items}
-									busy={busy}
-									onClear={() => setSelected(new Set())}
-									onMigrate={(to) => setPending({ from: [...selected], to })}
-								/>
-							)}
-
-							<div className="grid h-9 grid-cols-[1.75rem_minmax(0,1fr)_9rem_4rem] items-center gap-2 border-b bg-card px-3 font-medium text-muted-foreground text-xs">
-								<input
-									type="checkbox"
-									checked={allShownSelected}
-									onChange={toggleAll}
-									disabled={shown.length === 0}
-									aria-label="Select all shown"
-									className="size-3.5 accent-primary"
-								/>
-								<SortHeader
-									label="Name"
-									active={order.by === "value"}
-									order={order}
-									onClick={() => sortBy("value")}
-								/>
-								<SortHeader
-									label="Songs"
-									active={order.by === "count"}
-									order={order}
-									onClick={() => sortBy("count")}
-									right
-								/>
-								<span />
-							</div>
-						</div>
-						{loading && <EmptyState title="Loading…" />}
-						{!loading && shown.length === 0 && (
-							<NoValues label={label} isLibrary={isLibrary} searching={items.length > 0} />
-						)}
-						<div className="divide-y">
-							{creating && (
-								<NewValueRow
-									existing={items}
-									label={label}
-									onCreate={create}
-									onCancel={() => setCreating(false)}
-								/>
-							)}
-							{shown.map((item) => (
-								<RowMenu
-									key={item.value}
-									label={item.value}
-									items={[
-										{
-											label: "Show songs",
-											icon: <ListMusic />,
-											onSelect: () =>
-												detail.open({ kind: "value", field: source, value: item.value }),
-										},
-										{
-											label: "Play",
-											icon: <Play />,
-											disabled: item.count === 0,
-											onSelect: () => player.play(songsWith(item.value), 0),
-										},
-										"separator",
-										{
-											label: "Rename",
-											icon: <Pencil />,
-											disabled: busy,
-											onSelect: () => setEditing(item.value),
-										},
-										{
-											label: "Delete…",
-											icon: <Trash2 />,
-											destructive: true,
-											disabled: busy,
-											onSelect: () => setPending({ from: [item.value], to: null }),
-										},
-									]}
-								>
-									<Row
-										item={item}
-										unit={unit}
-										checked={selected.has(item.value)}
-										max={maxCount}
-										open={openValue?.field === source && same(openValue.value, item.value)}
-										editing={editing === item.value}
-										busy={busy}
-										onOpen={() => detail.open({ kind: "value", field: source, value: item.value })}
-										onToggle={() => toggle(item.value)}
-										onEdit={() => setEditing(item.value)}
-										onCancel={() => setEditing(null)}
-										onRename={(to) => rename(item, to)}
-										onDelete={() => setPending({ from: [item.value], to: null })}
-									/>
-								</RowMenu>
-							))}
-						</div>
-					</div>
-				</div>
-
-				{pending && (
-					<Confirm
-						pending={pending}
-						affected={countOf(pending.from)}
+				{selected.size > 0 && (
+					<MigrateBar
+						selected={[...selected]}
 						items={items}
-						rewritesFiles={!isLibrary}
-						onCancel={() => setPending(null)}
-						onConfirm={() => run(pending)}
+						busy={busy}
+						onClear={() => setSelected(new Set())}
+						onMigrate={(to) => setPending({ from: [...selected], to })}
 					/>
 				)}
 			</div>
-		</Page>
+
+			<div className="space-y-3 px-6 pt-5 pb-6">
+				<Notices notice={notice} error={ops.migrate.error ?? ops.create.error} />
+				{!loading && unused > 0 && (
+					<p className="text-muted-foreground text-xs">
+						{plural(unused, "value is", "values are")} not used by any song.
+					</p>
+				)}
+				{loading && <EmptyState title="Loading…" />}
+				{!loading && shown.length === 0 && !creating && (
+					<NoValues label={label} isLibrary={isLibrary} searching={items.length > 0} />
+				)}
+				<div className="space-y-px">
+					{creating && (
+						<NewValueRow
+							existing={items}
+							label={label}
+							onCreate={create}
+							onCancel={() => setCreating(false)}
+						/>
+					)}
+					{shown.map((item) => (
+						<RowMenu
+							key={item.value}
+							label={item.value}
+							items={[
+								{
+									label: "Show songs",
+									icon: <ListMusic />,
+									onSelect: () => detail.open({ kind: "value", field: source, value: item.value }),
+								},
+								{
+									label: "Play",
+									icon: <Play />,
+									disabled: item.count === 0,
+									onSelect: () => player.play(songsWith(item.value), 0),
+								},
+								"separator",
+								{
+									label: "Rename",
+									icon: <Pencil />,
+									disabled: busy,
+									onSelect: () => setEditing(item.value),
+								},
+								{
+									label: "Delete…",
+									icon: <Trash2 />,
+									destructive: true,
+									disabled: busy,
+									onSelect: () => setPending({ from: [item.value], to: null }),
+								},
+							]}
+						>
+							<Row
+								item={item}
+								unit={unit}
+								checked={selected.has(item.value)}
+								selecting={selected.size > 0}
+								max={maxCount}
+								open={openValue?.field === source && same(openValue.value, item.value)}
+								editing={editing === item.value}
+								busy={busy}
+								onOpen={() => detail.open({ kind: "value", field: source, value: item.value })}
+								onToggle={() => toggle(item.value)}
+								onEdit={() => setEditing(item.value)}
+								onCancel={() => setEditing(null)}
+								onRename={(to) => rename(item, to)}
+								onDelete={() => setPending({ from: [item.value], to: null })}
+							/>
+						</RowMenu>
+					))}
+				</div>
+			</div>
+
+			{pending && (
+				<Confirm
+					pending={pending}
+					affected={countOf(pending.from)}
+					items={items}
+					rewritesFiles={!isLibrary}
+					onCancel={() => setPending(null)}
+					onConfirm={() => run(pending)}
+				/>
+			)}
+		</main>
 	);
 }
 
@@ -399,7 +368,8 @@ function noticeFor(report: FixReport | null): { ok: boolean; text: string } {
 	};
 }
 
-function FieldNav({
+/** The fields as the page's header tabs, scrolling sideways when they do not all fit. */
+function FieldTabs({
 	all,
 	source,
 	onPick,
@@ -408,33 +378,69 @@ function FieldNav({
 	source: ValueField;
 	onPick: (f: ValueField) => void;
 }) {
-	const groups = [
-		{ title: "In the audio files", fields: VALUE_FIELDS.filter((f) => f.id !== "library") },
-		{ title: "In manplay", fields: VALUE_FIELDS.filter((f) => f.id === "library") },
-	];
 	return (
-		<nav
-			aria-label="Fields"
-			className="flex flex-wrap gap-x-4 gap-y-3 md:sticky md:top-6 md:flex-col md:flex-nowrap md:gap-y-4 md:self-start"
-		>
-			{groups.map((g) => (
-				<div key={g.title} className="space-y-0.5">
-					<h2 className={cn(typeScale.label, "px-2.5 pb-1")}>{g.title}</h2>
-					<div className="flex flex-wrap gap-0.5 md:flex-col">
-						{g.fields.map((f) => (
-							<FieldButton
-								key={f.id}
-								icon={FIELD_ICONS[f.id]}
-								label={f.label}
-								count={all[f.id].loading ? null : all[f.id].items.length}
-								active={source === f.id}
-								onClick={() => onPick(f.id)}
-							/>
-						))}
-					</div>
-				</div>
-			))}
-		</nav>
+		<div className="overflow-x-auto [scrollbar-width:none]">
+			<Segmented
+				className="w-max border-b-0"
+				value={source}
+				onChange={onPick}
+				label="Fields"
+				items={VALUE_FIELDS.map((f) => ({
+					value: f.id,
+					label: f.label,
+					icon: FIELD_ICONS[f.id],
+					count: all[f.id].loading ? 0 : all[f.id].items.length,
+				}))}
+			/>
+		</div>
+	);
+}
+
+/** Same search bar as the library: one outlined box, the sort menu as its right-hand segment. */
+function ValueSearch({
+	label,
+	search,
+	onSearch,
+	sort,
+	onSort,
+}: {
+	label: string;
+	search: string;
+	onSearch: (text: string) => void;
+	sort: ListSort<ValueSort>;
+	onSort: (sort: ListSort<ValueSort>) => void;
+}) {
+	return (
+		<div className="flex h-8 items-stretch rounded-lg border border-input bg-transparent focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30">
+			<label className="flex min-w-0 flex-1 items-center gap-1.5 px-2">
+				<Search className="size-4 shrink-0 text-muted-foreground" />
+				<input
+					value={search}
+					onChange={(e) => onSearch(e.target.value)}
+					placeholder={`Search ${label.toLowerCase()}`}
+					aria-label="Search values"
+					className="h-full min-w-24 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+				/>
+				{search !== "" && (
+					<button
+						type="button"
+						aria-label="Clear search"
+						className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+						onClick={() => onSearch("")}
+					>
+						<X className="size-4" />
+					</button>
+				)}
+			</label>
+			<div className="flex shrink-0 items-stretch border-input border-l">
+				<SortMenu
+					options={VALUE_SORTS}
+					value={sort}
+					onChange={onSort}
+					className="h-full rounded-none rounded-r-[calc(var(--radius-lg)-1px)] px-2.5 text-sm"
+				/>
+			</div>
+		</div>
 	);
 }
 
@@ -450,77 +456,6 @@ const FIELD_ICONS: Record<ValueField, ReactNode> = {
 	language: <Languages />,
 	library: <Tags />,
 };
-
-function FieldButton({
-	icon,
-	label,
-	count,
-	active,
-	onClick,
-}: {
-	icon: ReactNode;
-	label: string;
-	count: number | null;
-	active: boolean;
-	onClick: () => void;
-}) {
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			aria-current={active ? "true" : undefined}
-			className={cn(
-				"relative flex items-center justify-between gap-3 rounded-md px-2.5 py-1.5 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
-				active
-					? "bg-muted font-medium text-foreground"
-					: "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-			)}
-		>
-			{active && (
-				<span
-					aria-hidden="true"
-					className="absolute top-1.5 bottom-1.5 left-0 w-0.5 rounded-full bg-primary"
-				/>
-			)}
-			<span className="flex min-w-0 items-center gap-2">
-				<span aria-hidden="true" className={cn("[&_svg]:size-4", active && "text-primary")}>
-					{icon}
-				</span>
-				<span className="truncate">{label}</span>
-			</span>
-			<span className="text-muted-foreground text-xs tabular-nums">{count ?? ""}</span>
-		</button>
-	);
-}
-
-/** What the list is, how much is in it, and what changing a value does. */
-function FieldHeading({
-	label,
-	items,
-	loading,
-	isLibrary,
-}: {
-	label: string;
-	items: Item[];
-	loading: boolean;
-	isLibrary: boolean;
-}) {
-	const unused = items.filter((i) => i.count === 0).length;
-	return (
-		<header className="space-y-1">
-			<h2 className={typeScale.panelTitle}>{label}</h2>
-			<div className="flex flex-wrap gap-x-4 text-muted-foreground text-xs tabular-nums">
-				{!loading && <span>{plural(items.length, "value", "values")}</span>}
-				{unused > 0 && <span>{unused} unused</span>}
-			</div>
-			<p className={typeScale.description}>
-				{isLibrary
-					? "Tags you make in manplay. Audio files are not changed."
-					: "Renaming or merging rewrites the tag inside every audio file that uses it."}
-			</p>
-		</header>
-	);
-}
 
 function NoValues({
 	label,
@@ -564,37 +499,6 @@ function DatabaseStats({
 	);
 }
 
-function SortHeader({
-	label,
-	active,
-	order,
-	onClick,
-	right = false,
-}: {
-	label: string;
-	active: boolean;
-	order: Order;
-	onClick: () => void;
-	right?: boolean;
-}) {
-	const Arrow = order.desc ? ArrowDown : ArrowUp;
-	return (
-		<button
-			type="button"
-			onClick={onClick}
-			aria-label={`Sort by ${label.toLowerCase()}`}
-			className={cn(
-				"flex items-center gap-1 hover:text-foreground",
-				right && "justify-end",
-				active && "text-foreground",
-			)}
-		>
-			{label}
-			{active && <Arrow className="size-3" />}
-		</button>
-	);
-}
-
 /** A temporary row at the top of the list, named in place: Enter creates it, Escape drops it. */
 function NewValueRow({
 	existing,
@@ -608,7 +512,7 @@ function NewValueRow({
 	onCancel: () => void;
 }) {
 	return (
-		<div className="grid h-12 grid-cols-[1.75rem_minmax(0,1fr)_9rem_4rem] items-center gap-2 bg-primary/5 px-3 text-sm">
+		<div className={`${ROW} bg-primary/5`}>
 			<Plus className="size-3.5 text-primary" aria-hidden="true" />
 			<InlineInput
 				initial=""
@@ -620,8 +524,8 @@ function NewValueRow({
 				onCommit={onCreate}
 				onCancel={onCancel}
 			/>
-			<span className="text-right text-muted-foreground text-xs">New</span>
-			<span />
+			<span className="w-36 text-right text-muted-foreground text-xs">New</span>
+			<span className="w-14" />
 		</div>
 	);
 }
@@ -639,44 +543,63 @@ function MigrateBar({
 	onClear: () => void;
 	onMigrate: (to: string | null) => void;
 }) {
-	const listId = useId();
+	const id = useId();
 	const [target, setTarget] = useState("");
 	const to = target.trim();
+	const options = items.filter((i) => !selected.includes(i.value));
 	return (
-		<div className="flex flex-wrap items-center gap-2 border-b bg-primary/5 px-3 py-2">
-			<span className="px-1 font-medium text-sm tabular-nums">{selected.length} selected</span>
-			<Input
-				value={target}
-				onChange={(e) => setTarget(e.target.value)}
-				list={listId}
-				placeholder="Merge into…"
-				aria-label="Merge selected into"
-				className="w-56"
-			/>
-			<datalist id={listId}>
-				{items
-					.filter((i) => !selected.includes(i.value))
-					.map((i) => (
-						<option key={i.value} value={i.value} />
-					))}
-			</datalist>
-			<Button onClick={() => onMigrate(to)} disabled={busy || to === ""}>
-				<Merge /> Merge
+		<div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-1.5 pl-2">
+			<span className="font-medium text-sm tabular-nums">{selected.length} selected</span>
+			<Button
+				size="icon-xs"
+				variant="ghost"
+				aria-label="Clear selection"
+				title="Clear selection"
+				onClick={onClear}
+			>
+				<X />
 			</Button>
-			<Button variant="destructive" onClick={() => onMigrate(null)} disabled={busy}>
-				<Trash2 /> Delete
-			</Button>
-			<Button variant="ghost" onClick={onClear} className="ml-auto">
-				Clear selection
-			</Button>
+			<div className="ml-auto flex flex-wrap items-center gap-2">
+				<div className="w-64">
+					<TagCombobox
+						id={id}
+						value={target}
+						options={options}
+						multi={false}
+						placeholder="Merge into…"
+						touched={false}
+						onChange={setTarget}
+						className="bg-background dark:bg-background"
+					/>
+				</div>
+				<Button onClick={() => onMigrate(to)} disabled={busy || to === ""}>
+					<Merge /> Merge
+				</Button>
+				<Button
+					variant="ghost"
+					className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+					onClick={() => onMigrate(null)}
+					disabled={busy}
+				>
+					<Trash2 /> Delete
+				</Button>
+			</div>
 		</div>
 	);
+}
+
+function rowTint(checked: boolean, open: boolean): string {
+	if (checked) {
+		return "bg-primary/15";
+	}
+	return open ? "bg-muted/80" : "hover:bg-muted/60";
 }
 
 function Row({
 	item,
 	unit,
 	checked,
+	selecting,
 	max,
 	open,
 	editing,
@@ -691,6 +614,8 @@ function Row({
 	item: Item;
 	unit: string;
 	checked: boolean;
+	/** Some value is selected, so every row shows its checkbox. */
+	selecting: boolean;
 	/** The most songs any value in this list has, so bars share one scale. */
 	max: number;
 	/** Its songs are showing in the side panel. */
@@ -705,18 +630,16 @@ function Row({
 	onDelete: () => void;
 }) {
 	return (
-		<div
-			className={cn(
-				"group grid h-12 grid-cols-[1.75rem_minmax(0,1fr)_9rem_4rem] items-center gap-2 px-3 text-sm",
-				checked ? "bg-primary/10" : open ? "bg-muted" : "hover:bg-muted/50",
-			)}
-		>
+		<div className={cn(ROW, rowTint(checked, open))}>
 			<input
 				type="checkbox"
 				checked={checked}
 				onChange={onToggle}
 				aria-label={`Select ${item.value}`}
-				className="size-3.5 accent-primary"
+				className={cn(
+					"size-3.5 accent-primary focus-visible:opacity-100 group-hover:opacity-100",
+					!(checked || selecting) && "opacity-0",
+				)}
 			/>
 			{editing ? (
 				<InlineInput
@@ -741,7 +664,7 @@ function Row({
 				</button>
 			)}
 			<span
-				className="flex items-center justify-end gap-2 text-muted-foreground text-xs tabular-nums"
+				className="flex w-36 items-center justify-end gap-2 text-muted-foreground text-xs tabular-nums"
 				title={`${item.count} ${unit}`}
 			>
 				{item.count > 0 && (
@@ -756,7 +679,7 @@ function Row({
 					{item.count === 0 ? "Unused" : item.count}
 				</span>
 			</span>
-			<div className="flex justify-end gap-0.5 opacity-0 focus-within:opacity-100 group-hover:opacity-100">
+			<div className="flex w-14 justify-end gap-0.5 opacity-0 focus-within:opacity-100 group-hover:opacity-100">
 				<Button
 					size="icon-xs"
 					variant="ghost"

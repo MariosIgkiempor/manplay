@@ -81,9 +81,10 @@ export function Drawer({
 				aria-label={title}
 				inert={!open}
 				className={cn(
-					"absolute inset-y-0 right-0 z-40 flex max-w-[calc(100%-2rem)] flex-col border-l bg-background shadow-2xl transition-transform duration-200",
+					"absolute inset-y-0 right-0 z-40 flex max-w-[calc(100%-2rem)] flex-col border-l bg-background transition-transform duration-200",
 					width,
-					open ? "translate-x-0" : "translate-x-full",
+					// A closed drawer waits just outside the edge: its shadow must not bleed back in.
+					open ? "translate-x-0 shadow-2xl" : "translate-x-full",
 				)}
 			>
 				{header !== undefined ? (
