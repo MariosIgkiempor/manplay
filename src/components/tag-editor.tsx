@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { CoverPicker } from "#/components/cover-picker.tsx";
+import { NameSplitPills } from "#/components/name-split-pill.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
 import { PropertyRow } from "#/components/property-row.tsx";
@@ -408,7 +409,7 @@ function FieldInput(props: FieldProps) {
 			{field.kind === "flag" ? (
 				<FlagSelect id={id} {...props} />
 			) : (
-				<TextControl id={id} {...props} />
+				<TextWithSplits id={id} {...props} />
 			)}
 		</PropertyRow>
 	);
@@ -449,6 +450,21 @@ function placeholderFor(shared: Shared | undefined, touched: boolean): string {
 		return "Will be cleared";
 	}
 	return shared?.mixed ? "Differs between songs" : "";
+}
+
+/** The text control, with split suggestions under fields that hold credited names. */
+function TextWithSplits(props: FieldProps & { id: string }) {
+	const { field, shared, draft, onChange } = props;
+	const touched = draft !== undefined;
+	const showSplits = field.splitsCredits && (touched || !shared?.mixed);
+	return (
+		<>
+			<TextControl {...props} />
+			{showSplits && (
+				<NameSplitPills value={touched ? draft : (shared?.value ?? "")} onChange={onChange} />
+			)}
+		</>
+	);
 }
 
 function TextControl(props: FieldProps & { id: string }) {

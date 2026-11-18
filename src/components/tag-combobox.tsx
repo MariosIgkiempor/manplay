@@ -1,4 +1,5 @@
 import { GripVertical, X } from "lucide-react";
+import * as React from "react";
 import {
 	type ClipboardEvent,
 	type KeyboardEvent,
@@ -81,7 +82,8 @@ export function TagCombobox({
 		setActive(idle);
 		setOpen(multi);
 	};
-	const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
+	/** `to` is the gap the chip would land in: 0 before the first name, `chips.length` after the last. */
+	const [drag, setDrag] = useState<{ from: number; to: number } | null>(null);
 	/** Moves the name at `from` to position `to`; the first name is the primary one. */
 	const reorder = (from: number, to: number) => {
 		if (from === to || to < 0 || to >= chips.length) {
@@ -94,23 +96,13 @@ export function TagCombobox({
 			onChange(joinNames(next));
 		}
 	};
-	/** While dragging, chips show the order the drop would produce, so the gap is the preview. */
-	const order = (() => {
-		if (!drag || drag.from === drag.over) {
-			return chips;
-		}
-		const next = [...chips];
-		const [moved] = next.splice(drag.from, 1);
-		if (moved !== undefined) {
-			next.splice(drag.over, 0, moved);
-		}
-		return next;
-	})();
+	/** Dropping into the gap just before or after the chip's own slot changes nothing. */
+	const landsInPlace = drag !== null && (drag.to === drag.from || drag.to === drag.from + 1);
 	const rowRef = useRef<HTMLDivElement>(null);
-	useSlide(rowRef, order.join("\u0000"));
+	useSlide(rowRef, chips.join("\u0000"));
 	const dropDrag = () => {
-		if (drag) {
-			reorder(drag.from, drag.over);
+		if (drag && !landsInPlace) {
+			reorder(drag.from, drag.to > drag.from ? drag.to - 1 : drag.to);
 		}
 		setDrag(null);
 	};
@@ -232,28 +224,33 @@ export function TagCombobox({
 					touched && "border-primary/60 bg-primary/5 dark:bg-primary/10",
 				)}
 			>
-				{order.map((c) => {
-					const at = chips.indexOf(c);
-					return (
+				{chips.map((c, at) => (
+					<React.Fragment key={c}>
+						{drag && !landsInPlace && drag.to === at && <DropGhost name={chips[drag.from] ?? ""} />}
 						<Chip
-							key={c}
 							name={c}
 							selected={allSelected}
-							dragging={drag?.from === at}
+							origin={drag?.from === at}
 							onDragStart={() =>
 								// After the browser has taken its drag image of the untouched chip.
-								setTimeout(() => setDrag({ from: at, over: at }), 0)
+								setTimeout(() => setDrag({ from: at, to: at }), 0)
 							}
-							onDragOver={() =>
-								setDrag((d) => (d && d.from !== at && d.over !== at ? { ...d, over: at } : d))
+							onDragOver={(after) =>
+								setDrag((d) => {
+									const to = at + (after ? 1 : 0);
+									return d && d.to !== to ? { ...d, to } : d;
+								})
 							}
 							onDrop={dropDrag}
 							onDragEnd={() => setDrag(null)}
 							onNudge={(step) => reorder(at, at + step)}
 							onRemove={() => removeChip(c)}
 						/>
-					);
-				})}
+					</React.Fragment>
+				))}
+				{drag && !landsInPlace && drag.to === chips.length && (
+					<DropGhost name={chips[drag.from] ?? ""} />
+				)}
 				<input
 					id={id}
 					role="combobox"
@@ -286,7 +283,7 @@ export function TagCombobox({
 					onCopy={(e) => onCopy(e, false)}
 					onCut={(e) => onCopy(e, true)}
 					onPaste={onPaste}
-					className="h-6 min-w-16 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
+					className="h-6 min-w-6 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
 				/>
 			</div>
 			{open && rows.length > 0 && (
@@ -326,10 +323,27 @@ export function TagCombobox({
 	);
 }
 
+/** Where a dragged name would land. */
+function DropGhost({ name }: { name: string }) {
+	// Same parts as a chip, hidden, so the ghost is exactly as wide.
+	return (
+		<span
+			aria-hidden="true"
+			className="flex max-w-full items-center gap-0.5 rounded-md bg-emerald-500/10 py-0.5 pr-0.5 pl-0.5 text-emerald-500 text-xs outline-1 -outline-offset-1 outline-emerald-500/70 outline-dashed"
+		>
+			<GripVertical className="size-3 shrink-0 opacity-0" />
+			<span className="truncate">{name}</span>
+			<span className="p-0.5">
+				<X className="size-3 opacity-0" />
+			</span>
+		</span>
+	);
+}
+
 function Chip({
 	name,
 	selected,
-	dragging,
+	origin,
 	onDragStart,
 	onDragOver,
 	onDrop,
@@ -339,9 +353,11 @@ function Chip({
 }: {
 	name: string;
 	selected: boolean;
-	dragging: boolean;
+	/** The chip being dragged: its slot shows a red ghost until it is dropped. */
+	origin: boolean;
 	onDragStart: () => void;
-	onDragOver: () => void;
+	/** `after`: the pointer is over the chip's right half. */
+	onDragOver: (after: boolean) => void;
 	onDrop: () => void;
 	onDragEnd: () => void;
 	onNudge: (step: number) => void;
@@ -363,7 +379,8 @@ function Chip({
 			}}
 			onDragOver={(e) => {
 				e.preventDefault();
-				onDragOver();
+				const box = e.currentTarget.getBoundingClientRect();
+				onDragOver(e.clientX > box.left + box.width / 2);
 			}}
 			onDrop={(e) => {
 				e.preventDefault();
@@ -379,9 +396,9 @@ function Chip({
 			className={cn(
 				"flex max-w-full cursor-grab items-center gap-0.5 rounded-md bg-secondary py-0.5 pr-0.5 pl-0.5 text-secondary-foreground text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
 				selected && "bg-primary text-primary-foreground",
-				// The dragged chip's slot is the landing preview: a dashed, empty outline.
-				dragging &&
-					"bg-primary/10 outline-1 -outline-offset-1 outline-primary/70 outline-dashed *:invisible",
+				// Where the chip came from; dropping back on it cancels the move.
+				origin &&
+					"bg-destructive/10 outline-1 -outline-offset-1 outline-destructive/70 outline-dashed *:invisible",
 			)}
 		>
 			<GripVertical className="size-3 shrink-0 text-muted-foreground/60" />

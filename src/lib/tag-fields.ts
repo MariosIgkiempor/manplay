@@ -13,6 +13,8 @@ export interface TagField {
 	pick?: boolean;
 	/** Holds several names, stored as `A; B`. */
 	multi?: boolean;
+	/** Suggests splitting a name like `A & B` into separate artists. */
+	splitsCredits?: boolean;
 }
 
 export interface TagGroup {
@@ -86,7 +88,15 @@ export const TAG_GROUPS: TagGroup[] = [
 		fields: [
 			{ id: "title", label: "Title", scope: "file", wide: true },
 			{ id: "subtitle", label: "Mix / subtitle", scope: "file", hint: "rekordbox mix name" },
-			{ id: "artist", label: "Artist", scope: "both", wide: true, pick: true, multi: true },
+			{
+				id: "artist",
+				label: "Artist",
+				scope: "both",
+				wide: true,
+				pick: true,
+				multi: true,
+				splitsCredits: true,
+			},
 			{
 				id: "albumArtist",
 				label: "Album artist",
@@ -94,6 +104,7 @@ export const TAG_GROUPS: TagGroup[] = [
 				wide: true,
 				pick: true,
 				multi: true,
+				splitsCredits: true,
 				hint: "Jellyfin groups albums by this",
 			},
 			{ id: "album", label: "Album", scope: "both", wide: true },
@@ -136,6 +147,7 @@ export const TAG_GROUPS: TagGroup[] = [
 				hint: "rekordbox",
 				pick: true,
 				multi: true,
+				splitsCredits: true,
 			},
 			{ id: "grouping", label: "Grouping", scope: "both", hint: "rekordbox", pick: true },
 			{ id: "comment", label: "Comment", scope: "both", wide: true, hint: "rekordbox" },
