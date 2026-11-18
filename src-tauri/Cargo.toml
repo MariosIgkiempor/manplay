@@ -33,6 +33,7 @@ tokio = { version = "1.54.1", features = ["fs", "io-util", "macros", "sync", "ti
 roxmltree = "0.21.2"
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 percent-encoding = "2.3.2"
+unicode-normalization = "0.1.26"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 blake3 = "1.8.7"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }

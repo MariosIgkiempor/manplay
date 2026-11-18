@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use reqwest::Client;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::db::{Base, BaseUpdate, SyncTarget, Synced};
 use crate::error::Error;
@@ -854,29 +855,79 @@ struct Diff<'a> {
     uploads: Vec<&'a Item>,
     replaces: Vec<(&'a Item, u64)>,
     extras: Vec<&'a Remote>,
+    /// The destination file each library file was matched to, by track id.
+    matched: HashMap<i64, &'a Remote>,
+}
+
+/// A path as a case-insensitive, normalisation-insensitive destination sees it: Taildrive on a
+/// Mac or Windows machine treats `Pão` typed composed and decomposed, or `Western` and
+/// `western`, as one folder.
+fn folded(rel: &[String]) -> Vec<String> {
+    rel.iter()
+        .map(|segment| segment.nfc().collect::<String>().to_lowercase())
+        .collect()
 }
 
 /// Splits library and destination into matching files, files to push, and files the library lacks.
+/// Paths match exactly first; one that only differs in case or Unicode form still counts as the
+/// same file, so it is not planned as a move onto a path that already exists.
 fn diff<'a>(items: &'a [Item], remote: &'a [Remote]) -> Diff<'a> {
-    let remote_sizes: HashMap<&[String], u64> =
-        remote.iter().map(|r| (r.rel.as_slice(), r.size)).collect();
+    let exact: HashMap<&[String], usize> = remote
+        .iter()
+        .enumerate()
+        .map(|(at, r)| (r.rel.as_slice(), at))
+        .collect();
+    let mut claimed: HashSet<usize> = HashSet::new();
+    let mut found: HashMap<i64, usize> = HashMap::new();
+    for item in items {
+        if let Some(&at) = exact.get(item.rel.as_slice()) {
+            claimed.insert(at);
+            found.insert(item.track_id, at);
+        }
+    }
+    let mut by_fold: HashMap<Vec<String>, Vec<usize>> = HashMap::new();
+    for (at, r) in remote
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !claimed.contains(at))
+    {
+        by_fold.entry(folded(&r.rel)).or_default().push(at);
+    }
+    let unmatched: Vec<&Item> = items
+        .iter()
+        .filter(|i| !found.contains_key(&i.track_id))
+        .collect();
+    for item in unmatched {
+        if let Some(at) = by_fold.get_mut(&folded(&item.rel)).and_then(Vec::pop) {
+            claimed.insert(at);
+            found.insert(item.track_id, at);
+        }
+    }
     let mut out = Diff {
         in_sync: Vec::new(),
         uploads: Vec::new(),
         replaces: Vec::new(),
         extras: Vec::new(),
+        matched: HashMap::new(),
     };
     for item in items {
-        match remote_sizes.get(item.rel.as_slice()) {
-            Some(size) if *size == item.size => out.in_sync.push(item),
-            Some(size) => out.replaces.push((item, *size)),
+        match found.get(&item.track_id).map(|&at| &remote[at]) {
+            Some(r) if r.size == item.size => {
+                out.matched.insert(item.track_id, r);
+                out.in_sync.push(item);
+            }
+            Some(r) => {
+                out.matched.insert(item.track_id, r);
+                out.replaces.push((item, r.size));
+            }
             None => out.uploads.push(item),
         }
     }
-    let local: HashSet<&[String]> = items.iter().map(|i| i.rel.as_slice()).collect();
     out.extras = remote
         .iter()
-        .filter(|r| !local.contains(r.rel.as_slice()))
+        .enumerate()
+        .filter(|(at, _)| !claimed.contains(at))
+        .map(|(_, r)| r)
         .collect();
     out
 }
@@ -1017,12 +1068,12 @@ pub async fn plan_target(
         }
     };
     plan.remote_total = remote.len();
-    let versions: HashMap<&[String], &str> = remote
-        .iter()
-        .filter_map(|r| Some((r.rel.as_slice(), r.version.as_deref()?)))
-        .collect();
-    let version_of = |item: &Item| versions.get(item.rel.as_slice()).copied();
     let d = diff(items, remote);
+    let version_of = |item: &Item| {
+        d.matched
+            .get(&item.track_id)
+            .and_then(|r| r.version.as_deref())
+    };
     // Every same-size pair is compared: same path and size can still differ in tags or audio.
     // Other pairs are only read when a base says who edited them.
     let pairs: Vec<Pair> = d
@@ -2829,6 +2880,35 @@ mod tests {
         assert_eq!(d.replaces[0].1, 99);
         assert_eq!(d.extras.len(), 1);
         assert_eq!(d.extras[0].rel, rel("a/extra.wav"));
+    }
+
+    #[test]
+    fn diff_matches_paths_that_differ_only_in_case_or_unicode_form() {
+        let items = [
+            item(1, "Loefah/Western (Did A Skank)/a.wav", 10, None),
+            item(2, "Jammz/P\u{e3}o/b.wav", 10, None),
+        ];
+        let rem = [
+            remote("Loefah/western (did a skank)/a.wav", 10),
+            remote("Jammz/Pa\u{303}o/b.wav", 10),
+        ];
+        let d = diff(&items, &rem);
+        assert_eq!(d.in_sync.len(), 2);
+        assert!(d.uploads.is_empty());
+        assert!(d.extras.is_empty());
+    }
+
+    #[test]
+    fn diff_prefers_the_exact_path_when_a_case_variant_also_exists() {
+        let items = [
+            item(1, "a/Song.wav", 10, None),
+            item(2, "a/song.wav", 10, None),
+        ];
+        let rem = [remote("a/song.wav", 10), remote("a/Song.wav", 10)];
+        let d = diff(&items, &rem);
+        assert_eq!(d.in_sync.len(), 2);
+        assert_eq!(d.matched[&1].rel, rel("a/Song.wav"));
+        assert!(d.extras.is_empty());
     }
 
     #[test]
