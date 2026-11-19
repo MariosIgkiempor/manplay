@@ -7,15 +7,33 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), open: vi.fn(), save:
 
 const { syncScan, syncScans } = await import("#/lib/api.ts");
 
+const upload = {
+	id: 1,
+	targetId: 1,
+	kind: "upload",
+	rel: ["a", "c.mp3"],
+	from: null,
+	size: 10,
+	remoteSize: null,
+	note: null,
+	optional: false,
+	tags: null,
+	localSize: null,
+	merge: null,
+	trackId: 7,
+	duplicateOf: null,
+};
+
 const plan = {
 	targetId: 1,
 	name: "nas",
 	error: null,
-	actions: [],
+	actions: [upload],
 	held: [],
 	inSync: 4,
 	remoteTotal: 4,
 	unchecked: 0,
+	folders: [{ rel: ["a"], files: 4 }],
 };
 
 const scan = {
@@ -37,7 +55,10 @@ beforeEach(() => invoke.mockReset());
 describe("syncScan", () => {
 	it("accepts a read and no read yet", async () => {
 		invoke.mockResolvedValueOnce(scan);
-		expect((await syncScan(1))?.pull.missing).toHaveLength(1);
+		const read = await syncScan(1);
+		expect(read?.pull.missing).toHaveLength(1);
+		expect(read?.plan.actions[0]?.trackId).toBe(7);
+		expect(read?.plan.folders).toEqual([{ rel: ["a"], files: 4 }]);
 		invoke.mockResolvedValueOnce(null);
 		expect(await syncScan(1)).toBeNull();
 	});
@@ -47,6 +68,19 @@ describe("syncScan", () => {
 		{ name: "pull is missing", value: { ...scan, pull: undefined } },
 		{ name: "pull error is absent", value: { ...scan, pull: { total: 0, missing: [] } } },
 		{ name: "scanned at is not an integer", value: { ...scan, scannedAt: 1.5 } },
+		{ name: "the plan has no folders", value: { ...scan, plan: { ...plan, folders: undefined } } },
+		{
+			name: "a folder's count is text",
+			value: { ...scan, plan: { ...plan, folders: [{ rel: ["a"], files: "4" }] } },
+		},
+		{
+			name: "an action has no track id",
+			value: { ...scan, plan: { ...plan, actions: [{ ...upload, trackId: undefined }] } },
+		},
+		{
+			name: "a duplicate names its song as text",
+			value: { ...scan, plan: { ...plan, actions: [{ ...upload, duplicateOf: "7" }] } },
+		},
 	])("rejects a read when $name", async ({ value }) => {
 		invoke.mockResolvedValueOnce(value);
 		await expect(syncScan(1)).rejects.toThrow();

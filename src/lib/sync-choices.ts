@@ -104,6 +104,13 @@ function suggest(f: ThereFile, direction: SyncDirection): ThereChoice {
 	return "leave";
 }
 
+/** The choices one destination-only file allows, in the order they are offered. */
+export const thereOptions = (f: ThereFile): ThereChoice[] => [
+	...(f.pull ? (["pull"] as const) : []),
+	...(f.remove ? (["delete"] as const) : []),
+	"leave",
+];
+
 /**
  * Sets `choice` on every file of destination `targetId` that allows it, in a map of choices keyed
  * `targetId:path`. `null` drops each back to its suggestion.

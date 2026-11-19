@@ -1,18 +1,90 @@
-import { Check, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { PropertyRow } from "#/components/property-row.tsx";
-import { diffNames, isMulti, labelOf, type TagChange } from "#/lib/tag-preview.ts";
+import { type FieldDiff, fieldDiff, type TagPart, tagDiffs } from "#/lib/tag-change.ts";
+import { labelOf, type TagChange } from "#/lib/tag-preview.ts";
 import { cn } from "#/lib/utils.ts";
-
-/** Plain text in the editor's value column, without the field chrome. */
-const FIELD = "flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1 py-0.5 text-sm";
-const CHIP = "rounded-md px-1.5 py-0.5 text-xs";
 
 /** Names of the changed tags, as short as fits: `Genre, BPM, Key +2`. */
 function summary(changes: readonly TagChange[]): string {
 	const names = changes.map((c) => labelOf(c.field));
 	const shown = names.slice(0, 3).join(", ");
 	return names.length > 3 ? `${shown} +${names.length - 3}` : shown;
+}
+
+const LOOK: Record<TagPart["kind"], string> = {
+	kept: "bg-muted text-muted-foreground",
+	added: "bg-success/15 font-medium text-success",
+	removed: "bg-destructive/10 text-destructive line-through decoration-destructive/50",
+	renamed: "bg-warning/15",
+};
+
+const SPOKEN: Record<TagPart["kind"], string> = {
+	kept: "kept",
+	added: "added",
+	removed: "removed",
+	renamed: "renamed",
+};
+
+/**
+ * One value of a changed tag: green when added, red and struck when removed, orange with
+ * old → new when renamed, plain when it stays.
+ */
+export function TagPartPill({ part }: { part: TagPart }) {
+	return (
+		<span
+			className={cn(
+				"inline-block max-w-full break-words rounded-md px-1.5 py-0.5 text-xs leading-snug",
+				LOOK[part.kind],
+			)}
+		>
+			<span className="sr-only">{SPOKEN[part.kind]}: </span>
+			{part.kind === "renamed" ? (
+				<>
+					<span className="text-muted-foreground line-through decoration-muted-foreground/50">
+						{part.from}
+					</span>
+					<span aria-hidden="true" className="mx-1 text-muted-foreground">
+						→
+					</span>
+					<span className="sr-only"> to </span>
+					<span className="font-medium text-warning">{part.to}</span>
+				</>
+			) : (
+				part.value
+			)}
+		</span>
+	);
+}
+
+const partKey = (p: TagPart) => (p.kind === "renamed" ? `r:${p.to}` : `${p.kind}:${p.value}`);
+
+/** A tag's pills in a wrapping row. */
+function Parts({ parts }: { parts: readonly TagPart[] }) {
+	return (
+		<span className="flex min-w-0 flex-wrap items-baseline gap-1">
+			{parts.map((p) => (
+				<TagPartPill key={partKey(p)} part={p} />
+			))}
+		</span>
+	);
+}
+
+/** Changed tags, one line each: the tag's name, then the pills of its values. */
+export function FieldDiffs({ diffs }: { diffs: readonly FieldDiff[] }) {
+	if (diffs.length === 0) {
+		return null;
+	}
+	return (
+		<span className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-2 gap-y-1">
+			{diffs.map((d) => (
+				<span key={d.field} className="col-span-2 grid grid-cols-subgrid items-baseline">
+					<span className="text-muted-foreground text-xs">{labelOf(d.field)}</span>
+					<Parts parts={d.parts} />
+				</span>
+			))}
+		</span>
+	);
 }
 
 /** Old values of a field and how many songs had each. One song's change has one, count 1. */
@@ -23,50 +95,7 @@ export interface Was {
 
 const MAX_OLD = 3;
 
-/** A field's value with the change marked in it: list names as chips, otherwise old then new. */
-function Value({ field, was, to }: { field: string; was: readonly Was[]; to: string | null }) {
-	const single = was.length === 1 ? was[0] : undefined;
-	const names = single && isMulti(field) ? diffNames(single.value, to) : [];
-	// Chips only show names coming and going. Same names in another order or case read as text.
-	if (names.some((d) => d.state !== "kept")) {
-		return names.map((d) => (
-			<span
-				key={`${d.state}-${d.name}`}
-				className={cn(
-					CHIP,
-					d.state === "kept" && "bg-secondary text-secondary-foreground",
-					d.state === "added" && "bg-success/15 text-success",
-					d.state === "removed" && "bg-destructive/10 text-destructive line-through",
-				)}
-			>
-				{d.name}
-			</span>
-		));
-	}
-	return (
-		<>
-			{was.slice(0, MAX_OLD).map(
-				(w) =>
-					w.value !== null && (
-						<span key={w.value} className="text-muted-foreground">
-							<span className="line-through decoration-muted-foreground/60">{w.value}</span>
-							{was.length > 1 && <span className="text-xs"> ×{w.count}</span>}
-						</span>
-					),
-			)}
-			{was.length > MAX_OLD && (
-				<span className="text-muted-foreground text-xs">+{was.length - MAX_OLD}</span>
-			)}
-			{to === null ? (
-				<span className="text-muted-foreground italic">Cleared</span>
-			) : (
-				<span>{to}</span>
-			)}
-		</>
-	);
-}
-
-/** One changed field in the metadata editor's layout: its name, then the value with the change. */
+/** One changed field in the metadata editor's layout: its name, then a pill per old value. */
 export function TagRow({
 	field,
 	was,
@@ -76,54 +105,34 @@ export function TagRow({
 	was: readonly Was[];
 	to: string | null;
 }) {
+	const groups = was.flatMap((w) => {
+		const diff = fieldDiff(field, w.value, to);
+		return diff ? [{ parts: diff.parts, count: w.count, key: w.value ?? "" }] : [];
+	});
 	return (
 		<PropertyRow
 			className="grid-cols-[7rem_minmax(0,1fr)]"
 			label={<span className="truncate font-medium text-primary text-xs">{labelOf(field)}</span>}
 		>
-			<div className={FIELD}>
-				<Value field={field} was={was} to={to} />
+			<div className="flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1 py-0.5">
+				{groups.slice(0, MAX_OLD).map(({ parts, count, key }) => (
+					<span key={key} className="inline-flex flex-wrap items-baseline gap-1">
+						<Parts parts={parts} />
+						{was.length > 1 && <span className="text-muted-foreground text-xs">×{count}</span>}
+					</span>
+				))}
+				{groups.length > MAX_OLD && (
+					<span className="text-muted-foreground text-xs">+{groups.length - MAX_OLD}</span>
+				)}
 			</div>
 		</PropertyRow>
 	);
 }
 
-/** One value of a push conflict. The column that stays is tinted and plain, the other muted and struck. */
-function Cell({ value, kept, last }: { value: string | null; kept: boolean; last: boolean }) {
-	return (
-		<span
-			className={cn(
-				"min-w-0 break-words px-2.5 py-0.5",
-				kept ? "bg-primary/10 font-medium text-foreground" : "text-muted-foreground",
-				kept && last && "rounded-b-md",
-				!kept && value !== null && "line-through decoration-muted-foreground/50",
-			)}
-		>
-			{value ?? <span className="italic">empty</span>}
-		</span>
-	);
-}
-
-/** A column head of the conflict grid; the side that stays carries a check. */
-function Head({ who, kept }: { who: "Yours" | "Remote"; kept: boolean }) {
-	return (
-		<span
-			className={cn(
-				"inline-flex items-center gap-1 px-2.5 py-1 text-xs",
-				kept ? "rounded-t-md bg-primary/10 font-medium text-primary" : "text-muted-foreground",
-			)}
-		>
-			{kept && <Check className="size-3" />}
-			{who}
-			{kept && <span className="sr-only"> (kept)</span>}
-		</span>
-	);
-}
-
 /**
- * Changed tags laid out like the metadata editor: only the changed fields, one row each.
- * With `keep` set it is a push conflict: the destination's value against yours, and the one that
- * will be kept is marked (`keep` true: yours replaces the destination's).
+ * Changed tags as pills, one line per tag. With `keep` set it is a push over the destination's
+ * own tags: the pills say what the destination gets when yours replaces it (`keep` true), and
+ * are dimmed when the destination keeps its copy.
  */
 export function TagDiff({
 	changes,
@@ -132,32 +141,21 @@ export function TagDiff({
 	changes: readonly TagChange[];
 	keep?: boolean | undefined;
 }) {
-	if (keep === undefined) {
-		return (
-			<div className="space-y-1">
-				{changes.map((c) => (
-					<TagRow key={c.field} field={c.field} was={[{ value: c.from, count: 1 }]} to={c.to} />
-				))}
-			</div>
-		);
+	const diffs = tagDiffs(changes);
+	if (diffs.length === 0) {
+		return null;
 	}
 	return (
-		<div className="grid grid-cols-[6rem_minmax(0,1fr)_minmax(0,1fr)] items-baseline text-sm">
-			<span />
-			<Head who="Yours" kept={keep} />
-			<Head who="Remote" kept={!keep} />
-			{changes.map((c, i) => (
-				<div key={c.field} className="col-span-3 grid grid-cols-subgrid items-baseline">
-					<span className="truncate text-muted-foreground text-xs">{labelOf(c.field)}</span>
-					<Cell value={c.to} kept={keep} last={i === changes.length - 1} />
-					<Cell value={c.from} kept={!keep} last={i === changes.length - 1} />
-				</div>
-			))}
-		</div>
+		<span className="block space-y-1">
+			{keep === false && <span className="block text-muted-foreground text-xs">Remote kept</span>}
+			<span className={cn("block", keep === false && "opacity-50")}>
+				<FieldDiffs diffs={diffs} />
+			</span>
+		</span>
 	);
 }
 
-/** The diff, always open, for use inside a row whose label ticks a checkbox. */
+/** The pills, always open, for use inside a row whose label ticks a checkbox. */
 export function TagDiffInline({
 	changes,
 	keep,
@@ -175,7 +173,7 @@ export function TagDiffInline({
 	);
 }
 
-/** The changed tags' names, which open into the editor-style diff when pressed. */
+/** The changed tags' names, which open into pills when pressed. */
 export function TagChanges({
 	changes,
 	keep,

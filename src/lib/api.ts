@@ -663,6 +663,10 @@ const actionSchema = z.object({
 		.nullable(),
 	localSize: int.nullable(),
 	merge: z.array(fieldMergeSchema).nullable(),
+	/** The library song this file is; a delete's may have left the library since. */
+	trackId: int.nullable(),
+	/** Delete only: the library song with the same audio, when the file duplicates one. */
+	duplicateOf: int.nullable(),
 });
 export type SyncAction = z.infer<typeof actionSchema>;
 
@@ -675,6 +679,8 @@ const targetPlanSchema = z.object({
 	inSync: int,
 	remoteTotal: int,
 	unchecked: int,
+	/** Folders on the destination holding files, with how many are directly in each. */
+	folders: z.array(z.object({ rel: z.array(z.string()), files: int })),
 });
 export type TargetPlan = z.infer<typeof targetPlanSchema>;
 

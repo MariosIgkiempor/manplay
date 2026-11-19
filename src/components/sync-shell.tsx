@@ -5,9 +5,10 @@ import { cn } from "#/lib/utils.ts";
 export type SyncShellVariant = "drawer" | "page";
 
 /**
- * The frame of every sync screen: a scrolling area with a footer under it that never scrolls and
- * runs to the edges of its container, border included. `page` is a destination's page, whose
- * content lines up with the page header's 1.5rem padding; `drawer` is the slide-over.
+ * The frame of every sync screen: its content with a footer that stays in view and runs to the
+ * edges of its container, border included. `drawer` is the slide-over, which scrolls the content
+ * itself. `page` is a destination's page, which scrolls with the page header (so the header can
+ * scroll away) and lines up with its 1.5rem padding; its footer is pinned to the bottom.
  */
 export function SyncShell({
 	variant,
@@ -21,13 +22,20 @@ export function SyncShell({
 	return (
 		<div
 			className={cn(
-				"flex h-full min-h-0 flex-col [--sync-top:0px]",
-				variant === "page" ? "[--diff-inset:1.5rem]" : "[--diff-inset:1rem]",
+				"flex flex-col [--sync-top:0px]",
+				variant === "page" ? "flex-1 [--diff-inset:1.5rem]" : "h-full min-h-0 [--diff-inset:1rem]",
 			)}
 		>
-			<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>
+			<div
+				className={cn(
+					"flex-1",
+					variant === "drawer" && "min-h-0 overflow-y-auto overscroll-contain",
+				)}
+			>
+				{children}
+			</div>
 			{footer && (
-				<div className="shrink-0 space-y-3 border-t bg-background px-[var(--diff-inset)] py-3">
+				<div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-[var(--diff-inset)] py-3">
 					{footer}
 				</div>
 			)}

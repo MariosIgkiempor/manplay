@@ -1,35 +1,21 @@
 import { useQueryClient } from "@tanstack/react-query";
-import {
-	CheckCircle2,
-	ChevronRight,
-	CloudUpload,
-	Download,
-	FolderSearch,
-	Loader2,
-	RefreshCw,
-} from "lucide-react";
+import { CheckCircle2, Loader2, RefreshCw } from "lucide-react";
 import {
 	type Dispatch,
 	type ReactNode,
 	type SetStateAction,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
-import { ChangeBar, RunProgress, Tally, TONE, type Tone } from "#/components/diff-view.tsx";
+import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
-import { IncomingList } from "#/components/sync-incoming.tsx";
-import { OnlyThereList } from "#/components/sync-only-there.tsx";
 import { SyncResult } from "#/components/sync-result.tsx";
-import {
-	countKinds,
-	DeleteGuard,
-	FilterTally,
-	KINDS,
-	LABEL,
-	type PushFilter,
-	PushList,
-} from "#/components/sync-review.tsx";
+import { DeleteGuard, KINDS, LABEL } from "#/components/sync-review.tsx";
+import { AlbumMosaic } from "#/components/sync-review-albums.tsx";
+import type { ReviewControls } from "#/components/sync-review-item.tsx";
+import { FolderTree } from "#/components/sync-review-tree.tsx";
 import { SyncShell, type SyncShellVariant } from "#/components/sync-shell.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
@@ -56,6 +42,7 @@ import {
 	useSyncScans,
 	useSyncTargets,
 	useTargetScans,
+	useTracks,
 } from "#/lib/queries.ts";
 import {
 	hasNewerRead,
@@ -71,18 +58,23 @@ import {
 	isIncoming,
 	isPicked,
 	isPush,
-	isSettled,
 	onlyThere,
 	type PushAction,
 	type SyncDirection,
 	type ThereChoice,
 	type ThereFile,
 } from "#/lib/sync-choices.ts";
-import { cn } from "#/lib/utils.ts";
+import {
+	type AlbumInfo,
+	isSend,
+	reviewItems,
+	type SendAction,
+	type TrackLookup,
+} from "#/lib/sync-review-model.ts";
+import { parseReviewView, type ReviewView } from "#/lib/sync-review-view.ts";
 
 /** Which directions a sync starts with. */
 export type SyncMode = SyncDirection;
-type Group = "send" | "bring" | "there";
 
 const bytes = (items: readonly { size: number }[]) => items.reduce((n, i) => n + i.size, 0);
 const flip = <T,>(set: ReadonlySet<T>, v: T): Set<T> => {
@@ -105,69 +97,9 @@ type Phase =
 	  }
 	| { step: "failed"; error: string };
 
-/** One group of a destination's changes: a header with what it holds, and the list on demand. */
-function Section({
-	icon,
-	title,
-	summary,
-	size,
-	open,
-	onOpen,
-	children,
-}: {
-	icon: ReactNode;
-	title: string;
-	/** Counts after the title; they may be buttons that open the list. */
-	summary: ReactNode;
-	size: number;
-	open: boolean;
-	/** Opens or closes the whole list. */
-	onOpen: () => void;
-	children: ReactNode;
-}) {
-	return (
-		<div className="border-b first:border-t [--sync-head:3rem]">
-			<div
-				className={cn(
-					"sticky top-[var(--sync-top,-1rem)] z-20 flex h-12 items-center gap-3 bg-background px-[var(--diff-inset)]",
-					open && "border-b",
-				)}
-			>
-				<button
-					type="button"
-					aria-expanded={open}
-					onClick={onOpen}
-					className="flex shrink-0 items-center gap-1.5 rounded-md font-medium text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-4"
-				>
-					{icon}
-					{title}
-				</button>
-				<span className="min-w-0">{summary}</span>
-				{/* The empty stretch of the row opens the list too. */}
-				<button
-					type="button"
-					tabIndex={-1}
-					aria-hidden="true"
-					onClick={onOpen}
-					className="flex min-w-0 flex-1 items-center justify-end gap-3 self-stretch text-muted-foreground"
-				>
-					{size > 0 && <span className="text-xs tabular-nums">{formatBytes(size)}</span>}
-					<ChevronRight
-						className={cn(
-							"size-4 shrink-0 transition-transform motion-reduce:transition-none",
-							open && "rotate-90",
-						)}
-					/>
-				</button>
-			</div>
-			{open && <div>{children}</div>}
-		</div>
-	);
-}
-
 /**
  * Sync with the destinations: shows what their last background read found at once, as one
- * decision per song in three groups (send there, bring here, only there). Nothing changes until
+ * decision per song, by album or as the destination's folders after the sync. Nothing changes until
  * Sync. Refresh reads them again and waits for that.
  */
 export function SyncPanel({
@@ -210,8 +142,8 @@ interface Row {
 	plan: TargetPlan;
 	pullError: string | null;
 	/** Library files to put on the destination: new, changed or moved. */
-	send: PushAction[];
-	sendSel: PushAction[];
+	send: SendAction[];
+	sendSel: SendAction[];
 	/** Files edited on the destination that would change the library. */
 	incoming: IncomingAction[];
 	incomingSel: IncomingAction[];
@@ -224,7 +156,6 @@ interface Row {
 
 /** The state setters and lookups a destination's block works through. */
 interface Ui {
-	setOpen: Dispatch<SetStateAction<ReadonlyMap<string, string>>>;
 	setFlips: Dispatch<SetStateAction<ReadonlySet<number>>>;
 	setThere: Dispatch<SetStateAction<ReadonlyMap<string, ThereChoice>>>;
 	setChoices: Dispatch<SetStateAction<Choices>>;
@@ -235,102 +166,162 @@ interface Ui {
 
 const count = (n: number) => n.toLocaleString();
 
-function Count({ tone, n, label }: { tone: Tone; n: number; label: string }) {
-	if (n === 0) {
-		return null;
-	}
+/** The review's view, remembered on this device. */
+const VIEW_KEY = "manplay.sync.reviewView";
+
+function useReviewView() {
+	const [view, setView] = useState<ReviewView>(() => {
+		try {
+			return parseReviewView(localStorage.getItem(VIEW_KEY));
+		} catch {
+			return parseReviewView(null);
+		}
+	});
+	const choose = (next: ReviewView) => {
+		setView(next);
+		try {
+			localStorage.setItem(VIEW_KEY, next);
+		} catch {
+			// Remembering the view is a convenience only.
+		}
+	};
+	return [view, choose] as const;
+}
+
+/** Album and album artist of each library song, for the album view. */
+function useTrackLookup(): TrackLookup {
+	const tracks = useTracks().data;
+	return useMemo(() => {
+		const byId = new Map<number, AlbumInfo>(
+			(tracks ?? []).map(({ id, album, artist, fields }) => {
+				const { albumArtist } = fields;
+				return [id, { album, artist: albumArtist?.trim() || artist }];
+			}),
+		);
+		return (id: number) => byId.get(id);
+	}, [tracks]);
+}
+
+const VIEWS: { view: ReviewView; label: string }[] = [
+	{ view: "albums", label: "Albums" },
+	{ view: "folders", label: "Folders" },
+];
+
+/** Albums | Folders, and in Folders whether folders with nothing to do show too. */
+function ReviewToolbar({
+	view,
+	onView,
+	showUnchanged,
+	onShowUnchanged,
+}: {
+	view: ReviewView;
+	onView: (v: ReviewView) => void;
+	showUnchanged: boolean;
+	onShowUnchanged: (on: boolean) => void;
+}) {
 	return (
-		<span>
-			<span className={cn("font-medium", TONE[tone].text)}>
-				{TONE[tone].sign}
-				{count(n)}
-			</span>{" "}
-			<span className="text-muted-foreground">{label}</span>
-		</span>
+		<div className="sticky top-0 z-30 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background px-[var(--diff-inset)] py-2 text-sm">
+			<fieldset className="inline-flex overflow-clip rounded-md border text-xs">
+				<legend className="sr-only">Show changes as</legend>
+				{VIEWS.map((v) => (
+					<button
+						key={v.view}
+						type="button"
+						aria-pressed={view === v.view}
+						onClick={() => onView(v.view)}
+						className="border-l px-2.5 py-1 font-medium text-muted-foreground outline-none first:border-l-0 hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/60 aria-pressed:bg-muted aria-pressed:text-foreground"
+					>
+						{v.label}
+					</button>
+				))}
+			</fieldset>
+			{view === "folders" && (
+				<label className="inline-flex cursor-pointer items-center gap-1.5 text-muted-foreground text-xs">
+					<input
+						type="checkbox"
+						className="size-3.5 accent-primary"
+						checked={showUnchanged}
+						onChange={(e) => onShowUnchanged(e.target.checked)}
+					/>
+					Show unchanged folders
+				</label>
+			)}
+			<span className="text-muted-foreground text-xs">
+				{view === "albums"
+					? "Open an album to see its files."
+					: "Dashed: only on the destination. Struck through: deleted there."}
+			</span>
+		</div>
 	);
 }
 
-/** Files edited on the destination: updates, merges and conflicts, with their ticks and choices. */
-function BringList({ t, ui }: { t: Row; ui: Ui }) {
-	const { setFlips, setChoices, choices, picked } = ui;
-	return (
-		<IncomingList
-			actions={t.incoming}
-			choices={choices}
-			picked={picked}
-			// A conflict is ticked by choosing a copy; unticking forgets the choice.
-			onToggle={(a) =>
-				a.kind === "conflict"
-					? setChoices((m) => {
-							const next = new Map(m);
-							next.delete(a.id);
-							return next;
-						})
-					: setFlips((s) => flip(s, a.id))
-			}
-			onToggleAll={(items, on) =>
-				setFlips((s) => {
-					let next = s;
-					for (const a of items) {
-						if (a.kind !== "conflict" && isSettled(a, choices.get(a.id)) && picked(a) !== on) {
-							next = flip(next, a.id);
-						}
-					}
-					return next;
-				})
-			}
-			onChoose={(aid, next) => setChoices((m) => new Map(m).set(aid, next))}
-		/>
-	);
-}
-
-/** One destination: how much already matches, then what to send, bring and settle. */
+/** One destination: how much already matches, what is ticked, then its files in the chosen view. */
 function TargetBlock({
 	t,
 	multi,
-	open,
+	view,
+	showUnchanged,
+	lookup,
 	ui,
 }: {
 	t: Row;
 	multi: boolean;
-	open: ReadonlyMap<string, string>;
+	view: ReviewView;
+	showUnchanged: boolean;
+	lookup: TrackLookup;
 	ui: Ui;
 }) {
-	const { setOpen, setFlips, setThere, picked, thereChoice } = ui;
+	const { setFlips, setThere, setChoices, choices, picked, thereChoice } = ui;
 	const id = t.plan.targetId;
-	const name = t.plan.name;
-	const skipped = new Set(t.send.filter((a) => !picked(a)).map((a) => a.id));
-	const needChoice = t.incoming.filter((a) => !picked(a)).length;
-	const nothing = t.send.length + t.incoming.length + t.there.length === 0;
-	// Pressing the title opens the list; with a filter on it first clears the filter, and only a
-	// list showing everything closes.
-	const toggleOpen = (group: Group) =>
-		setOpen((prev) => {
-			const next = new Map(prev);
-			const at = `${id}:${group}`;
-			if (prev.get(at) === "all") {
-				next.delete(at);
-			} else {
-				next.set(at, "all");
-			}
-			return next;
-		});
-	// A count of one kind shows only that kind; pressing it again goes back to all, still open.
-	const pickKind = (kind: PushFilter) =>
-		setOpen((prev) =>
-			new Map(prev).set(`${id}:send`, prev.get(`${id}:send`) === kind ? "all" : kind),
-		);
-	const sendFilter = (open.get(`${id}:send`) ?? "all") as PushFilter;
-	const thereCounts = {
-		pull: t.pulls.length,
-		delete: t.deletes.length,
-		leave: t.there.length - t.pulls.length - t.deletes.length,
+	const items = reviewItems(t.send, t.incoming, t.there);
+	const controls: ReviewControls = {
+		picked,
+		choiceOf: (a) => choices.get(a.id),
+		// A conflict is ticked by choosing a copy; unticking forgets the choice.
+		toggle: (a) =>
+			a.kind === "conflict"
+				? setChoices((m) => {
+						const next = new Map(m);
+						next.delete(a.id);
+						return next;
+					})
+				: setFlips((s) => flip(s, a.id)),
+		toggleAll: (actions, on) =>
+			setFlips((s) => {
+				let next = s;
+				for (const a of actions) {
+					if (a.kind !== "conflict" && picked(a) !== on) {
+						next = flip(next, a.id);
+					}
+				}
+				return next;
+			}),
+		resolve: (a, next) => setChoices((m) => new Map(m).set(a.id, next)),
+		there: (f) => thereChoice(id, f),
+		chooseThere: (files, c) => setThere((m) => chooseAll(m, id, files, c)),
 	};
+	const needChoice = t.incoming.filter((a) => !picked(a)).length;
 	return (
-		<section key={id}>
-			<div className="flex flex-wrap items-baseline justify-between gap-x-3 px-[var(--diff-inset)] py-2">
-				{multi ? <h3 className="break-words font-semibold text-sm">{name}</h3> : <span />}
-				<span className="text-muted-foreground text-xs tabular-nums">
+		<section>
+			<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b px-[var(--diff-inset)] py-2">
+				{multi && <h3 className="break-words font-semibold text-sm">{t.plan.name}</h3>}
+				<Tally
+					items={[
+						...(["upload", "replace", "move"] as const).map((k) => ({
+							tone: LABEL[k].tone,
+							label: { upload: "new", replace: "changed", move: "moved" }[k],
+							count: t.sendSel.filter((a) => a.kind === k).length,
+						})),
+						{ tone: "change", label: `edited on ${t.plan.name}`, count: t.incomingSel.length },
+						{ tone: "add", label: "copy here", count: t.pulls.length },
+						{ tone: "remove", label: "delete there", count: t.deletes.length },
+					]}
+					empty="Nothing ticked"
+				/>
+				{needChoice > 0 && (
+					<span className="text-sm text-warning">{count(needChoice)} need a choice</span>
+				)}
+				<span className="ml-auto text-muted-foreground text-xs tabular-nums">
 					{count(t.plan.inSync)} already match
 					{t.plan.held.length > 0 && ` · ${count(t.plan.held.length)} kept for 7 days`}
 					{t.plan.unchecked > 0 && ` · ${count(t.plan.unchecked)} not compared`}
@@ -344,90 +335,36 @@ function TargetBlock({
 						</ErrorLine>
 					),
 			)}
-			{nothing && !t.plan.error && (
-				<p className="flex items-center gap-2 border-t px-[var(--diff-inset)] py-3 text-muted-foreground text-sm">
+			{items.length === 0 && !t.plan.error && (
+				<p className="flex items-center gap-2 px-[var(--diff-inset)] py-3 text-muted-foreground text-sm">
 					<CheckCircle2 className="size-4 text-success" /> Up to date
 				</p>
 			)}
-			{t.send.length > 0 && (
-				<Section
-					icon={<CloudUpload />}
-					title={`Send to ${name}`}
-					size={bytes(t.sendSel.filter((a) => a.kind !== "move"))}
-					open={open.has(`${id}:send`)}
-					onOpen={() => toggleOpen("send")}
-					summary={
-						<FilterTally
-							counts={countKinds(t.sendSel)}
-							totals={countKinds(t.send)}
-							active={(open.get(`${id}:send`) as PushFilter | undefined) ?? null}
-							onPick={pickKind}
-						/>
-					}
-				>
-					<PushList
-						filter={sendFilter}
-						onShowAll={() => setOpen((prev) => new Map(prev).set(`${id}:send`, "all"))}
-						plan={{ ...t.plan, actions: t.send, held: [], unchecked: 0 }}
-						skipped={skipped}
-						onToggle={(aid) => setFlips((s) => flip(s, aid))}
-						onToggleAll={(aids, on) =>
-							setFlips((s) => {
-								let next = s;
-								for (const a of t.send.filter((x) => aids.includes(x.id))) {
-									if (picked(a) !== on) {
-										next = flip(next, a.id);
-									}
-								}
-								return next;
-							})
-						}
+			{items.length > 0 &&
+				(view === "albums" ? (
+					<AlbumMosaic items={items} lookup={lookup} controls={controls} />
+				) : (
+					<FolderTree
+						items={items}
+						folders={t.plan.folders}
+						controls={controls}
+						showUnchanged={showUnchanged}
 					/>
-				</Section>
-			)}
-			{t.incoming.length > 0 && (
-				<Section
-					icon={<Download />}
-					title="Bring into your library"
-					size={bytes(t.incomingSel)}
-					open={open.has(`${id}:bring`)}
-					onOpen={() => toggleOpen("bring")}
-					summary={
-						<span className="inline-flex flex-wrap gap-x-4 text-sm tabular-nums">
-							<Count tone="change" n={t.incomingSel.length} label={`edited on ${name}`} />
-							{needChoice > 0 && (
-								<span className="text-warning">{count(needChoice)} need a choice</span>
-							)}
-						</span>
-					}
-				>
-					<BringList t={t} ui={ui} />
-				</Section>
-			)}
-			{t.there.length > 0 && (
-				<Section
-					icon={<FolderSearch />}
-					title={`Only on ${name}`}
-					size={bytes(t.pulls) + bytes(t.deletes)}
-					open={open.has(`${id}:there`)}
-					onOpen={() => toggleOpen("there")}
-					summary={
-						<span className="inline-flex flex-wrap gap-x-4 text-sm tabular-nums">
-							<Count tone="add" n={thereCounts.pull} label="copy here" />
-							<Count tone="remove" n={thereCounts.delete} label="delete there" />
-							{thereCounts.leave > 0 && (
-								<span className="text-muted-foreground">{count(thereCounts.leave)} left</span>
-							)}
-						</span>
-					}
-				>
-					<OnlyThereList
-						files={t.there}
-						choice={(f) => thereChoice(id, f)}
-						onChoose={(f, c) => setThere((m) => new Map(m).set(`${id}:${f.key}`, c))}
-						onChooseAll={(c) => setThere((m) => chooseAll(m, id, t.there, c))}
-					/>
-				</Section>
+				))}
+			{t.plan.held.length > 0 && (
+				<details className="mx-[var(--diff-inset)] mb-3 rounded-md border px-3 py-2 text-xs">
+					<summary className="cursor-pointer text-muted-foreground">
+						{count(t.plan.held.length)} kept for 7 days after leaving the library
+					</summary>
+					<ul className="mt-2 space-y-0.5 font-mono">
+						{t.plan.held.slice(0, 50).map((h) => (
+							<li key={h.rel.join("/")} className="break-all">
+								{h.rel.join("/")}
+							</li>
+						))}
+						{t.plan.held.length > 50 && <li>…and {count(t.plan.held.length - 50)} more</li>}
+					</ul>
+				</details>
 			)}
 		</section>
 	);
@@ -633,7 +570,7 @@ function toRows(
 ): Row[] {
 	return reviewed.map(({ plan: t, pull }) => {
 		const pushes = t.actions.filter(isPush);
-		const send = pushes.filter((a) => a.kind !== "delete");
+		const send = pushes.filter(isSend);
 		const incoming = t.actions.filter(isIncoming);
 		const thereFiles = onlyThere(pull.missing, pushes, mode);
 		const chosen = (c: ThereChoice) => thereFiles.filter((f) => thereChoice(t.targetId, f) === c);
@@ -681,10 +618,12 @@ function Gather({
 		};
 	}, []);
 
-	// What the user changed from the suggestions: ticks, choices and which lists are open.
+	// What the user changed from the suggestions: ticks and choices.
 	const [flips, setFlips] = useState<ReadonlySet<number>>(new Set());
 	const [there, setThere] = useState<ReadonlyMap<string, ThereChoice>>(new Map());
-	const [open, setOpen] = useState<ReadonlyMap<string, string>>(new Map());
+	const [view, setView] = useReviewView();
+	const [showUnchanged, setShowUnchanged] = useState(false);
+	const lookup = useTrackLookup();
 	const [understood, setUnderstood] = useState(false);
 	// What was chosen for merges and conflicts.
 	const [choices, setChoices] = useState<Choices>(new Map());
@@ -699,7 +638,6 @@ function Gather({
 		setFlips(new Set());
 		setThere(new Map());
 		setChoices(new Map());
-		setOpen(new Map());
 		setUnderstood(false);
 	};
 
@@ -844,13 +782,21 @@ function Gather({
 		>
 			<div>
 				<NewerRead show={newer && !busy} onShow={showLatest} />
+				<ReviewToolbar
+					view={view}
+					onView={setView}
+					showUnchanged={showUnchanged}
+					onShowUnchanged={setShowUnchanged}
+				/>
 				{targets.map((t) => (
 					<TargetBlock
 						key={t.plan.targetId}
 						t={t}
 						multi={ids.length > 1}
-						open={open}
-						ui={{ setOpen, setFlips, setThere, setChoices, choices, picked, thereChoice }}
+						view={view}
+						showUnchanged={showUnchanged}
+						lookup={lookup}
+						ui={{ setFlips, setThere, setChoices, choices, picked, thereChoice }}
 					/>
 				))}
 			</div>

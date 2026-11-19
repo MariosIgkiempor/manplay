@@ -240,7 +240,7 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 	const where = target.path.join(" / ") || "Bucket root";
 	return (
 		<PlaceFrame
-			fill={tab === "sync"}
+			scrollAll={tab === "sync"}
 			header={
 				<DestinationHeader
 					section="export"

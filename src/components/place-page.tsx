@@ -8,17 +8,29 @@ import { cn } from "#/lib/utils.ts";
 /**
  * A source's or destination's page: its header across the top, and what is under it filling the
  * rest. By default the rest scrolls inside the page's width; `fill` hands it all the room, for
- * screens with their own scrolling and pinned footer (a sync review, a drive's library browser).
+ * screens with their own scrolling and pinned footer (a drive's library browser). `scrollAll`
+ * scrolls the header away with the rest, for screens that pin their own toolbar and footer (a
+ * sync review).
  */
 export function PlaceFrame({
 	header,
 	children,
 	fill = false,
+	scrollAll = false,
 }: {
 	header: ReactNode;
 	children: ReactNode;
 	fill?: boolean;
+	scrollAll?: boolean;
 }) {
+	if (scrollAll) {
+		return (
+			<main className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain">
+				{header}
+				<div className="flex flex-1 flex-col">{children}</div>
+			</main>
+		);
+	}
 	return (
 		<main className="flex h-full min-h-0 flex-col">
 			{header}

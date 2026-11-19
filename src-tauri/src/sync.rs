@@ -780,8 +780,11 @@ pub struct Action {
     pub local_size: Option<u64>,
     /// Merge: every field the two copies disagree on.
     pub merge: Option<Vec<FieldMerge>>,
-    #[serde(skip)]
+    /// The library song this file is, so the review can show its album and artwork. A delete
+    /// carries the song it was last synced from, which may have left the library.
     pub track_id: Option<i64>,
+    /// Delete only: the library song with the same audio, when the file is a duplicate of one.
+    pub duplicate_of: Option<i64>,
     #[serde(skip)]
     pub local: Option<PathBuf>,
     /// Update, merge and conflict: [`local_signature`] of the library file as reviewed. The action
@@ -810,6 +813,7 @@ impl Action {
             local_size: None,
             merge: None,
             track_id: None,
+            duplicate_of: None,
             local: None,
             local_seen: None,
             seen: None,
@@ -826,6 +830,31 @@ pub struct Resolution {
     /// Merge: the side chosen for each field both copies changed.
     #[serde(default)]
     pub fields: HashMap<String, Side>,
+}
+
+/// A folder on the destination and how many files are directly in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteFolder {
+    pub rel: Vec<String>,
+    pub files: usize,
+}
+
+/// The folders of a destination listing, in path order, with their file counts.
+fn folders_of(remote: &[Remote]) -> Vec<RemoteFolder> {
+    let mut counts: std::collections::BTreeMap<&[String], usize> =
+        std::collections::BTreeMap::new();
+    for file in remote {
+        let dir = &file.rel[..file.rel.len().saturating_sub(1)];
+        *counts.entry(dir).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(rel, files)| RemoteFolder {
+            rel: rel.to_vec(),
+            files,
+        })
+        .collect()
 }
 
 /// A destination file that is left alone on purpose.
@@ -850,6 +879,9 @@ pub struct TargetPlan {
     /// Destination files examined (audio could not be compared for `unchecked` of them).
     pub remote_total: usize,
     pub unchecked: usize,
+    /// Every folder on the destination that holds files, with how many, so the review can show
+    /// folders the sync leaves alone.
+    pub folders: Vec<RemoteFolder>,
     /// `(track id, size)` of library files already on the destination.
     #[serde(skip)]
     pub present: Vec<(i64, i64)>,
@@ -880,6 +912,7 @@ impl TargetPlan {
             in_sync: 0,
             remote_total: 0,
             unchecked: 0,
+            folders: Vec::new(),
             present: Vec::new(),
             seeds: Vec::new(),
             fresh_prints: Vec::new(),
@@ -980,10 +1013,19 @@ fn diff<'a>(items: &'a [Item], remote: &'a [Remote]) -> Diff<'a> {
 }
 
 /// Outcome of matching destination extras against the library by audio.
+/// A destination file no library song accounts for: the plan offers to remove it.
+struct Extra<'a> {
+    file: &'a Remote,
+    /// Why it is offered, e.g. which library file has the same audio.
+    note: Option<String>,
+    /// The library song with the same audio, when it is a duplicate of one.
+    duplicate_of: Option<i64>,
+}
+
 struct Matched<'a> {
     moves: Vec<(&'a Remote, &'a Item)>,
-    /// Extras to remove, with an optional explanation.
-    deletes: Vec<(&'a Remote, Option<String>)>,
+    /// Extras to remove.
+    deletes: Vec<Extra<'a>>,
     /// Uploads not replaced by a move.
     uploads: Vec<&'a Item>,
 }
@@ -1015,17 +1057,24 @@ fn pair<'a>(
     for (file, print) in extras {
         let Some(fp) = print else {
             let note = is_audio_name(&file.rel).then(|| "Not compared".to_owned());
-            out.deletes.push((file, note));
+            out.deletes.push(Extra {
+                file,
+                note,
+                duplicate_of: None,
+            });
             continue;
         };
         if let Some(item) = wanting.get_mut(fp.as_str()).and_then(Vec::pop) {
             moved.insert(item.track_id);
             out.moves.push((file, item));
         } else {
-            let note = known
-                .get(fp.as_str())
-                .map(|i| format!("Duplicate of {}", i.rel.last().map_or("", String::as_str)));
-            out.deletes.push((file, note));
+            let twin = known.get(fp.as_str());
+            out.deletes.push(Extra {
+                file,
+                note: twin
+                    .map(|i| format!("Duplicate of {}", i.rel.last().map_or("", String::as_str))),
+                duplicate_of: twin.map(|i| i.track_id),
+            });
         }
     }
     out.uploads = uploads
@@ -1125,6 +1174,7 @@ pub async fn plan_target(
         }
     };
     plan.remote_total = remote.len();
+    plan.folders = folders_of(remote);
     let d = diff(items, remote);
     let version_of = |item: &Item| {
         d.matched
@@ -1391,7 +1441,12 @@ pub async fn plan_target(
             },
         });
     }
-    for (file, note) in &matched.deletes {
+    for Extra {
+        file,
+        note,
+        duplicate_of,
+    } in &matched.deletes
+    {
         // Suggested: manplay's own leftover, and a song removed from the library since it was
         // synced (its grace period over), which the last sync left here.
         let removed = known.get(&file.rel).filter(|k| k.missing && !k.in_grace);
@@ -1407,6 +1462,7 @@ pub async fn plan_target(
             optional: !(is_unfinished_upload(&file.rel) || removed.is_some()),
             note,
             track_id: known.get(&file.rel).map(|k| k.track_id),
+            duplicate_of: *duplicate_of,
             ..new(Kind::Delete, &file.rel)
         });
     }
@@ -3239,6 +3295,24 @@ mod tests {
     }
 
     #[test]
+    fn folders_count_the_files_directly_in_each() {
+        let listing = [
+            remote("a/b/1.mp3", 1),
+            remote("a/b/2.mp3", 1),
+            remote("a/3.mp3", 1),
+            remote("top.mp3", 1),
+        ];
+        let folder = |rel: &[&str], files| RemoteFolder {
+            rel: rel.iter().map(|s| (*s).to_owned()).collect(),
+            files,
+        };
+        assert_eq!(
+            folders_of(&listing),
+            vec![folder(&[], 1), folder(&["a"], 1), folder(&["a", "b"], 2)]
+        );
+    }
+
+    #[test]
     fn someone_elses_copy_is_renamed_to_the_library_path() {
         let items = [item(1, "mine/song.wav", 10, Some("fp"))];
         let up: Vec<&Item> = items.iter().collect();
@@ -3269,7 +3343,8 @@ mod tests {
         let m = pair(&items, &[], &[(&old, Some("fp".to_owned()))]);
         assert!(m.moves.is_empty());
         assert_eq!(m.deletes.len(), 1);
-        assert_eq!(m.deletes[0].1.as_deref(), Some("Duplicate of a.wav"));
+        assert_eq!(m.deletes[0].note.as_deref(), Some("Duplicate of a.wav"));
+        assert_eq!(m.deletes[0].duplicate_of, Some(1));
     }
 
     #[test]
@@ -3278,8 +3353,8 @@ mod tests {
         let audio = remote("x.mp3", 10);
         let art = remote("cover.jpg", 10);
         let m = pair(&items, &[], &[(&audio, None), (&art, None)]);
-        assert_eq!(m.deletes[0].1.as_deref(), Some("Not compared"));
-        assert_eq!(m.deletes[1].1, None);
+        assert_eq!(m.deletes[0].note.as_deref(), Some("Not compared"));
+        assert_eq!(m.deletes[1].note, None);
     }
 
     fn base(sig: &str) -> Base {

@@ -1,33 +1,12 @@
 import { Check } from "lucide-react";
-import type { ReactNode } from "react";
-import { DiffHunk, DiffRow, groupByDir } from "#/components/diff-view.tsx";
-import { TagDiffInline } from "#/components/tag-diff.tsx";
 import type { FieldMerge, Resolution, Side } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
 import { TRASH } from "#/lib/platform.ts";
-import {
-	type Choices,
-	type IncomingAction,
-	type IncomingKind,
-	isSettled,
-} from "#/lib/sync-choices.ts";
+import type { IncomingAction } from "#/lib/sync-choices.ts";
 import { labelOf } from "#/lib/tag-preview.ts";
 import { cn } from "#/lib/utils.ts";
 
-const path = (rel: readonly string[]) => rel.join("/");
-const dirOf = (a: IncomingAction) => path(a.rel.slice(0, -1)) || "(top level)";
 const nameOf = (a: IncomingAction) => a.rel.at(-1) ?? "";
-
-/** Clicks in a row's detail must not tick the row's checkbox. */
-function Inert({ children }: { children: ReactNode }) {
-	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: only stops the click reaching the label
-		// biome-ignore lint/a11y/useKeyWithClickEvents: keyboard never reaches the label through here
-		<span className="mt-1 block cursor-default" onClick={(e) => e.preventDefault()}>
-			{children}
-		</span>
-	);
-}
 
 const Empty = () => <span className="italic">empty</span>;
 
@@ -79,7 +58,7 @@ function Pick({
 }
 
 /** Base, yours and theirs for each tag both sides touched, with a choice where both edited the same one. */
-function MergeTable({
+export function MergeTable({
 	fields,
 	choice,
 	onChoose,
@@ -127,7 +106,7 @@ function MergeTable({
 }
 
 /** Keep mine (push) or keep theirs (update) for a file whose audio or artwork changed on both sides. */
-function ConflictChoice({
+export function ConflictChoice({
 	action,
 	choice,
 	onChoose,
@@ -181,127 +160,5 @@ function ConflictChoice({
 				{options.find((o) => o.side === choice?.keep)?.result ?? "Choose which copy stays."}
 			</p>
 		</fieldset>
-	);
-}
-
-/** The size on the right: what comes in, and by how much it differs from your file. */
-function SizeCell({ action }: { action: IncomingAction }) {
-	const delta =
-		action.kind === "update" && action.localSize !== null ? action.size - action.localSize : 0;
-	return (
-		<span className="inline-flex items-baseline gap-2">
-			{delta !== 0 && (
-				<span className="text-xs opacity-70">
-					{delta > 0 ? "+" : "−"}
-					{formatBytes(Math.abs(delta))}
-				</span>
-			)}
-			<span className="text-foreground/80">{formatBytes(action.size)}</span>
-		</span>
-	);
-}
-
-const WHAT: Record<IncomingKind, string> = {
-	update: `Edited on the destination. Replaces your file; the old one goes to the ${TRASH}.`,
-	merge: "Tags edited on both sides. The merged file goes to both.",
-	conflict: "Edited on both sides.",
-};
-
-function IncomingRow({
-	action,
-	picked,
-	choice,
-	onToggle,
-	onChoose,
-}: {
-	action: IncomingAction;
-	picked: boolean;
-	choice: Resolution | undefined;
-	onToggle: () => void;
-	onChoose: (next: Resolution) => void;
-}) {
-	const settled = isSettled(action, choice);
-	return (
-		<DiffRow
-			tone="change"
-			name={nameOf(action)}
-			detail={
-				action.kind === "conflict" && action.note
-					? `${WHAT.conflict} ${action.note}.`
-					: WHAT[action.kind]
-			}
-			warn={action.kind !== "update"}
-			picked={picked}
-			// A conflict is ticked by choosing a copy; unticking forgets the choice.
-			disabled={action.kind === "conflict" ? !picked : !settled}
-			onToggle={onToggle}
-			label={path(action.rel)}
-			aside={<SizeCell action={action} />}
-			extra={
-				<>
-					{action.kind === "update" && action.tags && action.tags.length > 0 && (
-						<TagDiffInline changes={action.tags} />
-					)}
-					{action.kind === "merge" && (
-						<Inert>
-							<MergeTable fields={action.merge ?? []} choice={choice} onChoose={onChoose} />
-						</Inert>
-					)}
-					{action.kind === "conflict" && (
-						<Inert>
-							<ConflictChoice action={action} choice={choice} onChoose={onChoose} />
-						</Inert>
-					)}
-				</>
-			}
-		/>
-	);
-}
-
-/**
- * Files edited on a destination since the last sync, folder by folder: updates that replace the
- * library file, merges of tags both sides edited, and conflicts that need a copy chosen.
- */
-export function IncomingList({
-	actions,
-	picked,
-	choices,
-	onToggle,
-	onToggleAll,
-	onChoose,
-}: {
-	actions: readonly IncomingAction[];
-	picked: (a: IncomingAction) => boolean;
-	choices: Choices;
-	onToggle: (a: IncomingAction) => void;
-	onToggleAll: (items: IncomingAction[], on: boolean) => void;
-	onChoose: (id: number, next: Resolution) => void;
-}) {
-	const hunks = groupByDir(actions, dirOf, nameOf);
-	return (
-		<div>
-			{hunks.map(([dir, items]) => (
-				<DiffHunk
-					key={dir}
-					flush
-					dir={dir}
-					total={items.length}
-					picked={items.filter(picked).length}
-					onToggleAll={(on) => onToggleAll(items, on)}
-					tallies={[{ tone: "change", count: items.length }]}
-				>
-					{items.map((a) => (
-						<IncomingRow
-							key={a.id}
-							action={a}
-							picked={picked(a)}
-							choice={choices.get(a.id)}
-							onToggle={() => onToggle(a)}
-							onChoose={(next) => onChoose(a.id, next)}
-						/>
-					))}
-				</DiffHunk>
-			))}
-		</div>
 	);
 }

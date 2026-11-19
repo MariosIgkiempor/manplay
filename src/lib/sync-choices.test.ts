@@ -67,6 +67,8 @@ const remove = (id: number, rel: string, optional: boolean, note: string | null)
 	tags: null,
 	localSize: null,
 	merge: null,
+	trackId: null,
+	duplicateOf: null,
 });
 
 describe("onlyThere", () => {
