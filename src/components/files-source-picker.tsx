@@ -1,7 +1,7 @@
 import { Menu } from "@base-ui/react/menu";
 import { Check, ChevronRight, ChevronsUpDown, Folder } from "lucide-react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
-import { isR2, type SyncTarget } from "#/lib/api.ts";
+import { isR2, type SyncTarget, targetShortName } from "#/lib/api.ts";
 import { useLibraryRoot, useSyncTargets } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -59,51 +59,63 @@ const item =
  * Chooses what the Files page shows: the library folder or any connected destination. It sits in
  * the page header's segmented control, so it takes the group's outline instead of drawing its own.
  */
+const CRUMB =
+	"flex h-6 max-w-48 items-center gap-1.5 rounded-md px-1 text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-muted";
+
+/**
+ * Chooses what a Files pane shows, the library folder or any connected destination, as the first
+ * crumb of the pane's path. Choosing what is already shown goes back to its top folder.
+ */
 export function FilesSourcePicker({
 	value: target,
 	onChange,
-	variant = "segment",
+	onTop,
 }: {
 	/** The destination shown, or `undefined` for the library. */
 	value: number | undefined;
 	onChange: (id: number | undefined) => void;
-	/** "segment" sits in the page header's joined control; "field" stands alone. */
-	variant?: "segment" | "field";
+	/** Goes to the top folder of what is shown. */
+	onTop: () => void;
 }) {
 	const targets = useSyncTargets().data ?? [];
 	const library = useLibraryRoot().data;
-	if (targets.length === 0) {
-		return null;
-	}
 	const current = targets.find((t) => t.id === target);
+	const icon = (
+		<BrandIcon brand={current ? brandOf(current) : "library"} className="size-4 rounded-[4px]" />
+	);
+	const name = current ? targetShortName(current) : "Library";
+	if (targets.length === 0) {
+		return (
+			<button type="button" className={cn(CRUMB, "font-medium")} onClick={onTop}>
+				{icon}
+				<span className="min-w-0 truncate">{name}</span>
+			</button>
+		);
+	}
 	const selected = current ? String(current.id) : LIBRARY;
+	const pick = (value: string) =>
+		value === selected ? onTop() : onChange(value === LIBRARY ? undefined : Number(value));
 	return (
 		<Menu.Root>
 			<Menu.Trigger
 				aria-label="Choose what to browse"
-				className={cn(
-					"flex h-8 max-w-64 items-center gap-2 py-0 pr-2 pl-1.5 text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset data-[popup-open]:bg-muted",
-					variant === "field" && "h-7 rounded-lg border bg-background",
-				)}
+				title={current ? `${current.machine}: ${current.path.join(" / ")}` : (library ?? undefined)}
+				className={CRUMB}
 			>
-				{current ? (
-					<BrandIcon brand={brandOf(current)} className="size-5 rounded-md" />
-				) : (
-					<BrandIcon brand="library" className="size-5 rounded-md" />
-				)}
-				<span className="min-w-0 truncate font-medium">
-					{current ? current.machine : "Library"}
-				</span>
-				<ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+				{icon}
+				<span className="min-w-0 truncate font-medium">{name}</span>
+				<ChevronsUpDown className="size-3 shrink-0 text-muted-foreground" />
 			</Menu.Trigger>
 			<Menu.Portal>
-				<Menu.Positioner sideOffset={6} align="end" className="z-50">
+				<Menu.Positioner sideOffset={6} align="start" className="z-50">
 					<Menu.Popup className="w-80 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg outline-none">
-						<Menu.RadioGroup
-							value={selected}
-							onValueChange={(v: string) => onChange(v === LIBRARY ? undefined : Number(v))}
-						>
-							<Menu.RadioItem value={LIBRARY} className={item} closeOnClick>
+						<Menu.RadioGroup value={selected}>
+							<Menu.RadioItem
+								value={LIBRARY}
+								className={item}
+								closeOnClick
+								onClick={() => pick(LIBRARY)}
+							>
 								<BrandIcon brand="library" className="size-9" />
 								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 									<span className="text-sm font-medium">Library</span>
@@ -118,10 +130,16 @@ export function FilesSourcePicker({
 									Destinations
 								</Menu.GroupLabel>
 								{targets.map((t) => (
-									<Menu.RadioItem key={t.id} value={String(t.id)} className={item} closeOnClick>
+									<Menu.RadioItem
+										key={t.id}
+										value={String(t.id)}
+										className={item}
+										closeOnClick
+										onClick={() => pick(String(t.id))}
+									>
 										<BrandIcon brand={brandOf(t)} className="size-9" />
 										<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-											<span className="truncate text-sm font-medium">{t.machine}</span>
+											<span className="truncate text-sm font-medium">{targetShortName(t)}</span>
 											<PathTrail
 												segments={t.path}
 												empty={isR2(t) ? "Bucket root" : "Whole share"}

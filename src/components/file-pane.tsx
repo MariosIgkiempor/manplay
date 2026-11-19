@@ -16,7 +16,6 @@ import {
 	Pencil,
 	Play,
 	Scissors,
-	Search,
 	Tags,
 	Trash2,
 	Wrench,
@@ -39,6 +38,8 @@ import {
 } from "#/components/drop-feedback.tsx";
 import { IssuePopover } from "#/components/issue-popover.tsx";
 import { ErrorLine } from "#/components/page.tsx";
+import { PathCrumbs } from "#/components/path-crumbs.tsx";
+import { SearchGlyph } from "#/components/search-field.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import type { UndoEntry } from "#/context/undo-context.ts";
@@ -47,6 +48,7 @@ import type { IssueIndex } from "#/lib/audit.ts";
 import { LIBRARY } from "#/lib/drag-session.ts";
 import { isAudioName, joinPath, parentPath, relSegments } from "#/lib/fs-path.ts";
 import { FILE_MANAGER, keyLabel, TRASH } from "#/lib/platform.ts";
+import { searchFieldClass } from "#/lib/search-field.ts";
 import { applyClick, EMPTY_SELECTION, type Selection } from "#/lib/selection.ts";
 import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
 import { labelOf } from "#/lib/tag-preview.ts";
@@ -63,7 +65,7 @@ import type { FsClipboard } from "#/lib/use-fs-ops.ts";
 import { useFsOps } from "#/lib/use-fs-ops.ts";
 import { undoMakeDir, undoRename } from "#/lib/use-fs-undo.ts";
 import { useIssueNav } from "#/lib/use-issue-nav.ts";
-import { useTree } from "#/lib/use-tree.ts";
+import { LOCAL_TREE, useTree } from "#/lib/use-tree.ts";
 import { expandOrEnter, useVimNav } from "#/lib/use-vim-nav.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -100,8 +102,10 @@ export function size(n: number): string {
 
 /** Keeps pane shortcuts working after a click, unless the click was in a text box or a popover. */
 function focusUnlessTyping(ev: MouseEvent<HTMLElement>) {
-	const inside = ev.currentTarget.contains(ev.target as Node);
-	if (inside && !(ev.target instanceof HTMLInputElement)) {
+	const target = ev.target as HTMLElement;
+	const inside = ev.currentTarget.contains(target);
+	// The location bar focuses its own filter field on a click; taking focus back would undo it.
+	if (inside && !(target instanceof HTMLInputElement) && !target.closest("[data-location-bar]")) {
 		ev.currentTarget.focus();
 	}
 }
@@ -138,8 +142,8 @@ interface PaneProps {
 	onActivate: () => void;
 	/** The other pane's folder, when the view is split. */
 	otherPath: string | null;
-	/** Shown first in the toolbar when the view is split: what this pane shows. */
-	sourcePicker?: React.ReactNode;
+	/** The first crumb, what this pane shows, given a way back to the top folder. */
+	sourcePicker: (goTop: () => void) => React.ReactNode;
 	/** Library health findings, for the warning icons. */
 	health: IssueIndex;
 	fixing: boolean;
@@ -368,7 +372,10 @@ export function FilePane({
 			top: () => jumpTo(visible[0]),
 			bottom: () => jumpTo(visible[visible.length - 1]),
 			g: () => nav.g(() => jumpTo(visible[0])),
-			search: () => filterRef.current?.select(),
+			search: () => {
+				filterRef.current?.focus();
+				filterRef.current?.select();
+			},
 			searchNext: () => nav.stepSearch(1),
 			searchPrev: () => nav.stepSearch(-1),
 			focusTags: onFocusTags,
@@ -478,8 +485,7 @@ export function FilePane({
 				focusUnlessTyping(ev);
 			}}
 		>
-			<div className="flex items-center gap-1 border-b px-2 py-1.5">
-				{sourcePicker}
+			<div className="flex items-center gap-1 border-b px-3 py-2 @3xl/pane:px-6">
 				<Button
 					variant="ghost"
 					size="icon-sm"
@@ -490,7 +496,22 @@ export function FilePane({
 				>
 					<ArrowUp />
 				</Button>
-				<Breadcrumbs root={root} crumbs={crumbs} drag={drag} onNavigate={onNavigate} />
+				<LocationBar
+					inputRef={filterRef}
+					value={query}
+					matches={matches ?? 0}
+					onChange={setQuery}
+					onDone={finishFilter}
+				>
+					<PathCrumbs
+						source={LOCAL_TREE}
+						first={sourcePicker(() => onNavigate(root))}
+						root={root}
+						crumbs={crumbs}
+						drag={drag}
+						onNavigate={onNavigate}
+					/>
+				</LocationBar>
 				<PaneActions
 					busy={busy}
 					count={selected.size}
@@ -507,19 +528,13 @@ export function FilePane({
 				/>
 			</div>
 
-			<FilterBox
-				inputRef={filterRef}
-				value={query}
-				matches={matches ?? 0}
-				onChange={setQuery}
-				onDone={finishFilter}
-			/>
 			<Banners error={error} listError={listing?.isError ? String(listing.error) : null} />
 			<ColumnHeader sort={sort} onSort={onSort} />
 
 			<MenuShell items={paneMenu}>
 				{/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for the current folder */}
 				<div
+					data-pane-list
 					className={cn(
 						"min-h-0 flex-1 overflow-y-auto py-0.5",
 						drag.dropTarget === path && DROP_PANE,
@@ -638,43 +653,72 @@ export function PaneFooter({
 	);
 }
 
-/** Always-visible filter; `/` jumps into it, Enter goes back to the list, Escape clears it. */
-export function FilterBox({
+/**
+ * Where the pane is and the filter, in one borderless field: the breadcrumbs show until the field
+ * is clicked (anywhere but a crumb) or `/` is pressed, then step aside for the filter while it is
+ * in use. Enter goes back to the list, Escape clears it and brings the breadcrumbs back.
+ */
+export function LocationBar({
 	inputRef,
 	value,
 	matches,
 	onChange,
 	onDone,
+	children,
 }: {
 	inputRef: React.RefObject<HTMLInputElement | null>;
 	value: string;
 	matches: number;
 	onChange: (v: string) => void;
 	onDone: (keep: boolean) => void;
+	/** The breadcrumbs. */
+	children: React.ReactNode;
 }) {
+	const [focused, setFocused] = useState(false);
 	const on = value.trim() !== "";
+	const searching = focused || on;
 	return (
-		<div className="flex items-center gap-2 border-b px-3">
-			<Search
-				className={cn("size-3.5 shrink-0", on ? "text-primary" : "text-muted-foreground/70")}
-			/>
+		// biome-ignore lint/a11y/noStaticElementInteractions: a click beside the crumbs starts filtering, like the input it holds
+		<div
+			data-location-bar
+			className={cn(searchFieldClass(searching), "h-8 flex-1")}
+			onMouseDown={(ev) => {
+				// Crumbs navigate; everywhere else in the bar starts filtering.
+				// Clicks in a crumb's picker reach here through React's portal; they are not the bar's.
+				const target = ev.target as HTMLElement;
+				if (ev.currentTarget.contains(target) && !target.closest("button, input")) {
+					ev.preventDefault();
+					inputRef.current?.focus();
+				}
+			}}
+		>
+			<SearchGlyph active={on} />
+			{!searching && <div className="flex min-w-0 flex-1 items-center">{children}</div>}
 			<input
 				ref={inputRef}
 				value={value}
 				placeholder="Filter by name"
 				aria-label="Filter by name"
 				spellCheck={false}
-				className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+				className={cn(
+					"h-full min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60",
+					searching ? "flex-1" : "w-0",
+				)}
+				onFocus={() => setFocused(true)}
+				onBlur={() => setFocused(false)}
 				onChange={(ev) => onChange(ev.target.value)}
 				onKeyDown={(ev) => {
 					ev.stopPropagation();
 					if (ev.key === "Enter" || ev.key === "Escape" || ev.key === "ArrowDown") {
 						ev.preventDefault();
 						onDone(ev.key !== "Escape");
+						if (ev.key === "Escape") {
+							ev.currentTarget.blur();
+						}
 					}
 				}}
 			/>
-			{on ? (
+			{on && (
 				<>
 					<span className="shrink-0 text-muted-foreground text-xs tabular-nums">
 						{matches === 0 ? "No matches" : `${matches} found`}
@@ -684,12 +728,13 @@ export function FilterBox({
 						aria-label="Clear filter"
 						title="Clear filter (Esc)"
 						onClick={() => onDone(false)}
-						className="-mr-1 grid size-6 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+						className="-mr-0.5 grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
 					>
 						<X className="size-3.5" />
 					</button>
 				</>
-			) : (
+			)}
+			{!searching && (
 				<kbd className="hidden shrink-0 rounded border px-1.5 text-[11px] text-muted-foreground/70 @sm/pane:inline">
 					/
 				</kbd>
@@ -803,52 +848,6 @@ export function Banners({ error, listError }: { error: string | null; listError:
 			{error && <ErrorLine className="border-b bg-destructive/10 px-3 py-1.5">{error}</ErrorLine>}
 			{listError && <ErrorLine className="px-3 py-2">{listError}</ErrorLine>}
 		</>
-	);
-}
-
-function Breadcrumbs({
-	root,
-	crumbs,
-	drag,
-	onNavigate,
-}: {
-	root: string;
-	crumbs: string[];
-	drag: ReturnType<typeof useFileDrag>;
-	onNavigate: (path: string) => void;
-}) {
-	const { dropTarget, allowDrop, clearDrop, dropInto } = drag;
-	return (
-		<nav className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5 text-sm">
-			<button
-				type="button"
-				className="rounded-md px-1 font-medium hover:bg-muted"
-				onClick={() => onNavigate(root)}
-				onDragOver={(ev) => allowDrop(ev, root)}
-				onDragLeave={clearDrop}
-				onDrop={(ev) => dropInto(ev, root)}
-			>
-				Library
-			</button>
-			{crumbs.map((seg, i) => {
-				const to = joinPath(root, ...crumbs.slice(0, i + 1));
-				return (
-					<span key={to} className="flex items-center gap-0.5">
-						<ChevronRight className="size-3 text-muted-foreground" />
-						<button
-							type="button"
-							className={cn("rounded-md px-1 hover:bg-muted", dropTarget === to && "bg-primary/20")}
-							onClick={() => onNavigate(to)}
-							onDragOver={(ev) => allowDrop(ev, to)}
-							onDragLeave={clearDrop}
-							onDrop={(ev) => dropInto(ev, to)}
-						>
-							{seg}
-						</button>
-					</span>
-				);
-			})}
-		</nav>
 	);
 }
 

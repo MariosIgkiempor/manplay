@@ -4,6 +4,7 @@ import { PageHeader, PageIcon } from "#/components/page-header.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { openPrivacySettings } from "#/lib/api.ts";
 import { describeError } from "#/lib/errors.ts";
+import { PAGE_BODY } from "#/lib/page-layout.ts";
 import { typeScale } from "#/lib/type-scale.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -39,7 +40,7 @@ export function Page({
 				actions={actions}
 				tabs={tabs}
 			/>
-			<div className={cn("mx-auto w-full space-y-8 px-6 pt-6 pb-10", !wide && "max-w-5xl")}>
+			<div className={cn("mx-auto w-full space-y-8", PAGE_BODY, !wide && "max-w-5xl")}>
 				{children}
 			</div>
 		</main>

@@ -90,11 +90,10 @@ export function SidebarSmartPlaylists() {
 							className={rowBase}
 							style={{ paddingLeft: CHILD_PAD }}
 						>
-							<Sparkles className="size-4 shrink-0" />
-							<span className="truncate">{p.name}</span>
+							<Sparkles className="size-4 shrink-0 opacity-70" />
+							<span className="min-w-0 truncate">{p.name}</span>
 							<ScopeMark scope={p.scope ?? "shared"} held={p.held ?? false} />
 						</Link>
-						<span className="size-5 shrink-0" />
 					</div>
 				</RowMenu>
 			))}

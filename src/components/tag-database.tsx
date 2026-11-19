@@ -13,7 +13,6 @@ import {
 	PenLine,
 	Play,
 	Plus,
-	Search,
 	Shuffle,
 	Smile,
 	Tags,
@@ -26,6 +25,7 @@ import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PageHeader, PageIcon } from "#/components/page-header.tsx";
+import { SearchField } from "#/components/search-field.tsx";
 import { SortMenu } from "#/components/sort-menu.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TagCombobox } from "#/components/tag-combobox.tsx";
@@ -34,6 +34,7 @@ import { Segmented } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import { type FixReport, listTags, tagValues } from "#/lib/api.ts";
+import { PAGE_BODY, PAGE_TOOLBAR } from "#/lib/page-layout.ts";
 import { useTagDatabaseOps, useTracks } from "#/lib/queries.ts";
 import { type ListSort, VALUE_SORTS, type ValueSort } from "#/lib/sorting.ts";
 import { trackHasValue, VALUE_FIELDS, type ValueField } from "#/lib/track-fields.ts";
@@ -229,7 +230,7 @@ export function TagDatabase() {
 				tabs={<FieldTabs all={all} source={source} onPick={setSource} />}
 			/>
 			{/* Search and any selection stay at hand while the list scrolls. */}
-			<div className="sticky top-0 z-10 space-y-3 border-b bg-background/90 px-6 py-3 backdrop-blur-md">
+			<div className={PAGE_TOOLBAR}>
 				<ValueSearch
 					label={label}
 					search={search}
@@ -248,7 +249,7 @@ export function TagDatabase() {
 				)}
 			</div>
 
-			<div className="space-y-3 px-6 pt-5 pb-6">
+			<div className={cn("space-y-3", PAGE_BODY)}>
 				<Notices notice={notice} error={ops.migrate.error ?? ops.create.error} />
 				{!loading && unused > 0 && (
 					<p className="text-muted-foreground text-xs">
@@ -379,7 +380,7 @@ function FieldTabs({
 	onPick: (f: ValueField) => void;
 }) {
 	return (
-		<div className="overflow-x-auto [scrollbar-width:none]">
+		<div className="overflow-x-auto no-scrollbar">
 			<Segmented
 				className="w-max border-b-0"
 				value={source}
@@ -411,36 +412,20 @@ function ValueSearch({
 	onSort: (sort: ListSort<ValueSort>) => void;
 }) {
 	return (
-		<div className="flex h-8 items-stretch rounded-lg border border-input bg-transparent focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30">
-			<label className="flex min-w-0 flex-1 items-center gap-1.5 px-2">
-				<Search className="size-4 shrink-0 text-muted-foreground" />
-				<input
-					value={search}
-					onChange={(e) => onSearch(e.target.value)}
-					placeholder={`Search ${label.toLowerCase()}`}
-					aria-label="Search values"
-					className="h-full min-w-24 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-				/>
-				{search !== "" && (
-					<button
-						type="button"
-						aria-label="Clear search"
-						className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-						onClick={() => onSearch("")}
-					>
-						<X className="size-4" />
-					</button>
-				)}
-			</label>
-			<div className="flex shrink-0 items-stretch border-input border-l">
+		<SearchField
+			value={search}
+			onChange={onSearch}
+			placeholder={`Search ${label.toLowerCase()}`}
+			label="Search values"
+			trailing={
 				<SortMenu
 					options={VALUE_SORTS}
 					value={sort}
 					onChange={onSort}
-					className="h-full rounded-none rounded-r-[calc(var(--radius-lg)-1px)] px-2.5 text-sm"
+					className="h-full px-2.5 text-sm"
 				/>
-			</div>
-		</div>
+			}
+		/>
 	);
 }
 

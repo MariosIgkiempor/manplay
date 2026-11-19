@@ -1,21 +1,20 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowRight, ChevronRight, FolderOpen, Plus, Trash2 } from "lucide-react";
-import { type ReactNode, useState } from "react";
-import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
-import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
-import { type MenuEntry, RowMenu } from "#/components/menu.tsx";
+import { FolderOpen, Plus, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
 import { EmptyState, ErrorLine, Section } from "#/components/page.tsx";
+import { PlaceFill, PlaceRow } from "#/components/place-row.tsx";
 import { RekordboxExportButton } from "#/components/rekordbox-view.tsx";
+import { useRemoveDestination } from "#/components/remove-destination.tsx";
 import { LibraryBadge } from "#/components/shared-library.tsx";
 import { SyncButton } from "#/components/sync-flow.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import {
 	isR2,
-	removeSyncTarget,
 	type SyncTarget,
 	tailscaleStatus,
+	targetShortName,
 	type UsbDrive,
 } from "#/lib/api.ts";
 import { formatBytes, timeAgo } from "#/lib/format.ts";
@@ -27,101 +26,6 @@ import { cn } from "#/lib/utils.ts";
 
 const plural = (n: number, one: string, many: string) =>
 	`${n.toLocaleString()} ${n === 1 ? one : many}`;
-
-/** Icon, name and where; a bar for how full it is; what happened last; one action. */
-const GRID = "grid-cols-[2rem_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto_1rem]";
-
-/** How much of something a destination holds: the library for a sync, space for a drive. */
-function Fill({ value, total, label }: { value: number; total: number; label: string }) {
-	const percent = total === 0 ? 0 : Math.min(100, (value / total) * 100);
-	return (
-		<div className="min-w-0 space-y-1.5">
-			<div className="truncate text-muted-foreground text-xs tabular-nums">{label}</div>
-			{/* The label above says the same in words. */}
-			<div aria-hidden="true" className="h-1 overflow-hidden rounded-full bg-muted">
-				<div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
-			</div>
-		</div>
-	);
-}
-
-interface RowProps {
-	brand: Brand;
-	name: string;
-	/** Next to the name, e.g. what kind of destination it is. */
-	badge?: ReactNode;
-	where: ReactNode;
-	/** Hover text for `where`, e.g. the full path. */
-	whereTitle?: string;
-	fill: ReactNode;
-	status: ReactNode;
-	action: ReactNode;
-	/** Goes to the destination's page. */
-	open: () => void;
-	menu: readonly MenuEntry[];
-}
-
-/** One destination. The row opens its page; the action works without opening it. */
-function Row({
-	brand,
-	name,
-	badge,
-	where,
-	whereTitle,
-	fill,
-	status,
-	action,
-	open,
-	menu,
-}: RowProps) {
-	const go = open;
-	return (
-		<RowMenu
-			label={name}
-			items={[{ label: "Open", icon: <ArrowRight />, onSelect: go }, "separator", ...menu]}
-		>
-			<div
-				className={cn(
-					"group grid min-h-16 items-center gap-4 px-4 py-3 transition-colors hover:bg-muted/40",
-					GRID,
-				)}
-			>
-				<BrandIcon brand={brand} className="size-8" />
-				<button
-					type="button"
-					onClick={go}
-					className="min-w-0 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-				>
-					<span className="flex items-center gap-2">
-						<span className="truncate font-medium text-sm">{name}</span>
-						{badge}
-					</span>
-					<span className="block truncate text-muted-foreground text-xs" title={whereTitle}>
-						{where}
-					</span>
-				</button>
-				{fill}
-				<div className="min-w-0 truncate text-muted-foreground text-xs">{status}</div>
-				{/* Right-clicks on the action are its own, not the row's. */}
-				<fieldset
-					aria-label={`${name} actions`}
-					className="flex min-w-0 justify-end"
-					onContextMenu={(e) => e.stopPropagation()}
-				>
-					{action}
-				</fieldset>
-				<button
-					type="button"
-					aria-label={`Open ${name}`}
-					onClick={go}
-					className="text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground"
-				>
-					<ChevronRight className="size-4" />
-				</button>
-			</div>
-		</RowMenu>
-	);
-}
 
 function useOnline(target: SyncTarget): boolean | undefined {
 	const machines = useQuery({
@@ -159,10 +63,11 @@ function TargetRow({
 		status = `Synced ${timeAgo(last.finishedAt)}`;
 	}
 	return (
-		<Row
+		<PlaceRow
 			brand={r2 ? "cloudflare" : "tailscale"}
-			name={target.machine}
+			name={targetShortName(target)}
 			badge={<LibraryBadge target={target} />}
+			whereTitle={`${target.machine}: ${target.path.join(" / ") || "bucket root"}`}
 			where={
 				<span className="inline-flex items-center gap-1.5">
 					{!r2 && (
@@ -176,11 +81,11 @@ function TargetRow({
 							)}
 						/>
 					)}
-					{target.path.join(" / ") || "Bucket root"}
+					{r2 ? target.path.join(" / ") || "Bucket root" : target.machine}
 				</span>
 			}
 			fill={
-				<Fill
+				<PlaceFill
 					value={target.syncedTracks}
 					total={librarySize}
 					label={`${target.syncedTracks.toLocaleString()} of ${plural(librarySize, "song", "songs")}`}
@@ -209,7 +114,7 @@ function RekordboxRow() {
 		line = <span className="text-destructive">{s.error}</span>;
 	}
 	return (
-		<Row
+		<PlaceRow
 			brand="rekordbox"
 			name="Rekordbox XML"
 			where={baseName(s.path)}
@@ -240,7 +145,7 @@ function UsbRow({ drive }: { drive: UsbDrive }) {
 	const open = () => void navigate({ to: "/export/usb", search: { mount: drive.mount } });
 	const used = drive.totalBytes - drive.freeBytes;
 	return (
-		<Row
+		<PlaceRow
 			brand="usb"
 			name={drive.name}
 			where={[
@@ -252,7 +157,7 @@ function UsbRow({ drive }: { drive: UsbDrive }) {
 				.filter(Boolean)
 				.join(", ")}
 			fill={
-				<Fill
+				<PlaceFill
 					value={used}
 					total={drive.totalBytes}
 					label={`${formatBytes(drive.freeBytes)} free`}
@@ -272,21 +177,12 @@ function UsbRow({ drive }: { drive: UsbDrive }) {
 
 /** Every export destination in one list: sync folders, the rekordbox file, plugged-in drives. */
 export function Destinations() {
-	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const targets = useSyncTargets();
 	const tracks = useTracks();
 	const drives = useUsbDrives();
 	const rekordbox = useRekordbox().status.data;
-	const [removing, setRemoving] = useState<SyncTarget | null>(null);
-	const remove = useMutation({
-		mutationFn: removeSyncTarget,
-		onSuccess: async () => {
-			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
-			await queryClient.invalidateQueries({ queryKey: ["sync-history"] });
-			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
-		},
-	});
+	const removal = useRemoveDestination();
 	const list = targets.data ?? [];
 	const plugged = drives.data ?? [];
 	const count = list.length + plugged.length + (rekordbox?.path ? 1 : 0);
@@ -303,7 +199,7 @@ export function Destinations() {
 				</Button>
 			}
 		>
-			{remove.isError && <ErrorLine>{String(remove.error)}</ErrorLine>}
+			{removal.error && <ErrorLine>{String(removal.error)}</ErrorLine>}
 			{count === 0 ? (
 				<div className="rounded-lg border border-dashed">
 					<EmptyState
@@ -325,7 +221,7 @@ export function Destinations() {
 							key={t.id}
 							target={t}
 							librarySize={librarySize}
-							onRemove={() => setRemoving(t)}
+							onRemove={() => removal.ask(t)}
 						/>
 					))}
 					<RekordboxRow />
@@ -334,22 +230,7 @@ export function Destinations() {
 					))}
 				</div>
 			)}
-			{removing && (
-				<ConfirmDialog
-					title={`Remove ${removing.machine}?`}
-					confirmLabel="Remove destination"
-					destructive
-					busy={remove.isPending}
-					onCancel={() => setRemoving(null)}
-					onConfirm={() => {
-						remove.mutate(removing.id);
-						setRemoving(null);
-					}}
-				>
-					manplay stops syncing there. Files already in {removing.path.join(" / ") || "the bucket"}{" "}
-					stay.
-				</ConfirmDialog>
-			)}
+			{removal.dialog}
 		</Section>
 	);
 }

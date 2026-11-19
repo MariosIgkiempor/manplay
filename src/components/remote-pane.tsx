@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, ChevronRight, Download, FolderOpen, Pause, Play } from "lucide-react";
+import { ArrowUp, Download, FolderOpen, Pause, Play } from "lucide-react";
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { DROP_PANE, DropChip, DropHintBar } from "#/components/drop-feedback.tsx";
 import {
@@ -8,8 +8,8 @@ import {
 	ColumnHeader,
 	EntryColumns,
 	EntryIcon,
-	FilterBox,
 	INDENT,
+	LocationBar,
 	type MenuItem,
 	MenuShell,
 	Name,
@@ -19,6 +19,7 @@ import {
 	SongIcon,
 } from "#/components/file-pane.tsx";
 import { NoticeBar } from "#/components/notice-bar.tsx";
+import { PathCrumbs } from "#/components/path-crumbs.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	type PullOutcome,
@@ -28,7 +29,7 @@ import {
 	remoteTrackPath,
 } from "#/lib/api.ts";
 import type { PaneSource } from "#/lib/drag-session.ts";
-import { isAudioName, joinPath, parentPath, relSegments } from "#/lib/fs-path.ts";
+import { isAudioName, parentPath, relSegments } from "#/lib/fs-path.ts";
 import { applyClick, EMPTY_SELECTION, type Selection } from "#/lib/selection.ts";
 import {
 	DEFAULT_FILE_SORT,
@@ -78,50 +79,6 @@ function rowMenu({
 }
 
 type Drag = ReturnType<typeof useFileDrag>;
-
-/** Where you are inside the destination; each step is also a place to drop files. */
-function RemoteCrumbs({
-	label,
-	crumbs,
-	drag,
-	onNavigate,
-}: {
-	label: string;
-	crumbs: string[];
-	drag: Drag;
-	onNavigate: (path: string) => void;
-}) {
-	const step = (to: string, text: string, extra?: string) => (
-		<button
-			type="button"
-			className={cn(
-				"rounded-md px-1 hover:bg-muted",
-				extra,
-				drag.dropTarget === to && "bg-primary/20",
-			)}
-			onClick={() => onNavigate(to)}
-			onDragOver={(ev) => drag.allowDrop(ev, to)}
-			onDragLeave={drag.clearDrop}
-			onDrop={(ev) => drag.dropInto(ev, to)}
-		>
-			{text}
-		</button>
-	);
-	return (
-		<nav className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5 text-sm">
-			{step(ROOT, label, "font-medium")}
-			{crumbs.map((seg, i) => {
-				const to = joinPath(ROOT, ...crumbs.slice(0, i + 1));
-				return (
-					<span key={to} className="flex items-center gap-0.5">
-						<ChevronRight className="size-3 text-muted-foreground" />
-						{step(to, seg)}
-					</span>
-				);
-			})}
-		</nav>
-	);
-}
 
 /** One file or folder: select, open, play, drag, and take a drop when it is a folder. */
 function RemoteRow({
@@ -228,8 +185,8 @@ export function RemotePane({
 	pane: 0 | 1;
 	targetId: number;
 	label: string;
-	/** Shown first in the toolbar when the view is split: what this pane shows. */
-	sourcePicker?: ReactNode;
+	/** The first crumb, what this pane shows, given a way back to the top folder. */
+	sourcePicker: (goTop: () => void) => ReactNode;
 	onActivate: () => void;
 }) {
 	const [path, setPath] = useState(ROOT);
@@ -327,8 +284,7 @@ export function RemotePane({
 			onMouseDown={onActivate}
 			className="@container/pane relative flex h-full min-h-0 min-w-0 flex-1 flex-col border-r bg-card/40 outline-none last:border-r-0"
 		>
-			<div className="flex items-center gap-1 border-b px-2 py-1.5">
-				{sourcePicker}
+			<div className="flex items-center gap-1 border-b px-3 py-2 @3xl/pane:px-6">
 				<Button
 					variant="ghost"
 					size="icon-sm"
@@ -339,7 +295,22 @@ export function RemotePane({
 				>
 					<ArrowUp />
 				</Button>
-				<RemoteCrumbs label={label} crumbs={crumbs} drag={drag} onNavigate={setPath} />
+				<LocationBar
+					inputRef={filterRef}
+					value={query}
+					matches={filtering ? shown.filter((r) => nameMatches(r.entry.name, query)).length : 0}
+					onChange={setQuery}
+					onDone={(keep) => !keep && setQuery("")}
+				>
+					<PathCrumbs
+						source={source}
+						first={sourcePicker(() => setPath(ROOT))}
+						root={ROOT}
+						crumbs={crumbs}
+						drag={drag}
+						onNavigate={setPath}
+					/>
+				</LocationBar>
 				<Button
 					variant="outline"
 					size="sm"
@@ -351,18 +322,12 @@ export function RemotePane({
 					{pull.isPending ? "Pulling…" : "Pull to library"}
 				</Button>
 			</div>
-			<FilterBox
-				inputRef={filterRef}
-				value={query}
-				matches={filtering ? shown.filter((r) => nameMatches(r.entry.name, query)).length : 0}
-				onChange={setQuery}
-				onDone={(keep) => !keep && setQuery("")}
-			/>
 			<NoticeBar notice={notice} />
 			<Banners error={null} listError={listing?.isError ? String(listing.error) : null} />
 			<ColumnHeader sort={sort} onSort={setSort} />
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for the current folder */}
 			<div
+				data-pane-list
 				className={cn(
 					"min-h-0 flex-1 overflow-y-auto py-0.5",
 					drag.dropTarget === path && DROP_PANE,

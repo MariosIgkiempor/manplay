@@ -18,9 +18,9 @@ import { type MenuEntry, RowMenu } from "#/components/menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { Cover } from "#/components/page-header.tsx";
 import { PanelHeader } from "#/components/panel-header.tsx";
+import { SearchField } from "#/components/search-field.tsx";
 import { TrackList } from "#/components/track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Input } from "#/components/ui/input.tsx";
 import {
 	type Track,
 	type UsbEdit,
@@ -451,11 +451,11 @@ function SongsView({
 				tracks={all}
 			/>
 			{all.length > 8 && (
-				<Input
+				<SearchField
 					value={query}
-					onChange={(e) => setQuery(e.target.value)}
+					onChange={setQuery}
 					placeholder="Filter by title, artist or album"
-					aria-label="Filter songs"
+					label="Filter songs"
 				/>
 			)}
 			<TrackList

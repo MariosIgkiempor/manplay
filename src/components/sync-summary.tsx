@@ -1,5 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, CloudUpload, Download, Loader2, RefreshCw } from "lucide-react";
+import {
+	CheckCircle2,
+	ChevronRight,
+	CloudUpload,
+	Download,
+	FolderSearch,
+	Loader2,
+	RefreshCw,
+} from "lucide-react";
 import {
 	type Dispatch,
 	type ReactNode,
@@ -8,10 +16,10 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
-import { ErrorLine } from "#/components/page.tsx";
-import { PullList } from "#/components/pull-review.tsx";
+import { ChangeBar, RunProgress, Tally, TONE, type Tone } from "#/components/diff-view.tsx";
+import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { IncomingList } from "#/components/sync-incoming.tsx";
+import { OnlyThereList } from "#/components/sync-only-there.tsx";
 import { SyncResult } from "#/components/sync-result.tsx";
 import {
 	countKinds,
@@ -24,7 +32,6 @@ import {
 } from "#/components/sync-review.tsx";
 import { SyncShell, type SyncShellVariant } from "#/components/sync-shell.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Switch } from "#/components/ui/switch.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import {
 	type ApplySummary,
@@ -41,7 +48,7 @@ import {
 	type TargetPlan,
 	type TargetScan,
 } from "#/lib/api.ts";
-import { formatBytes } from "#/lib/format.ts";
+import { formatBytes, timeAgo } from "#/lib/format.ts";
 import {
 	DELETED_KEY,
 	useSyncApply,
@@ -59,17 +66,23 @@ import {
 } from "#/lib/review-reads.ts";
 import {
 	type Choices,
+	chooseAll,
 	type IncomingAction,
 	isIncoming,
+	isPicked,
 	isPush,
 	isSettled,
+	onlyThere,
 	type PushAction,
+	type SyncDirection,
+	type ThereChoice,
+	type ThereFile,
 } from "#/lib/sync-choices.ts";
 import { cn } from "#/lib/utils.ts";
 
-/** Which halves of a sync start switched on. */
-export type SyncMode = "both" | "pull" | "push";
-type Side = "pull" | "push";
+/** Which directions a sync starts with. */
+export type SyncMode = SyncDirection;
+type Group = "send" | "bring" | "there";
 
 const bytes = (items: readonly { size: number }[]) => items.reduce((n, i) => n + i.size, 0);
 const flip = <T,>(set: ReadonlySet<T>, v: T): Set<T> => {
@@ -79,7 +92,6 @@ const flip = <T,>(set: ReadonlySet<T>, v: T): Set<T> => {
 	}
 	return next;
 };
-const pullKey = (id: number, f: RemoteFile) => `${id}:${f.rel.join("/")}`;
 
 type Phase =
 	| { step: "review" }
@@ -93,28 +105,21 @@ type Phase =
 	  }
 	| { step: "failed"; error: string };
 
-/** One half of a sync on one destination: a switch, what it would do, and the list on demand. */
+/** One group of a destination's changes: a header with what it holds, and the list on demand. */
 function Section({
 	icon,
 	title,
-	on,
-	onToggle,
 	summary,
 	size,
-	empty,
 	open,
 	onOpen,
 	children,
 }: {
 	icon: ReactNode;
 	title: string;
-	on: boolean;
-	onToggle: (on: boolean) => void;
 	/** Counts after the title; they may be buttons that open the list. */
 	summary: ReactNode;
 	size: number;
-	/** Nothing to do: the switch and the list are off. */
-	empty: boolean;
 	open: boolean;
 	/** Opens or closes the whole list. */
 	onOpen: () => void;
@@ -125,51 +130,44 @@ function Section({
 			<div
 				className={cn(
 					"sticky top-[var(--sync-top,-1rem)] z-20 flex h-12 items-center gap-3 bg-background px-[var(--diff-inset)]",
-					open && !empty && "border-b",
+					open && "border-b",
 				)}
 			>
-				<Switch checked={on && !empty} disabled={empty} onChange={onToggle} label={title} />
 				<button
 					type="button"
 					aria-expanded={open}
-					disabled={empty}
 					onClick={onOpen}
-					className="flex shrink-0 items-center gap-1.5 rounded-md font-medium text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-default [&_svg]:size-4"
+					className="flex shrink-0 items-center gap-1.5 rounded-md font-medium text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-4"
 				>
 					{icon}
 					{title}
 				</button>
-				<span className={cn("min-w-0 transition-opacity", !on && !empty && "opacity-45")}>
-					{summary}
-				</span>
+				<span className="min-w-0">{summary}</span>
 				{/* The empty stretch of the row opens the list too. */}
 				<button
 					type="button"
 					tabIndex={-1}
 					aria-hidden="true"
-					disabled={empty}
 					onClick={onOpen}
-					className="flex min-w-0 flex-1 items-center justify-end gap-3 self-stretch text-muted-foreground disabled:cursor-default"
+					className="flex min-w-0 flex-1 items-center justify-end gap-3 self-stretch text-muted-foreground"
 				>
 					{size > 0 && <span className="text-xs tabular-nums">{formatBytes(size)}</span>}
-					{!empty && (
-						<ChevronRight
-							className={cn(
-								"size-4 shrink-0 transition-transform motion-reduce:transition-none",
-								open && "rotate-90",
-							)}
-						/>
-					)}
+					<ChevronRight
+						className={cn(
+							"size-4 shrink-0 transition-transform motion-reduce:transition-none",
+							open && "rotate-90",
+						)}
+					/>
 				</button>
 			</div>
-			{open && !empty && <div>{children}</div>}
+			{open && <div>{children}</div>}
 		</div>
 	);
 }
 
 /**
- * Sync with the destinations: shows what their last background read found at once, a pull and a
- * push for each, each with a switch and its full list of changes to tick. Nothing changes until
+ * Sync with the destinations: shows what their last background read found at once, as one
+ * decision per song in three groups (send there, bring here, only there). Nothing changes until
  * Sync. Refresh reads them again and waits for that.
  */
 export function SyncPanel({
@@ -210,76 +208,56 @@ export function SyncPanel({
 
 interface Row {
 	plan: TargetPlan;
-	missing: RemoteFile[];
 	pullError: string | null;
-	pullOn: boolean;
-	pushOn: boolean;
-	/** What would be pulled if the switch were on, and what is, with it off nothing. */
-	pullSel: RemoteFile[];
-	pull: RemoteFile[];
-	/** Files edited on the destination that would change the library: they belong to the pull. */
+	/** Library files to put on the destination: new, changed or moved. */
+	send: PushAction[];
+	sendSel: PushAction[];
+	/** Files edited on the destination that would change the library. */
 	incoming: IncomingAction[];
 	incomingSel: IncomingAction[];
-	/** What runs: the selection, unless the pull is switched off. */
-	incomingRun: IncomingAction[];
-	pushActions: PushAction[];
-	pushSel: PushAction[];
-	push: PushAction[];
+	/** Files only on the destination, one decision each. */
+	there: ThereFile[];
+	/** What the there-choices come to. */
+	pulls: RemoteFile[];
+	deletes: PushAction[];
 }
 
-/** The state setters and tick lookups a destination's block works through. */
+/** The state setters and lookups a destination's block works through. */
 interface Ui {
 	setOpen: Dispatch<SetStateAction<ReadonlyMap<string, string>>>;
-	setSwitched: Dispatch<SetStateAction<ReadonlyMap<string, boolean>>>;
-	setPullFlips: Dispatch<SetStateAction<ReadonlySet<string>>>;
-	setPushFlips: Dispatch<SetStateAction<ReadonlySet<number>>>;
+	setFlips: Dispatch<SetStateAction<ReadonlySet<number>>>;
+	setThere: Dispatch<SetStateAction<ReadonlyMap<string, ThereChoice>>>;
 	setChoices: Dispatch<SetStateAction<Choices>>;
 	choices: Choices;
-	pullPicked: (id: number, f: RemoteFile) => boolean;
-	pushPicked: (a: SyncAction) => boolean;
+	picked: (a: SyncAction) => boolean;
+	thereChoice: (id: number, f: ThereFile) => ThereChoice;
 }
 
-/** What a destination's pull holds: songs the library lacks and songs edited over there. */
-function PullSummary({ t }: { t: Row }) {
-	if (t.pullError !== null) {
-		return <span className="text-destructive text-sm">Could not check</span>;
-	}
-	if (t.missing.length + t.incoming.length === 0) {
-		return <span className="text-muted-foreground text-sm">Nothing to pull</span>;
+const count = (n: number) => n.toLocaleString();
+
+function Count({ tone, n, label }: { tone: Tone; n: number; label: string }) {
+	if (n === 0) {
+		return null;
 	}
 	return (
-		<span className="inline-flex flex-wrap gap-x-4 text-sm tabular-nums">
-			{t.missing.length > 0 && (
-				<span>
-					<span className="font-medium text-success">+{t.pullSel.length.toLocaleString()}</span>{" "}
-					<span className="text-muted-foreground">
-						of {t.missing.length.toLocaleString()} songs not in your library
-					</span>
-				</span>
-			)}
-			{t.incoming.length > 0 && (
-				<span>
-					<span className="font-medium text-warning">~{t.incomingSel.length.toLocaleString()}</span>{" "}
-					<span className="text-muted-foreground">
-						of {t.incoming.length.toLocaleString()} edited on the destination
-					</span>
-				</span>
-			)}
+		<span>
+			<span className={cn("font-medium", TONE[tone].text)}>
+				{TONE[tone].sign}
+				{count(n)}
+			</span>{" "}
+			<span className="text-muted-foreground">{label}</span>
 		</span>
 	);
 }
 
 /** Files edited on the destination: updates, merges and conflicts, with their ticks and choices. */
-function PullIncoming({ t, ui }: { t: Row; ui: Ui }) {
-	if (t.incoming.length === 0) {
-		return null;
-	}
-	const { setPushFlips, setChoices, choices, pushPicked } = ui;
+function BringList({ t, ui }: { t: Row; ui: Ui }) {
+	const { setFlips, setChoices, choices, picked } = ui;
 	return (
 		<IncomingList
 			actions={t.incoming}
 			choices={choices}
-			picked={pushPicked}
+			picked={picked}
 			// A conflict is ticked by choosing a copy; unticking forgets the choice.
 			onToggle={(a) =>
 				a.kind === "conflict"
@@ -288,13 +266,13 @@ function PullIncoming({ t, ui }: { t: Row; ui: Ui }) {
 							next.delete(a.id);
 							return next;
 						})
-					: setPushFlips((s) => flip(s, a.id))
+					: setFlips((s) => flip(s, a.id))
 			}
 			onToggleAll={(items, on) =>
-				setPushFlips((s) => {
+				setFlips((s) => {
 					let next = s;
 					for (const a of items) {
-						if (a.kind !== "conflict" && isSettled(a, choices.get(a.id)) && pushPicked(a) !== on) {
+						if (a.kind !== "conflict" && isSettled(a, choices.get(a.id)) && picked(a) !== on) {
 							next = flip(next, a.id);
 						}
 					}
@@ -306,7 +284,7 @@ function PullIncoming({ t, ui }: { t: Row; ui: Ui }) {
 	);
 }
 
-/** One destination: how much already matches, then its pull and its push. */
+/** One destination: how much already matches, then what to send, bring and settle. */
 function TargetBlock({
 	t,
 	multi,
@@ -318,16 +296,18 @@ function TargetBlock({
 	open: ReadonlyMap<string, string>;
 	ui: Ui;
 }) {
-	const { setOpen, setSwitched, setPullFlips, setPushFlips, pullPicked, pushPicked } = ui;
+	const { setOpen, setFlips, setThere, picked, thereChoice } = ui;
 	const id = t.plan.targetId;
-	const skippedPush = new Set(t.pushActions.filter((a) => !pushPicked(a)).map((a) => a.id));
-	const pullCount = t.missing.length + t.incoming.length;
+	const name = t.plan.name;
+	const skipped = new Set(t.send.filter((a) => !picked(a)).map((a) => a.id));
+	const needChoice = t.incoming.filter((a) => !picked(a)).length;
+	const nothing = t.send.length + t.incoming.length + t.there.length === 0;
 	// Pressing the title opens the list; with a filter on it first clears the filter, and only a
 	// list showing everything closes.
-	const toggleOpen = (side: Side) =>
+	const toggleOpen = (group: Group) =>
 		setOpen((prev) => {
 			const next = new Map(prev);
-			const at = `${id}:${side}`;
+			const at = `${id}:${group}`;
 			if (prev.get(at) === "all") {
 				next.delete(at);
 			} else {
@@ -338,19 +318,24 @@ function TargetBlock({
 	// A count of one kind shows only that kind; pressing it again goes back to all, still open.
 	const pickKind = (kind: PushFilter) =>
 		setOpen((prev) =>
-			new Map(prev).set(`${id}:push`, prev.get(`${id}:push`) === kind ? "all" : kind),
+			new Map(prev).set(`${id}:send`, prev.get(`${id}:send`) === kind ? "all" : kind),
 		);
-	const pushFilter = (open.get(`${id}:push`) ?? "all") as PushFilter;
+	const sendFilter = (open.get(`${id}:send`) ?? "all") as PushFilter;
+	const thereCounts = {
+		pull: t.pulls.length,
+		delete: t.deletes.length,
+		leave: t.there.length - t.pulls.length - t.deletes.length,
+	};
 	return (
 		<section key={id}>
-			{(multi || t.plan.inSync > 0) && (
-				<div className="flex flex-wrap items-baseline justify-between gap-x-3 px-[var(--diff-inset)] py-2">
-					{multi ? <h3 className="break-words font-semibold text-sm">{t.plan.name}</h3> : <span />}
-					<span className="text-muted-foreground text-xs tabular-nums">
-						{t.plan.inSync.toLocaleString()} already match
-					</span>
-				</div>
-			)}
+			<div className="flex flex-wrap items-baseline justify-between gap-x-3 px-[var(--diff-inset)] py-2">
+				{multi ? <h3 className="break-words font-semibold text-sm">{name}</h3> : <span />}
+				<span className="text-muted-foreground text-xs tabular-nums">
+					{count(t.plan.inSync)} already match
+					{t.plan.held.length > 0 && ` · ${count(t.plan.held.length)} kept for 7 days`}
+					{t.plan.unchecked > 0 && ` · ${count(t.plan.unchecked)} not compared`}
+				</span>
+			</div>
 			{[...new Set([t.pullError, t.plan.error])].map(
 				(message) =>
 					message && (
@@ -359,87 +344,91 @@ function TargetBlock({
 						</ErrorLine>
 					),
 			)}
-			<Section
-				icon={<Download />}
-				title="Pull"
-				on={t.pullOn}
-				onToggle={(v) => setSwitched((m) => new Map(m).set(`${id}:pull`, v))}
-				empty={pullCount === 0}
-				size={bytes(t.pullSel) + bytes(t.incomingSel)}
-				open={open.has(`${id}:pull`)}
-				onOpen={() => toggleOpen("pull")}
-				summary={<PullSummary t={t} />}
-			>
-				<PullIncoming t={t} ui={ui} />
-				<PullList
-					missing={t.missing}
-					picked={(f) => pullPicked(id, f)}
-					onToggle={(f) => setPullFlips((s) => flip(s, pullKey(id, f)))}
-					onToggleGroup={(files, on) =>
-						setPullFlips((s) => {
-							let next = s;
-							for (const f of files) {
-								if (pullPicked(id, f) !== on) {
-									next = flip(next, pullKey(id, f));
-								}
-							}
-							return next;
-						})
-					}
-					onOnly={(keep) =>
-						setPullFlips(
-							new Set(
-								t.missing
-									.filter((f) => !f.otherFormat !== keep.includes(f))
-									.map((f) => pullKey(id, f)),
-							),
-						)
-					}
-				/>
-			</Section>
-			<Section
-				icon={<CloudUpload />}
-				title="Push"
-				on={t.pushOn}
-				onToggle={(v) => setSwitched((m) => new Map(m).set(`${id}:push`, v))}
-				empty={t.pushActions.length === 0 || t.plan.error !== null}
-				size={bytes(t.pushSel.filter((a) => a.kind === "upload" || a.kind === "replace"))}
-				open={open.has(`${id}:push`)}
-				onOpen={() => toggleOpen("push")}
-				summary={
-					t.plan.error ? (
-						<span className="text-destructive text-sm">Could not check</span>
-					) : t.pushActions.length === 0 ? (
-						<span className="text-muted-foreground text-sm">Up to date</span>
-					) : (
+			{nothing && !t.plan.error && (
+				<p className="flex items-center gap-2 border-t px-[var(--diff-inset)] py-3 text-muted-foreground text-sm">
+					<CheckCircle2 className="size-4 text-success" /> Up to date
+				</p>
+			)}
+			{t.send.length > 0 && (
+				<Section
+					icon={<CloudUpload />}
+					title={`Send to ${name}`}
+					size={bytes(t.sendSel.filter((a) => a.kind !== "move"))}
+					open={open.has(`${id}:send`)}
+					onOpen={() => toggleOpen("send")}
+					summary={
 						<FilterTally
-							counts={countKinds(t.pushSel)}
-							totals={countKinds(t.pushActions)}
-							active={(open.get(`${id}:push`) as PushFilter | undefined) ?? null}
+							counts={countKinds(t.sendSel)}
+							totals={countKinds(t.send)}
+							active={(open.get(`${id}:send`) as PushFilter | undefined) ?? null}
 							onPick={pickKind}
 						/>
-					)
-				}
-			>
-				<PushList
-					filter={pushFilter}
-					onShowAll={() => setOpen((prev) => new Map(prev).set(`${id}:push`, "all"))}
-					plan={{ ...t.plan, actions: t.pushActions }}
-					skipped={skippedPush}
-					onToggle={(aid) => setPushFlips((s) => flip(s, aid))}
-					onToggleAll={(aids, on) =>
-						setPushFlips((s) => {
-							let next = s;
-							for (const a of t.pushActions.filter((x) => aids.includes(x.id))) {
-								if (pushPicked(a) !== on) {
-									next = flip(next, a.id);
-								}
-							}
-							return next;
-						})
 					}
-				/>
-			</Section>
+				>
+					<PushList
+						filter={sendFilter}
+						onShowAll={() => setOpen((prev) => new Map(prev).set(`${id}:send`, "all"))}
+						plan={{ ...t.plan, actions: t.send, held: [], unchecked: 0 }}
+						skipped={skipped}
+						onToggle={(aid) => setFlips((s) => flip(s, aid))}
+						onToggleAll={(aids, on) =>
+							setFlips((s) => {
+								let next = s;
+								for (const a of t.send.filter((x) => aids.includes(x.id))) {
+									if (picked(a) !== on) {
+										next = flip(next, a.id);
+									}
+								}
+								return next;
+							})
+						}
+					/>
+				</Section>
+			)}
+			{t.incoming.length > 0 && (
+				<Section
+					icon={<Download />}
+					title="Bring into your library"
+					size={bytes(t.incomingSel)}
+					open={open.has(`${id}:bring`)}
+					onOpen={() => toggleOpen("bring")}
+					summary={
+						<span className="inline-flex flex-wrap gap-x-4 text-sm tabular-nums">
+							<Count tone="change" n={t.incomingSel.length} label={`edited on ${name}`} />
+							{needChoice > 0 && (
+								<span className="text-warning">{count(needChoice)} need a choice</span>
+							)}
+						</span>
+					}
+				>
+					<BringList t={t} ui={ui} />
+				</Section>
+			)}
+			{t.there.length > 0 && (
+				<Section
+					icon={<FolderSearch />}
+					title={`Only on ${name}`}
+					size={bytes(t.pulls) + bytes(t.deletes)}
+					open={open.has(`${id}:there`)}
+					onOpen={() => toggleOpen("there")}
+					summary={
+						<span className="inline-flex flex-wrap gap-x-4 text-sm tabular-nums">
+							<Count tone="add" n={thereCounts.pull} label="copy here" />
+							<Count tone="remove" n={thereCounts.delete} label="delete there" />
+							{thereCounts.leave > 0 && (
+								<span className="text-muted-foreground">{count(thereCounts.leave)} left</span>
+							)}
+						</span>
+					}
+				>
+					<OnlyThereList
+						files={t.there}
+						choice={(f) => thereChoice(id, f)}
+						onChoose={(f, c) => setThere((m) => new Map(m).set(`${id}:${f.key}`, c))}
+						onChooseAll={(c) => setThere((m) => chooseAll(m, id, t.there, c))}
+					/>
+				</Section>
+			)}
 		</section>
 	);
 }
@@ -471,6 +460,58 @@ async function exchangeLibraryData(
 		}
 	}
 	return outcomes;
+}
+
+/**
+ * Runs what the review settled: library data first, then copies into the library, then
+ * everything the plans apply (sends, deletes, updates, merges). `setPhase` follows each step.
+ */
+async function runSync({
+	libraryIds,
+	pulls,
+	applyIds,
+	planIds,
+	resolutions,
+	queryClient,
+	apply,
+	setPhase,
+}: {
+	libraryIds: number[];
+	pulls: readonly Row[];
+	applyIds: number[];
+	planIds: PlanId[];
+	resolutions: Record<number, Resolution>;
+	queryClient: ReturnType<typeof useQueryClient>;
+	apply: (args: {
+		planIds: PlanId[];
+		actionIds: number[];
+		resolutions: Record<number, Resolution>;
+	}) => Promise<ApplySummary[]>;
+	setPhase: (phase: Phase) => void;
+}) {
+	try {
+		setPhase({ step: "pulling" });
+		const library = await exchangeLibraryData(libraryIds, queryClient);
+		const pulled: PullOutcome[] = [];
+		for (const t of pulls) {
+			pulled.push(
+				await remotePull(
+					t.plan.targetId,
+					t.pulls.map((f) => f.rel),
+				),
+			);
+		}
+		if (pulled.length > 0) {
+			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
+			await queryClient.invalidateQueries({ queryKey: ["library-status"] });
+		}
+		setPhase({ step: "pushing" });
+		const pushed =
+			applyIds.length > 0 ? await apply({ planIds, actionIds: applyIds, resolutions }) : [];
+		setPhase({ step: "done", pulled, pushed, library });
+	} catch (e) {
+		setPhase({ step: "failed", error: String(e) });
+	}
 }
 
 /** What shows before there is a plan to review, and after the run: loading, errors, the result. */
@@ -583,6 +624,33 @@ function useReviewReads(ids: readonly number[], stale: ReadonlySet<PlanId>, froz
 	};
 }
 
+/** Each destination's read split into what to send, bring and settle, with what is chosen. */
+function toRows(
+	reviewed: readonly TargetScan[],
+	mode: SyncMode,
+	picked: (a: SyncAction) => boolean,
+	thereChoice: (id: number, f: ThereFile) => ThereChoice,
+): Row[] {
+	return reviewed.map(({ plan: t, pull }) => {
+		const pushes = t.actions.filter(isPush);
+		const send = pushes.filter((a) => a.kind !== "delete");
+		const incoming = t.actions.filter(isIncoming);
+		const thereFiles = onlyThere(pull.missing, pushes, mode);
+		const chosen = (c: ThereChoice) => thereFiles.filter((f) => thereChoice(t.targetId, f) === c);
+		return {
+			plan: t,
+			pullError: pull.error,
+			send,
+			sendSel: t.error ? [] : send.filter(picked),
+			incoming,
+			incomingSel: incoming.filter(picked),
+			there: thereFiles,
+			pulls: chosen("pull").flatMap((f) => (f.pull ? [f.pull] : [])),
+			deletes: chosen("delete").flatMap((f) => (f.remove ? [f.remove] : [])),
+		};
+	});
+}
+
 function Gather({
 	ids,
 	stale,
@@ -613,35 +681,23 @@ function Gather({
 		};
 	}, []);
 
-	// What the user changed from the defaults: switches, ticks and which lists are open.
-	const [switched, setSwitched] = useState<ReadonlyMap<string, boolean>>(new Map());
-	const [pullFlips, setPullFlips] = useState<ReadonlySet<string>>(new Set());
-	const [pushFlips, setPushFlips] = useState<ReadonlySet<number>>(new Set());
+	// What the user changed from the suggestions: ticks, choices and which lists are open.
+	const [flips, setFlips] = useState<ReadonlySet<number>>(new Set());
+	const [there, setThere] = useState<ReadonlyMap<string, ThereChoice>>(new Map());
 	const [open, setOpen] = useState<ReadonlyMap<string, string>>(new Map());
 	const [understood, setUnderstood] = useState(false);
 	// What was chosen for merges and conflicts.
 	const [choices, setChoices] = useState<Choices>(new Map());
 
-	const isOn = (id: number, side: Side) =>
-		switched.get(`${id}:${side}`) ?? (mode === "both" || mode === side);
-	// Songs that only exist here in another format, and opt-in changes such as deletes, start unticked.
-	const pullPicked = (id: number, f: RemoteFile) =>
-		!f.otherFormat !== pullFlips.has(pullKey(id, f));
-	// A merge or conflict only runs once its choices are made; unticking a ready merge is a flip.
-	const pushPicked = (a: SyncAction) => {
-		if (isIncoming(a)) {
-			return isSettled(a, choices.get(a.id)) && (a.kind === "conflict" || !pushFlips.has(a.id));
-		}
-		return !a.optional !== pushFlips.has(a.id);
-	};
+	const picked = (a: SyncAction) => isPicked(a, mode, flips.has(a.id), choices.get(a.id));
+	const thereChoice = (id: number, f: ThereFile) => there.get(`${id}:${f.key}`) ?? f.suggested;
 
 	const busy = phase.step !== "review";
-	const touched = switched.size + pullFlips.size + pushFlips.size + choices.size > 0;
+	const touched = flips.size + there.size + choices.size > 0;
 	const { shown, newer, waiting, error } = useReviewReads(ids, stale, touched || busy);
 	const showLatest = () => {
-		setSwitched(new Map());
-		setPullFlips(new Set());
-		setPushFlips(new Set());
+		setFlips(new Set());
+		setThere(new Map());
 		setChoices(new Map());
 		setOpen(new Map());
 		setUnderstood(false);
@@ -663,39 +719,15 @@ function Gather({
 	}
 	const reviewed = shown.filter((r): r is TargetScan => r !== null);
 
-	const targets = reviewed.map(({ plan: t, pull }) => {
-		const missing = pull.missing;
-		const pullOn = isOn(t.targetId, "pull");
-		const pushOn = isOn(t.targetId, "push") && !t.error;
-		const pullSel = missing.filter((f) => pullPicked(t.targetId, f));
-		const pushActions = t.actions.filter(isPush);
-		const incoming = t.actions.filter(isIncoming);
-		const pushSel = pushActions.filter(pushPicked);
-		const incomingSel = incoming.filter(pushPicked);
-		return {
-			plan: t,
-			missing,
-			pullError: pull.error,
-			pullOn,
-			pushOn,
-			pullSel,
-			pull: pullOn ? pullSel : [],
-			incoming,
-			incomingSel,
-			incomingRun: pullOn ? incomingSel : [],
-			pushActions,
-			pushSel,
-			push: pushOn ? pushSel : [],
-		};
-	});
-	const pulls = targets.filter((t) => t.pull.length > 0);
-	const pushIds = targets.flatMap((t) => t.push.map((a) => a.id));
-	const pushed = targets.flatMap((t) => t.push);
+	const targets = toRows(reviewed, mode, picked, thereChoice);
+	const pulls = targets.filter((t) => t.pulls.length > 0);
+	const pushed = targets.flatMap((t) => [...t.sendSel, ...t.deletes]);
+	const pushIds = pushed.map((a) => a.id);
 	const removing = pushed.filter((a) => a.kind === "delete").length;
 	const remoteFiles = targets
-		.filter((t) => t.push.some((a) => a.kind === "delete"))
+		.filter((t) => t.deletes.length > 0)
 		.reduce((n, t) => n + t.plan.remoteTotal, 0);
-	const incomingRun = targets.flatMap((t) => t.incomingRun);
+	const incomingRun = targets.flatMap((t) => t.incomingSel);
 	// Updates and merges run with the push: the plan applies them.
 	const applyIds = [...pushIds, ...incomingRun.map((a) => a.id)];
 	const resolutions: Record<number, Resolution> = Object.fromEntries(
@@ -704,7 +736,8 @@ function Gather({
 			return choice ? [[a.id, choice] as const] : [];
 		}),
 	);
-	const total = pulls.reduce((n, t) => n + t.pull.length, 0) + applyIds.length;
+	const pullCount = pulls.reduce((n, t) => n + t.pulls.length, 0);
+	const total = pullCount + applyIds.length;
 	// Destinations that share tags and playlists: they are exchanged first, whatever is ticked.
 	const libraryIds = ids.filter((id) => syncTargets.data?.find((t) => t.id === id)?.libsync);
 	// Only the plans with something ticked are applied, so an untouched old one cannot refuse.
@@ -714,33 +747,31 @@ function Gather({
 		.map((r) => r.planId);
 	const refresh = () => onRefresh(reviewed.map((r) => r.planId));
 
-	const run = async () => {
-		try {
-			setPhase({ step: "pulling" });
-			const library = await exchangeLibraryData(libraryIds, queryClient);
-			const pulled: PullOutcome[] = [];
-			for (const t of pulls) {
-				pulled.push(
-					await remotePull(
-						t.plan.targetId,
-						t.pull.map((f) => f.rel),
-					),
-				);
-			}
-			if (pulled.length > 0) {
-				await queryClient.invalidateQueries({ queryKey: ["tracks"] });
-				await queryClient.invalidateQueries({ queryKey: ["library-status"] });
-			}
-			setPhase({ step: "pushing" });
-			const result =
-				applyIds.length > 0
-					? await apply.mutateAsync({ planIds, actionIds: applyIds, resolutions })
-					: [];
-			setPhase({ step: "done", pulled, pushed: result, library });
-		} catch (e) {
-			setPhase({ step: "failed", error: String(e) });
-		}
-	};
+	const run = () =>
+		runSync({
+			libraryIds,
+			pulls,
+			applyIds,
+			planIds,
+			resolutions,
+			queryClient,
+			apply: apply.mutateAsync,
+			setPhase,
+		});
+
+	if (showsUpToDate(phase, newer, targets)) {
+		return (
+			<UpToDate
+				variant={variant}
+				targets={targets}
+				scannedAt={Math.min(...reviewed.map((r) => r.scannedAt))}
+				libraryData={libraryIds.length > 0}
+				onRefresh={refresh}
+				onSyncLibrary={() => void run()}
+				onClose={onClose}
+			/>
+		);
+	}
 
 	return (
 		<SyncShell
@@ -757,11 +788,7 @@ function Gather({
 						<div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
 							<Tally
 								items={[
-									{
-										tone: "add",
-										label: "to pull",
-										count: pulls.reduce((n, t) => n + t.pull.length, 0),
-									},
+									{ tone: "add", label: "to copy here", count: pullCount },
 									{
 										tone: "change",
 										label: "to update your library",
@@ -777,7 +804,7 @@ function Gather({
 							/>
 							<span className="text-muted-foreground text-xs tabular-nums">
 								{formatBytes(
-									bytes(pulls.flatMap((t) => t.pull)) +
+									bytes(pulls.flatMap((t) => t.pulls)) +
 										bytes(incomingRun) +
 										bytes(pushed.filter((a) => a.kind === "upload" || a.kind === "replace")),
 								)}
@@ -785,7 +812,7 @@ function Gather({
 						</div>
 						<ChangeBar
 							parts={[
-								{ tone: "add", count: pulls.reduce((n, t) => n + t.pull.length, 0) },
+								{ tone: "add", count: pullCount },
 								{ tone: "change", count: incomingRun.length },
 								...KINDS.map((k) => ({
 									tone: LABEL[k].tone,
@@ -804,20 +831,13 @@ function Gather({
 								Close
 							</Button>
 						)}
-						<Button
-							className="flex-1"
-							onClick={() => void run()}
-							disabled={
-								busy || (total === 0 && libraryIds.length === 0) || (removing > 0 && !understood)
-							}
-						>
-							<RefreshCw className={busy ? "animate-spin motion-reduce:animate-none" : ""} />
-							{busy
-								? "Syncing…"
-								: total === 0
-									? "Sync library data"
-									: `Sync ${total.toLocaleString()} changes`}
-						</Button>
+						<SyncButton
+							busy={busy}
+							total={total}
+							libraryData={libraryIds.length > 0}
+							needsConfirm={removing > 0 && !understood}
+							onRun={() => void run()}
+						/>
 					</div>
 				</>
 			}
@@ -830,20 +850,124 @@ function Gather({
 						t={t}
 						multi={ids.length > 1}
 						open={open}
-						ui={{
-							setOpen,
-							setSwitched,
-							setPullFlips,
-							setPushFlips,
-							setChoices,
-							choices,
-							pullPicked,
-							pushPicked,
-						}}
+						ui={{ setOpen, setFlips, setThere, setChoices, choices, picked, thereChoice }}
 					/>
 				))}
 			</div>
 		</SyncShell>
+	);
+}
+
+/**
+ * Whether the review is the up-to-date screen: still reviewing, no newer read waiting, and every
+ * destination read with nothing to send, bring or settle.
+ */
+const showsUpToDate = (phase: Phase, newer: boolean, targets: readonly Row[]) =>
+	phase.step === "review" &&
+	!newer &&
+	targets.length > 0 &&
+	targets.every(
+		(t) =>
+			t.send.length + t.incoming.length + t.there.length === 0 &&
+			t.plan.error === null &&
+			t.pullError === null,
+	);
+
+/**
+ * Nothing to send, bring or settle anywhere: one calm line on how much matches and when it was
+ * checked, with Refresh. Destinations sharing library data still offer to exchange it.
+ */
+function UpToDate({
+	variant,
+	targets,
+	scannedAt,
+	libraryData,
+	onRefresh,
+	onSyncLibrary,
+	onClose,
+}: {
+	variant: SyncShellVariant;
+	targets: readonly Row[];
+	scannedAt: number;
+	libraryData: boolean;
+	onRefresh: () => void;
+	onSyncLibrary: () => void;
+	onClose: (() => void) | undefined;
+}) {
+	const matching = targets.reduce((n, t) => n + t.plan.inSync, 0);
+	const only = targets.length === 1 ? targets[0] : undefined;
+	const where = only ? only.plan.name : `${targets.length} destinations`;
+	const held = targets.reduce((n, t) => n + t.plan.held.length, 0);
+	return (
+		<SyncShell
+			variant={variant}
+			footer={
+				(libraryData || onClose) && (
+					<div className="flex gap-2">
+						{onClose && (
+							<Button variant="outline" onClick={onClose}>
+								Close
+							</Button>
+						)}
+						{libraryData && (
+							<Button className="flex-1" onClick={onSyncLibrary}>
+								<RefreshCw /> Sync library data
+							</Button>
+						)}
+					</div>
+				)
+			}
+		>
+			<EmptyState
+				className="py-16"
+				icon={<CheckCircle2 className="size-8 text-success" />}
+				title={only ? `${only.plan.name} is up to date` : "Everything is up to date"}
+				action={
+					<Button size="sm" variant="outline" onClick={onRefresh}>
+						<RefreshCw /> Check again
+					</Button>
+				}
+			>
+				{matching > 0
+					? `All ${count(matching)} songs match ${where}.`
+					: `Nothing to sync with ${where}.`}{" "}
+				Checked {timeAgo(scannedAt)}.
+				{held > 0 && ` ${count(held)} removed songs are kept there for 7 days.`}
+			</EmptyState>
+		</SyncShell>
+	);
+}
+
+/** The footer's main button: how many changes run, or only the library data exchange. */
+function SyncButton({
+	busy,
+	total,
+	libraryData,
+	needsConfirm,
+	onRun,
+}: {
+	busy: boolean;
+	total: number;
+	libraryData: boolean;
+	/** Deletes are ticked but not confirmed yet. */
+	needsConfirm: boolean;
+	onRun: () => void;
+}) {
+	let label = `Sync ${total.toLocaleString()} changes`;
+	if (busy) {
+		label = "Syncing…";
+	} else if (total === 0) {
+		label = "Sync library data";
+	}
+	return (
+		<Button
+			className="flex-1"
+			onClick={onRun}
+			disabled={busy || (total === 0 && !libraryData) || needsConfirm}
+		>
+			<RefreshCw className={busy ? "animate-spin motion-reduce:animate-none" : ""} />
+			{label}
+		</Button>
 	);
 }
 

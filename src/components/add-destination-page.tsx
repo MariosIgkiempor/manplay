@@ -48,7 +48,7 @@ function Heading({ brand, title }: { brand?: Brand | undefined; title: string })
 			}
 			kind={
 				<>
-					<PlaceCrumb section="export" current="add" label="Add destination" />
+					<PlaceCrumb section="export" current="add" />
 					{brand && (
 						<>
 							<ChevronRight className="size-3.5 shrink-0" />

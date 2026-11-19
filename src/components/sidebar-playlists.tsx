@@ -197,13 +197,12 @@ export function SidebarPlaylists() {
 									style={{ paddingLeft: CHILD_PAD }}
 									onDoubleClick={() => setRenaming(p.id)}
 								>
-									<ListMusic className="size-4 shrink-0" />
-									<span className="truncate">{p.name}</span>
+									<ListMusic className="size-4 shrink-0 opacity-70" />
+									<span className="min-w-0 truncate">{p.name}</span>
 									<ScopeMark scope={p.scope ?? "shared"} held={p.held ?? false} />
 									<RowCount n={p.trackCount} />
 								</Link>
 							)}
-							<span className="size-5 shrink-0" />
 						</div>
 					</RowMenu>
 				))}

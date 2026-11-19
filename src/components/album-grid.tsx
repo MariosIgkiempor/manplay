@@ -2,10 +2,12 @@ import { Play } from "lucide-react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
+import { LoadMore } from "#/components/load-more.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import { type Album, syncState } from "#/lib/albums.ts";
+import { useProgressive } from "#/lib/use-progressive.ts";
 
 interface Props {
 	albums: readonly Album[];
@@ -72,14 +74,18 @@ function AlbumTile({
 }
 
 export function AlbumGrid({ albums, targetCount, onOpen }: Props) {
+	const { shown, more, loadMore } = useProgressive(albums, (a) => a.key);
 	if (albums.length === 0) {
 		return <EmptyState title="No albums">Clear the search to see everything.</EmptyState>;
 	}
 	return (
-		<div className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-x-4 gap-y-6">
-			{albums.map((a) => (
-				<AlbumTile key={a.key} album={a} targetCount={targetCount} onOpen={() => onOpen(a)} />
-			))}
-		</div>
+		<>
+			<div className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-x-4 gap-y-6">
+				{shown.map((a) => (
+					<AlbumTile key={a.key} album={a} targetCount={targetCount} onOpen={() => onOpen(a)} />
+				))}
+			</div>
+			<LoadMore more={more} onMore={loadMore} />
+		</>
 	);
 }

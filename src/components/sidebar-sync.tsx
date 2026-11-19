@@ -1,11 +1,13 @@
 import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
 import {
+	ArrowRight,
 	Check,
 	CloudUpload,
 	Download,
 	FolderOpen,
 	Loader2,
 	RefreshCw,
+	Trash2,
 	TriangleAlert,
 	Upload,
 } from "lucide-react";
@@ -13,13 +15,23 @@ import type { ReactNode } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { useDownloadsEnabled } from "#/components/downloads-source.tsx";
 import { useItunesOn } from "#/components/itunes-source.tsx";
+import { RowMenu } from "#/components/menu.tsx";
+import { useRemoveDestination } from "#/components/remove-destination.tsx";
+import { LibraryBadge } from "#/components/shared-library.tsx";
 import { AddButton } from "#/components/sidebar-create.tsx";
-import { GroupHeading, SectionLabel } from "#/components/sidebar-parts.tsx";
-import { CHILD_INDENT, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
+import { GroupHeading, RowTrailing, SectionLabel } from "#/components/sidebar-parts.tsx";
+import {
+	CHILD_PAD,
+	HOVER_ACTION,
+	HOVER_END,
+	rowBase,
+	rowClass,
+	UNDER_HOVER_END,
+} from "#/components/sidebar-row.ts";
 import { type SyncKind, useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
-import { isR2 } from "#/lib/api.ts";
-import { formatBytes } from "#/lib/format.ts";
+import { isR2, targetShortName } from "#/lib/api.ts";
+import { compactCount as compact, formatBytes } from "#/lib/format.ts";
 import { useClashes, useItunesPending, useSyncScans, useSyncTargets } from "#/lib/queries.ts";
 import { type DestinationStatus, destinationStatus } from "#/lib/sync-status.ts";
 import { useDownloadsNewCount } from "#/lib/use-import.ts";
@@ -61,13 +73,17 @@ function QuickActions() {
 	);
 }
 
-/** A source or destination: opens its page. */
+/**
+ * A source or destination: opens its page. Its state sits at the right end, lined up with every
+ * row's count; a destination's Browse files button takes that spot while hovered.
+ */
 function ChildRow({
 	brand,
 	label,
 	title,
 	active,
 	dim,
+	badge,
 	trailing,
 	browse,
 	onOpen,
@@ -78,36 +94,38 @@ function ChildRow({
 	active: boolean;
 	/** Switched off: shown, but quieter. */
 	dim?: boolean;
+	/** A small mark right after the name, e.g. that it holds the shared library. */
+	badge?: ReactNode;
 	trailing?: ReactNode;
-	/** Destination id whose files can be browsed; adds a hover button next to the row. */
+	/** Destination id whose files can be browsed; shows a button in the last column on hover. */
 	browse?: number;
 	onOpen: () => void;
 }) {
 	return (
-		<div className={cn("group/row", rowClass(active))}>
+		<div className={cn("group/row relative", rowClass(active))}>
 			<button
 				type="button"
 				title={title ?? label}
 				onClick={onOpen}
 				className={cn(rowBase, "text-left outline-none", dim && "opacity-60")}
-				style={{ paddingLeft: `${8 + CHILD_INDENT}px` }}
+				style={{ paddingLeft: `${CHILD_PAD}px` }}
 			>
-				<BrandIcon brand={brand} className="size-4 rounded-[4px] ring-0" />
-				<span className="truncate">{label}</span>
-				{trailing && <span className="ml-auto shrink-0 pl-2 text-xs tabular-nums">{trailing}</span>}
+				<BrandIcon brand={brand} className="size-4 shrink-0 rounded-[4px] ring-0" />
+				<span className="min-w-0 truncate">{label}</span>
+				{badge}
+				{trailing && (
+					<RowTrailing className={cn(browse !== undefined && UNDER_HOVER_END)}>
+						{trailing}
+					</RowTrailing>
+				)}
 			</button>
-			{browse === undefined ? (
-				<span className="size-5 shrink-0" />
-			) : (
+			{browse !== undefined && (
 				<Link
 					to="/files"
 					search={{ target: browse }}
 					aria-label={`Browse files on ${label}`}
 					title="Browse files"
-					className={cn(
-						iconButton,
-						"size-5 opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100",
-					)}
+					className={cn(iconButton, "size-5", HOVER_END)}
 				>
 					<FolderOpen />
 				</Link>
@@ -116,17 +134,14 @@ function ChildRow({
 	);
 }
 
-/** Songs waiting to be imported, as a count after the source's name. */
+/** Songs waiting to be imported, as ↓N like a destination's songs to pull. */
 function PendingCount({ count, what }: { count: number | null; what: string }) {
 	if (count === null || count === 0) {
 		return null;
 	}
 	return (
-		<span
-			title={`${count.toLocaleString()} ${what}`}
-			className="rounded-full bg-primary/15 px-1.5 py-px font-medium text-[10px] text-primary leading-4"
-		>
-			{count.toLocaleString()}
+		<span title={`${count.toLocaleString()} ${what}`} className="text-success">
+			↓{compact(count)}
 		</span>
 	);
 }
@@ -195,21 +210,21 @@ function ScanIndicator({ status }: { status: DestinationStatus | null }) {
 			<Loader2
 				role="img"
 				aria-label={SCAN_TEXT.scanning}
-				className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none"
+				className="size-3.5 animate-spin text-muted-foreground motion-reduce:animate-none"
 			/>
 		);
 	}
 	if (status.kind === "error") {
 		return (
 			<span role="img" aria-label={`${SCAN_TEXT.error}: ${status.message}`} title={status.message}>
-				<TriangleAlert className="size-3 text-destructive" />
+				<TriangleAlert className="size-3.5 text-destructive" />
 			</span>
 		);
 	}
 	if (status.kind === "upToDate") {
 		return (
 			<span role="img" aria-label={SCAN_TEXT.upToDate} title={SCAN_TEXT.upToDate}>
-				<Check className="size-3 text-success" />
+				<Check className="size-3.5 text-success" />
 			</span>
 		);
 	}
@@ -218,9 +233,9 @@ function ScanIndicator({ status }: { status: DestinationStatus | null }) {
 		status.toPush > 0 && `${status.toPush.toLocaleString()} to push`,
 	].filter(Boolean);
 	return (
-		<span title={parts.join(", ")} className="flex items-center gap-1 text-[11px] tabular-nums">
-			{status.toPull > 0 && <span className="text-success">↓{status.toPull.toLocaleString()}</span>}
-			{status.toPush > 0 && <span className="text-primary">↑{status.toPush.toLocaleString()}</span>}
+		<span title={parts.join(", ")} className="flex items-center gap-1.5">
+			{status.toPull > 0 && <span className="text-success">↓{compact(status.toPull)}</span>}
+			{status.toPush > 0 && <span className="text-primary">↑{compact(status.toPush)}</span>}
 		</span>
 	);
 }
@@ -234,45 +249,70 @@ function ExportItems() {
 	const rekordbox = useRekordbox().status.data;
 	const progress = useSyncProgress();
 	const syncing = new Set([...progress.values()].map((p) => p.targetId));
+	const { start } = useSyncActions();
+	const matchTarget = matchRoute({ to: "/export/$targetId", fuzzy: true });
+	// Off its page once it is gone.
+	const removal = useRemoveDestination((t) => {
+		if (matchTarget && Number(matchTarget.targetId) === t.id) {
+			void navigate({ to: "/export" });
+		}
+	});
 	return (
 		<>
 			{targets.map((t) => {
 				const status = destinationStatus(scans, t.id);
+				const open = () => void navigate({ to: "/export/$targetId", params: { targetId: t.id } });
 				return (
-					<ChildRow
+					<RowMenu
 						key={t.id}
-						brand={isR2(t) ? "cloudflare" : "tailscale"}
-						label={t.machine}
-						title={`${t.machine}: ${t.path.join(" / ") || "bucket root"}`}
-						active={Boolean(matchRoute({ to: "/export/$targetId", params: { targetId: t.id } }))}
-						browse={t.id}
-						trailing={
-							(t.libsync || syncing.has(t.id) || status !== null) && (
-								<span className="flex items-center gap-1.5">
-									{t.libsync && (
-										<span
-											title="Holds your shared library"
-											className="rounded-full bg-primary/15 px-1.5 py-px font-medium text-[10px] text-primary leading-4"
-										>
-											Shared
-										</span>
-									)}
-									{syncing.has(t.id) ? (
-										<span
-											role="img"
-											aria-label="Syncing"
-											className="block size-2 animate-pulse rounded-full bg-primary"
-										/>
-									) : (
-										<ScanIndicator status={status} />
-									)}
-								</span>
-							)
-						}
-						onOpen={() => void navigate({ to: "/export/$targetId", params: { targetId: t.id } })}
-					/>
+						label={targetShortName(t)}
+						items={[
+							{ label: "Open", icon: <ArrowRight />, onSelect: open },
+							{
+								label: "Browse files",
+								icon: <FolderOpen />,
+								onSelect: () => void navigate({ to: "/files", search: { target: t.id } }),
+							},
+							{
+								label: "Sync…",
+								icon: <RefreshCw />,
+								disabled: syncing.size > 0,
+								onSelect: () => start("sync", [t.id]),
+							},
+							"separator",
+							{
+								label: "Remove destination…",
+								icon: <Trash2 />,
+								destructive: true,
+								disabled: removal.busy,
+								onSelect: () => removal.ask(t),
+							},
+						]}
+					>
+						<ChildRow
+							brand={isR2(t) ? "cloudflare" : "tailscale"}
+							label={targetShortName(t)}
+							title={`${t.machine}: ${t.path.join(" / ") || "bucket root"}`}
+							active={Boolean(matchRoute({ to: "/export/$targetId", params: { targetId: t.id } }))}
+							browse={t.id}
+							badge={t.libsync && <LibraryBadge target={t} focusable={false} />}
+							trailing={
+								syncing.has(t.id) ? (
+									<span
+										role="img"
+										aria-label="Syncing"
+										className="block size-2 animate-pulse rounded-full bg-primary"
+									/>
+								) : (
+									<ScanIndicator status={status} />
+								)
+							}
+							onOpen={open}
+						/>
+					</RowMenu>
 				);
 			})}
+			{removal.dialog}
 			{rekordbox?.path && (
 				<ChildRow
 					brand="rekordbox"
@@ -306,18 +346,13 @@ function ClashesRow() {
 	}
 	return (
 		<div className={rowClass(false)}>
-			<Link
-				to="/settings"
-				className={cn(rowBase, "text-left outline-none")}
-				style={{ paddingLeft: "8px" }}
-			>
+			<Link to="/settings" className={cn(rowBase, "text-left outline-none")}>
 				<TriangleAlert className="size-4 shrink-0 text-warning" />
 				<span className="truncate">Clashes</span>
-				<span className="ml-auto rounded-full bg-warning/15 px-1.5 text-warning text-xs tabular-nums">
-					{count}
-				</span>
+				<RowTrailing>
+					<span className="text-warning">{compact(count)}</span>
+				</RowTrailing>
 			</Link>
-			<span className="size-5 shrink-0" />
 		</div>
 	);
 }

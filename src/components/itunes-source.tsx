@@ -1,14 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { CheckCircle2, FileAudio, FolderOpen, Music, RefreshCw, Trash2 } from "lucide-react";
+import {
+	CheckCircle2,
+	Download,
+	FileAudio,
+	FolderOpen,
+	Music,
+	Power,
+	RefreshCw,
+	Trash2,
+} from "lucide-react";
 import type { ReactNode } from "react";
-import { DestinationHeader, FolderFigure, SettingLabel } from "#/components/destination-header.tsx";
+import { DestinationHeader, SettingLabel } from "#/components/destination-header.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
-import { ErrorLine } from "#/components/page.tsx";
+import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { PlacePage } from "#/components/place-page.tsx";
+import { OffBadge, PlaceRow } from "#/components/place-row.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
-import { SourceCard } from "#/components/source-card.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { type ItunesStatus, itunesStatus, pickItunesFolder, setItunesPath } from "#/lib/api.ts";
@@ -66,57 +75,112 @@ function lastLine(status: ItunesStatus | undefined) {
 	return `Last import ${timeAgo(last.ranAt)} · ${last.converted.length} converted`;
 }
 
-export function ItunesCard() {
+/** Converts what is new in the iTunes folder into the library. */
+function ImportNowButton({
+	run,
+	disabled,
+	variant = "default",
+}: {
+	run: { mutate: () => void; isPending: boolean };
+	disabled: boolean;
+	variant?: "default" | "outline";
+}) {
+	return (
+		<Button
+			size="sm"
+			variant={variant}
+			onClick={() => run.mutate()}
+			disabled={disabled || run.isPending}
+		>
+			<RefreshCw className={run.isPending ? "animate-spin" : undefined} />
+			{run.isPending ? "Converting…" : "Import now"}
+		</Button>
+	);
+}
+
+/** Picks the iTunes folder. */
+function ChooseButton({
+	choose,
+	label,
+	variant,
+}: {
+	choose: { mutate: () => void; isPending: boolean };
+	label: string;
+	variant: "default" | "outline";
+}) {
+	return (
+		<Button size="sm" variant={variant} onClick={() => choose.mutate()} disabled={choose.isPending}>
+			<FolderOpen /> {label}
+		</Button>
+	);
+}
+
+/** iTunes as a row of the Import page: folder, songs not in the library yet, Import now. */
+export function ItunesRow() {
 	const navigate = useNavigate();
 	const { status, choose, run, root, enabled, setEnabled } = useItunes();
 	const path = status.data?.path ?? null;
+	const pending = useItunesPending(enabled && path !== null);
 	return (
-		<SourceCard
+		<PlaceRow
 			brand="itunes"
-			title="iTunes"
-			subtitle={path ?? "No folder chosen"}
-			enabled={enabled}
-			onToggle={setEnabled}
-			status={lastLine(status.data)}
-			onOpen={() => void navigate({ to: "/import/itunes" })}
+			name="iTunes"
+			badge={!enabled && <OffBadge />}
+			where={path ?? "No folder chosen"}
+			whereTitle={path ?? undefined}
+			fill={
+				<span className="text-muted-foreground text-xs tabular-nums">
+					{enabled && pending.data ? `${pending.data.length.toLocaleString()} new` : ""}
+				</span>
+			}
+			status={enabled ? lastLine(status.data) : "Off"}
 			action={
 				path === null ? (
-					<Button size="sm" onClick={() => choose.mutate()} disabled={choose.isPending}>
-						<FolderOpen /> Choose folder…
-					</Button>
+					<ChooseButton choose={choose} label="Choose folder…" variant="outline" />
 				) : (
-					<Button
-						size="sm"
-						onClick={() => run.mutate()}
-						disabled={run.isPending || root.data === null}
-					>
-						<RefreshCw className={run.isPending ? "animate-spin" : undefined} />
-						{run.isPending ? "Converting…" : "Import now"}
-					</Button>
+					<ImportNowButton run={run} disabled={!enabled || root.data === null} variant="outline" />
 				)
 			}
+			open={() => void navigate({ to: "/import/itunes" })}
+			menu={[
+				{
+					label: enabled ? "Turn off" : "Turn on",
+					icon: <Power />,
+					onSelect: () => setEnabled(!enabled),
+				},
+				{ label: "Change folder…", icon: <FolderOpen />, onSelect: () => choose.mutate() },
+			]}
 		/>
 	);
 }
 
-/** The iTunes source, laid out like an export destination: header, then History and Settings. */
+/** The iTunes source, laid out like an export destination: header, then Import, History and Settings. */
 export function ItunesPage() {
 	const { status, choose, stop, run, root, enabled, setEnabled } = useItunes();
 	const history = useActivity("itunes");
 	const path = status.data?.path ?? null;
 	const chooseButton = (
-		<Button
-			size="sm"
+		<ChooseButton
+			choose={choose}
+			label={path === null ? "Choose folder…" : "Change…"}
 			variant={path === null ? "default" : "outline"}
-			onClick={() => choose.mutate()}
-			disabled={choose.isPending}
-		>
-			<FolderOpen /> {path === null ? "Choose folder…" : "Change…"}
-		</Button>
+		/>
 	);
 	return (
 		<PlacePage
 			enabled={enabled}
+			main={{
+				label: "Import",
+				icon: <Download />,
+				content:
+					path === null ? (
+						<EmptyState icon={<FolderOpen />} title="No folder chosen" action={chooseButton}>
+							{EMPTY_HINT}
+						</EmptyState>
+					) : (
+						<ItunesPending />
+					),
+			}}
 			header={(tabs) => (
 				<>
 					<DestinationHeader
@@ -131,25 +195,13 @@ export function ItunesPage() {
 						}
 						title="iTunes"
 						titleHint={path ?? undefined}
-						meta={
-							<>
-								<span>{lastLine(status.data)}</span>
-								<FolderFigure path={path} />
-							</>
-						}
+						meta={<span>{lastLine(status.data)}</span>}
 						toggle={<Switch checked={enabled} onChange={setEnabled} label="Enable iTunes" />}
 						actions={
 							path === null ? (
 								chooseButton
 							) : (
-								<Button
-									size="sm"
-									onClick={() => run.mutate()}
-									disabled={!enabled || run.isPending || root.data === null}
-								>
-									<RefreshCw className={run.isPending ? "animate-spin" : undefined} />
-									{run.isPending ? "Converting…" : "Import now"}
-								</Button>
+								<ImportNowButton run={run} disabled={!enabled || root.data === null} />
 							)
 						}
 					/>
@@ -240,7 +292,7 @@ export function ItunesPending() {
 	return (
 		<div className="space-y-3">
 			<div className="flex items-center justify-between gap-2">
-				<h3 className={typeScale.label}>iTunes</h3>
+				<h3 className={typeScale.label}>Not in your library yet</h3>
 				<Button
 					size="sm"
 					onClick={() => run.mutate()}

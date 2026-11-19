@@ -13,14 +13,14 @@ import {
 import { createContext, type ReactNode, useContext, useEffect } from "react";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
 import { SidebarRecentlyDeleted } from "#/components/sidebar-deleted.tsx";
-import { SectionLabel } from "#/components/sidebar-parts.tsx";
+import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
 import { SidebarPlaylists } from "#/components/sidebar-playlists.tsx";
 import { SidebarSmartPlaylists } from "#/components/sidebar-smart-playlists.tsx";
 import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { keyLabel } from "#/lib/platform.ts";
-import { useClashes } from "#/lib/queries.ts";
+import { useClashes, useTracks } from "#/lib/queries.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
 import { usePaneWidth, useStoredFlag } from "#/lib/use-pane-width.ts";
 import { cn } from "#/lib/utils.ts";
@@ -36,7 +36,7 @@ const CollapsedContext = createContext(false);
 
 // The right padding matches a list row's trailing slot, so badges line up with the counts.
 const linkClass =
-	"relative flex items-center gap-2 truncate rounded-md py-1.5 pr-6 pl-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground";
+	"relative flex items-center gap-2 truncate rounded-md py-1.5 pr-2 pl-5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground";
 const railLinkClass =
 	"relative grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground";
 const activeProps = { className: "bg-muted font-medium text-foreground" } as const;
@@ -45,6 +45,7 @@ function NavLink({
 	label,
 	icon,
 	badge,
+	count,
 	...props
 }: {
 	to: "/" | "/files" | "/import" | "/export" | "/metadata" | "/settings";
@@ -52,6 +53,8 @@ function NavLink({
 	icon: ReactNode;
 	/** A dot or pill at the end of the row (on the icon when collapsed). */
 	badge?: ReactNode;
+	/** How many it holds, at the end of the row like every sidebar count; hidden when collapsed. */
+	count?: number | undefined;
 }) {
 	const collapsed = useContext(CollapsedContext);
 	return (
@@ -75,6 +78,7 @@ function NavLink({
 				<>
 					{label}
 					{badge}
+					{count !== undefined && count > 0 && <RowCount n={count} />}
 				</>
 			)}
 		</Link>
@@ -123,6 +127,7 @@ function useToggleKey(toggle: () => void) {
  */
 export function Sidebar() {
 	const syncing = useSyncProgress().size > 0;
+	const songCount = useTracks().data?.length;
 	const updateAvailable = useUpdateCheck().data != null;
 	const [width, setWidth] = usePaneWidth({
 		key: "manplay.sidebar-width",
@@ -166,7 +171,7 @@ export function Sidebar() {
 					</div>
 				)}
 				<nav className={cn("space-y-0.5", collapsed && "flex flex-col items-center")}>
-					<NavLink to="/" label="Library" icon={<Library />} />
+					<NavLink to="/" label="Library" icon={<Library />} count={songCount} />
 					<NavLink to="/files" label="Files" icon={<FolderTree />} />
 					<NavLink to="/metadata" label="Metadata" icon={<Database />} />
 					{collapsed && <RailSyncLinks syncing={syncing} />}

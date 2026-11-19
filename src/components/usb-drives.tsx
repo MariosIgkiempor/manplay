@@ -13,6 +13,7 @@ import {
 import { type ReactNode, useId, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { DestinationHeader, SettingLabel, UsageBar } from "#/components/destination-header.tsx";
+import { HeaderMenu } from "#/components/header-menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PlaceFrame } from "#/components/place-page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
@@ -142,11 +143,10 @@ function DriveHeader({
 					</>
 				}
 				title={drive.name}
-				titleHint={drive.mount}
+				titleHint={[drive.mount, drive.filesystem?.toUpperCase()].filter(Boolean).join(" · ")}
 				meta={
 					<>
 						<SpaceBar drive={drive} />
-						{drive.filesystem && <span>{drive.filesystem.toUpperCase()}</span>}
 						{!drive.writable && <span className="text-warning">Read-only</span>}
 					</>
 				}
@@ -154,17 +154,22 @@ function DriveHeader({
 				actions={
 					<>
 						{actions}
-						<Button size="sm" variant="outline" onClick={() => reveal.mutate()}>
-							<FolderOpen /> Show in {FILE_MANAGER}
-						</Button>
-						<Button
+						<HeaderMenu
 							size="sm"
-							variant="outline"
-							onClick={() => eject.mutate()}
-							disabled={eject.isPending}
-						>
-							<Eject /> {eject.isPending ? "Ejecting…" : "Eject"}
-						</Button>
+							entries={[
+								{
+									label: `Show in ${FILE_MANAGER}`,
+									icon: <FolderOpen />,
+									onSelect: () => reveal.mutate(),
+								},
+								{
+									label: eject.isPending ? "Ejecting…" : "Eject",
+									icon: <Eject />,
+									onSelect: () => eject.mutate(),
+									disabled: eject.isPending,
+								},
+							]}
+						/>
 					</>
 				}
 				tabs={tabs}

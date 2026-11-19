@@ -1,8 +1,8 @@
 import { useIsMutating, useQueries } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Library as LibraryIcon } from "lucide-react";
+import { Library as LibraryIcon, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
-import { FolderFigure } from "#/components/destination-header.tsx";
+import { HeaderMenu } from "#/components/header-menu.tsx";
 import {
 	AnalyzeButton,
 	LibraryList,
@@ -16,6 +16,7 @@ import { useDetail } from "#/context/detail-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
 import { playlistTracks } from "#/lib/api.ts";
 import { useLibrarySorts } from "#/lib/library-sorts.ts";
+import { PAGE_BODY, PAGE_TOOLBAR } from "#/lib/page-layout.ts";
 import {
 	SCAN_KEY,
 	useLibraryRoot,
@@ -26,6 +27,7 @@ import {
 } from "#/lib/queries.ts";
 import { filterTracks, type Pill, type PlaylistMembers } from "#/lib/search.ts";
 import { sortAlbums } from "#/lib/sorting.ts";
+import { cn } from "#/lib/utils.ts";
 
 export const Route = createFileRoute("/")({ component: Library });
 
@@ -87,27 +89,37 @@ function Library() {
 					</PageIcon>
 				}
 				title="Library"
+				titleHint={root.data ?? undefined}
 				meta={
 					<>
 						<span>{plural(tracks.data?.length ?? 0, "song")}</span>
 						<span>{plural(albumCount, "album")}</span>
-						{root.data && <FolderFigure path={root.data} />}
 					</>
 				}
 				actions={
-					<>
-						<ScanButtons
-							hasRoot={!!root.data}
-							scanning={scanning}
-							onScan={(mode) => scan.mutate(mode)}
-						/>
-						{root.data && <AnalyzeButton tracks={tracks.data ?? []} />}
-					</>
+					root.data ? (
+						<>
+							<AnalyzeButton tracks={tracks.data ?? []} />
+							<HeaderMenu
+								entries={[
+									{
+										label: scanning ? "Scanning…" : "Rescan",
+										icon: <RefreshCw />,
+										hint: "Look for added, changed and removed files",
+										onSelect: () => scan.mutate("saved"),
+										disabled: scanning,
+									},
+								]}
+							/>
+						</>
+					) : (
+						<ScanButtons hasRoot={false} scanning={scanning} onScan={(mode) => scan.mutate(mode)} />
+					)
 				}
 				tabs={<ViewToggle view={view} onChange={setView} />}
 			/>
 			{/* Search stays at hand while the list scrolls. */}
-			<div className="sticky top-0 z-10 border-b bg-background/90 px-6 py-3 backdrop-blur-md">
+			<div className={PAGE_TOOLBAR}>
 				<SearchPalette
 					pills={pills}
 					onPills={setPills}
@@ -117,7 +129,7 @@ function Library() {
 				/>
 			</div>
 
-			<div className="space-y-5 px-6 pt-5 pb-6">
+			<div className={cn("space-y-5", PAGE_BODY)}>
 				<LibraryList
 					view={view}
 					albums={albums}

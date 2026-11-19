@@ -104,6 +104,36 @@
 	}
 }
 
+/*
+ * Scrollbars that take their own lane at the edge, instead of macOS's overlay ones: an overlay
+ * scrollbar is drawn under sticky bars (a page's search row), so it vanished behind them. The
+ * thumb stays slim and quiet, and the lane has no background.
+ */
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+	background: transparent;
+}
+::-webkit-scrollbar-thumb {
+	border: 2px solid transparent;
+	border-radius: 9999px;
+	background-clip: content-box;
+	background-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
+}
+::-webkit-scrollbar-thumb:hover {
+	background-color: color-mix(in oklab, var(--muted-foreground) 60%, transparent);
+}
+/* Rows that scroll sideways without a bar, e.g. the search field's chips. */
+.no-scrollbar {
+	scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+	display: none;
+}
+
 /* The import toolbar's progress bar while the total is not known yet. */
 @keyframes import-sweep {
 	from {

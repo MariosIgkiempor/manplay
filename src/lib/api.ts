@@ -449,6 +449,14 @@ export function targetName(target: SyncTarget): string {
 	return [target.machine, ...target.path].join(" / ");
 }
 
+/**
+ * A destination's name in lists: a Tailscale folder by its own folder name (the machine may hold
+ * several), an R2 bucket by its bucket name.
+ */
+export function targetShortName(target: SyncTarget): string {
+	return isR2(target) ? target.machine : (target.path.at(-1) ?? target.machine);
+}
+
 export function isR2(target: SyncTarget): boolean {
 	return target.tailnet.startsWith("r2:");
 }

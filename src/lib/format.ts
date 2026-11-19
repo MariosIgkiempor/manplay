@@ -51,3 +51,10 @@ export function duration(seconds: number): string {
 	}
 	return m > 0 ? `${m}m ${String(sec).padStart(2, "0")}s` : `${sec}s`;
 }
+
+const compactNumber = new Intl.NumberFormat(undefined, { notation: "compact" });
+
+/** A count in at most four characters, e.g. 1.2K, for tight spots such as the sidebar. */
+export function compactCount(n: number): string {
+	return compactNumber.format(n);
+}

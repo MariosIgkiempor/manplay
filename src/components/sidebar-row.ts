@@ -1,20 +1,36 @@
 import { cn } from "#/lib/utils.ts";
 
-/** Shared geometry of sidebar rows: 16px icon, label, right-aligned count, 20px trailing slot. */
+/**
+ * Shared geometry of sidebar rows: a 20px gutter on the left where a chevron folds a group or
+ * tag, the 16px icon, the label, and the count flush right. Nothing is reserved on the right: a
+ * row's hover button (+, Browse files) takes the count's place while hovered.
+ */
+export const GUTTER = 20;
 export const rowBase =
-	"flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-2 text-sm text-muted-foreground";
+	"flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-5 text-sm text-muted-foreground";
 export const rowIdle = "hover:bg-muted hover:text-foreground";
 export const rowActive = "bg-muted font-medium text-foreground";
 
 export function rowClass(active: boolean) {
-	return cn("flex items-center rounded-md pr-1", active ? rowActive : rowIdle);
+	return cn("flex items-center rounded-md pr-2", active ? rowActive : rowIdle);
 }
 
-/** Indent of a row under a group heading, past the heading's icon. */
-export const CHILD_INDENT = 22;
+/** Indent of a row under a group heading: its icon sits under the heading's name. */
+export const CHILD_INDENT = 24;
 /** Left padding of a row under a group heading. */
-export const CHILD_PAD = 8 + CHILD_INDENT;
+export const CHILD_PAD = GUTTER + CHILD_INDENT;
+/** Left edge of a row's chevron, `pad` being the row's left padding. */
+export const chevronLeft = (pad: number) => pad - 18;
+
+/** A chevron in a row's left gutter that folds what is under the row. */
+export const CHEVRON =
+	"-translate-y-1/2 absolute top-1/2 grid size-4 place-items-center rounded text-muted-foreground hover:bg-background/60 hover:text-foreground";
+
+/** A row's hover button over its count at the right end (the count hides meanwhile). */
+export const HOVER_END =
+	"-translate-y-1/2 absolute top-1/2 right-1.5 opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100";
+/** What hides under `HOVER_END` while the row is hovered. */
+export const UNDER_HOVER_END = "group-focus-within/row:invisible group-hover/row:invisible";
 
 /** Classes that show a heading's + only while the heading is hovered or focused. */
-export const HOVER_ACTION =
-	"mr-0.5 opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100";
+export const HOVER_ACTION = HOVER_END;

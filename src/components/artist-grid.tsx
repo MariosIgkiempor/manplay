@@ -1,9 +1,11 @@
 import { Play } from "lucide-react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
+import { LoadMore } from "#/components/load-more.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import type { Artist } from "#/lib/artists.ts";
+import { useProgressive } from "#/lib/use-progressive.ts";
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -61,14 +63,18 @@ export function ArtistGrid({
 	artists: readonly Artist[];
 	onOpen: (artist: Artist) => void;
 }) {
+	const { shown, more, loadMore } = useProgressive(artists, (a) => a.name);
 	if (artists.length === 0) {
 		return <EmptyState title="No artists">Clear the search to see everything.</EmptyState>;
 	}
 	return (
-		<div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-x-4 gap-y-6">
-			{artists.map((a) => (
-				<ArtistTile key={a.name} artist={a} onOpen={() => onOpen(a)} />
-			))}
-		</div>
+		<>
+			<div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-x-4 gap-y-6">
+				{shown.map((a) => (
+					<ArtistTile key={a.name} artist={a} onOpen={() => onOpen(a)} />
+				))}
+			</div>
+			<LoadMore more={more} onMore={loadMore} />
+		</>
 	);
 }

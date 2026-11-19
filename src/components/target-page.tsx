@@ -1,7 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import {
 	Cloud,
 	Folder,
+	FolderOpen,
 	History,
 	KeyRound,
 	LockKeyhole,
@@ -11,25 +13,19 @@ import {
 	Trash2,
 } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
-import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
-import {
-	DestinationHeader,
-	FolderFigure,
-	SettingLabel,
-	UsageBar,
-} from "#/components/destination-header.tsx";
+import { DestinationHeader, SettingLabel, UsageBar } from "#/components/destination-header.tsx";
+import { HeaderMenu } from "#/components/header-menu.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
-import { EmptyState } from "#/components/page.tsx";
-import { MutationErrors } from "#/components/path-setting.tsx";
+import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PlaceFrame } from "#/components/place-page.tsx";
+import { useRemoveDestination } from "#/components/remove-destination.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { SyncPanel } from "#/components/sync-summary.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
-import { useSyncProgress } from "#/context/sync-progress-context.ts";
-import { isR2, removeSyncTarget, type SyncTarget, updateSyncTarget } from "#/lib/api.ts";
+import { isR2, type SyncTarget, targetShortName, updateSyncTarget } from "#/lib/api.ts";
 import { syncEntries } from "#/lib/history.ts";
 import { useSyncHistory, useSyncTargets, useTracks } from "#/lib/queries.ts";
 import { useAutosave } from "#/lib/unsaved.tsx";
@@ -193,26 +189,14 @@ function SettingsForm({ target, children }: { target: SyncTarget; children?: Rea
 }
 
 /** Removing the destination, as the last settings row. */
-function RemoveRow({ target, onRemoved }: { target: SyncTarget; onRemoved: () => void }) {
-	const queryClient = useQueryClient();
-	const [confirming, setConfirming] = useState(false);
-	const busy = useSyncProgress().size > 0;
-	const remove = useMutation({
-		mutationFn: removeSyncTarget,
-		onSuccess: async () => {
-			onRemoved();
-			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
-			await queryClient.invalidateQueries({ queryKey: ["sync-history"] });
-			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
-		},
-	});
+function RemoveRow({ onRemove, busy }: { onRemove: () => void; busy: boolean }) {
 	return (
 		<SettingRow
 			label={
 				<SettingLabel
 					icon={<Trash2 className="text-destructive" />}
 					title="Remove destination"
-					hint="manplay stops syncing here. The files already there stay."
+					hint="manplay stops syncing here and forgets it. The files there stay."
 				/>
 			}
 		>
@@ -221,28 +205,11 @@ function RemoveRow({ target, onRemoved }: { target: SyncTarget; onRemoved: () =>
 				size="sm"
 				variant="outline"
 				className="border-destructive/40 text-destructive hover:bg-destructive/10"
-				onClick={() => setConfirming(true)}
+				onClick={onRemove}
 				disabled={busy}
 			>
 				Remove…
 			</Button>
-			<MutationErrors mutations={[remove]} />
-			{confirming && (
-				<ConfirmDialog
-					title={`Remove ${target.machine}?`}
-					confirmLabel="Remove destination"
-					destructive
-					busy={remove.isPending}
-					onCancel={() => setConfirming(false)}
-					onConfirm={() => {
-						setConfirming(false);
-						remove.mutate(target.id);
-					}}
-				>
-					manplay stops syncing there. Files already in {target.path.join(" / ") || "the bucket"}{" "}
-					stay.
-				</ConfirmDialog>
-			)}
 		</SettingRow>
 	);
 }
@@ -254,10 +221,12 @@ type Tab = "sync" | "history" | "settings";
  * at once), its own sync history and its settings.
  */
 export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => void }) {
+	const navigate = useNavigate();
 	const targets = useSyncTargets();
 	const history = useSyncHistory();
 	const tracks = useTracks();
 	const [tab, setTab] = useState<Tab>("sync");
+	const removal = useRemoveDestination(onRemoved);
 	const target = targets.data?.find((t) => t.id === id);
 	if (!target) {
 		return targets.isPending ? null : (
@@ -284,18 +253,36 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 							</>
 						) : (
 							<>
-								<Network /> Tailscale folder
+								<Network /> Tailscale folder on {target.machine}
 							</>
 						)
 					}
-					title={target.machine}
+					title={targetShortName(target)}
+					actions={
+						<HeaderMenu
+							size="sm"
+							entries={[
+								{
+									label: "Browse files",
+									icon: <FolderOpen />,
+									onSelect: () => void navigate({ to: "/files", search: { target: id } }),
+								},
+								"separator",
+								{
+									label: "Remove destination…",
+									icon: <Trash2 />,
+									destructive: true,
+									disabled: removal.busy,
+									onSelect: () => removal.ask(target),
+								},
+							]}
+						/>
+					}
+					titleHint={`${target.machine}: ${where}`}
 					meta={
-						<>
-							<UsageBar value={target.syncedTracks} total={total} tone="progress">
-								{target.syncedTracks.toLocaleString()} of {total.toLocaleString()} songs synced
-							</UsageBar>
-							<FolderFigure path={where} />
-						</>
+						<UsageBar value={target.syncedTracks} total={total} tone="progress">
+							{target.syncedTracks.toLocaleString()} of {total.toLocaleString()} songs synced
+						</UsageBar>
 					}
 					tabs={
 						<Segmented
@@ -323,9 +310,11 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 				/>
 			) : (
 				<SettingsForm key={id} target={target}>
-					<RemoveRow target={target} onRemoved={onRemoved} />
+					<RemoveRow onRemove={() => removal.ask(target)} busy={removal.busy} />
 				</SettingsForm>
 			)}
+			{removal.error && <ErrorLine>{String(removal.error)}</ErrorLine>}
+			{removal.dialog}
 		</PlaceFrame>
 	);
 }

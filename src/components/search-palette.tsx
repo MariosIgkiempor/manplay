@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ListMusic, Music, Search, Tag, User, X } from "lucide-react";
+import { ListMusic, Music, Tag, User, X } from "lucide-react";
 import {
 	type ComponentType,
 	type KeyboardEvent,
@@ -10,6 +10,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { SearchGlyph } from "#/components/search-field.tsx";
 import { listPlaylists, listTags } from "#/lib/api.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { useTracks } from "#/lib/queries.ts";
@@ -21,6 +22,7 @@ import {
 	type SuggestionGroup,
 	suggest,
 } from "#/lib/search.ts";
+import { searchFieldClass } from "#/lib/search-field.ts";
 import { cn } from "#/lib/utils.ts";
 
 const ICONS: Record<PillKind, ComponentType<{ className?: string | undefined }>> = {
@@ -152,15 +154,10 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 	const hasAny = text !== "" || pills.length > 0;
 	return (
 		<div className="relative min-w-40 flex-1">
-			<div
-				className={cn(
-					"flex h-8 items-stretch rounded-lg border border-input bg-transparent dark:bg-input/30",
-					open && "border-ring ring-3 ring-ring/50",
-				)}
-			>
-				<label className="flex min-w-0 flex-1 items-center gap-1.5 px-2">
-					<Search className="size-4 shrink-0 text-muted-foreground" />
-					<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
+			<div className="flex h-8 items-stretch gap-1">
+				<label className={cn(searchFieldClass(open || hasAny), "flex-1")}>
+					<SearchGlyph active={hasAny} />
+					<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar">
 						{pills.map((p) => (
 							<PillChip
 								key={pillKey(p)}
@@ -184,13 +181,13 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 							role="combobox"
 							aria-expanded={open}
 							aria-controls={listId}
-							className="h-full min-w-24 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+							className="h-full min-w-24 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
 						/>
 					</div>
 					{!hasAny && !open && (
 						<kbd
 							title="Jump to search from anywhere"
-							className="shrink-0 rounded border bg-muted px-1.5 font-sans text-[11px] text-muted-foreground"
+							className="shrink-0 rounded border px-1.5 font-sans text-[11px] text-muted-foreground/70"
 						>
 							{keyLabel("⌘K")}
 						</kbd>
@@ -207,9 +204,7 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 						</button>
 					)}
 				</label>
-				{trailing && (
-					<div className="flex shrink-0 items-stretch border-input border-l">{trailing}</div>
-				)}
+				{trailing && <div className="flex shrink-0 items-stretch">{trailing}</div>}
 			</div>
 			{open && groups.length > 0 && (
 				<SuggestionList

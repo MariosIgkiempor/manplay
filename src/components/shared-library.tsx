@@ -1,10 +1,11 @@
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
-import { Users } from "lucide-react";
+import { FileAudio, Users } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { ClashList } from "#/components/clashes.tsx";
 import { ConfirmDialog, Dialog } from "#/components/confirm-dialog.tsx";
 import { ScopeSwitch } from "#/components/item-sharing.tsx";
 import { ErrorLine, LoadingLine, Panel, Section } from "#/components/page.tsx";
+import { StatusIcon } from "#/components/status-icon.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	type FoundLibrary,
@@ -31,17 +32,33 @@ function libraryLabel(t: SyncTarget): string {
 }
 
 /** Whether this destination holds the device's shared library or only takes the files. */
-export function LibraryBadge({ target, className }: { target: SyncTarget; className?: string }) {
-	return (
-		<span
-			className={cn(
-				"inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs",
-				target.libsync ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
-				className,
-			)}
-		>
-			{target.libsync ? "Shared library" : "Files only"}
-		</span>
+export function LibraryBadge({
+	target,
+	className,
+	focusable = true,
+}: {
+	target: SyncTarget;
+	className?: string;
+	/** Off inside something already focusable, such as a sidebar row. */
+	focusable?: boolean;
+}) {
+	return target.libsync ? (
+		<StatusIcon
+			focusable={focusable}
+			icon={<Users />}
+			tone="primary"
+			label="Shared library"
+			detail="Tags, playlists and analysis sync through here, as well as the files."
+			className={className}
+		/>
+	) : (
+		<StatusIcon
+			focusable={focusable}
+			icon={<FileAudio />}
+			label="Files only"
+			detail="Only the song files sync here. Tags and playlists stay on this device."
+			className={className}
+		/>
 	);
 }
 

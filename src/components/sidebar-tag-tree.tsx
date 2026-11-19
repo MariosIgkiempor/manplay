@@ -9,7 +9,16 @@ import { RowMenu } from "#/components/menu.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
 import { GroupHeading, RowCount } from "#/components/sidebar-parts.tsx";
-import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
+import {
+	CHEVRON,
+	CHILD_PAD,
+	chevronLeft,
+	HOVER_ACTION,
+	HOVER_END,
+	rowBase,
+	rowClass,
+	UNDER_HOVER_END,
+} from "#/components/sidebar-row.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import {
 	createTag as createLibraryTag,
@@ -96,27 +105,32 @@ function saveOpen(open: ReadonlySet<string>) {
 
 /** Library tags as a collapsible tree; clicking one opens its page. */
 /** Opens or closes a tag's subtags; an empty slot for tags without any, so rows line up. */
+/** The chevron in a tag row's left gutter, when the tag has subtags. */
 function ExpandButton({
 	node,
 	open,
+	pad,
 	onToggle,
 }: {
 	node: TagNode;
 	open: boolean;
+	/** The row's left padding; the chevron sits just before its icon. */
+	pad: number;
 	onToggle: () => void;
 }) {
 	if (node.children.length === 0) {
-		return <span className="size-5 shrink-0" />;
+		return null;
 	}
 	return (
 		<button
 			type="button"
 			aria-label={open ? `Collapse ${node.label}` : `Expand ${node.label}`}
 			aria-expanded={open}
-			className="grid size-5 shrink-0 place-items-center rounded hover:bg-background/60"
+			className={CHEVRON}
+			style={{ left: chevronLeft(pad) }}
 			onClick={onToggle}
 		>
-			<ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+			<ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
 		</button>
 	);
 }
@@ -198,6 +212,7 @@ export function SidebarTagTree() {
 			const key = n.name.toLowerCase();
 			const isOpen = open.has(key);
 			const active = !!matchRoute({ to: "/tags/$", params: { _splat: n.name } });
+			const pad = CHILD_PAD + depth * 14;
 			return (
 				<div key={key}>
 					<RowMenu
@@ -227,7 +242,7 @@ export function SidebarTagTree() {
 							{renaming === key ? (
 								<div
 									className="flex min-w-0 flex-1 items-center gap-2 py-0.5"
-									style={{ paddingLeft: `${CHILD_PAD + depth * 14}px` }}
+									style={{ paddingLeft: `${pad}px` }}
 								>
 									<Tag className="size-4 shrink-0 text-muted-foreground" />
 									<InlineInput
@@ -244,24 +259,21 @@ export function SidebarTagTree() {
 									params={{ _splat: n.name }}
 									title={n.name}
 									className={rowBase}
-									style={{ paddingLeft: `${CHILD_PAD + depth * 14}px` }}
+									style={{ paddingLeft: `${pad}px` }}
 								>
 									<Tag className="size-4 shrink-0" />
 									<span className="truncate">{n.label}</span>
 									<ScopeMark scope={n.scope} held={n.held} />
 									{/* On hover the count gives way to + (new subtag), so every row's count lines up. */}
-									<RowCount
-										n={n.trackCount}
-										className="group-focus-within/row:invisible group-hover/row:invisible"
-									/>
+									<RowCount n={n.trackCount} className={UNDER_HOVER_END} />
 								</Link>
 							)}
 							<AddButton
 								label={`New tag in ${n.label}`}
 								onClick={() => startTag(n)}
-								className="absolute top-1/2 right-6 -translate-y-1/2 opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100"
+								className={HOVER_END}
 							/>
-							<ExpandButton node={n} open={isOpen} onToggle={() => toggle(key)} />
+							<ExpandButton node={n} open={isOpen} pad={pad} onToggle={() => toggle(key)} />
 						</div>
 					</RowMenu>
 					{adding === key && newTagRow(n, depth + 1)}

@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { Brand } from "#/components/brand-icon.tsx";
-import { isR2 } from "#/lib/api.ts";
+import { isR2, targetShortName } from "#/lib/api.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
@@ -37,7 +37,7 @@ export function useExportPlaces(): PlaceOption[] {
 		...targets.map(
 			(t): PlaceOption => ({
 				key: `target:${t.id}`,
-				label: t.machine,
+				label: targetShortName(t),
 				brand: isR2(t) ? "cloudflare" : "tailscale",
 				go: () => void navigate({ to: "/export/$targetId", params: { targetId: t.id } }),
 			}),

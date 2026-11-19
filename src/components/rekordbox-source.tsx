@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Copy, FileCode, FolderOpen, History, Settings2, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { DestinationHeader, SettingLabel } from "#/components/destination-header.tsx";
+import { HeaderMenu } from "#/components/header-menu.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
@@ -47,8 +48,9 @@ function FileFigures({ status }: { status: RekordboxStatus | undefined }) {
 	}
 	return (
 		<>
-			<span>{plural(status.tracks, "track")}</span>
-			<span>{plural(status.playlists, "playlist")}</span>
+			<span>
+				{plural(status.tracks, "track")} in {plural(status.playlists, "playlist")}
+			</span>
 			<span>
 				{status.exportedAt ? `Exported ${timeAgo(status.exportedAt)}` : "Not exported yet"}
 			</span>
@@ -166,9 +168,16 @@ export function RekordboxPage() {
 						) : (
 							<>
 								<RekordboxExportButton size="sm" label="Export…" />
-								<Button size="sm" variant="outline" onClick={() => void copy()}>
-									<Copy /> {copied ? "Copied" : "Copy path"}
-								</Button>
+								<HeaderMenu
+									size="sm"
+									entries={[
+										{
+											label: copied ? "Copied" : "Copy path",
+											icon: <Copy />,
+											onSelect: () => void copy(),
+										},
+									]}
+								/>
 							</>
 						)
 					}

@@ -20,7 +20,7 @@ export function Hint({
 			<Tooltip.Trigger delay={150} closeDelay={0} render={children} />
 			<Tooltip.Portal>
 				<Tooltip.Positioner side={side} sideOffset={6} className="z-50">
-					<Tooltip.Popup className="max-w-64 rounded-md bg-foreground px-2 py-1 text-background text-xs shadow-md transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0">
+					<Tooltip.Popup className="max-w-64 rounded-md border bg-popover px-2 py-1 text-popover-foreground text-xs shadow-md transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0">
 						{label}
 					</Tooltip.Popup>
 				</Tooltip.Positioner>

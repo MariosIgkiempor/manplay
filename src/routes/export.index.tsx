@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Upload } from "lucide-react";
+import { CloudUpload, Download, Upload } from "lucide-react";
 import { Destinations } from "#/components/destinations.tsx";
+import { HeaderMenu } from "#/components/header-menu.tsx";
 import { Page } from "#/components/page.tsx";
-import { Stat, StatusBar } from "#/components/status-bar.tsx";
-import { PullButton, PushButton, SyncButton } from "#/components/sync-flow.tsx";
+import { SyncButton } from "#/components/sync-flow.tsx";
+import { useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { useSyncTargets, useTracks } from "#/lib/queries.ts";
 
@@ -11,6 +12,7 @@ export const Route = createFileRoute("/export/")({ component: ExportPage });
 
 function ExportPage() {
 	const progress = useSyncProgress();
+	const { start } = useSyncActions();
 	const targets = useSyncTargets();
 	const tracks = useTracks();
 	const targetCount = targets.data?.length ?? 0;
@@ -34,17 +36,27 @@ function ExportPage() {
 			}
 			actions={
 				<>
-					<PullButton disabled={busy || targetCount === 0} />
-					<PushButton variant="outline" disabled={busy || targetCount === 0} />
 					<SyncButton disabled={busy || targetCount === 0} label="Sync all" />
+					<HeaderMenu
+						entries={[
+							{
+								label: "Only bring into your library…",
+								icon: <Download />,
+								onSelect: () => start("pull"),
+								disabled: busy || targetCount === 0,
+							},
+							{
+								label: "Only send to destinations…",
+								icon: <CloudUpload />,
+								onSelect: () => start("push"),
+								disabled: busy || targetCount === 0,
+							},
+						]}
+					/>
 				</>
 			}
 		>
 			<Destinations />
-			<StatusBar>
-				<Stat label="Destinations" value={targetCount} />
-				<Stat label="Songs to sync" value={pending} />
-			</StatusBar>
 		</Page>
 	);
 }

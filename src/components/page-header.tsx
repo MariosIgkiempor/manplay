@@ -1,6 +1,7 @@
 import { Check, Pencil, Play, Trash2, X } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
+import { HeaderMenu } from "#/components/header-menu.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ButtonGroup } from "#/components/ui/button-group.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -111,6 +112,26 @@ export function PageIcon({ children }: { children: ReactNode }) {
 	);
 }
 
+/** A plain title as the page's heading, with hover text; anything else as it is. */
+function HeaderTitle({
+	title,
+	hint,
+	size,
+}: {
+	title: ReactNode;
+	hint: string | undefined;
+	size: string;
+}) {
+	if (typeof title !== "string") {
+		return title;
+	}
+	return (
+		<h1 className={cn("truncate font-semibold tracking-tight", size)} title={hint ?? title}>
+			{title}
+		</h1>
+	);
+}
+
 const VARIANTS = {
 	/** A full page: the band runs edge to edge under the page's own padding. */
 	page: {
@@ -141,6 +162,7 @@ export function PageHeader({
 	kind,
 	badge,
 	title,
+	titleHint,
 	subtitle,
 	meta,
 	actions,
@@ -155,6 +177,8 @@ export function PageHeader({
 	badge?: ReactNode;
 	/** The title, or a field while it is being renamed. */
 	title: ReactNode;
+	/** Hover text for a plain title, e.g. where it is on disk. */
+	titleHint?: string | undefined;
 	/** A line under the title, e.g. the artist. */
 	subtitle?: ReactNode;
 	meta?: ReactNode;
@@ -188,13 +212,7 @@ export function PageHeader({
 					{/* The buttons drop under the title once the two no longer fit side by side. */}
 					<div className="flex flex-wrap items-start gap-x-3 gap-y-2">
 						<div className="min-w-0 flex-1 basis-40">
-							{typeof title === "string" ? (
-								<h1 className={cn("truncate font-semibold tracking-tight", v.title)} title={title}>
-									{title}
-								</h1>
-							) : (
-								title
-							)}
+							<HeaderTitle title={title} hint={titleHint} size={v.title} />
 						</div>
 						{actions && (
 							<ButtonGroup size={variant === "page" ? "default" : "sm"} className="mt-0.5">
@@ -235,13 +253,13 @@ interface CollectionProps {
 	fallbackIcon: ReactNode;
 	onRename: (name: string) => void;
 	onDelete: () => void;
-	/** Shared / Private switch beside the buttons (shown while in a shared library). */
+	/** Shared / Private switch at the top right (shown while in a shared library). */
 	sharing?: ReactNode;
 	/** Extra content under the buttons, such as subtags. */
 	children?: ReactNode;
 }
 
-/** Header of a playlist or tag page: covers, name, figures, and Play / Rename / Delete. */
+/** Header of a playlist or tag page: covers, name, figures, Play, and Rename / Delete under ⋯. */
 export function CollectionHeader({
 	kind,
 	title,
@@ -272,19 +290,25 @@ export function CollectionHeader({
 					onCancel={() => setEditing(false)}
 				/>
 			}
+			badge={sharing}
 			meta={meta}
 			actions={
 				<>
 					<Button disabled={tracks.length === 0} onClick={() => player.play(tracks, 0)}>
 						<Play /> Play
 					</Button>
-					<Button variant="outline" onClick={() => setEditing(true)} disabled={editing}>
-						<Pencil /> Rename
-					</Button>
-					{sharing}
-					<Button variant="ghost" onClick={onDelete} className="hover:text-destructive">
-						<Trash2 /> Delete
-					</Button>
+					<HeaderMenu
+						entries={[
+							{
+								label: "Rename",
+								icon: <Pencil />,
+								onSelect: () => setEditing(true),
+								disabled: editing,
+							},
+							"separator",
+							{ label: "Delete…", icon: <Trash2 />, onSelect: onDelete, destructive: true },
+						]}
+					/>
 				</>
 			}
 		>

@@ -12,6 +12,7 @@ import {
 } from "#/components/diff-view.tsx";
 import { FailureList } from "#/components/failure-list.tsx";
 import { ErrorLine } from "#/components/page.tsx";
+import { SearchField } from "#/components/search-field.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
 	onPullProgress,
@@ -167,13 +168,12 @@ function FilterBar({
 }) {
 	return (
 		<div className="flex flex-wrap items-center gap-2">
-			<input
-				type="search"
+			<SearchField
 				value={query}
-				onChange={(e) => onQuery(e.target.value)}
+				onChange={onQuery}
 				placeholder="Filter by artist, album or file name"
-				aria-label="Filter files"
-				className="h-8 min-w-0 flex-1 rounded-md border bg-transparent px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+				label="Filter files"
+				className="flex-1"
 			/>
 			{active && (
 				<Button
@@ -191,77 +191,6 @@ function FilterBar({
 }
 
 /** The songs a pull would copy in, folder by folder, with a filter. Ticks belong to the caller. */
-export function PullList({
-	missing,
-	picked,
-	onToggle,
-	onToggleGroup,
-	onOnly,
-}: {
-	missing: RemoteFile[];
-	picked: (f: RemoteFile) => boolean;
-	onToggle: (f: RemoteFile) => void;
-	onToggleGroup: (files: RemoteFile[], on: boolean) => void;
-	onOnly: (keep: RemoteFile[]) => void;
-}) {
-	const [shown, setShown] = useState(HUNKS_PER_PAGE);
-	const [query, setQuery] = useState("");
-	const needle = query.trim().toLowerCase();
-	const matching = filterFiles(missing, needle);
-	const hunks = groupByDir(matching, dirOf, nameOf);
-	return (
-		<div>
-			<div className="border-b px-[var(--diff-inset,0)] py-2">
-				<FilterBar
-					query={query}
-					onQuery={setQuery}
-					shown={matching.length}
-					active={needle !== ""}
-					disabled={false}
-					onOnly={() => onOnly(matching)}
-				/>
-			</div>
-			<div>
-				{hunks.slice(0, shown).map(([dir, files]) => (
-					<DiffHunk
-						flush
-						key={dir}
-						dir={dir}
-						total={files.length}
-						picked={files.filter(picked).length}
-						onToggleAll={(on) => onToggleGroup(files, on)}
-						tallies={(["add", "change", "move"] as const).map((tone) => ({
-							tone,
-							count: files.filter((f) => describe(f, undefined).tone === tone).length,
-						}))}
-					>
-						{files.map((f) => (
-							<FileRow
-								key={key(f)}
-								file={f}
-								picked={picked(f)}
-								verdict={undefined}
-								disabled={false}
-								onToggle={() => onToggle(f)}
-							/>
-						))}
-					</DiffHunk>
-				))}
-				{hunks.length > shown && (
-					<Button
-						variant="ghost"
-						size="sm"
-						className="mx-[var(--diff-inset,0)] my-2"
-						onClick={() => setShown(shown + HUNKS_PER_PAGE)}
-					>
-						Show more folders ({hunks.length - shown} hidden)
-					</Button>
-				)}
-			</div>
-		</div>
-	);
-}
-
 function Picker({
 	targetId,
 	missing,

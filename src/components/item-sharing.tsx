@@ -5,6 +5,7 @@ import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { CHILD_PAD, rowBase } from "#/components/sidebar-row.ts";
+import { StatusIcon } from "#/components/status-icon.tsx";
 import {
 	type ItemKind,
 	type LocalTagUse,
@@ -15,7 +16,7 @@ import {
 	sharePreview,
 	type TagChoice,
 } from "#/lib/api.ts";
-import { useSharingOn } from "#/lib/queries.ts";
+import { useDefaultScope, useSharingOn } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** What an item's menu needs to know about it. */
@@ -35,30 +36,40 @@ const KIND_WORD: Record<ItemKind, string> = {
 const songs = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
 
 /**
- * A small mark after an item's name: a warning when it waits in Clashes, a lock when it is only
- * on this device, people when everyone on the destination has it. Marks of scope show only while
- * some destination shares library data.
+ * A small mark after an item's name: a warning when it waits in Clashes, else its scope only
+ * where it differs from new items' (most items share the default, so marking them all is noise).
+ * Scope shows only while some destination shares library data.
  */
 export function ScopeMark({ scope, held }: { scope: Scope; held: boolean }) {
 	const sharing = useSharingOn();
+	const usual = useDefaultScope().scope.data ?? "shared";
 	if (held) {
 		return (
-			<span title="Same name as another item: settle it in Clashes (Sync tab)" role="img">
-				<TriangleAlert className="size-3.5 shrink-0 text-warning" aria-label="Name clash" />
-			</span>
+			<StatusIcon
+				focusable={false}
+				icon={<TriangleAlert className="text-warning" />}
+				label="Name clash"
+				detail="Another item has the same name. Settle it in Clashes."
+			/>
 		);
 	}
-	if (!sharing) {
+	if (!sharing || scope === usual) {
 		return null;
 	}
 	return scope === "local" ? (
-		<span title="Only on this device" role="img">
-			<Lock className="size-3 shrink-0 opacity-60" aria-label="Only on this device" />
-		</span>
+		<StatusIcon
+			focusable={false}
+			icon={<Lock />}
+			label="Only on this device"
+			detail="Not shared with the other devices on the destination."
+		/>
 	) : (
-		<span title="Shared with everyone on the destination" role="img">
-			<Users className="size-3 shrink-0 opacity-60" aria-label="Shared" />
-		</span>
+		<StatusIcon
+			focusable={false}
+			icon={<Users />}
+			label="Shared"
+			detail="Everyone on the destination has it."
+		/>
 	);
 }
 

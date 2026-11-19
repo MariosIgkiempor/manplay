@@ -1,4 +1,4 @@
-import { CloudUpload, Download, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Drawer } from "#/components/drawer.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
@@ -20,24 +20,7 @@ function useIds(ids: number[] | undefined) {
 	return ids ?? targets.data?.map((t) => t.id) ?? [];
 }
 
-/** Opens a review of what would be copied from the destinations into this library. */
-export function PullButton({ ids, size, variant = "outline", disabled }: Props) {
-	const all = useIds(ids);
-	const { start } = useSyncActions();
-	return (
-		<Button
-			size={size}
-			variant={variant}
-			disabled={disabled === true || all.length === 0}
-			title="Copy songs your library is missing from destinations. A pull never deletes."
-			onClick={() => start("pull", ids)}
-		>
-			<Download /> Review pull
-		</Button>
-	);
-}
-
-/** Sync = pull and push, each with its own review. */
+/** Opens the sync review for every destination, or the ones `ids` names. */
 export function SyncButton({
 	ids,
 	size,
@@ -52,7 +35,7 @@ export function SyncButton({
 			size={size}
 			variant={variant}
 			disabled={disabled === true || all.length === 0}
-			title="Shows what a pull and a push would change, then runs both once confirmed."
+			title="Shows what a sync would change; nothing changes until you confirm."
 			onClick={() => start("sync", ids)}
 		>
 			<RefreshCw /> {label}
@@ -60,32 +43,10 @@ export function SyncButton({
 	);
 }
 
-/** Button that opens the push review: nothing reaches a destination until it is confirmed. */
-export function PushButton({
-	ids,
-	label = "Review push",
-	size,
-	variant,
-	disabled,
-}: Props & { label?: string }) {
-	const { start } = useSyncActions();
-	return (
-		<Button
-			size={size}
-			variant={variant}
-			disabled={disabled}
-			title="See what will be sent, moved or deleted before anything changes."
-			onClick={() => start("push", ids)}
-		>
-			<CloudUpload /> {label}
-		</Button>
-	);
-}
-
 const ABOUT: Record<SyncKind, string> = {
-	sync: "Pull what your library is missing, then push your changes.",
-	pull: "Copy songs your library is missing. A pull never deletes.",
-	push: "Send, move and change files on destinations.",
+	sync: "Send your changes, bring in theirs, and decide what to do with files only they have.",
+	pull: "Starts with what comes into your library; nothing is sent.",
+	push: "Starts with what goes to destinations; nothing comes in.",
 };
 
 /** The page header every other panel has: icon tile, title and a line on what this run does. */
@@ -105,8 +66,8 @@ function SyncHeader({ kind }: { kind: SyncKind }) {
 }
 
 /**
- * The slide-over for syncing every destination, or the ones a button names. One panel with a
- * switch for each pull and push; the buttons only decide which start switched on.
+ * The slide-over for syncing every destination, or the ones a button names: one review of what
+ * to send, bring in and settle. Pull or push only decides which direction starts ticked.
  */
 export function SyncDrawers() {
 	const { request, close } = useSyncActions();

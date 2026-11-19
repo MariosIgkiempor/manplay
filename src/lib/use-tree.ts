@@ -12,10 +12,11 @@ export interface TreeSource {
 	sizes: (dir: string) => Promise<Record<string, number>>;
 }
 
-const LOCAL: TreeSource = { key: "fs", list: fsList, sizes: fsDirSizes };
+/** The library folder on this computer. */
+export const LOCAL_TREE: TreeSource = { key: "fs", list: fsList, sizes: fsDirSizes };
 
 /** A folder shown as a tree: its own entries plus the contents of every expanded subfolder. */
-export function useTree(path: string, sort?: FileSort, source: TreeSource = LOCAL) {
+export function useTree(path: string, sort?: FileSort, source: TreeSource = LOCAL_TREE) {
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 	// The pane's own folder plus every expanded folder, each listed separately.
 	const dirs = [path, ...expanded];

@@ -2,6 +2,7 @@ import { History, Settings2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type { PlaceTab } from "#/components/destination-header.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
+import { PAGE_BODY } from "#/lib/page-layout.ts";
 import { cn } from "#/lib/utils.ts";
 
 /**
@@ -25,30 +26,41 @@ export function PlaceFrame({
 				<div className="min-h-0 flex-1">{children}</div>
 			) : (
 				<div className="min-h-0 flex-1 overflow-y-auto">
-					<div className="mx-auto w-full max-w-5xl space-y-5 px-6 pt-6 pb-10">{children}</div>
+					<div className={cn("mx-auto w-full max-w-5xl space-y-5", PAGE_BODY)}>{children}</div>
 				</div>
 			)}
 		</main>
 	);
 }
 
+/** A page's own first tab, before History and Settings, e.g. a source's "Import". */
+export interface MainTab {
+	label: string;
+	icon: ReactNode;
+	content: ReactNode;
+}
+
 /**
- * Body of a source or destination page under its header: History and Settings tabs. A switched-off
- * source shows both faded and out of reach until it is switched back on.
+ * Body of a source or destination page under its header: its own `main` tab when it has one, then
+ * History and Settings. A switched-off source shows them faded and out of reach until it is
+ * switched back on.
  */
 export function PlacePage({
 	header,
+	main,
 	history,
 	settings,
 	enabled = true,
 }: {
 	/** The page's header, given the tabs to put on its bottom edge. */
 	header: (tabs: ReactNode) => ReactNode;
+	main?: MainTab;
 	history: ReactNode;
 	settings: ReactNode;
 	enabled?: boolean;
 }) {
-	const [tab, setTab] = useState<PlaceTab>("history");
+	const [tab, setTab] = useState<PlaceTab | "main">(main ? "main" : "history");
+	const content = { main: main?.content, history, settings }[tab];
 	return (
 		<PlaceFrame
 			header={header(
@@ -58,6 +70,7 @@ export function PlacePage({
 					onChange={setTab}
 					label="Page view"
 					items={[
+						...(main ? [{ value: "main" as const, label: main.label, icon: main.icon }] : []),
 						{ value: "history", label: "History", icon: <History /> },
 						{ value: "settings", label: "Settings", icon: <Settings2 /> },
 					]}
@@ -65,7 +78,7 @@ export function PlacePage({
 			)}
 		>
 			<div className={cn(!enabled && "opacity-50")} inert={!enabled}>
-				{tab === "history" ? history : settings}
+				{content}
 			</div>
 		</PlaceFrame>
 	);

@@ -1,6 +1,6 @@
-import { ChevronRight, Search, Tag as TagIcon } from "lucide-react";
+import { ChevronRight, Tag as TagIcon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Input } from "#/components/ui/input.tsx";
+import { SearchField } from "#/components/search-field.tsx";
 import type { Tag } from "#/lib/api.ts";
 import { setTagTree, type TagCheck, tagCheck } from "#/lib/rekordbox-selection.ts";
 import { buildTagTree, type TagNode } from "#/lib/tag-tree.ts";
@@ -104,18 +104,7 @@ export function Filter({
 	onChange: (v: string) => void;
 	label: string;
 }) {
-	return (
-		<div className="relative">
-			<Search className="-translate-y-1/2 pointer-events-none absolute top-1/2 left-2.5 size-3.5 text-muted-foreground" />
-			<Input
-				value={value}
-				onChange={(e) => onChange(e.target.value)}
-				placeholder={label}
-				aria-label={label}
-				className="pl-8"
-			/>
-		</div>
-	);
+	return <SearchField value={value} onChange={onChange} placeholder={label} />;
 }
 
 function TagRows({

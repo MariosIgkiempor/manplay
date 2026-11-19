@@ -5,6 +5,7 @@ import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
 import { InlineEdit, InlineInput } from "#/components/inline-edit.tsx";
+import { LoadMore } from "#/components/load-more.tsx";
 import { type MenuEntry, RowMenu } from "#/components/menu.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
@@ -16,6 +17,7 @@ import type { Track } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName, normalizeKey } from "#/lib/musical-key.ts";
 import { parseBpm } from "#/lib/track-fields.ts";
+import { useProgressive } from "#/lib/use-progressive.ts";
 import type { InlineField } from "#/lib/use-track-edit.ts";
 import type { TrackSelection } from "#/lib/use-track-selection.ts";
 import { cn } from "#/lib/utils.ts";
@@ -507,6 +509,8 @@ function TrackRow({
 export function TrackList({ tracks, selection, empty, rowKey, ...rest }: Props) {
 	const player = usePlayer();
 	const inPanel = useContext(PanelScopeContext);
+	// Rows are added a page at a time as the list scrolls; play and select still use every track.
+	const page = useProgressive(tracks, (t) => t.id);
 	if (tracks.length === 0) {
 		return empty ?? <EmptyState title="No songs" />;
 	}
@@ -533,7 +537,7 @@ export function TrackList({ tracks, selection, empty, rowKey, ...rest }: Props) 
 					className="space-y-px outline-none"
 					onKeyDown={onKeyDown}
 				>
-					{tracks.map((track, i) => (
+					{page.shown.map((track, i) => (
 						<TrackRow
 							key={rowKey ? rowKey(track, i) : track.id}
 							track={track}
@@ -546,6 +550,7 @@ export function TrackList({ tracks, selection, empty, rowKey, ...rest }: Props) 
 						/>
 					))}
 				</div>
+				<LoadMore more={page.more} onMore={page.loadMore} />
 			</div>
 		</TrackOrderContext.Provider>
 	);
