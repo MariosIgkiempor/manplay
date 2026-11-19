@@ -177,10 +177,89 @@ pub fn audio_print_path(path: &std::path::Path) -> Option<String> {
     audio_print(&mut f, size)
 }
 
+/// Smallest range fetched at once by [`audio_print_fetching`], so a run of small header reads
+/// costs one request.
+const FETCH_AT_LEAST: u64 = 64 * 1024;
+/// Fetches allowed for one print; real files need a handful.
+const MAX_FETCHES: usize = 16;
+
+/// A file of `size` bytes of which only the fetched ranges are known. A read that reaches an
+/// unknown byte fails and remembers where, so the caller can fetch it and try again.
+struct Fetched {
+    size: u64,
+    pos: u64,
+    ranges: Vec<(u64, Vec<u8>)>,
+    missing: Option<u64>,
+}
+
+impl Read for Fetched {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.size || buf.is_empty() {
+            return Ok(0);
+        }
+        let pos = self.pos;
+        let Some((start, bytes)) = self
+            .ranges
+            .iter()
+            .find(|(start, bytes)| *start <= pos && pos < start + bytes.len() as u64)
+        else {
+            self.missing = Some(pos);
+            return Err(std::io::Error::other("not fetched"));
+        };
+        let at = usize::try_from(pos - start).map_err(std::io::Error::other)?;
+        let n = (bytes.len() - at).min(buf.len());
+        buf[..n].copy_from_slice(&bytes[at..at + n]);
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl Seek for Fetched {
+    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+        let next = match to {
+            SeekFrom::Start(n) => i128::from(n),
+            SeekFrom::End(n) => i128::from(self.size) + i128::from(n),
+            SeekFrom::Current(n) => i128::from(self.pos) + i128::from(n),
+        };
+        self.pos = u64::try_from(next).map_err(std::io::Error::other)?;
+        Ok(self.pos)
+    }
+}
+
+/// [`audio_print`] of a file that is read through `fetch(start, len)`, e.g. range requests to a
+/// destination: only the bytes the print looks at are fetched, a few small ranges per file.
+pub async fn audio_print_fetching<F, Fut>(size: u64, mut fetch: F) -> Option<String>
+where
+    F: FnMut(u64, u64) -> Fut,
+    Fut: std::future::Future<Output = Option<Vec<u8>>>,
+{
+    let mut file = Fetched {
+        size,
+        pos: 0,
+        ranges: Vec::new(),
+        missing: None,
+    };
+    for _ in 0..MAX_FETCHES {
+        file.pos = 0;
+        file.missing = None;
+        if let Some(print) = audio_print(&mut file, size) {
+            return Some(print);
+        }
+        let at = file.missing?;
+        let len = FETCH_AT_LEAST.min(size - at);
+        let bytes = fetch(at, len).await?;
+        if bytes.is_empty() {
+            return None;
+        }
+        file.ranges.push((at, bytes));
+    }
+    None
+}
+
 #[cfg(test)]
 #[allow(clippy::cast_possible_truncation)]
 mod tests {
-    use super::audio_print;
+    use super::{audio_print, audio_print_fetching};
     use std::io::Cursor;
 
     fn id3(body: &[u8]) -> Vec<u8> {
@@ -236,6 +315,47 @@ mod tests {
         };
         assert!(print(&wav(b"")).is_some());
         assert_eq!(print(&wav(b"")), print(&wav(b"artist")));
+    }
+
+    #[tokio::test]
+    async fn fetching_only_some_ranges_gives_the_same_print() {
+        let frames: Vec<u8> = [0xff, 0xfb]
+            .iter()
+            .copied()
+            .chain((0..400_000_u32).map(|i| (i % 251) as u8))
+            .collect();
+        let mut mp3 = id3(&vec![7_u8; 300_000]);
+        mp3.extend(&frames);
+        mp3.extend(b"TAG");
+        mp3.extend(vec![0_u8; 125]);
+        let mut wav = b"RIFF\0\0\0\0WAVE".to_vec();
+        wav.extend(b"LIST");
+        wav.extend(200_000_u32.to_le_bytes());
+        wav.extend(vec![1_u8; 200_000]);
+        wav.extend(b"data");
+        wav.extend(300_000_u32.to_le_bytes());
+        wav.extend((0..300_000_u32).map(|i| (i % 13) as u8));
+        let cases: [(&str, &[u8]); 4] = [
+            ("mp3 with a large tag", &mp3),
+            ("wav with a chunk before the audio", &wav),
+            ("small file", b"RIFF\0\0\0\0WAVEdata\x04\0\0\0abcd"),
+            ("not audio", b"hello world, not audio"),
+        ];
+        for (case, bytes) in cases {
+            let mut fetched = 0_u64;
+            let size = bytes.len() as u64;
+            let ranged = audio_print_fetching(size, |at, len| {
+                fetched += len;
+                let (at, len) = (at as usize, len as usize);
+                std::future::ready(Some(bytes[at..at + len].to_vec()))
+            })
+            .await;
+            assert_eq!(ranged, print(bytes), "{case}");
+            assert!(
+                fetched <= size.max(4 * 64 * 1024),
+                "{case}: fetched {fetched}"
+            );
+        }
     }
 
     #[test]

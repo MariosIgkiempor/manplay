@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::db::{Base, BaseUpdate, SyncTarget, Synced};
+use crate::db::{Base, BaseUpdate, Exact, SyncTarget, Synced};
 use crate::error::Error;
 use crate::fsops;
 use crate::libsync;
@@ -14,6 +14,7 @@ use crate::r2::{self, R2};
 use crate::tags::{FieldMerge, Side};
 use crate::webdav;
 
+pub mod lock;
 pub mod transfer;
 
 #[derive(Clone, Serialize)]
@@ -32,7 +33,8 @@ pub struct Item {
     /// Path relative to the library root, e.g. `["artist", "album", "01.wav"]`.
     pub rel: Vec<String>,
     pub size: u64,
-    pub fingerprint: Option<String>,
+    /// What recognises the same song under another path or tags: see [`library_identity`].
+    pub identity: Option<String>,
     /// Last modification time of the local file (unix seconds).
     pub modified: i64,
 }
@@ -42,6 +44,8 @@ pub struct Item {
 #[derive(Clone, Copy)]
 pub struct Known {
     pub track_id: i64,
+    /// Marked missing by a scan (whether or not still inside the grace period).
+    pub missing: bool,
     pub in_grace: bool,
 }
 
@@ -115,6 +119,60 @@ impl<'a> Backend<'a> {
         }
     }
 
+    /// Uploads `file` so that `dest` is never seen half written: on `WebDAV` it goes to a
+    /// [`PART_SUFFIX`] file next to `dest` first and is renamed once complete (R2 only ever shows
+    /// whole objects). Unless `overwrite`, fails when something is already at `dest`.
+    async fn put_whole(
+        &self,
+        dest: &[String],
+        file: &std::path::Path,
+        overwrite: bool,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Dav(c) => {
+                let mut part = dest.to_vec();
+                if let Some(name) = part.last_mut() {
+                    name.push_str(PART_SUFFIX);
+                }
+                webdav::put(c, &part, file).await?;
+                let moved = webdav::move_file(c, &part, dest, overwrite).await;
+                if moved.is_err() {
+                    let _ = webdav::delete(c, &part).await;
+                }
+                moved
+            }
+            Self::R2(c, r) => r.put(c, dest, file).await,
+        }
+    }
+
+    /// Uploads `file` to `dest` only if nothing is there yet, in one step on the server, so two
+    /// devices racing for `dest` cannot both win. Returns `false` when something already is.
+    /// `nonce` keeps this device's temporary `WebDAV` file apart from another's.
+    async fn put_new(
+        &self,
+        dest: &[String],
+        file: &std::path::Path,
+        nonce: &str,
+    ) -> Result<bool, Error> {
+        match self {
+            Self::Dav(c) => {
+                let mut part = dest.to_vec();
+                if let Some(name) = part.last_mut() {
+                    name.push('.');
+                    name.push_str(nonce);
+                    name.push_str(PART_SUFFIX);
+                }
+                webdav::put(c, &part, file).await?;
+                let moved = webdav::move_new(c, &part, dest).await;
+                if !matches!(moved, Ok(true)) {
+                    let _ = webdav::delete(c, &part).await;
+                }
+                moved
+            }
+            Self::R2(c, r) => r.put_new(c, dest, file).await,
+        }
+    }
+
     /// The folders and files directly inside `dir`, folders first, then by name.
     async fn list_dir(&self, dir: &[String]) -> Result<Vec<webdav::Entry>, Error> {
         match self {
@@ -178,7 +236,7 @@ impl<'a> Backend<'a> {
     /// Renames a file on the destination. Never overwrites an existing file.
     async fn rename(&self, from: &[String], to: &[String]) -> Result<(), Error> {
         match self {
-            Self::Dav(c) => webdav::move_file(c, from, to).await,
+            Self::Dav(c) => webdav::move_file(c, from, to, false).await,
             Self::R2(c, r) => {
                 r.copy(c, from, to).await?;
                 r.delete(c, from).await
@@ -305,18 +363,8 @@ impl libsync::ChunkStore for LogStore<'_, '_> {
             chunk.seq
         ));
         tokio::fs::write(&tmp, &bytes).await?;
-        let sent = match self.backend {
-            // Written under a temporary name and renamed, so a reader never sees half a chunk.
-            Backend::Dav(_) => {
-                let mut part = dir;
-                part.push(format!("{name}.part"));
-                match self.backend.put(&part, &tmp).await {
-                    Ok(()) => self.backend.rename(&part, &dest).await,
-                    Err(e) => Err(e),
-                }
-            }
-            Backend::R2(..) => self.backend.put(&dest, &tmp).await,
-        };
+        // A reader never sees half a chunk.
+        let sent = self.backend.put_whole(&dest, &tmp, false).await;
         let _ = tokio::fs::remove_file(&tmp).await;
         sent
     }
@@ -345,18 +393,10 @@ impl libsync::ChunkStore for LogStore<'_, '_> {
         tokio::fs::write(&tmp, &bytes).await?;
         // A snapshot is big: written under a temporary name and renamed, so a reader never
         // takes half of one for the newest.
-        let sent = match self.backend {
-            Backend::Dav(_) if path.starts_with(libsync::snapshot::DIR) => {
-                let mut part = full.clone();
-                if let Some(name) = part.last_mut() {
-                    name.push_str(".part");
-                }
-                match self.backend.put(&part, &tmp).await {
-                    Ok(()) => self.backend.rename(&part, &full).await,
-                    Err(e) => Err(e),
-                }
-            }
-            _ => self.backend.put(&full, &tmp).await,
+        let sent = if path.starts_with(libsync::snapshot::DIR) {
+            self.backend.put_whole(&full, &tmp, false).await
+        } else {
+            self.backend.put(&full, &tmp).await
         };
         let _ = tokio::fs::remove_file(&tmp).await;
         sent
@@ -429,19 +469,7 @@ impl libsync::ChunkStore for LogStore<'_, '_> {
             w.version
         ));
         tokio::fs::write(&tmp, &bytes).await?;
-        let sent = match self.backend {
-            Backend::Dav(_) => {
-                let mut part = dest.clone();
-                if let Some(name) = part.last_mut() {
-                    name.push_str(".part");
-                }
-                match self.backend.put(&part, &tmp).await {
-                    Ok(()) => self.backend.rename(&part, &dest).await,
-                    Err(e) => Err(e),
-                }
-            }
-            Backend::R2(..) => self.backend.put(&dest, &tmp).await,
-        };
+        let sent = self.backend.put_whole(&dest, &tmp, false).await;
         let _ = tokio::fs::remove_file(&tmp).await;
         match sent {
             // Lost the race to another device: its file is the same.
@@ -512,6 +540,30 @@ pub struct LibraryOutcome {
     pub error: Option<String>,
 }
 
+impl LibraryOutcome {
+    fn empty(target: &SyncTarget) -> Self {
+        Self {
+            target_id: target.id,
+            name: target_name(target),
+            sent: 0,
+            received: 0,
+            unreadable: 0,
+            held: 0,
+            clock_wrong: false,
+            new_device_id: false,
+            error: None,
+        }
+    }
+
+    /// Nothing was exchanged with the destination, for `reason`.
+    pub fn failed(target: &SyncTarget, reason: String) -> Self {
+        Self {
+            error: Some(reason),
+            ..Self::empty(target)
+        }
+    }
+}
+
 /// Waveforms moved between progress reports, after a sync.
 const WAVEFORM_BATCH: usize = 20;
 /// Pause between waveform downloads, so the destination is not hammered.
@@ -524,17 +576,7 @@ pub async fn run_library_data(
     target: &SyncTarget,
     db: &std::sync::Mutex<rusqlite::Connection>,
 ) -> LibraryOutcome {
-    let mut out = LibraryOutcome {
-        target_id: target.id,
-        name: target_name(target),
-        sent: 0,
-        received: 0,
-        unreadable: 0,
-        held: 0,
-        clock_wrong: false,
-        new_device_id: false,
-        error: None,
-    };
+    let mut out = LibraryOutcome::empty(target);
     let base = base_of(target);
     let backend = match Backend::for_target(client, target) {
         Ok(b) => b,
@@ -820,6 +862,10 @@ pub struct TargetPlan {
     /// Every destination signature this plan used, read now or cached, to cache for the next.
     #[serde(skip)]
     pub signatures: Vec<RemoteSignature>,
+    /// Destination files whose fingerprint matches a library file at another path: the library
+    /// already has them, so a pull must not offer them again.
+    #[serde(skip)]
+    pub in_library: HashSet<Vec<String>>,
 }
 
 impl TargetPlan {
@@ -838,6 +884,7 @@ impl TargetPlan {
             seeds: Vec::new(),
             fresh_prints: Vec::new(),
             signatures: Vec::new(),
+            in_library: HashSet::new(),
         }
     }
 
@@ -951,13 +998,13 @@ fn pair<'a>(
 ) -> Matched<'a> {
     let mut wanting: HashMap<&str, Vec<&'a Item>> = HashMap::new();
     for item in uploads {
-        if let Some(fp) = &item.fingerprint {
+        if let Some(fp) = &item.identity {
             wanting.entry(fp.as_str()).or_default().push(item);
         }
     }
     let known: HashMap<&str, &Item> = items
         .iter()
-        .filter_map(|i| Some((i.fingerprint.as_deref()?, i)))
+        .filter_map(|i| Some((i.identity.as_deref()?, i)))
         .collect();
     let mut moved: HashSet<i64> = HashSet::new();
     let mut out = Matched {
@@ -987,6 +1034,16 @@ fn pair<'a>(
         .copied()
         .collect();
     out
+}
+
+/// Paths of the `extras` whose fingerprint equals some library file's.
+fn in_library(items: &[Item], extras: &[(&Remote, Option<String>)]) -> HashSet<Vec<String>> {
+    let prints: HashSet<&str> = items.iter().filter_map(|i| i.identity.as_deref()).collect();
+    extras
+        .iter()
+        .filter(|(_, print)| print.as_deref().is_some_and(|fp| prints.contains(fp)))
+        .map(|(file, _)| file.rel.clone())
+        .collect()
 }
 
 fn is_audio_name(rel: &[String]) -> bool {
@@ -1103,27 +1160,42 @@ pub async fn plan_target(
     let mut updates: Vec<Differing> = Vec::new();
     let mut boths: Vec<Differing> = Vec::new();
     let mut legacy: Vec<Differing> = Vec::new();
+    let backend = Backend::for_target(client, target).ok();
     for pair in &pairs {
         let id = pair.item.track_id;
         match cmps.get(&id) {
-            Some(Cmp::Same(sig)) => {
-                matching.push(pair.item);
-                if bases
-                    .get(&id)
-                    .is_none_or(|b| b.local_sig != *sig || b.remote_sig != *sig || b.tags.is_none())
-                {
-                    plan.seeds.push(Seed {
-                        track_id: id,
-                        local: pair.item.local.clone(),
-                        size: pair.item.size,
-                        sig: sig.clone(),
-                    });
-                }
-            }
-            Some(Cmp::Differs { local, remote }) => {
-                let sigs = Some((remote.clone(), local.clone()));
-                let row = Differing { pair: *pair, sigs };
-                match classify(bases.get(&id), local, remote) {
+            Some(cmp) => {
+                let (local, remote) = match cmp {
+                    Cmp::Same(sig) => (sig, sig),
+                    Cmp::Differs { local, remote } => (local, remote),
+                };
+                let base = bases.get(&id);
+                let sides = match (base, &backend) {
+                    (Some(base), Some(backend)) => {
+                        let dest = dest_of(&base_of(target), &pair.item.rel);
+                        changed_since(backend, &dest, *pair, base, local, remote)
+                            .await
+                            .ok()
+                    }
+                    _ => None,
+                };
+                let row = Differing {
+                    pair: *pair,
+                    sigs: Some((remote.clone(), local.clone())),
+                };
+                match verdict(local == remote, base.is_some(), sides) {
+                    Verdict::Same => {
+                        matching.push(pair.item);
+                        if base.is_none_or(|b| needs_seed(b, local, *pair)) {
+                            plan.seeds.push(Seed {
+                                track_id: id,
+                                local: pair.item.local.clone(),
+                                size: pair.item.size,
+                                sig: local.clone(),
+                                remote_version: pair.remote_version.map(str::to_owned),
+                            });
+                        }
+                    }
                     Verdict::Push => pushes.push(row),
                     Verdict::Update => updates.push(row),
                     Verdict::Both => boths.push(row),
@@ -1208,6 +1280,7 @@ pub async fn plan_target(
         .iter()
         .map(|r| (*r, by_rel.get(r.rel.as_slice()).cloned().flatten()))
         .collect();
+    plan.in_library = in_library(items, &extras);
     let matched = pair(items, &d.uploads, &extras);
     let resolved = resolve_boths(app, client, target, &boths, bases).await;
 
@@ -1319,10 +1392,20 @@ pub async fn plan_target(
         });
     }
     for (file, note) in &matched.deletes {
+        // Suggested: manplay's own leftover, and a song removed from the library since it was
+        // synced (its grace period over), which the last sync left here.
+        let removed = known.get(&file.rel).filter(|k| k.missing && !k.in_grace);
+        let note = if is_unfinished_upload(&file.rel) {
+            Some(UNFINISHED_NOTE.to_owned())
+        } else if removed.is_some() {
+            Some(REMOVED_NOTE.to_owned())
+        } else {
+            note.clone()
+        };
         add(Action {
             size: file.size,
-            note: note.clone(),
-            optional: true,
+            optional: !(is_unfinished_upload(&file.rel) || removed.is_some()),
+            note,
             track_id: known.get(&file.rel).map(|k| k.track_id),
             ..new(Kind::Delete, &file.rel)
         });
@@ -1333,6 +1416,8 @@ pub async fn plan_target(
 }
 
 const EDITED_HERE: &str = "Edited here";
+const UNFINISHED_NOTE: &str = "Left by an upload that was cut off";
+const REMOVED_NOTE: &str = "Removed from your library";
 const NO_BASE_NOTE: &str = "Differs from the destination (no earlier sync to compare with)";
 const BOTH_NOTE: &str = "Changed on both sides, nothing earlier to merge from";
 
@@ -1610,6 +1695,8 @@ pub struct Seed {
     pub size: u64,
     /// [`local_signature`] as compared with the destination copy.
     pub sig: String,
+    /// The destination copy's change marker when it was compared.
+    pub remote_version: Option<String>,
 }
 
 /// Reads the tags of each seed's file into a [`Base`]. A file that changed since it was compared
@@ -1617,24 +1704,159 @@ pub struct Seed {
 pub async fn seed_bases(seeds: Vec<Seed>) -> Vec<(i64, Base)> {
     let mut out = Vec::new();
     for s in seeds {
-        if local_signature(&s.local, s.size).await.ok().as_deref() != Some(s.sig.as_str()) {
-            continue;
+        if let Some(base) = base_for(&s.local, s.size, s.sig, s.remote_version).await {
+            out.push((s.track_id, base));
         }
-        let path = s.local.clone();
-        let tags = tauri::async_runtime::spawn_blocking(move || crate::tags::fields_json(&path))
-            .await
-            .ok()
-            .flatten();
-        out.push((
-            s.track_id,
-            Base {
-                local_sig: s.sig.clone(),
-                remote_sig: s.sig,
-                tags,
-            },
-        ));
     }
     out
+}
+
+/// The base of a library file that is identical to its destination copy: its signature `sig`,
+/// tags, and exact check. `None` when the file no longer has that signature. The exact check is
+/// left out when the file changes while it is hashed, or cannot be hashed.
+async fn base_for(
+    local: &Path,
+    size: u64,
+    sig: String,
+    remote_version: Option<String>,
+) -> Option<Base> {
+    if local_signature(local, size).await.ok().as_deref() != Some(sig.as_str()) {
+        return None;
+    }
+    let path = local.to_path_buf();
+    let tags = tauri::async_runtime::spawn_blocking(move || crate::tags::fields_json(&path))
+        .await
+        .ok()
+        .flatten();
+    let before = local_modified(local).await;
+    let content = content_hash(local).await.ok();
+    let exact = match (content, before) {
+        (Some(content), Some(at)) if local_modified(local).await == Some(at) => Some(Exact {
+            content,
+            local_modified: at,
+            remote_version,
+        }),
+        _ => None,
+    };
+    Some(Base {
+        local_sig: sig.clone(),
+        remote_sig: sig,
+        tags,
+        exact,
+    })
+}
+
+/// A file's modification time in Unix seconds, as [`Item::modified`] has it.
+pub fn modified_secs(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+}
+
+async fn local_modified(path: &Path) -> Option<i64> {
+    tokio::fs::metadata(path)
+        .await
+        .ok()
+        .map(|m| modified_secs(&m))
+}
+
+/// Hash of every byte of a library file.
+async fn content_hash(path: &Path) -> Result<String, Error> {
+    let path = path.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update_reader(std::fs::File::open(&path)?)?;
+        Ok(hasher.finalize().to_hex().to_string())
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+/// [`content_hash`] of a destination file, which means downloading all of it.
+async fn remote_content_hash(backend: &Backend<'_>, dest: &[String]) -> Result<String, Error> {
+    let tmp = std::env::temp_dir().join(format!(
+        "manplay-content-{}-{}.part",
+        std::process::id(),
+        blake3::hash(dest.join("/").as_bytes()).to_hex()
+    ));
+    let got = backend.get(dest, &tmp).await;
+    let hash = match got {
+        Ok(()) => content_hash(&tmp).await,
+        Err(e) => Err(e),
+    };
+    let _ = tokio::fs::remove_file(&tmp).await;
+    hash
+}
+
+/// Which copies changed since the last sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Sides {
+    local: bool,
+    remote: bool,
+}
+
+/// Which sides must be hashed whole: those whose signature still matches the base although
+/// their change marker moved since it, which is where an edit the samples miss would hide. A
+/// destination copy written by a sync has no marker in its base yet and is trusted until read.
+fn needs_full(base: &Base, pair: Pair<'_>, sigs: Sides) -> Sides {
+    let Some(exact) = &base.exact else {
+        return Sides {
+            local: false,
+            remote: false,
+        };
+    };
+    Sides {
+        local: !sigs.local && exact.local_modified != pair.item.modified,
+        remote: !sigs.remote
+            && exact
+                .remote_version
+                .as_deref()
+                .is_some_and(|v| pair.remote_version != Some(v)),
+    }
+}
+
+/// Which copies changed since `base`, given both signatures read now. Signatures decide where
+/// they differ from the base; elsewhere a moved change marker means hashing the whole file.
+async fn changed_since(
+    backend: &Backend<'_>,
+    dest: &[String],
+    pair: Pair<'_>,
+    base: &Base,
+    local_sig: &str,
+    remote_sig: &str,
+) -> Result<Sides, Error> {
+    let by_sig = Sides {
+        local: local_sig != base.local_sig,
+        remote: remote_sig != base.remote_sig,
+    };
+    let full = needs_full(base, pair, by_sig);
+    let content = base.exact.as_ref().map(|e| e.content.as_str());
+    let local_hash = if full.local {
+        Some(content_hash(&pair.item.local).await?)
+    } else {
+        None
+    };
+    let remote_hash = if full.remote {
+        Some(remote_content_hash(backend, dest).await?)
+    } else {
+        None
+    };
+    let local = by_sig.local || local_hash.is_some_and(|h| Some(h.as_str()) != content);
+    let remote = by_sig.remote || remote_hash.as_deref().is_some_and(|h| Some(h) != content);
+    Ok(Sides { local, remote })
+}
+
+/// Whether a matching pair's base should be stored again: it is missing pieces, or the change
+/// markers it would compare with moved (so the next read does not hash the file again).
+fn needs_seed(base: &Base, sig: &str, pair: Pair<'_>) -> bool {
+    base.local_sig != sig
+        || base.remote_sig != sig
+        || base.tags.is_none()
+        || base.exact.as_ref().is_none_or(|e| {
+            e.local_modified != pair.item.modified
+                || e.remote_version.as_deref() != pair.remote_version
+        })
 }
 
 /// What reading both copies of a pair showed.
@@ -1647,9 +1869,11 @@ enum Cmp {
     },
 }
 
-/// Who changed a pair that differs, judged against its base.
+/// What a compared pair needs, judged against its base.
 #[derive(Debug, PartialEq, Eq)]
 enum Verdict {
+    /// Both copies are the same.
+    Same,
     /// Only the library file changed since the last sync.
     Push,
     /// Only the destination copy changed.
@@ -1660,17 +1884,45 @@ enum Verdict {
     Unknown,
 }
 
-/// Decides who edited a pair whose copies differ. `local` and `remote` are their signatures now.
-fn classify(base: Option<&Base>, local: &str, remote: &str) -> Verdict {
-    let Some(base) = base else {
-        return Verdict::Unknown;
-    };
-    match (base.local_sig != local, base.remote_sig != remote) {
-        (true, false) => Verdict::Push,
-        (false, true) => Verdict::Update,
-        (true, true) => Verdict::Both,
-        // The base was taken when both were identical: this cannot happen for a differing pair.
-        (false, false) => Verdict::Unknown,
+/// Decides what a pair needs. `sides` says who changed since the base, `None` when there is no
+/// base or the check could not read a copy: then only the signatures decide.
+fn verdict(sigs_match: bool, has_base: bool, sides: Option<Sides>) -> Verdict {
+    match (sigs_match, has_base, sides) {
+        (
+            true,
+            _,
+            None
+            | Some(Sides {
+                local: false,
+                remote: false,
+            }),
+        ) => Verdict::Same,
+        (
+            _,
+            true,
+            Some(Sides {
+                local: true,
+                remote: false,
+            }),
+        ) => Verdict::Push,
+        (
+            _,
+            true,
+            Some(Sides {
+                local: false,
+                remote: true,
+            }),
+        ) => Verdict::Update,
+        (
+            _,
+            true,
+            Some(Sides {
+                local: true,
+                remote: true,
+            }),
+        ) => Verdict::Both,
+        // Differing copies whose base says neither changed: the base is not trusted.
+        _ => Verdict::Unknown,
     }
 }
 
@@ -1903,6 +2155,17 @@ pub struct Applied {
 }
 
 impl ApplySummary {
+    /// A destination where nothing ran, with the reason.
+    pub fn refused(target_id: i64, name: String, reason: String) -> Self {
+        let mut out = Self {
+            target_id,
+            name,
+            ..Self::default()
+        };
+        out.fail(reason);
+        out
+    }
+
     fn fail(&mut self, msg: String) {
         self.failed_total += 1;
         if self.failed.len() < MAX_REPORTED_FAILURES {
@@ -2128,19 +2391,10 @@ async fn base_after(local: &Path, size: u64, sig: Option<String>) -> BaseUpdate 
     let Some(sig) = sig else {
         return BaseUpdate::Clear;
     };
-    if local_signature(local, size).await.ok().as_deref() != Some(sig.as_str()) {
-        return BaseUpdate::Clear;
-    }
-    let path = local.to_path_buf();
-    let tags = tauri::async_runtime::spawn_blocking(move || crate::tags::fields_json(&path))
+    // The destination copy's marker is learned on the next read.
+    base_for(local, size, sig, None)
         .await
-        .ok()
-        .flatten();
-    BaseUpdate::Set(Base {
-        local_sig: sig.clone(),
-        remote_sig: sig,
-        tags,
-    })
+        .map_or(BaseUpdate::Clear, BaseUpdate::Set)
 }
 
 async fn run_action(
@@ -2195,7 +2449,9 @@ async fn run_action(
                 ensure_unchanged(backend, &dest, size, a.seen.as_deref()).await?;
             }
             ensure_dirs(backend, base, &dest, made).await?;
-            backend.put(&dest, local).await?;
+            backend
+                .put_whole(&dest, local, job.kind == Kind::Replace)
+                .await?;
             Ok(Done {
                 size: a.size,
                 base: base_after(local, a.size, before).await,
@@ -2398,7 +2654,7 @@ async fn merge_library(
         .map_err(|e| Error::Msg(e.to_string()))??;
     let size = tokio::fs::metadata(&local).await?.len();
     let sig = local_signature(&local, size).await.ok();
-    backend.put(dest, &local).await?;
+    backend.put_whole(dest, &local, true).await?;
     Ok(Done {
         size,
         base: base_after(&local, size, sig).await,
@@ -2502,6 +2758,14 @@ pub async fn list_remote(client: &Client, target: &SyncTarget) -> Result<Vec<Rem
     let mut files = backend.list(&base).await?;
     files.retain(|r| !is_library_data(&r.rel));
     Ok(files)
+}
+
+/// Appended to a file's name while it uploads to a `WebDAV` destination.
+const PART_SUFFIX: &str = ".part";
+
+/// A file left behind by an upload that was cut off.
+fn is_unfinished_upload(rel: &[String]) -> bool {
+    rel.last().is_some_and(|n| n.ends_with(PART_SUFFIX))
 }
 
 /// A file of the shared library's own data (`.manplay/`), which the library data sync reads and
@@ -2749,13 +3013,35 @@ async fn fingerprint_one(
         return Err(Error::Msg("unsafe path on destination".to_owned()));
     }
     let src: Vec<String> = base.iter().chain(file.rel.iter()).cloned().collect();
+    let audio = crate::audioprint::audio_print_fetching(file.size, |start, len| {
+        let src = &src;
+        async move { backend.get_range(src, start, len).await.ok() }
+    })
+    .await;
+    if audio.is_some() {
+        return Ok(library_identity(audio, None).unwrap_or_default());
+    }
     let mut parts = Vec::new();
     let ranges = crate::scan::sample_ranges(file.size)
         .ok_or_else(|| Error::Msg("file too small to fingerprint".to_owned()))?;
     for (start, len) in ranges {
         parts.push(backend.get_range(&src, start, len).await?);
     }
-    Ok(crate::scan::fingerprint_from_samples(file.size, &parts))
+    let whole = crate::scan::fingerprint_from_samples(file.size, &parts);
+    library_identity(None, Some(whole)).ok_or_else(|| Error::Msg("no identity".to_owned()))
+}
+
+/// A song's identity: the fingerprint of its audio alone (`audioprint`), so it is recognised
+/// after a move, rename or tag edit. For formats `audioprint` doesn't know, the fingerprint of
+/// the whole file (`scan::fingerprint`), marked `file:`, which a tag edit changes.
+pub fn library_identity(audio_fp: Option<String>, fingerprint: Option<String>) -> Option<String> {
+    audio_fp.or_else(|| fingerprint.map(|f| format!("file:{f}")))
+}
+
+/// Whether a stored destination identity was made by [`library_identity`]. Older versions kept
+/// whole-file fingerprints without a marker; those are read again.
+pub fn is_identity(value: &str) -> bool {
+    value.contains(':')
 }
 
 #[cfg(test)]
@@ -2765,6 +3051,19 @@ mod tests {
 
     fn rel(p: &str) -> Vec<String> {
         p.split('/').map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn only_part_files_count_as_unfinished_uploads() {
+        for (path, unfinished) in [
+            ("a/song.mp3.part", true),
+            ("song.part", true),
+            ("a/song.mp3", false),
+            ("a/part/song.mp3", false),
+            ("a/song.partial", false),
+        ] {
+            assert_eq!(is_unfinished_upload(&rel(path)), unfinished, "{path}");
+        }
     }
 
     #[test]
@@ -2781,7 +3080,7 @@ mod tests {
             local: PathBuf::from(p),
             rel: rel(p),
             size,
-            fingerprint: fp.map(str::to_owned),
+            identity: fp.map(str::to_owned),
             modified: 0,
         }
     }
@@ -2923,6 +3222,23 @@ mod tests {
     }
 
     #[test]
+    fn same_audio_in_another_folder_counts_as_in_the_library() {
+        let items = [item(1, "house/song.wav", 10, Some("fp1"))];
+        let elsewhere = remote("techno/song.wav", 10);
+        let unknown = remote("techno/other.wav", 10);
+        let unread = remote("techno/unread.wav", 10);
+        let found = in_library(
+            &items,
+            &[
+                (&elsewhere, Some("fp1".to_owned())),
+                (&unknown, Some("fp2".to_owned())),
+                (&unread, None),
+            ],
+        );
+        assert_eq!(found, HashSet::from([rel("techno/song.wav")]));
+    }
+
+    #[test]
     fn someone_elses_copy_is_renamed_to_the_library_path() {
         let items = [item(1, "mine/song.wav", 10, Some("fp"))];
         let up: Vec<&Item> = items.iter().collect();
@@ -2971,20 +3287,226 @@ mod tests {
             local_sig: sig.to_owned(),
             remote_sig: sig.to_owned(),
             tags: None,
+            exact: Some(Exact {
+                content: "whole".to_owned(),
+                local_modified: 100,
+                remote_version: Some("v1".to_owned()),
+            }),
         }
+    }
+
+    const fn sides(local: bool, remote: bool) -> Sides {
+        Sides { local, remote }
     }
 
     #[test]
     fn who_edited_is_judged_against_the_base() {
-        let b = base("old");
-        // Only here: push. Only there: update. Both: look inside.
-        assert_eq!(classify(Some(&b), "mine", "old"), Verdict::Push);
-        assert_eq!(classify(Some(&b), "old", "theirs"), Verdict::Update);
-        assert_eq!(classify(Some(&b), "mine", "theirs"), Verdict::Both);
-        // Without a base the old two-way rules apply.
-        assert_eq!(classify(None, "mine", "theirs"), Verdict::Unknown);
-        // Identical copies never reach here, but an impossible base is not trusted.
-        assert_eq!(classify(Some(&b), "old", "old"), Verdict::Unknown);
+        let cases = [
+            ("identical, no base", true, false, None, Verdict::Same),
+            (
+                "identical, unchanged",
+                true,
+                true,
+                Some(sides(false, false)),
+                Verdict::Same,
+            ),
+            (
+                "identical, check unreadable",
+                true,
+                true,
+                None,
+                Verdict::Same,
+            ),
+            (
+                "edited here only",
+                false,
+                true,
+                Some(sides(true, false)),
+                Verdict::Push,
+            ),
+            (
+                "edited there only",
+                false,
+                true,
+                Some(sides(false, true)),
+                Verdict::Update,
+            ),
+            (
+                "edited on both",
+                false,
+                true,
+                Some(sides(true, true)),
+                Verdict::Both,
+            ),
+            // An edit the samples missed: the copies look the same but one changed.
+            (
+                "hidden edit here",
+                true,
+                true,
+                Some(sides(true, false)),
+                Verdict::Push,
+            ),
+            (
+                "hidden edit there",
+                true,
+                true,
+                Some(sides(false, true)),
+                Verdict::Update,
+            ),
+            ("differ, no base", false, false, None, Verdict::Unknown),
+            (
+                "differ, check unreadable",
+                false,
+                true,
+                None,
+                Verdict::Unknown,
+            ),
+            (
+                "differ, base says unchanged",
+                false,
+                true,
+                Some(sides(false, false)),
+                Verdict::Unknown,
+            ),
+        ];
+        for (case, sigs_match, has_base, found, expected) in cases {
+            assert_eq!(verdict(sigs_match, has_base, found), expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_whole_file_is_hashed_only_where_a_marker_moved_but_the_samples_did_not() {
+        let item = |modified| Item {
+            modified,
+            ..item(1, "a.mp3", 10, None)
+        };
+        let unmoved = item(100);
+        let moved = item(200);
+        let pair = |item, version| Pair {
+            item,
+            remote_size: 10,
+            remote_version: version,
+        };
+        let without_marker = Base {
+            exact: Some(Exact {
+                remote_version: None,
+                ..base("s").exact.expect("exact")
+            }),
+            ..base("s")
+        };
+        let legacy = Base {
+            exact: None,
+            ..base("s")
+        };
+        let cases = [
+            (
+                "nothing moved",
+                &base("s"),
+                pair(&unmoved, Some("v1")),
+                sides(false, false),
+                sides(false, false),
+            ),
+            (
+                "library file touched",
+                &base("s"),
+                pair(&moved, Some("v1")),
+                sides(false, false),
+                sides(true, false),
+            ),
+            (
+                "destination copy touched",
+                &base("s"),
+                pair(&unmoved, Some("v2")),
+                sides(false, false),
+                sides(false, true),
+            ),
+            (
+                "destination lost its marker",
+                &base("s"),
+                pair(&unmoved, None),
+                sides(false, false),
+                sides(false, true),
+            ),
+            (
+                "both touched",
+                &base("s"),
+                pair(&moved, Some("v2")),
+                sides(false, false),
+                sides(true, true),
+            ),
+            (
+                "signatures already differ",
+                &base("s"),
+                pair(&moved, Some("v2")),
+                sides(true, true),
+                sides(false, false),
+            ),
+            (
+                "written by a sync, marker not yet seen",
+                &without_marker,
+                pair(&unmoved, Some("v9")),
+                sides(false, false),
+                sides(false, false),
+            ),
+            (
+                "base from before exact checks",
+                &legacy,
+                pair(&moved, Some("v2")),
+                sides(false, false),
+                sides(false, false),
+            ),
+        ];
+        for (case, b, p, by_sig, expected) in cases {
+            assert_eq!(needs_full(b, p, by_sig), expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_matching_pair_is_seeded_again_when_its_base_is_incomplete_or_its_markers_moved() {
+        let it = Item {
+            modified: 100,
+            ..item(1, "a.mp3", 10, None)
+        };
+        let pair = |version| Pair {
+            item: &it,
+            remote_size: 10,
+            remote_version: version,
+        };
+        let with_tags = Base {
+            tags: Some("{}".to_owned()),
+            ..base("s")
+        };
+        let cases = [
+            (
+                "complete and current",
+                &with_tags,
+                "s",
+                pair(Some("v1")),
+                false,
+            ),
+            ("signature changed", &with_tags, "t", pair(Some("v1")), true),
+            ("no tags", &base("s"), "s", pair(Some("v1")), true),
+            (
+                "destination marker moved",
+                &with_tags,
+                "s",
+                pair(Some("v2")),
+                true,
+            ),
+            (
+                "no exact check yet",
+                &Base {
+                    exact: None,
+                    ..with_tags.clone()
+                },
+                "s",
+                pair(Some("v1")),
+                true,
+            ),
+        ];
+        for (case, b, sig, p, expected) in cases {
+            assert_eq!(needs_seed(b, sig, p), expected, "{case}");
+        }
     }
 
     #[tokio::test]
@@ -3016,6 +3538,11 @@ mod tests {
                 local_sig: seen.clone(),
                 remote_sig: seen,
                 tags: None,
+                exact: Some(Exact {
+                    content: blake3::hash(b"theirs").to_hex().to_string(),
+                    local_modified: modified_secs(&std::fs::metadata(&lib).expect("meta")),
+                    remote_version: None,
+                }),
             })
         );
         let _ = std::fs::remove_dir_all(&dir);

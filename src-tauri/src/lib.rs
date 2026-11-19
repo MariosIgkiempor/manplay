@@ -1343,7 +1343,10 @@ async fn remote_upload(
         .await
         .map_err(|e| Error::Msg(e.to_string()))??;
     let _claim = claim_sync(&state).await?;
-    sync::transfer::upload(&app, &state.http, &target, &files).await
+    let held = sync::lock::acquire(&state.http, &target, &lock_owner(&state)?).await?;
+    let uploaded = sync::transfer::upload(&app, &state.http, &target, &files).await;
+    held.release().await;
+    uploaded
 }
 
 /// Moves files and folders into another folder of the same destination.
@@ -1356,7 +1359,10 @@ async fn remote_move(
 ) -> Result<usize, Error> {
     let (target, _) = find_target(&state, target_id)?;
     let _claim = claim_sync(&state).await?;
-    sync::transfer::move_items(&state.http, &target, &items, &dest).await
+    let held = sync::lock::acquire(&state.http, &target, &lock_owner(&state)?).await?;
+    let moved = sync::transfer::move_items(&state.http, &target, &items, &dest).await;
+    held.release().await;
+    moved
 }
 
 #[tauri::command]
@@ -1947,17 +1953,13 @@ fn collect_items(conn: &Connection) -> Result<Vec<sync::Item>, Error> {
             // Files deleted since the last scan are skipped rather than reported as failures.
             let meta = std::fs::metadata(&local).ok()?;
             let size = meta.len();
-            let modified = meta
-                .modified()
-                .ok()
-                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+            let modified = sync::modified_secs(&meta);
             Some(sync::Item {
                 track_id: t.id,
                 rel: rel_path(root, &t.path)?,
                 local,
                 size,
-                fingerprint: t.fingerprint,
+                identity: sync::library_identity(t.audio_fp, t.fingerprint),
                 modified,
             })
         })
@@ -1979,6 +1981,7 @@ fn collect_known(conn: &Connection) -> Result<HashMap<Vec<String>, sync::Known>,
         .filter_map(|t| {
             let known = sync::Known {
                 track_id: t.id,
+                missing: t.missing_since.is_some(),
                 in_grace: t.missing_since.is_some_and(|m| m > cutoff),
             };
             Some((rel_path(root, &t.path)?, known))
@@ -2011,6 +2014,15 @@ async fn claim_sync(state: &AppState) -> Result<SyncClaim<'_>, Error> {
     Ok(SyncClaim {
         _flag: flag,
         _io: io,
+    })
+}
+
+/// This device, as a destination lock names it to other devices.
+fn lock_owner(state: &AppState) -> Result<sync::lock::Owner, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    Ok(sync::lock::Owner {
+        device: sync::lock::DeviceId(libsync::write::device_id(&conn)?),
+        name: libsync::membership::device_name(&conn)?,
     })
 }
 
@@ -2184,7 +2196,10 @@ fn scan_inputs(conn: &Connection, target_id: i64) -> Result<ScanInputs, Error> {
         items,
         known,
         synced_at,
-        cached: db::remote_prints(conn, target_id)?,
+        cached: db::remote_prints(conn, target_id)?
+            .into_iter()
+            .filter(|(_, print)| sync::is_identity(print))
+            .collect(),
         bases,
         signatures: db::remote_signatures(conn, target_id)?,
         library: sync_scans::KnownLibrary::of(&present),
@@ -2309,6 +2324,10 @@ async fn scan_target(
     )
     .await;
     state.next_action_id.store(next_id, Ordering::SeqCst);
+    // Same audio in another folder is already in the library, whatever the name or path.
+    let mut pull = pull;
+    pull.missing
+        .retain(|m| !plan.in_library.contains(&m.file.rel));
     let bases = remember_read(state, target.id, &mut plan, listing.is_ok()).await?;
     // New bases change no plan (their files match), so the stamp counts them as already there.
     let stamp = stamp_with(bases.as_ref().unwrap_or(&inputs.bases));
@@ -2460,6 +2479,7 @@ async fn apply_plans(
         )?;
         db::get_targets(&conn, Some(&ids))?
     };
+    let owner = lock_owner(state)?;
     let backups = state.data_dir.join("sync-backups");
     let batch = unix_now();
     let backup_dir = backups.join(format!("{batch:012}"));
@@ -2478,7 +2498,19 @@ async fn apply_plans(
             backup_dir: &backup_dir,
             root: &root,
         };
+        let held = match sync::lock::acquire(&state.http, target, &owner).await {
+            Ok(held) => held,
+            Err(e) => {
+                summaries.push(sync::ApplySummary::refused(
+                    target.id,
+                    tp.name.clone(),
+                    e.to_string(),
+                ));
+                continue;
+            }
+        };
         let applied = sync::apply_target(app, &state.http, target, tp, &review).await;
+        held.release().await;
         let s = &applied.summary;
         let record = db::RunRecord {
             target_id: target.id,
@@ -2720,8 +2752,15 @@ async fn libsync_run(
     };
     let mut out = Vec::new();
     state.wf_misses.clear();
+    let owner = lock_owner(&state)?;
     for target in targets.iter().filter(|t| t.libsync) {
-        out.push(sync::run_library_data(&state.http, target, &state.db).await);
+        match sync::lock::acquire(&state.http, target, &owner).await {
+            Ok(held) => {
+                out.push(sync::run_library_data(&state.http, target, &state.db).await);
+                held.release().await;
+            }
+            Err(e) => out.push(sync::LibraryOutcome::failed(target, e.to_string())),
+        }
     }
     if let Some(target) = targets.into_iter().find(|t| t.libsync) {
         tauri::async_runtime::spawn(transfer_waveforms(app, target));
@@ -4344,6 +4383,11 @@ mod tests {
             local_sig: sig.to_owned(),
             remote_sig: sig.to_owned(),
             tags: Some("{}".to_owned()),
+            exact: Some(db::Exact {
+                content: format!("content-{sig}"),
+                local_modified: 7,
+                remote_version: (sig == "b").then(|| "etag".to_owned()),
+            }),
         };
         let synced = |update| db::Synced {
             track_id: id,

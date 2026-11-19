@@ -210,8 +210,29 @@ pub async fn delete(client: &Client, segments: &[String]) -> Result<(), Error> {
     }
 }
 
-/// Moves a remote file. Fails (412) rather than overwrite something already at `to`.
-pub async fn move_file(client: &Client, from: &[String], to: &[String]) -> Result<(), Error> {
+/// Moves a remote file. Unless `overwrite`, fails (412) rather than replace something already
+/// at `to`.
+pub async fn move_file(
+    client: &Client,
+    from: &[String],
+    to: &[String],
+    overwrite: bool,
+) -> Result<(), Error> {
+    let resp = client
+        .request(method("MOVE")?, url(from))
+        .header("Destination", url(to))
+        .header("Overwrite", if overwrite { "T" } else { "F" })
+        .send()
+        .await?;
+    match resp.status() {
+        s if s.is_success() => Ok(()),
+        s => Err(Error::Msg(format!("webdav MOVE {s}"))),
+    }
+}
+
+/// Moves a remote file only if nothing is at `to` yet, in one step on the server. Returns `false`
+/// (412) when something already is.
+pub async fn move_new(client: &Client, from: &[String], to: &[String]) -> Result<bool, Error> {
     let resp = client
         .request(method("MOVE")?, url(from))
         .header("Destination", url(to))
@@ -219,7 +240,8 @@ pub async fn move_file(client: &Client, from: &[String], to: &[String]) -> Resul
         .send()
         .await?;
     match resp.status() {
-        s if s.is_success() => Ok(()),
+        StatusCode::PRECONDITION_FAILED => Ok(false),
+        s if s.is_success() => Ok(true),
         s => Err(Error::Msg(format!("webdav MOVE {s}"))),
     }
 }

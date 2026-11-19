@@ -79,7 +79,7 @@ impl LibraryDigest {
                 &item.rel,
                 item.size,
                 item.modified,
-                &item.fingerprint,
+                &item.identity,
             )
                 .hash(&mut hasher);
         }
@@ -89,7 +89,7 @@ impl LibraryDigest {
             .collect();
         planned_known.sort_by(|a, b| a.0.cmp(b.0));
         for (rel, k) in planned_known {
-            (rel, k.track_id, k.in_grace).hash(&mut hasher);
+            (rel, k.track_id, k.missing, k.in_grace).hash(&mut hasher);
         }
         hasher.finish()
     }
@@ -498,7 +498,7 @@ mod tests {
             local: PathBuf::from(rel),
             rel: rel.split('/').map(str::to_owned).collect(),
             size,
-            fingerprint: None,
+            identity: None,
             modified: 0,
         }
     }
@@ -606,6 +606,7 @@ mod tests {
             vec!["a".to_owned(), "one.mp3".to_owned()],
             Known {
                 track_id: 1,
+                missing: true,
                 in_grace: true,
             },
         )]);

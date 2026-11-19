@@ -244,6 +244,28 @@ impl R2 {
         }
     }
 
+    /// Uploads `file` only if no object is at `key` yet, in one step on the server
+    /// (`If-None-Match: *`). Returns `false` (412) when one already is.
+    pub async fn put_new(
+        &self,
+        client: &Client,
+        key: &[String],
+        file: &Path,
+    ) -> Result<bool, Error> {
+        let bytes = tokio::fs::read(file).await?;
+        let resp = self
+            .signed_with(client, &Method::PUT, key, &[], &[("if-none-match", "*")])
+            .header(header::CONTENT_LENGTH, bytes.len())
+            .body(bytes)
+            .send()
+            .await?;
+        match resp.status() {
+            StatusCode::PRECONDITION_FAILED => Ok(false),
+            s if s.is_success() => Ok(true),
+            s => Err(Error::Msg(format!("r2 PUT {s}"))),
+        }
+    }
+
     /// Every object below `prefix` as `(full key, size, ETag)`.
     pub async fn list(
         &self,

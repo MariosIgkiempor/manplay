@@ -139,7 +139,7 @@ pub async fn upload(
                 return Ok(false);
             }
             ensure_dirs(&backend, &base, &dest, &mut made).await?;
-            backend.put(&dest, local).await?;
+            backend.put_whole(&dest, local, false).await?;
             Ok(true)
         }
         .await;

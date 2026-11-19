@@ -705,6 +705,10 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "synced_files", "local_sig", "TEXT")?;
     add_column(&conn, "synced_files", "remote_sig", "TEXT")?;
     add_column(&conn, "synced_files", "base_tags", "TEXT")?;
+    // Its exact check (see `Exact`): the whole file's hash and both sides' change markers.
+    add_column(&conn, "synced_files", "base_content", "TEXT")?;
+    add_column(&conn, "synced_files", "base_modified", "INTEGER")?;
+    add_column(&conn, "synced_files", "base_version", "TEXT")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
          CREATE INDEX IF NOT EXISTS tracks_audio_fp ON tracks(audio_fp);
@@ -1902,17 +1906,20 @@ pub struct TrackRow {
     pub id: i64,
     pub path: String,
     pub fingerprint: Option<String>,
+    pub audio_fp: Option<String>,
     pub missing_since: Option<i64>,
 }
 
 pub fn all_track_rows(conn: &Connection) -> Result<Vec<TrackRow>, Error> {
-    let mut stmt = conn.prepare("SELECT id, path, fingerprint, missing_since FROM tracks")?;
+    let mut stmt =
+        conn.prepare("SELECT id, path, fingerprint, audio_fp, missing_since FROM tracks")?;
     let rows = stmt.query_map([], |r| {
         Ok(TrackRow {
             id: r.get(0)?,
             path: r.get(1)?,
             fingerprint: r.get(2)?,
-            missing_since: r.get(3)?,
+            audio_fp: r.get(3)?,
+            missing_since: r.get(4)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1938,6 +1945,35 @@ pub struct Base {
     pub remote_sig: String,
     /// JSON of the tag fields (`tags::fields_json`); `None` when they could not be read.
     pub tags: Option<String>,
+    /// `None` for bases stored before exact checks, until the next sync or read renews them.
+    pub exact: Option<Exact>,
+}
+
+/// What catches an edit the signatures' samples miss: when a side's change marker moved since
+/// the base, its whole content is hashed and compared with `content`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exact {
+    /// `sync::content_hash` of the whole file, the same on both sides.
+    pub content: String,
+    /// Modification time of the library file (Unix seconds).
+    pub local_modified: i64,
+    /// The destination copy's change marker (`sync::Remote::version`); `None` until a read after
+    /// the sync that wrote it sees one.
+    pub remote_version: Option<String>,
+}
+
+impl Exact {
+    fn of_row(
+        content: Option<String>,
+        local_modified: Option<i64>,
+        remote_version: Option<String>,
+    ) -> Option<Self> {
+        Some(Self {
+            content: content?,
+            local_modified: local_modified?,
+            remote_version,
+        })
+    }
 }
 
 /// What a finished sync does to a file's base.
@@ -1975,7 +2011,9 @@ pub fn synced_bases(
     target_id: i64,
 ) -> Result<std::collections::HashMap<i64, Base>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT track_id, local_sig, remote_sig, base_tags FROM synced_files
+        "SELECT track_id, local_sig, remote_sig, base_tags, base_content, base_modified,
+                base_version
+         FROM synced_files
          WHERE target_id = ?1 AND local_sig IS NOT NULL AND remote_sig IS NOT NULL",
     )?;
     let rows = stmt.query_map(params![target_id], |r| {
@@ -1985,6 +2023,7 @@ pub fn synced_bases(
                 local_sig: r.get(1)?,
                 remote_sig: r.get(2)?,
                 tags: r.get(3)?,
+                exact: Exact::of_row(r.get(4)?, r.get(5)?, r.get(6)?),
             },
         ))
     })?;
@@ -2000,16 +2039,21 @@ pub fn store_bases(
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare(
-            "UPDATE synced_files SET local_sig = ?3, remote_sig = ?4, base_tags = ?5
+            "UPDATE synced_files SET local_sig = ?3, remote_sig = ?4, base_tags = ?5,
+                 base_content = ?6, base_modified = ?7, base_version = ?8
              WHERE target_id = ?1 AND track_id = ?2",
         )?;
         for (track_id, b) in bases {
+            let exact = b.exact.as_ref();
             stmt.execute(params![
                 target_id,
                 track_id,
                 b.local_sig,
                 b.remote_sig,
-                b.tags
+                b.tags,
+                exact.map(|e| &e.content),
+                exact.map(|e| e.local_modified),
+                exact.and_then(|e| e.remote_version.as_ref()),
             ])?;
         }
     }
@@ -2503,13 +2547,17 @@ pub fn record_run(
     {
         let mut stmt = tx.prepare(
             "INSERT INTO synced_files
-                 (target_id, track_id, size, synced_at, local_sig, remote_sig, base_tags)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 (target_id, track_id, size, synced_at, local_sig, remote_sig, base_tags,
+                  base_content, base_modified, base_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?9, ?10, ?11)
              ON CONFLICT(target_id, track_id) DO UPDATE SET
                  size = excluded.size, synced_at = excluded.synced_at,
                  local_sig = IIF(?8, excluded.local_sig, local_sig),
                  remote_sig = IIF(?8, excluded.remote_sig, remote_sig),
-                 base_tags = IIF(?8, excluded.base_tags, base_tags)",
+                 base_tags = IIF(?8, excluded.base_tags, base_tags),
+                 base_content = IIF(?8, excluded.base_content, base_content),
+                 base_modified = IIF(?8, excluded.base_modified, base_modified),
+                 base_version = IIF(?8, excluded.base_version, base_version)",
         )?;
         for s in synced {
             let (sigs, replace) = match &s.base {
@@ -2525,7 +2573,12 @@ pub fn record_run(
                 sigs.map(|b| &b.local_sig),
                 sigs.map(|b| &b.remote_sig),
                 sigs.and_then(|b| b.tags.as_ref()),
-                replace
+                replace,
+                sigs.and_then(|b| b.exact.as_ref()).map(|e| &e.content),
+                sigs.and_then(|b| b.exact.as_ref())
+                    .map(|e| e.local_modified),
+                sigs.and_then(|b| b.exact.as_ref())
+                    .and_then(|e| e.remote_version.as_ref()),
             ])?;
         }
     }
