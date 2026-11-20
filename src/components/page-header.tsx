@@ -1,7 +1,7 @@
 import { Check, Pencil, Play, Trash2, X } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
-import { HeaderMenu } from "#/components/header-menu.tsx";
+import { HeaderMenu, type HeaderMenuEntry } from "#/components/header-menu.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ButtonGroup } from "#/components/ui/button-group.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -255,6 +255,8 @@ interface CollectionProps {
 	onDelete: () => void;
 	/** Shared / Private switch at the top right (shown while in a shared library). */
 	sharing?: ReactNode;
+	/** More ⋯ rows, between Rename and Delete. */
+	menuExtra?: readonly HeaderMenuEntry[];
 	/** Extra content under the buttons, such as subtags. */
 	children?: ReactNode;
 }
@@ -270,6 +272,7 @@ export function CollectionHeader({
 	onRename,
 	onDelete,
 	sharing,
+	menuExtra = [],
 	children,
 }: CollectionProps) {
 	const player = usePlayer();
@@ -305,6 +308,8 @@ export function CollectionHeader({
 								onSelect: () => setEditing(true),
 								disabled: editing,
 							},
+							"separator",
+							...menuExtra,
 							"separator",
 							{ label: "Delete…", icon: <Trash2 />, onSelect: onDelete, destructive: true },
 						]}

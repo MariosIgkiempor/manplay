@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { useJellyfinMenu } from "#/components/jellyfin-menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { CollectionHeader } from "#/components/page-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
@@ -26,6 +27,7 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 	}, [tracks.data, preview.data]);
 	const seconds = (preview.data?.durationMs ?? 0) / 1000;
 	const [confirming, setConfirming] = useState(false);
+	const jellyfinMenu = useJellyfinMenu({ kind: "smart", id: playlist.id });
 
 	const rename = useMutation({
 		mutationFn: (name: string) => saveSmartPlaylist({ ...playlist, name }),
@@ -60,6 +62,7 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 				fallbackIcon={<Sparkles className="size-10" />}
 				onRename={(name) => name.trim() && rename.mutate(name.trim())}
 				onDelete={() => setConfirming(true)}
+				menuExtra={jellyfinMenu}
 				sharing={
 					<SharingControl
 						item={{

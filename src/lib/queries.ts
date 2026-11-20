@@ -28,6 +28,8 @@ import {
 	itunesImport,
 	itunesPending,
 	type JoinChoice,
+	jellyfinDestinations,
+	jellyfinSettings,
 	type LeaveChoice,
 	libraryStatus,
 	libsyncJoin,
@@ -95,6 +97,19 @@ export function useActivity(source: ActivitySource) {
 
 export function useSyncTargets() {
 	return useQuery({ queryKey: ["sync-targets"], queryFn: listSyncTargets });
+}
+
+/** Every destination with a Jellyfin server, with the playlists it sends. */
+export function useJellyfinDestinations() {
+	return useQuery({ queryKey: ["jellyfin-destinations"], queryFn: jellyfinDestinations });
+}
+
+/** The Jellyfin server saved for a destination, or null. */
+export function useJellyfinSettings(targetId: number) {
+	return useQuery({
+		queryKey: ["jellyfin", targetId],
+		queryFn: () => jellyfinSettings(targetId),
+	});
 }
 
 /** Whether some destination shares library data: until then nothing is sent to anyone. */

@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ListMusic, ListX } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { useJellyfinMenu } from "#/components/jellyfin-menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { CollectionHeader } from "#/components/page-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
@@ -62,6 +63,7 @@ function PlaylistPage() {
 
 	const [confirming, setConfirming] = useState(false);
 	const list = tracks.data ?? [];
+	const jellyfinMenu = useJellyfinMenu(playlist ? { kind: "playlist", id: playlist.id } : null);
 	const seconds = list.reduce((n, t) => n + (t.durationMs ?? 0), 0) / 1000;
 
 	return (
@@ -85,6 +87,7 @@ function PlaylistPage() {
 				fallbackIcon={<ListMusic className="size-10" />}
 				onRename={(name) => rename.mutate(name)}
 				onDelete={() => setConfirming(true)}
+				menuExtra={jellyfinMenu}
 				sharing={
 					<SharingControl
 						item={

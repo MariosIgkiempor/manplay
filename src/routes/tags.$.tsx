@@ -4,6 +4,7 @@ import { ChevronRight, Tag } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import type { Shareable } from "#/components/item-sharing.tsx";
+import { useJellyfinMenu } from "#/components/jellyfin-menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { CollectionHeader } from "#/components/page-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
@@ -39,6 +40,7 @@ function TagPage() {
 		[tracks.data, name],
 	);
 	const tagRow = shareableTag(tags.data ?? [], name);
+	const jellyfinMenu = useJellyfinMenu(name ? { kind: "tag", name } : null);
 	const depth = name.split(TAG_SEP).length;
 	const subtags = (tags.data ?? []).filter(
 		(t) => tagWithin(t.name, name) && t.name.split(TAG_SEP).length === depth + 1,
@@ -120,6 +122,7 @@ function TagPage() {
 				fallbackIcon={<Tag className="size-10" />}
 				onRename={rename}
 				onDelete={() => setAsk({ kind: "delete" })}
+				menuExtra={jellyfinMenu}
 				sharing={<SharingControl item={tagRow} />}
 			>
 				{subtags.length > 0 && (

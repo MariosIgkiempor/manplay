@@ -10,6 +10,7 @@ mod error;
 mod fsops;
 mod import;
 mod itunes;
+mod jellyfin;
 mod libsync;
 mod onelib;
 mod pdb;
@@ -72,6 +73,10 @@ struct AppState {
     wf_filling: AtomicBool,
     /// A sync asked for a waveform transfer while one was running: run again when it ends.
     wf_again: AtomicBool,
+    /// The last Jellyfin push shown for review, per destination; Send carries out exactly this.
+    jellyfin_plans: Mutex<HashMap<i64, Vec<jellyfin::push::Planned>>>,
+    /// Held while playlists are sent to a Jellyfin server, so two pushes never interleave.
+    jellyfin_pushing: tokio::sync::Mutex<()>,
 }
 
 const SETTING_ROOT: &str = "library_root";
@@ -1369,8 +1374,621 @@ async fn remote_move(
 fn remove_sync_target(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), Error> {
     with_db!(state, |c| db::remove_target(c, id))?;
     r2::forget_credentials(id);
+    jellyfin::forget_key(id);
+    with_db!(state, |c| db::remove_export_selection(
+        c,
+        &jellyfin_destination(id)
+    ))?;
     state.scans.lock().map_err(|_| Error::Lock)?.forget(id);
     let _ = app.emit("sync-scan", ());
+    Ok(())
+}
+
+// ---- Jellyfin ----------------------------------------------------------------------------------
+
+/// The Jellyfin server saved for a destination, if any.
+#[tauri::command]
+fn jellyfin_settings(
+    state: State<'_, AppState>,
+    target_id: i64,
+) -> Result<Option<jellyfin::Settings>, Error> {
+    with_db!(state, |c| db::jellyfin_settings(c, target_id))
+}
+
+/// The key typed, or the one saved for the destination when none was typed.
+fn typed_or_saved_key(target_id: i64, api_key: Option<&str>) -> Result<jellyfin::ApiKey, Error> {
+    match api_key.filter(|k| !k.trim().is_empty()) {
+        Some(typed) => jellyfin::ApiKey::parse(typed),
+        None => jellyfin::load_key(target_id),
+    }
+}
+
+/// Reads a server's users and song libraries, to choose from before saving.
+#[tauri::command]
+async fn jellyfin_probe(
+    state: State<'_, AppState>,
+    target_id: i64,
+    url: String,
+    api_key: Option<String>,
+) -> Result<jellyfin::Server, Error> {
+    let url = jellyfin::ServerUrl::parse(&url)?;
+    let key = typed_or_saved_key(target_id, api_key.as_deref())?;
+    jellyfin::Jellyfin::new(&state.http, &url, &key)
+        .server()
+        .await
+}
+
+/// Saves the Jellyfin server that scans a destination, once the server confirms the key, the
+/// user and the library. An empty `api_key` keeps the saved one.
+#[tauri::command]
+async fn jellyfin_save(
+    state: State<'_, AppState>,
+    target_id: i64,
+    url: String,
+    api_key: Option<String>,
+    user_id: String,
+    library_id: String,
+    visibility: jellyfin::Visibility,
+) -> Result<jellyfin::Settings, Error> {
+    if !with_db!(state, |c| db::list_targets(c))?
+        .iter()
+        .any(|t| t.id == target_id)
+    {
+        return Err(Error::Msg("destination no longer exists".to_owned()));
+    }
+    let url = jellyfin::ServerUrl::parse(&url)?;
+    let typed = api_key.as_deref().is_some_and(|k| !k.trim().is_empty());
+    let key = typed_or_saved_key(target_id, api_key.as_deref())?;
+    let server = jellyfin::Jellyfin::new(&state.http, &url, &key)
+        .server()
+        .await?;
+    let user = server
+        .users
+        .iter()
+        .find(|u| u.id.0 == user_id)
+        .cloned()
+        .ok_or_else(|| Error::Msg("that Jellyfin user is no longer on the server".to_owned()))?;
+    let library = server
+        .libraries
+        .into_iter()
+        .find(|l| l.id.0 == library_id)
+        .ok_or_else(|| Error::Msg("that Jellyfin library is no longer on the server".to_owned()))?;
+    let visibility = visibility.normalised(&user.id);
+    if let jellyfin::Visibility::Users { users } = &visibility
+        && users
+            .iter()
+            .any(|u| !server.users.iter().any(|s| &s.id == u))
+    {
+        return Err(Error::Msg(
+            "a user chosen to see the playlists is no longer on the server".to_owned(),
+        ));
+    }
+    let settings = jellyfin::Settings {
+        url,
+        server_name: server.name,
+        user,
+        library: jellyfin::LibraryRef {
+            id: library.id,
+            name: library.name,
+        },
+        visibility,
+    };
+    if typed {
+        jellyfin::save_key(target_id, &key)?;
+    }
+    with_db!(state, |c| db::save_jellyfin(c, target_id, &settings))?;
+    Ok(settings)
+}
+
+/// How many of a destination's songs its Jellyfin server has, with a few it does not.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JellyfinSongCheck {
+    synced: usize,
+    found: usize,
+    missing: usize,
+    ambiguous: usize,
+    /// Destination paths of up to [`SONG_CHECK_EXAMPLES`] songs not found, missing ones first.
+    examples: Vec<String>,
+}
+
+const SONG_CHECK_EXAMPLES: usize = 5;
+
+/// Songs synced to a destination, by their path inside it (the same as inside the library).
+fn destination_songs(
+    conn: &Connection,
+    target_id: i64,
+) -> Result<Vec<jellyfin::matching::DestinationSong>, Error> {
+    let Some(root) = db::get_setting(conn, SETTING_ROOT)? else {
+        return Ok(Vec::new());
+    };
+    let root = Path::new(&root);
+    Ok(db::synced_track_paths(conn, target_id)?
+        .into_iter()
+        .filter_map(|(track_id, path)| {
+            Some(jellyfin::matching::DestinationSong {
+                track_id,
+                rel: rel_path(root, &path)?,
+            })
+        })
+        .collect())
+}
+
+/// Matches the destination's songs to the songs in its Jellyfin library.
+#[tauri::command]
+async fn jellyfin_check_songs(
+    state: State<'_, AppState>,
+    target_id: i64,
+) -> Result<JellyfinSongCheck, Error> {
+    let (settings, songs) = with_db!(state, |c| Ok::<_, Error>((
+        db::jellyfin_settings(c, target_id)?,
+        destination_songs(c, target_id)?
+    )))?;
+    let settings =
+        settings.ok_or_else(|| Error::Msg("connect a Jellyfin server first".to_owned()))?;
+    let key = jellyfin::load_key(target_id)?;
+    let items = jellyfin::Jellyfin::new(&state.http, &settings.url, &key)
+        .audio_items(&settings.library.id, &settings.user.id)
+        .await?;
+    let matches = jellyfin::matching::match_songs(&songs, &items);
+    let rel_of: HashMap<i64, String> = songs
+        .iter()
+        .map(|s| (s.track_id, s.rel.join("/")))
+        .collect();
+    let examples = matches
+        .missing
+        .iter()
+        .chain(&matches.ambiguous)
+        .filter_map(|id| rel_of.get(id).cloned())
+        .take(SONG_CHECK_EXAMPLES)
+        .collect();
+    Ok(JellyfinSongCheck {
+        synced: songs.len(),
+        found: matches.found.len(),
+        missing: matches.missing.len(),
+        ambiguous: matches.ambiguous.len(),
+        examples,
+    })
+}
+
+/// The `export_selections` key of what a destination sends its Jellyfin server.
+fn jellyfin_destination(target_id: i64) -> String {
+    format!("jellyfin:{target_id}")
+}
+
+/// A destination with a Jellyfin server, and the playlists chosen for it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JellyfinDestination {
+    target_id: i64,
+    server_name: String,
+    selection: db::ExportSelection,
+    last_push: Option<LastJellyfinPush>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LastJellyfinPush {
+    /// Unix seconds, UTC.
+    at: i64,
+    summary: jellyfin::push::Summary,
+}
+
+/// Every destination with a Jellyfin server, with what each sends it.
+#[tauri::command]
+fn jellyfin_destinations(state: State<'_, AppState>) -> Result<Vec<JellyfinDestination>, Error> {
+    with_db!(state, |c| {
+        let mut out = Vec::new();
+        for target in db::list_targets(c)? {
+            if let Some(settings) = db::jellyfin_settings(c, target.id)? {
+                out.push(JellyfinDestination {
+                    target_id: target.id,
+                    server_name: settings.server_name,
+                    selection: db::export_selection(c, &jellyfin_destination(target.id))?
+                        .unwrap_or_default(),
+                    last_push: db::last_jellyfin_push(c, target.id)?.and_then(|(at, json)| {
+                        Some(LastJellyfinPush {
+                            at,
+                            summary: serde_json::from_str(&json).ok()?,
+                        })
+                    }),
+                });
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// Saves which playlists, tags and smart playlists go to a destination's Jellyfin server.
+#[tauri::command]
+fn jellyfin_set_selection(
+    state: State<'_, AppState>,
+    target_id: i64,
+    selection: db::ExportSelection,
+) -> Result<db::ExportSelection, Error> {
+    with_db!(state, |c| {
+        if db::jellyfin_settings(c, target_id)?.is_none() {
+            return Err(Error::Msg("connect a Jellyfin server first".to_owned()));
+        }
+        db::set_export_selection(c, &jellyfin_destination(target_id), &selection)?;
+        Ok(db::export_selection(c, &jellyfin_destination(target_id))?.unwrap_or_default())
+    })
+}
+
+/// The playlists the destination's Jellyfin user has on the server now.
+#[tauri::command]
+async fn jellyfin_server_playlists(
+    state: State<'_, AppState>,
+    target_id: i64,
+) -> Result<Vec<jellyfin::ServerPlaylist>, Error> {
+    let settings = with_db!(state, |c| db::jellyfin_settings(c, target_id))?
+        .ok_or_else(|| Error::Msg("connect a Jellyfin server first".to_owned()))?;
+    let key = jellyfin::load_key(target_id)?;
+    jellyfin::Jellyfin::new(&state.http, &settings.url, &key)
+        .playlists(&settings.user.id)
+        .await
+}
+
+/// The chosen playlists with their songs now: library playlists, tags (named as on a USB drive,
+/// "Genre › House") and smart playlists, each with a key that survives renames.
+fn jellyfin_wanted(
+    conn: &Connection,
+    selection: &db::ExportSelection,
+) -> Result<Vec<jellyfin::push::Wanted>, Error> {
+    use jellyfin::push::{PlaylistKey, Wanted};
+    let mut out = Vec::new();
+    let (_, lists) = db::export_data(conn)?;
+    for id in &selection.playlists {
+        if let Some(p) = lists.iter().find(|p| p.id == Some(*id)) {
+            let uid = db::uid_of(conn, "playlists", *id)?.unwrap_or_else(|| id.to_string());
+            out.push(Wanted {
+                key: PlaylistKey(format!("playlist:{uid}")),
+                name: p.name.clone(),
+                track_ids: p.track_ids.clone(),
+            });
+        }
+    }
+    for p in db::export_tag_playlists(conn, &selection.tags)? {
+        out.push(Wanted {
+            key: PlaylistKey(format!("tag:{}", p.name.to_lowercase())),
+            name: p.name.replace('/', " › "),
+            track_ids: p.track_ids,
+        });
+    }
+    if !selection.smart.is_empty() {
+        let tracks = db::list(conn)?;
+        let now = unix_now();
+        for p in db::smart_playlists(conn)?
+            .into_iter()
+            .filter(|p| selection.smart.contains(&p.id))
+        {
+            let uid =
+                db::uid_of(conn, "smart_playlists", p.id)?.unwrap_or_else(|| p.id.to_string());
+            out.push(Wanted {
+                key: PlaylistKey(format!("smart:{uid}")),
+                track_ids: smart::resolve(&p.rules, &tracks, now),
+                name: p.name,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Works out what a push would change, reading the server for its songs and playlists.
+/// How long a push waits for Jellyfin to scan songs a sync just uploaded.
+const JELLYFIN_SCAN_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+const JELLYFIN_SCAN_POLL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Chosen songs on the destination that Jellyfin does not have yet: it is told about them, then
+/// read again until it has them all, stops finding more, or [`JELLYFIN_SCAN_WAIT`] passes.
+async fn jellyfin_wait_for_new(
+    server: &jellyfin::Jellyfin<'_>,
+    settings: &jellyfin::Settings,
+    songs: &[jellyfin::matching::DestinationSong],
+    chosen: &HashSet<i64>,
+    mut items: Vec<jellyfin::matching::ServerItem>,
+) -> Result<Vec<jellyfin::matching::ServerItem>, Error> {
+    let missing_of = |items: &[jellyfin::matching::ServerItem]| -> Vec<i64> {
+        jellyfin::matching::match_songs(songs, items)
+            .missing
+            .into_iter()
+            .filter(|t| chosen.contains(t))
+            .collect()
+    };
+    let mut missing = missing_of(&items);
+    if missing.is_empty() {
+        return Ok(items);
+    }
+    let locations = server.library_locations(&settings.library.id).await?;
+    let not_scanned: HashSet<i64> = missing.iter().copied().collect();
+    let paths: Vec<String> = songs
+        .iter()
+        .filter(|s| not_scanned.contains(&s.track_id))
+        .flat_map(|s| jellyfin::matching::server_paths(&locations, &s.rel))
+        .collect();
+    server.report_new_files(&paths).await?;
+    let started = std::time::Instant::now();
+    let mut quiet_polls = 0;
+    while !missing.is_empty() && started.elapsed() < JELLYFIN_SCAN_WAIT && quiet_polls < 6 {
+        tokio::time::sleep(JELLYFIN_SCAN_POLL).await;
+        items = server
+            .audio_items(&settings.library.id, &settings.user.id)
+            .await?;
+        let now_missing = missing_of(&items);
+        quiet_polls = if now_missing.len() < missing.len() {
+            0
+        } else {
+            quiet_polls + 1
+        };
+        missing = now_missing;
+    }
+    Ok(items)
+}
+
+/// Works out what a push would change, reading the server for its songs and playlists. With
+/// `wait_for_new`, chosen songs Jellyfin has not scanned yet are waited for first.
+async fn jellyfin_prepare(
+    state: &AppState,
+    target_id: i64,
+    wait_for_new: bool,
+) -> Result<Vec<jellyfin::push::Planned>, Error> {
+    let (settings, wanted, songs, known) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let settings = db::jellyfin_settings(&conn, target_id)?
+            .ok_or_else(|| Error::Msg("connect a Jellyfin server first".to_owned()))?;
+        let selection =
+            db::export_selection(&conn, &jellyfin_destination(target_id))?.unwrap_or_default();
+        (
+            settings,
+            jellyfin_wanted(&conn, &selection)?,
+            destination_songs(&conn, target_id)?,
+            db::jellyfin_known(&conn, target_id)?,
+        )
+    };
+    let key = jellyfin::load_key(target_id)?;
+    let server = jellyfin::Jellyfin::new(&state.http, &settings.url, &key);
+    let mut items = server
+        .audio_items(&settings.library.id, &settings.user.id)
+        .await?;
+    if wait_for_new {
+        let chosen: HashSet<i64> = wanted
+            .iter()
+            .flat_map(|w| w.track_ids.iter().copied())
+            .collect();
+        items = jellyfin_wait_for_new(&server, &settings, &songs, &chosen, items).await?;
+    }
+    let found = jellyfin::matching::match_songs(&songs, &items).found;
+    // Songs are read only for playlists manplay may change: its own, and same-named ones.
+    let names: HashSet<&str> = wanted.iter().map(|w| w.name.as_str()).collect();
+    let owned: HashSet<&jellyfin::PlaylistId> = known.values().map(|s| &s.id).collect();
+    let mut on_server = Vec::new();
+    for p in server.playlists(&settings.user.id).await? {
+        if !owned.contains(&p.id) && !names.contains(p.name.as_str()) {
+            continue;
+        }
+        let entries = server.playlist_entries(&p.id, &settings.user.id).await?;
+        on_server.push(jellyfin::push::OnServer {
+            songs: entries.into_iter().map(|e| e.song).collect(),
+            id: p.id,
+            name: p.name,
+        });
+    }
+    Ok(jellyfin::push::plan(
+        &wanted,
+        &known,
+        &on_server,
+        &found,
+        &settings.visibility,
+    ))
+}
+
+/// A playlist's name and songs before it is changed or deleted, under
+/// `jellyfin-backups/<unix time>/`, pruned like the sync backups.
+fn jellyfin_backup(
+    dir: &Path,
+    target_id: i64,
+    id: &jellyfin::PlaylistId,
+    name: &str,
+    songs: &[jellyfin::AudioId],
+) -> Result<(), Error> {
+    std::fs::create_dir_all(dir)?;
+    let json = serde_json::json!({ "targetId": target_id, "playlistId": id, "name": name, "songs": songs });
+    let file = dir.join(format!(
+        "{target_id}-{}.json",
+        id.0.replace(['/', '\\'], "_")
+    ));
+    std::fs::write(
+        file,
+        serde_json::to_vec_pretty(&json).map_err(|e| Error::Msg(e.to_string()))?,
+    )?;
+    Ok(())
+}
+
+/// Carries out one planned playlist change.
+async fn jellyfin_apply_one(
+    state: &AppState,
+    server: &jellyfin::Jellyfin<'_>,
+    settings: &jellyfin::Settings,
+    target_id: i64,
+    backup_dir: &Path,
+    p: &jellyfin::push::Planned,
+) -> Result<(), Error> {
+    use jellyfin::push::Action;
+    let user = &settings.user.id;
+    let visibility = &settings.visibility;
+    // `made` is who a new playlist was made visible to; `None` keeps what was recorded.
+    let remember = |id: &jellyfin::PlaylistId, made: Option<&jellyfin::Visibility>| {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::set_jellyfin_known(&conn, target_id, &p.key, id, made)
+    };
+    match &p.action {
+        Action::Create => {
+            let id = server
+                .create_playlist(&p.name, &p.songs, user, visibility)
+                .await?;
+            remember(&id, Some(visibility))?;
+        }
+        Action::Refill { id } => {
+            jellyfin_backup(backup_dir, target_id, id, &p.name, &p.before)?;
+            remember(id, None)?;
+            let entries: Vec<jellyfin::EntryId> = server
+                .playlist_entries(id, user)
+                .await?
+                .into_iter()
+                .map(|e| e.entry)
+                .collect();
+            server.remove_entries(id, &entries).await?;
+            server.add_songs(id, &p.songs, user).await?;
+        }
+        Action::Rename { old, old_name } => {
+            let id = server
+                .create_playlist(&p.name, &p.songs, user, visibility)
+                .await?;
+            remember(&id, Some(visibility))?;
+            jellyfin_backup(backup_dir, target_id, old, old_name, &p.before)?;
+            server.delete_playlist(old, user).await?;
+        }
+        Action::Reshare { old } => {
+            let id = server
+                .create_playlist(&p.name, &p.songs, user, visibility)
+                .await?;
+            remember(&id, Some(visibility))?;
+            jellyfin_backup(backup_dir, target_id, old, &p.name, &p.before)?;
+            server.delete_playlist(old, user).await?;
+        }
+        Action::Remove { id } => {
+            jellyfin_backup(backup_dir, target_id, id, &p.name, &p.before)?;
+            server.delete_playlist(id, user).await?;
+            let conn = state.db.lock().map_err(|_| Error::Lock)?;
+            db::forget_jellyfin_known(&conn, target_id, &p.key)?;
+        }
+        Action::Unchanged { id } => remember(id, None)?,
+    }
+    Ok(())
+}
+
+/// Sends planned changes. Without `reviewed`, changes that delete or take over a playlist are
+/// left for a review and counted as waiting.
+async fn jellyfin_send(
+    state: &AppState,
+    target_id: i64,
+    planned: &[jellyfin::push::Planned],
+    reviewed: bool,
+) -> Result<jellyfin::push::Summary, Error> {
+    use jellyfin::push::{Action, Summary};
+    let _one_at_a_time = state.jellyfin_pushing.lock().await;
+    let settings = with_db!(state, |c| db::jellyfin_settings(c, target_id))?
+        .ok_or_else(|| Error::Msg("connect a Jellyfin server first".to_owned()))?;
+    let key = jellyfin::load_key(target_id)?;
+    let server = jellyfin::Jellyfin::new(&state.http, &settings.url, &key);
+    let now = unix_now();
+    let backups = state.data_dir.join("jellyfin-backups");
+    let backup_dir = backups.join(format!("{now:012}"));
+    let mut summary = Summary::default();
+    for p in planned {
+        if !reviewed && p.needs_review() {
+            summary.waiting += usize::from(p.changes() || p.adopted);
+            continue;
+        }
+        match jellyfin_apply_one(state, &server, &settings, target_id, &backup_dir, p).await {
+            Ok(()) => match p.action {
+                Action::Create => summary.created += 1,
+                Action::Refill { .. } => summary.updated += 1,
+                Action::Rename { .. } => summary.renamed += 1,
+                Action::Reshare { .. } => summary.reshared += 1,
+                Action::Remove { .. } => summary.removed += 1,
+                Action::Unchanged { .. } => {}
+            },
+            Err(e) => summary.failed.push(format!("{}: {e}", p.name)),
+        }
+    }
+    let json = serde_json::to_string(&summary).map_err(|e| Error::Msg(e.to_string()))?;
+    with_db!(state, |c| db::record_jellyfin_push(
+        c, target_id, now, &json
+    ))?;
+    sync::prune_backups(&backups, now, SYNC_BACKUP_KEEP_SECS);
+    Ok(summary)
+}
+
+/// What sending the chosen playlists would change, for review. Kept until Send.
+#[tauri::command]
+async fn jellyfin_plan(
+    state: State<'_, AppState>,
+    target_id: i64,
+) -> Result<Vec<jellyfin::push::Row>, Error> {
+    let planned = jellyfin_prepare(&state, target_id, false).await?;
+    let rows = planned.iter().map(jellyfin::push::Planned::row).collect();
+    state
+        .jellyfin_plans
+        .lock()
+        .map_err(|_| Error::Lock)?
+        .insert(target_id, planned);
+    Ok(rows)
+}
+
+/// Sends the reviewed playlists to Jellyfin, exactly as the review showed them.
+#[tauri::command]
+async fn jellyfin_push(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: i64,
+) -> Result<jellyfin::push::Summary, Error> {
+    let planned = state
+        .jellyfin_plans
+        .lock()
+        .map_err(|_| Error::Lock)?
+        .remove(&target_id)
+        .ok_or_else(|| Error::Msg("review the playlists again before sending".to_owned()))?;
+    let summary = jellyfin_send(&state, target_id, &planned, true).await?;
+    let _ = app.emit("jellyfin-push", target_id);
+    Ok(summary)
+}
+
+/// After a sync: sends new songs and new playlists to each synced destination's Jellyfin server.
+/// Renames, removals and take-overs wait for a review.
+async fn jellyfin_after_sync(app: AppHandle, target_ids: Vec<i64>) {
+    let state = app.state::<AppState>();
+    for target_id in target_ids {
+        // Nothing chosen and nothing sent before: no need to read the server.
+        let has_work = state.db.lock().is_ok_and(|c| {
+            let connected = db::jellyfin_settings(&c, target_id)
+                .ok()
+                .flatten()
+                .is_some();
+            let chosen = db::export_selection(&c, &jellyfin_destination(target_id))
+                .ok()
+                .flatten()
+                .is_some_and(|s| {
+                    !(s.playlists.is_empty() && s.tags.is_empty() && s.smart.is_empty())
+                });
+            let sent = db::jellyfin_known(&c, target_id).is_ok_and(|k| !k.is_empty());
+            connected && (chosen || sent)
+        });
+        if !has_work {
+            continue;
+        }
+        let outcome = match jellyfin_prepare(&state, target_id, true).await {
+            Ok(planned) => jellyfin_send(&state, target_id, &planned, false).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = outcome {
+            let failed = jellyfin::push::Summary {
+                failed: vec![e.to_string()],
+                ..Default::default()
+            };
+            if let (Ok(json), Ok(conn)) = (serde_json::to_string(&failed), state.db.lock()) {
+                let _ = db::record_jellyfin_push(&conn, target_id, unix_now(), &json);
+            }
+        }
+        let _ = app.emit("jellyfin-push", target_id);
+    }
+}
+
+/// Forgets a destination's Jellyfin server and its API key. Playlists already on the server stay.
+#[tauri::command]
+fn jellyfin_forget(state: State<'_, AppState>, target_id: i64) -> Result<(), Error> {
+    with_db!(state, |c| db::remove_jellyfin(c, target_id))?;
+    jellyfin::forget_key(target_id);
     Ok(())
 }
 
@@ -2446,7 +3064,10 @@ async fn sync_apply(
         selected: &selected,
         resolutions: &resolutions.unwrap_or_default(),
     };
-    apply_plans(&app, &state, &plans, &review).await
+    let summaries = apply_plans(&app, &state, &plans, &review).await?;
+    let synced: Vec<i64> = summaries.iter().map(|s| s.target_id).collect();
+    tauri::async_runtime::spawn(jellyfin_after_sync(app.clone(), synced));
+    Ok(summaries)
 }
 
 /// The actions the user ticked, and how they settled merges and conflicts.
@@ -3918,6 +4539,8 @@ pub fn run() {
                 wf_misses: libsync::waveforms::Misses::default(),
                 wf_filling: AtomicBool::new(false),
                 wf_again: AtomicBool::new(false),
+                jellyfin_plans: Mutex::new(HashMap::new()),
+                jellyfin_pushing: tokio::sync::Mutex::new(()),
             });
             tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(reprint_audio_fps(app.handle().clone()));
@@ -4001,6 +4624,16 @@ pub fn run() {
             smart_local_tags,
             libsync_run,
             remove_sync_target,
+            jellyfin_settings,
+            jellyfin_probe,
+            jellyfin_save,
+            jellyfin_forget,
+            jellyfin_check_songs,
+            jellyfin_destinations,
+            jellyfin_set_selection,
+            jellyfin_server_playlists,
+            jellyfin_plan,
+            jellyfin_push,
             sync_history,
             activity_history,
             service_flags,
@@ -4562,6 +5195,8 @@ mod tests {
             wf_misses: libsync::waveforms::Misses::default(),
             wf_filling: AtomicBool::new(false),
             wf_again: AtomicBool::new(false),
+            jellyfin_plans: Mutex::new(HashMap::new()),
+            jellyfin_pushing: tokio::sync::Mutex::new(()),
         };
         assert!(export_inner(&state, false).expect("export"));
 
@@ -4661,6 +5296,8 @@ mod tests {
             wf_misses: libsync::waveforms::Misses::default(),
             wf_filling: AtomicBool::new(false),
             wf_again: AtomicBool::new(false),
+            jellyfin_plans: Mutex::new(HashMap::new()),
+            jellyfin_pushing: tokio::sync::Mutex::new(()),
         };
         assert!(export_inner(&state, false).expect("export"));
 
@@ -4707,6 +5344,8 @@ mod tests {
             wf_misses: libsync::waveforms::Misses::default(),
             wf_filling: AtomicBool::new(false),
             wf_again: AtomicBool::new(false),
+            jellyfin_plans: Mutex::new(HashMap::new()),
+            jellyfin_pushing: tokio::sync::Mutex::new(()),
         };
         assert!(!export_inner(&state, false).expect("no-op"));
     }

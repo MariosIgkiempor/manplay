@@ -291,6 +291,14 @@ pub(crate) fn migrate_selection_uids(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
+pub fn remove_export_selection(conn: &Connection, destination: &str) -> Result<(), Error> {
+    conn.execute(
+        "DELETE FROM export_selections WHERE destination = ?1",
+        params![destination],
+    )?;
+    Ok(())
+}
+
 pub fn set_export_selection(
     conn: &Connection,
     destination: &str,
@@ -801,7 +809,230 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     crate::libsync::seed::catch_up(&conn)?;
     crate::libsync::clashes::migrate(&conn)?;
     retry_unnamed_waveforms(&conn)?;
+    create_jellyfin(&conn)?;
     Ok(conn)
+}
+
+// ---- Jellyfin ----------------------------------------------------------------------------------
+
+/// The Jellyfin server that scans a destination. Its API key is in the keychain
+/// (`jellyfin::save_key`), not here.
+fn create_jellyfin(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS jellyfin_servers (
+             target_id    INTEGER PRIMARY KEY REFERENCES sync_targets(id) ON DELETE CASCADE,
+             url          TEXT NOT NULL,
+             server_name  TEXT NOT NULL,
+             user_id      TEXT NOT NULL,
+             user_name    TEXT NOT NULL,
+             library_id   TEXT NOT NULL,
+             library_name TEXT NOT NULL
+         );
+         -- The Jellyfin playlist each chosen manplay playlist was sent to, so later pushes
+         -- update it (and renames find it) instead of making another.
+         CREATE TABLE IF NOT EXISTS jellyfin_playlists (
+             target_id   INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
+             key         TEXT NOT NULL,
+             playlist_id TEXT NOT NULL,
+             PRIMARY KEY (target_id, key)
+         );",
+    )?;
+    // The last push: when (Unix seconds, UTC) and what it did, as JSON.
+    add_column(conn, "jellyfin_servers", "last_push_at", "INTEGER")?;
+    add_column(conn, "jellyfin_servers", "last_push", "TEXT")?;
+    // Who sees the playlists manplay makes (`jellyfin::Visibility` as JSON).
+    add_column(
+        conn,
+        "jellyfin_servers",
+        "visibility",
+        "TEXT NOT NULL DEFAULT '{\"kind\":\"onlyMe\"}'",
+    )?;
+    // What a playlist was made with; NULL for one taken over, whose sharing is left alone.
+    add_column(conn, "jellyfin_playlists", "visibility", "TEXT")?;
+    Ok(())
+}
+
+fn visibility_from(json: Option<String>) -> Option<crate::jellyfin::Visibility> {
+    serde_json::from_str(&json?).ok()
+}
+
+fn visibility_json(visibility: &crate::jellyfin::Visibility) -> Result<String, Error> {
+    serde_json::to_string(visibility).map_err(|e| Error::Msg(e.to_string()))
+}
+
+/// Which Jellyfin playlist each manplay playlist was sent to, for one destination.
+pub fn jellyfin_known(
+    conn: &Connection,
+    target_id: i64,
+) -> Result<
+    std::collections::HashMap<crate::jellyfin::push::PlaylistKey, crate::jellyfin::push::Sent>,
+    Error,
+> {
+    use crate::jellyfin::PlaylistId;
+    use crate::jellyfin::push::{PlaylistKey, Sent};
+    let mut stmt = conn.prepare(
+        "SELECT key, playlist_id, visibility FROM jellyfin_playlists WHERE target_id = ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![target_id], |r| {
+            Ok((
+                PlaylistKey(r.get(0)?),
+                Sent {
+                    id: PlaylistId(r.get(1)?),
+                    visibility: visibility_from(r.get(2)?),
+                },
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// Records where a playlist was sent. `visibility` is what it was made with; `None` keeps what
+/// was recorded for the same playlist (filled again, its sharing is unchanged), and marks a
+/// taken-over one, whose sharing manplay leaves alone.
+pub fn set_jellyfin_known(
+    conn: &Connection,
+    target_id: i64,
+    key: &crate::jellyfin::push::PlaylistKey,
+    playlist: &crate::jellyfin::PlaylistId,
+    visibility: Option<&crate::jellyfin::Visibility>,
+) -> Result<(), Error> {
+    let visibility = visibility.map(visibility_json).transpose()?;
+    conn.execute(
+        "INSERT INTO jellyfin_playlists (target_id, key, playlist_id, visibility)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (target_id, key) DO UPDATE SET
+             visibility = CASE WHEN excluded.playlist_id = playlist_id
+                               THEN COALESCE(excluded.visibility, visibility)
+                               ELSE excluded.visibility END,
+             playlist_id = excluded.playlist_id",
+        params![target_id, key.0, playlist.0, visibility],
+    )?;
+    Ok(())
+}
+
+pub fn forget_jellyfin_known(
+    conn: &Connection,
+    target_id: i64,
+    key: &crate::jellyfin::push::PlaylistKey,
+) -> Result<(), Error> {
+    conn.execute(
+        "DELETE FROM jellyfin_playlists WHERE target_id = ?1 AND key = ?2",
+        params![target_id, key.0],
+    )?;
+    Ok(())
+}
+
+/// Saves what the last push did; `summary` is its JSON.
+pub fn record_jellyfin_push(
+    conn: &Connection,
+    target_id: i64,
+    at: i64,
+    summary: &str,
+) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE jellyfin_servers SET last_push_at = ?2, last_push = ?3 WHERE target_id = ?1",
+        params![target_id, at, summary],
+    )?;
+    Ok(())
+}
+
+/// When the last push ran and its JSON summary.
+pub fn last_jellyfin_push(
+    conn: &Connection,
+    target_id: i64,
+) -> Result<Option<(i64, String)>, Error> {
+    Ok(conn
+        .query_row(
+            "SELECT last_push_at, last_push FROM jellyfin_servers
+             WHERE target_id = ?1 AND last_push_at IS NOT NULL AND last_push IS NOT NULL",
+            params![target_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+}
+
+/// The stable id (`uid`) of a playlist or smart playlist row.
+pub fn uid_of(conn: &Connection, table: &str, id: i64) -> Result<Option<String>, Error> {
+    Ok(uids_for(conn, table, &[id])?.into_iter().next())
+}
+
+pub fn jellyfin_settings(
+    conn: &Connection,
+    target_id: i64,
+) -> Result<Option<crate::jellyfin::Settings>, Error> {
+    use crate::jellyfin::{LibraryId, LibraryRef, ServerUrl, Settings, User, UserId};
+    Ok(conn
+        .query_row(
+            "SELECT url, server_name, user_id, user_name, library_id, library_name, visibility
+             FROM jellyfin_servers WHERE target_id = ?1",
+            params![target_id],
+            |r| {
+                Ok(Settings {
+                    url: ServerUrl::from_stored(r.get(0)?),
+                    server_name: r.get(1)?,
+                    user: User {
+                        id: UserId(r.get(2)?),
+                        name: r.get(3)?,
+                    },
+                    library: LibraryRef {
+                        id: LibraryId(r.get(4)?),
+                        name: r.get(5)?,
+                    },
+                    visibility: visibility_from(r.get(6)?).unwrap_or_default(),
+                })
+            },
+        )
+        .optional()?)
+}
+
+pub fn save_jellyfin(
+    conn: &Connection,
+    target_id: i64,
+    settings: &crate::jellyfin::Settings,
+) -> Result<(), Error> {
+    conn.execute(
+        "INSERT INTO jellyfin_servers
+             (target_id, url, server_name, user_id, user_name, library_id, library_name,
+              visibility)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT (target_id) DO UPDATE SET
+             url = excluded.url, server_name = excluded.server_name,
+             user_id = excluded.user_id, user_name = excluded.user_name,
+             library_id = excluded.library_id, library_name = excluded.library_name,
+             visibility = excluded.visibility",
+        params![
+            target_id,
+            settings.url.as_str(),
+            settings.server_name,
+            settings.user.id.0,
+            settings.user.name,
+            settings.library.id.0,
+            settings.library.name,
+            visibility_json(&settings.visibility)?,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Songs this device has synced to a destination: track id and local path.
+pub fn synced_track_paths(conn: &Connection, target_id: i64) -> Result<Vec<(i64, String)>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.path FROM synced_files sf JOIN tracks t ON t.id = sf.track_id
+         WHERE sf.target_id = ?1 AND t.missing_since IS NULL ORDER BY t.path",
+    )?;
+    let rows = stmt
+        .query_map(params![target_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+pub fn remove_jellyfin(conn: &Connection, target_id: i64) -> Result<(), Error> {
+    conn.execute(
+        "DELETE FROM jellyfin_servers WHERE target_id = ?1",
+        params![target_id],
+    )?;
+    Ok(())
 }
 
 /// Waveforms of prints like `a1:<hex>` could not be named as files before, and were marked as on
@@ -3893,5 +4124,90 @@ mod tests {
         set_export_selection(&conn, "usb:1234", &usb).expect("save");
         set_export_selection(&conn, "usb:1234", &usb).expect("overwrite");
         assert_eq!(export_selection(&conn, "usb:1234").expect("row"), Some(usb));
+    }
+
+    #[test]
+    fn sent_playlists_keep_who_they_were_made_for() {
+        use crate::jellyfin::{PlaylistId, Visibility, push::PlaylistKey};
+        let conn = open(Path::new(":memory:")).expect("db");
+        let target = add_target(
+            &conn,
+            &NewTarget {
+                tailnet: "t".to_owned(),
+                machine: "nas".to_owned(),
+                path: vec!["share".to_owned()],
+            },
+        )
+        .expect("target");
+        let key = PlaylistKey("playlist:u1".to_owned());
+        let p1 = PlaylistId("p1".to_owned());
+        let p2 = PlaylistId("p2".to_owned());
+        // (step, playlist, made visible to, then recorded)
+        let steps = [
+            (
+                "made",
+                &p1,
+                Some(Visibility::Everyone),
+                Some(Visibility::Everyone),
+            ),
+            ("filled again", &p1, None, Some(Visibility::Everyone)),
+            (
+                "made again",
+                &p2,
+                Some(Visibility::OnlyMe),
+                Some(Visibility::OnlyMe),
+            ),
+            ("another one taken over", &p1, None, None),
+        ];
+        for (step, id, made, recorded) in steps {
+            set_jellyfin_known(&conn, target, &key, id, made.as_ref()).expect("save");
+            let sent = jellyfin_known(&conn, target).expect("read");
+            assert_eq!(&sent[&key].id, id, "{step}");
+            assert_eq!(sent[&key].visibility, recorded, "{step}");
+        }
+    }
+
+    #[test]
+    fn jellyfin_settings_round_trip_and_go_with_their_destination() {
+        use crate::jellyfin::{LibraryId, LibraryRef, ServerUrl, Settings, User, UserId};
+        let conn = open(Path::new(":memory:")).expect("db");
+        let target = add_target(
+            &conn,
+            &NewTarget {
+                tailnet: "t".to_owned(),
+                machine: "nas".to_owned(),
+                path: vec!["share".to_owned()],
+            },
+        )
+        .expect("target");
+        assert_eq!(jellyfin_settings(&conn, target).expect("read"), None);
+        let mut settings = Settings {
+            url: ServerUrl::parse("nas:8096").expect("url"),
+            server_name: "nas".to_owned(),
+            user: User {
+                id: UserId("u1".to_owned()),
+                name: "mario".to_owned(),
+            },
+            library: LibraryRef {
+                id: LibraryId("l1".to_owned()),
+                name: "Music".to_owned(),
+            },
+            visibility: crate::jellyfin::Visibility::Users {
+                users: vec![UserId("u2".to_owned())],
+            },
+        };
+        save_jellyfin(&conn, target, &settings).expect("save");
+        assert_eq!(
+            jellyfin_settings(&conn, target).expect("read"),
+            Some(settings.clone())
+        );
+        settings.library.name = "Sets".to_owned();
+        save_jellyfin(&conn, target, &settings).expect("overwrite");
+        assert_eq!(
+            jellyfin_settings(&conn, target).expect("read"),
+            Some(settings)
+        );
+        remove_target(&conn, target).expect("remove");
+        assert_eq!(jellyfin_settings(&conn, target).expect("read"), None);
     }
 }

@@ -16,6 +16,7 @@ import { type ReactNode, useId, useState } from "react";
 import { DestinationHeader, SettingLabel, UsageBar } from "#/components/destination-header.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
+import { JellyfinSection } from "#/components/jellyfin-section.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PlaceFrame } from "#/components/place-page.tsx";
 import { useRemoveDestination } from "#/components/remove-destination.tsx";
@@ -309,9 +310,12 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 					titled={false}
 				/>
 			) : (
-				<SettingsForm key={id} target={target}>
-					<RemoveRow onRemove={() => removal.ask(target)} busy={removal.busy} />
-				</SettingsForm>
+				<div className="space-y-6">
+					<SettingsForm key={id} target={target}>
+						<RemoveRow onRemove={() => removal.ask(target)} busy={removal.busy} />
+					</SettingsForm>
+					<JellyfinSection key={id} targetId={id} />
+				</div>
 			)}
 			{removal.error && <ErrorLine>{String(removal.error)}</ErrorLine>}
 			{removal.dialog}

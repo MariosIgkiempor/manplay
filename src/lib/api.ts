@@ -576,6 +576,110 @@ export async function removeSyncTarget(id: number): Promise<void> {
 	await invoke("remove_sync_target", { id });
 }
 
+// ---- Jellyfin ---------------------------------------------------------------
+
+const jellyfinUserIdSchema = z.string().min(1).brand<"JellyfinUserId">();
+export type JellyfinUserId = z.infer<typeof jellyfinUserIdSchema>;
+const jellyfinLibraryIdSchema = z.string().min(1).brand<"JellyfinLibraryId">();
+export type JellyfinLibraryId = z.infer<typeof jellyfinLibraryIdSchema>;
+
+const jellyfinUserSchema = z.object({ id: jellyfinUserIdSchema, name: z.string() });
+export type JellyfinUser = z.infer<typeof jellyfinUserSchema>;
+
+const jellyfinLibrarySchema = z.object({
+	id: jellyfinLibraryIdSchema,
+	name: z.string(),
+	/** Folders the library scans, as paths on the server. */
+	locations: z.array(z.string()),
+});
+export type JellyfinLibrary = z.infer<typeof jellyfinLibrarySchema>;
+
+/** What a Jellyfin server offers: its users and the libraries that can hold songs. */
+const jellyfinServerSchema = z.object({
+	name: z.string(),
+	version: z.string(),
+	users: z.array(jellyfinUserSchema),
+	libraries: z.array(jellyfinLibrarySchema),
+});
+export type JellyfinServer = z.infer<typeof jellyfinServerSchema>;
+
+/** Who sees the playlists manplay makes, besides the user they belong to. */
+const jellyfinVisibilitySchema = z.discriminatedUnion("kind", [
+	z.object({ kind: z.literal("onlyMe") }),
+	z.object({ kind: z.literal("everyone") }),
+	/** These users can play them, not edit them. */
+	z.object({ kind: z.literal("users"), users: z.array(jellyfinUserIdSchema) }),
+]);
+export type JellyfinVisibility = z.infer<typeof jellyfinVisibilitySchema>;
+
+/** The Jellyfin server that scans a destination. Its API key stays in the keychain. */
+const jellyfinSettingsSchema = z.object({
+	url: z.string().min(1),
+	serverName: z.string(),
+	user: jellyfinUserSchema,
+	library: z.object({ id: jellyfinLibraryIdSchema, name: z.string() }),
+	visibility: jellyfinVisibilitySchema,
+});
+export type JellyfinSettings = z.infer<typeof jellyfinSettingsSchema>;
+
+export async function jellyfinSettings(targetId: number): Promise<JellyfinSettings | null> {
+	return jellyfinSettingsSchema.nullable().parse(await invoke("jellyfin_settings", { targetId }));
+}
+
+/** Reads a server's users and libraries. No `apiKey` uses the one saved for the destination. */
+export async function probeJellyfin(p: {
+	targetId: number;
+	url: string;
+	apiKey?: string | undefined;
+}): Promise<JellyfinServer> {
+	return jellyfinServerSchema.parse(
+		await invoke("jellyfin_probe", { targetId: p.targetId, url: p.url, apiKey: p.apiKey ?? null }),
+	);
+}
+
+/** Saves the server once it confirms the key, user and library. No `apiKey` keeps the saved one. */
+export async function saveJellyfin(p: {
+	targetId: number;
+	url: string;
+	apiKey?: string | undefined;
+	userId: JellyfinUserId;
+	libraryId: JellyfinLibraryId;
+	visibility: JellyfinVisibility;
+}): Promise<JellyfinSettings> {
+	return jellyfinSettingsSchema.parse(
+		await invoke("jellyfin_save", {
+			targetId: p.targetId,
+			url: p.url,
+			apiKey: p.apiKey ?? null,
+			userId: p.userId,
+			libraryId: p.libraryId,
+			visibility: p.visibility,
+		}),
+	);
+}
+
+/** How many of a destination's synced songs its Jellyfin library has. */
+const jellyfinSongCheckSchema = z.object({
+	synced: int.nonnegative(),
+	found: int.nonnegative(),
+	/** Not in Jellyfin: not scanned yet, or outside the chosen library. */
+	missing: int.nonnegative(),
+	/** Several Jellyfin songs fit equally well, so none is used. */
+	ambiguous: int.nonnegative(),
+	/** Destination paths of a few songs not found. */
+	examples: z.array(z.string()),
+});
+export type JellyfinSongCheck = z.infer<typeof jellyfinSongCheckSchema>;
+
+export async function checkJellyfinSongs(targetId: number): Promise<JellyfinSongCheck> {
+	return jellyfinSongCheckSchema.parse(await invoke("jellyfin_check_songs", { targetId }));
+}
+
+/** Forgets the destination's Jellyfin server and key. Playlists already there stay. */
+export async function forgetJellyfin(targetId: number): Promise<void> {
+	await invoke("jellyfin_forget", { targetId });
+}
+
 const runSchema = z.object({
 	id: int,
 	targetId: int,
@@ -955,6 +1059,97 @@ export async function rekordboxSelection(): Promise<ExportSelection> {
 /** Saves what goes into the rekordbox file and writes it. */
 export async function setRekordboxSelection(selection: ExportSelection): Promise<ExportSelection> {
 	return exportSelectionSchema.parse(await invoke("rekordbox_set_selection", { selection }));
+}
+
+// ---- Jellyfin playlists -----------------------------------------------------
+
+/** What a push to Jellyfin did. */
+const jellyfinPushSummarySchema = z.object({
+	created: int.nonnegative(),
+	updated: int.nonnegative(),
+	renamed: int.nonnegative(),
+	/** Made again for the people now chosen to see them. */
+	reshared: int.nonnegative().default(0),
+	removed: int.nonnegative(),
+	/** Renames, removals and take-overs left for a review. */
+	waiting: int.nonnegative(),
+	failed: z.array(z.string()),
+});
+export type JellyfinPushSummary = z.infer<typeof jellyfinPushSummarySchema>;
+
+/** A destination with a Jellyfin server, and what it sends that server. */
+const jellyfinDestinationSchema = z.object({
+	targetId: int,
+	serverName: z.string(),
+	selection: exportSelectionSchema,
+	/** The last push, at Unix seconds (UTC). */
+	lastPush: z.object({ at: int, summary: jellyfinPushSummarySchema }).nullable(),
+});
+export type JellyfinDestination = z.infer<typeof jellyfinDestinationSchema>;
+
+export async function jellyfinDestinations(): Promise<JellyfinDestination[]> {
+	return z.array(jellyfinDestinationSchema).parse(await invoke("jellyfin_destinations"));
+}
+
+/** Saves which playlists, tags and smart playlists go to the destination's Jellyfin server. */
+export async function setJellyfinSelection(p: {
+	targetId: number;
+	selection: ExportSelection;
+}): Promise<ExportSelection> {
+	return exportSelectionSchema.parse(
+		await invoke("jellyfin_set_selection", { targetId: p.targetId, selection: p.selection }),
+	);
+}
+
+/** A playlist the destination's Jellyfin user already has on the server. */
+const jellyfinServerPlaylistSchema = z.object({
+	id: z.string().min(1),
+	name: z.string(),
+	songs: int.nonnegative(),
+});
+export type JellyfinServerPlaylist = z.infer<typeof jellyfinServerPlaylistSchema>;
+
+/** One playlist in the review of a push. */
+const jellyfinPlanRowSchema = z.object({
+	key: z.string().min(1),
+	name: z.string(),
+	action: z.enum(["create", "update", "rename", "reshare", "remove", "unchanged"]),
+	/** The name on the server before a rename. */
+	oldName: z.string().nullable(),
+	/** Made outside manplay with the same name: manplay takes it over. */
+	adopted: z.boolean(),
+	songs: int.nonnegative(),
+	added: int.nonnegative(),
+	removed: int.nonnegative(),
+	/** Chosen songs Jellyfin does not have (not synced, or not scanned yet). */
+	leftOut: int.nonnegative(),
+});
+export type JellyfinPlanRow = z.infer<typeof jellyfinPlanRowSchema>;
+
+/** What sending the chosen playlists would change. Send carries out exactly this. */
+export async function jellyfinPlan(targetId: number): Promise<JellyfinPlanRow[]> {
+	return z.array(jellyfinPlanRowSchema).parse(await invoke("jellyfin_plan", { targetId }));
+}
+
+/** Sends the reviewed playlists to Jellyfin. */
+export async function pushJellyfin(targetId: number): Promise<JellyfinPushSummary> {
+	return jellyfinPushSummarySchema.parse(await invoke("jellyfin_push", { targetId }));
+}
+
+/** Fires with the destination's id whenever playlists were sent to its Jellyfin server. */
+export function onJellyfinPush(handler: (targetId: number) => void): Promise<() => void> {
+	return listen("jellyfin-push", (e) => {
+		const parsed = int.safeParse(e.payload);
+		if (parsed.success) {
+			handler(parsed.data);
+		}
+	});
+}
+
+export async function jellyfinServerPlaylists(targetId: number): Promise<JellyfinServerPlaylist[]> {
+	return z
+		.array(jellyfinServerPlaylistSchema)
+		.parse(await invoke("jellyfin_server_playlists", { targetId }));
 }
 
 // ---- smart playlists -----------------------------------------------------
