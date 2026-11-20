@@ -7,9 +7,8 @@ import {
 	albumFromPath,
 	buildTree,
 	type ChipKind,
+	floatPlacement,
 	groupByAlbum,
-	MAX_OPEN_ROWS,
-	openSpan,
 	type ReviewItem,
 	type SendAction,
 	sharedThere,
@@ -217,18 +216,42 @@ describe("sharedThere", () => {
 	});
 });
 
-describe("openSpan", () => {
-	const uploads = (n: number) => Array.from({ length: n }, (_, i) => send("upload", `${i}.flac`));
-	it.each<{ name: string; items: ReviewItem[]; expected: number }>([
-		{ name: "a short list takes two rows", items: uploads(1), expected: 2 },
-		{ name: "a longer list takes more", items: uploads(10), expected: 3 },
+describe("floatPlacement", () => {
+	it.each([
 		{
-			name: "a very long list is capped and scrolls",
-			items: uploads(200),
-			expected: MAX_OPEN_ROWS,
+			name: "first column: two cards wide on the right",
+			left: 0,
+			expected: { side: "right", panel: 480 },
 		},
-	])("$name", ({ items, expected }) => {
-		expect(openSpan(items, false)).toBe(expected);
+		{
+			name: "middle: right, limited by the space left",
+			left: 252,
+			expected: { side: "right", panel: 456 },
+		},
+		{ name: "last column: flips to the left", left: 708, expected: { side: "left", panel: 480 } },
+		{
+			name: "wide cards stop at the widest list",
+			left: 0,
+			width: 400,
+			grid: 1400,
+			expected: { side: "right", panel: 720 },
+		},
+		{
+			name: "one column: under the card",
+			left: 0,
+			width: 300,
+			grid: 300,
+			expected: { side: "below", panel: 300 },
+		},
+		{
+			name: "neither side wide enough: under the card",
+			left: 200,
+			width: 240,
+			grid: 700,
+			expected: { side: "below", panel: 240 },
+		},
+	])("$name", ({ left, width = 240, grid = 948, expected }) => {
+		expect(floatPlacement(left, width, grid)).toEqual(expected);
 	});
 });
 

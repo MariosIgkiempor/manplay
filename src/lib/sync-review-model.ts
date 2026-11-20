@@ -283,40 +283,41 @@ export function sharedThere(items: readonly ReviewItem[], there: ThereLookup): S
 	return { files, options, value: files.every((f) => there(f) === value) ? value : null };
 }
 
-/** Height of one row of the album mosaic, and the gap between rows, in pixels. */
+/** Height of one row of the album mosaic, in pixels. */
 export const MOSAIC_ROW_PX = 128;
-export const MOSAIC_GAP_PX = 12;
-/** An open album never grows past this many rows; a longer list scrolls inside it. */
-export const MAX_OPEN_ROWS = 6;
 
-/** Space a closed card's header, chips and the list's top rule take. */
-const CARD_HEAD_PX = 112;
+/** The narrowest an open album's file list may be beside its card, and the widest. */
+export const FLOAT_PANEL_MIN_PX = 320;
+export const FLOAT_PANEL_MAX_PX = 720;
 
-/** Roughly how tall one file's row is in an open card. */
-function itemHeight(item: ReviewItem, shared: boolean): number {
-	const line = 26;
-	if (item.side === "there") {
-		return line + (item.file.note ? 16 : 0) + (shared ? 0 : 30);
-	}
-	const a = item.action;
-	const pills = a.tags?.length ?? 0;
-	switch (a.kind) {
-		case "merge":
-			return line + 24 + 26 * (a.merge?.length ?? 0);
-		case "conflict":
-			return line + 90;
-		case "move":
-			return line + 18;
-		default:
-			return line + (pills > 0 ? 24 * Math.ceil(pills / 2) : 0) + (a.note ? 16 : 0);
-	}
+/** Where an open album's file list goes: beside its card, or under it when neither side fits. */
+export type FloatSide = "right" | "left" | "below";
+
+export interface FloatPlacement {
+	side: FloatSide;
+	/** Width of the file list in pixels; under the card it is as wide as the card. */
+	panel: number;
 }
 
-/** How many mosaic rows an open album spans to fit its file list, capped at `MAX_OPEN_ROWS`. */
-export function openSpan(items: readonly ReviewItem[], sharedChoice: boolean): number {
-	const list = items.reduce((n, i) => n + itemHeight(i, sharedChoice), sharedChoice ? 40 : 0);
-	const rows = Math.ceil((CARD_HEAD_PX + list + MOSAIC_GAP_PX) / (MOSAIC_ROW_PX + MOSAIC_GAP_PX));
-	return Math.min(MAX_OPEN_ROWS, Math.max(2, rows));
+/**
+ * Where an open album floats its file list, given the card's place in the mosaic. The card
+ * stays where it is; the list goes on its right, or on its left when the card is too close to
+ * the right edge, and is about two cards wide where there is room.
+ */
+export function floatPlacement(
+	cardLeft: number,
+	cardWidth: number,
+	gridWidth: number,
+): FloatPlacement {
+	const wanted = Math.min(FLOAT_PANEL_MAX_PX, Math.max(FLOAT_PANEL_MIN_PX, cardWidth * 2));
+	const right = gridWidth - cardLeft - cardWidth;
+	if (right >= FLOAT_PANEL_MIN_PX) {
+		return { side: "right", panel: Math.min(wanted, right) };
+	}
+	if (cardLeft >= FLOAT_PANEL_MIN_PX) {
+		return { side: "left", panel: Math.min(wanted, cardLeft) };
+	}
+	return { side: "below", panel: cardWidth };
 }
 
 // ---- Folders --------------------------------------------------------------
