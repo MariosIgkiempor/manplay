@@ -3,7 +3,6 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import {
 	Check,
 	ChevronDown,
-	Disc3,
 	HardDrive,
 	HardDriveUpload,
 	ListPlus,
@@ -23,6 +22,7 @@ import {
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ButtonGroup } from "#/components/ui/button-group.tsx";
+import { UsbOutputsPicker } from "#/components/usb-outputs.tsx";
 import { type PlaylistSource, Review, ReviewCounts } from "#/components/usb-review.tsx";
 import {
 	type ExportSelection,
@@ -40,6 +40,7 @@ import {
 	type UsbExportReport,
 	type UsbLibrary,
 	type UsbMode,
+	type UsbOutputs,
 	usbExportPreview,
 	usbExportSelection,
 } from "#/lib/api.ts";
@@ -49,6 +50,7 @@ import { baseName } from "#/lib/fs-path.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { trackHasTag } from "#/lib/tag-tree.ts";
 import { typeScale } from "#/lib/type-scale.ts";
+import { exportSteps, outputProblems, outputResults } from "#/lib/usb-outputs.ts";
 import { useSmartPlaylists } from "#/lib/use-smart.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -203,30 +205,44 @@ function Swatch({ className, children }: { className: string; children: ReactNod
 	);
 }
 
-function steps(serato: boolean): [UsbExportProgress["phase"], string][] {
-	return [
-		["copying", "Copy songs"],
-		["analyzing", "Beat grids and waveforms"],
-		[
-			"writing",
-			serato ? "Write the rekordbox library and Serato crates" : "Write the rekordbox library",
-		],
-	];
+/** The bar under the step that is running: how far it is, or just that it is working. */
+function StepProgress({ progress }: { progress: UsbExportProgress | null }) {
+	const counted = progress !== null && progress.total > 0;
+	const pct = counted ? Math.round((progress.done / progress.total) * 100) : 0;
+	const doing = progress === null ? "Reading the drive…" : progress.current || "Working…";
+	return (
+		<>
+			<div className="flex justify-between gap-3 text-muted-foreground text-xs">
+				<span className="min-w-0 truncate">{doing}</span>
+				{counted && (
+					<span className="shrink-0 tabular-nums">
+						{Math.min(progress.done + 1, progress.total)} of {progress.total}
+					</span>
+				)}
+			</div>
+			<div className="h-1 overflow-hidden rounded-full bg-muted">
+				<div
+					className={cn(
+						"h-full bg-primary transition-[width] motion-reduce:transition-none",
+						!counted && "w-full animate-pulse motion-reduce:animate-none",
+					)}
+					style={counted ? { width: `${pct}%` } : undefined}
+				/>
+			</div>
+		</>
+	);
 }
 
-/** The three things an export does, in order, with the current one's progress. */
-function Steps({ progress, serato }: { progress: UsbExportProgress | null; serato: boolean }) {
-	const all = steps(serato);
-	const at = progress ? all.findIndex(([p]) => p === progress.phase) : -1;
+/** What an export does, in order, with the current step's progress. */
+function Steps({ progress, outputs }: { progress: UsbExportProgress | null; outputs: UsbOutputs }) {
+	const all = exportSteps(outputs);
+	// Before the first report the drive is being read, which is part of the first step.
+	const at = progress ? all.findIndex(([p]) => p === progress.phase) : 0;
 	return (
 		<ol className="space-y-3" aria-live="polite">
 			{all.map(([phase, label], i) => {
 				const done = i < at;
 				const current = i === at;
-				const pct =
-					current && progress && progress.total > 0
-						? Math.round((progress.done / progress.total) * 100)
-						: 0;
 				return (
 					<li key={phase} className="flex gap-3">
 						<span
@@ -241,27 +257,11 @@ function Steps({ progress, serato }: { progress: UsbExportProgress | null; serat
 						</span>
 						<div className="min-w-0 flex-1 space-y-1.5">
 							<p className={cn("text-sm", !done && !current && "text-muted-foreground")}>{label}</p>
-							{current && progress && phase !== "writing" && progress.total > 0 && (
-								<>
-									<div className="flex justify-between gap-3 text-muted-foreground text-xs">
-										<span className="min-w-0 truncate">{progress.current}</span>
-										<span className="shrink-0 tabular-nums">
-											{Math.min(progress.done + 1, progress.total)} of {progress.total}
-										</span>
-									</div>
-									<div className="h-1 overflow-hidden rounded-full bg-muted">
-										<div
-											className="h-full bg-primary transition-[width] motion-reduce:transition-none"
-											style={{ width: `${pct}%` }}
-										/>
-									</div>
-								</>
-							)}
+							{current && <StepProgress progress={progress} />}
 						</div>
 					</li>
 				);
 			})}
-			{progress === null && <li className="text-muted-foreground text-sm">Reading the drive…</li>}
 		</ol>
 	);
 }
@@ -317,20 +317,12 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 						<dd className="tabular-nums">{plural(report.regridded, "song")}</dd>
 					</>
 				)}
-				<dt className="text-muted-foreground">Players</dt>
-				<dd>
-					{report.oneLibrary ? "Every Pioneer and AlphaTheta player" : "CDJ-3000 and older only"}
-				</dd>
-				{report.seratoCrates !== null && (
-					<>
-						<dt className="text-muted-foreground">Serato</dt>
-						<dd className="tabular-nums">
-							{plural(report.seratoCrates, "crate")}
-							{report.seratoCratesRemoved > 0 &&
-								`, ${plural(report.seratoCratesRemoved, "crate")} removed`}
-						</dd>
-					</>
-				)}
+				{outputResults(report).map((result) => (
+					<div key={result.label} className="contents">
+						<dt className="text-muted-foreground">{result.label}</dt>
+						<dd className="tabular-nums">{result.text}</dd>
+					</div>
+				))}
 				{report.backup && (
 					<>
 						<dt className="text-muted-foreground">Previous library</dt>
@@ -340,16 +332,9 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 					</>
 				)}
 			</dl>
-			{report.oneLibraryError && (
-				<ErrorLine>
-					{`The OneLibrary for the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo could not be written, so the old one was removed: ${report.oneLibraryError}`}
-				</ErrorLine>
-			)}
-			{report.seratoError && (
-				<ErrorLine>
-					{`The Serato crates could not be written. The rekordbox library was: ${report.seratoError}`}
-				</ErrorLine>
-			)}
+			{outputProblems(report).map((problem) => (
+				<ErrorLine key={problem}>{problem}</ErrorLine>
+			))}
 			{report.failed.length > 0 && (
 				<div className="space-y-1">
 					<p className="font-medium text-destructive text-sm">
@@ -411,7 +396,7 @@ function startingSelection(
 		tags: tags.filter((t) => onDrive.has(tagPlaylistName(t.name))).map((t) => t.name),
 		smart: [],
 		usbMode: "add",
-		usbSerato: false,
+		usbOutputs: EMPTY_SELECTION.usbOutputs,
 	};
 }
 
@@ -533,14 +518,14 @@ function Body({ x, onLeave }: { x: ExportState; onLeave: () => void }) {
 		return <Summary report={x.run.data} drive={x.drive} />;
 	}
 	if (x.run.isPending) {
-		return <Steps progress={x.progress} serato={x.selection.usbSerato} />;
+		return <Steps progress={x.progress} outputs={x.selection.usbOutputs} />;
 	}
 	if (x.review.isSuccess) {
 		return (
 			<Review
 				diff={x.review.data}
 				mode={x.selection.usbMode}
-				serato={x.selection.usbSerato}
+				outputs={x.selection.usbOutputs}
 				sourceOf={x.sourceOf}
 			/>
 		);
@@ -559,7 +544,7 @@ function Body({ x, onLeave }: { x: ExportState; onLeave: () => void }) {
 				content: x.library ? (
 					<HeldPlaylists
 						playlists={heldPlaylists(x.library, x.removing)}
-						empty="No rekordbox playlists on the drive yet."
+						empty="No playlists on the drive yet."
 					/>
 				) : (
 					<p className="text-muted-foreground text-sm">Reading the drive…</p>
@@ -681,23 +666,6 @@ function ReviewSplitButton({ x }: { x: ExportState }) {
 									</Menu.RadioItem>
 								))}
 							</Menu.RadioGroup>
-							<Menu.Separator className="my-1.5 h-px bg-border" />
-							<Menu.CheckboxItem
-								checked={x.selection.usbSerato}
-								onCheckedChange={(usbSerato: boolean) => x.setDraft({ ...x.selection, usbSerato })}
-								className="flex cursor-default items-start gap-3 rounded-md px-2 py-2 outline-none data-[highlighted]:bg-muted"
-							>
-								<Disc3 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-									<span className="font-medium text-sm">Also as Serato crates</span>
-									<span className="text-muted-foreground text-xs">
-										Serato DJ shows each playlist as a crate and analyses new songs itself.
-									</span>
-								</span>
-								<Menu.CheckboxItemIndicator className="mt-0.5 text-primary">
-									<Check className="size-4" />
-								</Menu.CheckboxItemIndicator>
-							</Menu.CheckboxItem>
 							<p className="px-2 pt-1.5 pb-1 text-muted-foreground text-xs">
 								You see every change before anything is written. Remembered for {x.drive.name}.
 							</p>
@@ -779,6 +747,12 @@ export function UsbExportButton({
 							<h2 className={cn("truncate", typeScale.panelTitle)}>{drive.name}</h2>
 							<SpaceMeter drive={drive} adding={x.run.isSuccess ? 0 : x.estimate.bytes} />
 						</div>
+						{!x.review.isSuccess && !x.run.isPending && !x.run.isSuccess && (
+							<UsbOutputsPicker
+								outputs={x.selection.usbOutputs}
+								onChange={(usbOutputs) => x.setDraft({ ...x.selection, usbOutputs })}
+							/>
+						)}
 						<Body x={x} onLeave={close} />
 						{x.review.isError && <ErrorLine>{String(x.review.error)}</ErrorLine>}
 						{x.run.isError && <ErrorLine>{String(x.run.error)}</ErrorLine>}

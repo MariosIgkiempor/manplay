@@ -298,6 +298,90 @@ fn sections(b: &[u8]) -> Option<(&[u8], Vec<&[u8]>)> {
     Some((b.get(..header_len)?, out))
 }
 
+/// Thousandths of a second from the start of a track, as analysis files count time.
+pub type Milliseconds = u32;
+
+/// A cue or loop as an analysis file lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriveCue {
+    /// Hot cue pad (0-7 for A-H); `None` for a memory cue.
+    pub slot: Option<u8>,
+    pub start: Milliseconds,
+    /// Where a loop ends; `None` for a plain cue point.
+    pub loop_end: Option<Milliseconds>,
+}
+
+/// What one analysis file (`.DAT` or `.EXT`) holds that another player's library can be built
+/// from, whoever wrote the file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Parsed {
+    /// Time of the first beat of the grid.
+    pub first_beat: Option<Milliseconds>,
+    /// Detail waveform (`PWV3`), `WAVEFORM_RATE` columns per second, height in the low 5 bits.
+    pub detail: Vec<u8>,
+    /// Cues from the original lists (`PCOB`).
+    pub cues: Vec<DriveCue>,
+    /// Cues from the newer lists (`PCO2`), which also hold hot cues past C.
+    pub extended_cues: Vec<DriveCue>,
+}
+
+/// The entries of a cue list section; `entry` reads one from its bytes.
+fn cue_entries(section: &[u8], entry: impl Fn(&[u8]) -> Option<DriveCue>) -> Vec<DriveCue> {
+    let u32_at =
+        |b: &[u8], o: usize| Some(u32::from_be_bytes(b.get(o..o + 4)?.try_into().ok()?) as usize);
+    let mut out = Vec::new();
+    let Some(mut o) = u32_at(section, 4) else {
+        return out;
+    };
+    while let Some(len) = u32_at(section, o + 8).filter(|len| *len >= 12) {
+        let Some(bytes) = section.get(o..o + len) else {
+            break;
+        };
+        out.extend(entry(bytes));
+        o += len;
+    }
+    out
+}
+
+/// A cue from its pad number, kind and times, which sit at different places in the two formats.
+fn drive_cue(e: &[u8], kind: usize, start: usize, end: usize) -> Option<DriveCue> {
+    let u32_at = |o: usize| Some(u32::from_be_bytes(e.get(o..o + 4)?.try_into().ok()?));
+    let pad = u32_at(12)?;
+    let is_loop = *e.get(kind)? == 2;
+    Some(DriveCue {
+        slot: pad.checked_sub(1).and_then(|p| u8::try_from(p).ok()),
+        start: u32_at(start)?,
+        loop_end: u32_at(end).filter(|end| is_loop && *end != u32::MAX),
+    })
+}
+
+/// Reads the beat grid's start, the detail waveform and the cues out of an analysis file.
+/// `None` when `b` is not one.
+pub fn parse(b: &[u8]) -> Option<Parsed> {
+    let (_, all) = sections(b)?;
+    let mut out = Parsed::default();
+    for s in all {
+        let header_len = u32::from_be_bytes(s.get(4..8)?.try_into().ok()?) as usize;
+        match s.get(..4)? {
+            b"PQTZ" => {
+                out.first_beat = s
+                    .get(header_len + 4..header_len + 8)
+                    .and_then(|t| t.try_into().ok())
+                    .map(u32::from_be_bytes);
+            }
+            b"PWV3" => out.detail = s.get(header_len..).unwrap_or_default().to_vec(),
+            b"PCOB" => out
+                .cues
+                .extend(cue_entries(s, |e| drive_cue(e, 28, 32, 36))),
+            b"PCO2" => out
+                .extended_cues
+                .extend(cue_entries(s, |e| drive_cue(e, 16, 20, 24))),
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
 /// An analysis file written by someone else (rekordbox) with its beat grid replaced by `grid`'s
 /// and its cue lists by `cues`, each only when given, and everything else (waveforms, the other
 /// of the two) as it was. Replacing the grid drops the extended grid (`PQT2`) newer players
@@ -339,6 +423,30 @@ pub fn patch(b: &[u8], grid: Option<&Stored>, cues: Option<&[Cue]>) -> Option<Ve
     let mut v = header.to_vec();
     v[8..12].copy_from_slice(&(total as u32).to_be_bytes());
     for s in out {
+        v.extend_from_slice(&s);
+    }
+    Some(v)
+}
+
+/// An analysis file with the track path it names (`PPTH`) replaced, for a song that moved on the
+/// drive. `None` when `b` is not an analysis file.
+pub fn with_path(b: &[u8], path: &str) -> Option<Vec<u8>> {
+    let (header, old) = sections(b)?;
+    let new: Vec<Vec<u8>> = old
+        .into_iter()
+        .map(|s| {
+            if s.get(..4) == Some(b"PPTH") {
+                path_section(path)
+            } else {
+                s.to_vec()
+            }
+        })
+        .collect();
+    let total: usize = header.len() + new.iter().map(Vec::len).sum::<usize>();
+    let mut v = header.to_vec();
+    v.get_mut(8..12)?
+        .copy_from_slice(&(total as u32).to_be_bytes());
+    for s in new {
         v.extend_from_slice(&s);
     }
     Some(v)

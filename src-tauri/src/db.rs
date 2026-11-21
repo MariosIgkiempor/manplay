@@ -99,8 +99,8 @@ pub struct ExportSelection {
     pub smart: Vec<i64>,
     /// USB drives: what happens to the playlists and songs already there.
     pub usb_mode: crate::usb_export::Mode,
-    /// USB drives: also write the playlists as Serato crates.
-    pub usb_serato: bool,
+    /// USB drives: the formats written onto the drive.
+    pub usb_outputs: crate::usb_export::Outputs,
 }
 
 fn mode_text(mode: crate::usb_export::Mode) -> String {
@@ -153,12 +153,20 @@ fn create_export_selections(conn: &Connection) -> Result<(), Error> {
         "usb_mode",
         "TEXT NOT NULL DEFAULT 'add'",
     )?;
-    add_column(
-        conn,
-        "export_selections",
-        "usb_serato",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
+    // rekordbox was all an export wrote before there was a choice, so it starts switched on.
+    for (column, default) in [
+        ("usb_rekordbox", 1),
+        ("usb_serato", 0),
+        ("usb_gemini", 0),
+        ("usb_playlist_folders", 0),
+    ] {
+        add_column(
+            conn,
+            "export_selections",
+            column,
+            &format!("INTEGER NOT NULL DEFAULT {default}"),
+        )?;
+    }
     migrate_rekordbox_selection(conn)
 }
 
@@ -207,15 +215,24 @@ pub fn export_selection(
     conn: &Connection,
     destination: &str,
 ) -> Result<Option<ExportSelection>, Error> {
-    let row: Option<(String, String, String, String, bool)> = conn
+    let row: Option<(String, String, String, String, crate::usb_export::Outputs)> = conn
         .query_row(
-            "SELECT playlists, tags, smart, usb_mode, usb_serato FROM export_selections
-             WHERE destination = ?1",
+            "SELECT playlists, tags, smart, usb_mode, usb_serato, usb_gemini,
+                    usb_playlist_folders, usb_rekordbox
+             FROM export_selections WHERE destination = ?1",
             params![destination],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| {
+                let extras = crate::usb_export::Outputs {
+                    rekordbox: r.get(7)?,
+                    serato: r.get(4)?,
+                    gemini: r.get(5)?,
+                    playlist_folders: r.get(6)?,
+                };
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, extras))
+            },
         )
         .optional()?;
-    let Some((playlists, tags, smart, usb_mode, usb_serato)) = row else {
+    let Some((playlists, tags, smart, usb_mode, usb_outputs)) = row else {
         return Ok(None);
     };
     Ok(Some(ExportSelection {
@@ -223,7 +240,7 @@ pub fn export_selection(
         tags: serde_json::from_str(&tags).unwrap_or_default(),
         smart: ids_from_stored(conn, "smart_playlists", &smart)?,
         usb_mode: mode_from(&usb_mode),
-        usb_serato,
+        usb_outputs,
     }))
 }
 
@@ -319,18 +336,26 @@ pub fn set_export_selection(
     let smart = serde_json::to_string(&uids_for(conn, "smart_playlists", &selection.smart)?)
         .map_err(|e| Error::Msg(e.to_string()))?;
     conn.execute(
-        "INSERT INTO export_selections (destination, playlists, tags, smart, usb_mode, usb_serato)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO export_selections
+             (destination, playlists, tags, smart, usb_mode, usb_serato, usb_gemini,
+              usb_playlist_folders, usb_rekordbox)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(destination) DO UPDATE SET
              playlists = excluded.playlists, tags = excluded.tags, smart = excluded.smart,
-             usb_mode = excluded.usb_mode, usb_serato = excluded.usb_serato",
+             usb_mode = excluded.usb_mode, usb_serato = excluded.usb_serato,
+             usb_gemini = excluded.usb_gemini,
+             usb_playlist_folders = excluded.usb_playlist_folders,
+             usb_rekordbox = excluded.usb_rekordbox",
         params![
             destination,
             playlists,
             tags,
             smart,
             mode_text(selection.usb_mode),
-            selection.usb_serato
+            selection.usb_outputs.serato,
+            selection.usb_outputs.gemini,
+            selection.usb_outputs.playlist_folders,
+            selection.usb_outputs.rekordbox
         ],
     )?;
     Ok(())
@@ -4130,7 +4155,12 @@ mod tests {
             tags: vec![],
             smart: vec![smart],
             usb_mode: crate::usb_export::Mode::ReplaceAll,
-            usb_serato: true,
+            usb_outputs: crate::usb_export::Outputs {
+                rekordbox: false,
+                serato: true,
+                gemini: false,
+                playlist_folders: true,
+            },
         };
         set_export_selection(&conn, "usb:1234", &usb).expect("save");
         set_export_selection(&conn, "usb:1234", &usb).expect("overwrite");

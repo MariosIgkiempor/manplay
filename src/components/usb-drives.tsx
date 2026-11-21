@@ -194,17 +194,43 @@ const FORMATS = [
 		file: "exportLibrary.db",
 		players: "CDJ-3000X, Opus Quad, XDJ-AZ, Omnis Duo",
 	},
-] as const;
+	{
+		key: "serato",
+		name: "Serato",
+		file: "_Serato_/database V2",
+		players: "Serato DJ, on a computer or a controller it drives",
+		holds: ["song", "crate"],
+	},
+	{
+		key: "gemini",
+		name: "Gemini",
+		file: "GEMINI/gemini_bd.sqlite",
+		players: "Gemini MDJ-500, MDJ-600, MDJ-900, MDJ-1000 (MP3 and WAV only)",
+	},
+	{
+		key: "playlistFolders",
+		name: "Folders",
+		file: "Playlists/",
+		players: "Any player that browses folders, such as the MDJ-500",
+		holds: ["song", "folder"],
+	},
+] as const satisfies readonly {
+	key: string;
+	name: string;
+	file: string;
+	players: string;
+	/** What the format calls its tracks and playlists, when not that. */
+	holds?: readonly [string, string];
+}[];
 
 type FormatKey = (typeof FORMATS)[number]["key"];
 
-function summaryText(s: UsbLibrarySummary): string {
-	return s.tracks === 0
-		? "Empty"
-		: `${plural(s.tracks, "track", "tracks")}, ${plural(s.playlists, "playlist", "playlists")}`;
+function summaryText(s: UsbLibrarySummary, holds: readonly [string, string]): string {
+	const count = (n: number, one: string) => plural(n, one, `${one}s`);
+	return s.tracks === 0 ? "Empty" : `${count(s.tracks, holds[0])}, ${count(s.playlists, holds[1])}`;
 }
 
-/** What to tell the user when the two formats do not cover every player with the same songs. */
+/** What to tell the user when rekordbox's two formats do not cover every player with the same songs. */
 function formatsAdvice(f: UsbFormats): string | null {
 	const pdb = f.deviceLibrary;
 	const one = f.oneLibrary;
@@ -230,13 +256,18 @@ interface FormatStatus {
 	error?: string;
 }
 
-function formatStatus(f: UsbFormats | undefined, failed: boolean, key: FormatKey): FormatStatus {
+function formatStatus(
+	f: UsbFormats | undefined,
+	failed: boolean,
+	format: (typeof FORMATS)[number],
+): FormatStatus {
+	const key: FormatKey = format.key;
 	if (!f) {
 		return failed
 			? { short: "?", text: "Could not check", tone: "off" }
 			: { short: "…", text: "Checking…", tone: "off" };
 	}
-	const error = f[`${key}Error`];
+	const error = key === "playlistFolders" ? null : f[`${key}Error`];
 	if (error) {
 		return { short: "Unreadable", text: "Could not be read", tone: "error", error };
 	}
@@ -246,7 +277,7 @@ function formatStatus(f: UsbFormats | undefined, failed: boolean, key: FormatKey
 	}
 	return {
 		short: summary.tracks.toLocaleString(),
-		text: summaryText(summary),
+		text: summaryText(summary, "holds" in format ? format.holds : ["track", "playlist"]),
 		tone: summary.tracks > 0 ? "ok" : "off",
 	};
 }
@@ -261,14 +292,17 @@ const DOT: Record<Tone, string> = {
 const popup =
 	"z-50 w-80 rounded-lg border bg-popover p-3 text-popover-foreground text-sm shadow-lg outline-none";
 
-/** The drive's two library formats as pills; each opens the detail and which players read it. */
+/** The drive's library formats as pills; each opens the detail and which players read it. */
 function FormatPills({ mount }: { mount: string }) {
 	const formats = useQuery({ queryKey: ["usb-formats", mount], queryFn: () => usbFormats(mount) });
-	const advice = formats.data ? formatsAdvice(formats.data) : null;
+	const rekordboxAdvice = formats.data ? formatsAdvice(formats.data) : null;
 	return (
 		<div className="flex flex-wrap gap-1.5 pt-1">
 			{FORMATS.map((format) => {
-				const status = formatStatus(formats.data, formats.isError, format.key);
+				const status = formatStatus(formats.data, formats.isError, format);
+				// The advice is about rekordbox's two libraries disagreeing; the others are not part of it.
+				const advice =
+					format.key === "deviceLibrary" || format.key === "oneLibrary" ? rekordboxAdvice : null;
 				const tone: Tone = advice && status.tone === "ok" ? "warn" : status.tone;
 				return (
 					<Popover.Root key={format.key}>
@@ -448,8 +482,8 @@ function ResetRow({ drive }: { drive: UsbDrive }) {
 					<div className="space-y-3">
 						<p>
 							{isMac
-								? "The rekordbox library (both formats), analysis files, artwork and every song in Contents move to the drive's Trash. Players will show the drive as empty. The space frees up when you empty the Trash; until then you can put them back from it."
-								: "The rekordbox library (both formats), analysis files, artwork and every song in Contents are deleted from the drive for good (Windows keeps no Recycle Bin on USB drives). Players will show the drive as empty."}
+								? "The rekordbox library (both formats), the Serato and Gemini libraries, analysis files, artwork and every song in Contents and Playlists move to the drive's Trash. Players will show the drive as empty. The space frees up when you empty the Trash; until then you can put them back from it."
+								: "The rekordbox library (both formats), the Serato and Gemini libraries, analysis files, artwork and every song in Contents and Playlists are deleted from the drive for good (Windows keeps no Recycle Bin on USB drives). Players will show the drive as empty."}
 						</p>
 						<div className="space-y-1.5">
 							<label htmlFor={field} className="block text-foreground text-xs">

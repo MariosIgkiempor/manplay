@@ -261,8 +261,7 @@ pub fn merge_database(
     Ok(Merged { bytes: out, added })
 }
 
-/// The songs `database V2` lists, in order. Only tests read them back.
-#[cfg(test)]
+/// The songs `database V2` lists, in order.
 pub fn database_songs(bytes: &[u8]) -> Result<Vec<SeratoPath>, String> {
     let mut paths = Vec::new();
     for (tag, payload) in fields(bytes)? {
@@ -273,6 +272,27 @@ pub fn database_songs(bytes: &[u8]) -> Result<Vec<SeratoPath>, String> {
         }
     }
     Ok(paths)
+}
+
+/// How many songs and crates the drive's Serato library holds; `None` when it has none.
+pub fn held(mount: &Path) -> Option<Result<(usize, usize), String>> {
+    let bytes = match fs::read(mount.join(DATABASE_PATH)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
+        Err(e) => return Some(Err(e.to_string())),
+    };
+    let crates = fs::read_dir(mount.join(SUBCRATES_DIR)).map_or(0, |entries| {
+        entries
+            .filter_map(Result::ok)
+            .filter(|e| {
+                let name = e.file_name();
+                let name = Path::new(&name);
+                name.extension().is_some_and(|x| x == CRATE_EXTENSION)
+                    && !name.to_string_lossy().starts_with("._")
+            })
+            .count()
+    });
+    Some(database_songs(&bytes).map(|songs| (songs.len(), crates)))
 }
 
 /// What [`write`] did.

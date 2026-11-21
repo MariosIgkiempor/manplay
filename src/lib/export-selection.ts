@@ -12,7 +12,7 @@ export const EMPTY_SELECTION: ExportSelection = {
 	tags: [],
 	smart: [],
 	usbMode: "add",
-	usbSerato: false,
+	usbOutputs: { rekordbox: true, serato: false, gemini: false, playlistFolders: false },
 };
 
 /** One thing a destination can be sent: a playlist, a smart playlist, or a tag as a playlist. */

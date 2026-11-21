@@ -1036,6 +1036,20 @@ export async function rekordboxLibrary(): Promise<RekordboxLibrary | null> {
 	return rekordboxLibrarySchema.parse(await invoke("rekordbox_library"));
 }
 
+/** The formats a USB export writes onto the drive, each for the players that read it. */
+const usbOutputsSchema = z.object({
+	/** rekordbox's libraries, for Pioneer and AlphaTheta players. */
+	rekordbox: z.boolean().default(true),
+	/** The playlists as Serato crates. */
+	serato: z.boolean().default(false),
+	/** The library Gemini MDJ players read. */
+	gemini: z.boolean().default(false),
+	/** Each playlist as a folder of its songs, for players that only browse folders. */
+	playlistFolders: z.boolean().default(false),
+});
+
+export type UsbOutputs = z.infer<typeof usbOutputsSchema>;
+
 const exportSelectionSchema = z.object({
 	/** Library playlists, by id. */
 	playlists: z.array(int),
@@ -1045,8 +1059,13 @@ const exportSelectionSchema = z.object({
 	smart: z.array(int).default([]),
 	/** USB drives: what happens to the playlists and songs already there. */
 	usbMode: z.enum(["add", "replacePlaylists", "replaceAll"]).default("add"),
-	/** USB drives: also write the playlists as Serato crates. */
-	usbSerato: z.boolean().default(false),
+	/** USB drives: the formats written onto the drive. */
+	usbOutputs: usbOutputsSchema.default({
+		rekordbox: true,
+		serato: false,
+		gemini: false,
+		playlistFolders: false,
+	}),
 });
 
 export type UsbMode = ExportSelection["usbMode"];
@@ -1950,8 +1969,16 @@ const usbFormatsSchema = z.object({
 	deviceLibrary: usbLibrarySummarySchema.nullable(),
 	/** `exportLibrary.db`, read by the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo. */
 	oneLibrary: usbLibrarySummarySchema.nullable(),
+	/** Serato's `database V2` and crates (counted as playlists). */
+	serato: usbLibrarySummarySchema.nullable().default(null),
+	/** The `GEMINI` library Gemini MDJ players read. */
+	gemini: usbLibrarySummarySchema.nullable().default(null),
+	/** The playlists as folders of songs; a song counts once for each folder it is in. */
+	playlistFolders: usbLibrarySummarySchema.nullable().default(null),
 	deviceLibraryError: z.string().nullable(),
 	oneLibraryError: z.string().nullable(),
+	seratoError: z.string().nullable().default(null),
+	geminiError: z.string().nullable().default(null),
 });
 
 export type UsbFormats = z.infer<typeof usbFormatsSchema>;
@@ -1963,13 +1990,47 @@ export async function usbFormats(mount: string): Promise<UsbFormats> {
 }
 
 const usbExportProgressSchema = z.object({
-	phase: z.enum(["copying", "analyzing", "writing"]),
+	phase: z.enum(["copying", "analyzing", "writing", "folders", "libraries"]),
 	done: int,
 	total: int,
 	current: z.string(),
 });
 
 export type UsbExportProgress = z.infer<typeof usbExportProgressSchema>;
+
+/** The Gemini library (`GEMINI/`) an export wrote beside the rekordbox ones. */
+const geminiSummarySchema = z.object({
+	tracks: int,
+	playlists: int,
+	/** Playlists past the 100 a player lists, which were not written. */
+	playlistsLeftOut: int,
+	waveforms: int,
+	covers: int,
+	/** Songs in the playlists a player will not load (not MP3 or WAV). */
+	unplayable: int,
+	/** Playlist entries left out because their path is longer than a player reads. */
+	longPaths: int,
+	backup: z.string().nullable(),
+});
+
+export type GeminiSummary = z.infer<typeof geminiSummarySchema>;
+
+/** What the playlist folders (`Playlists/`) hold after an export. */
+const playlistFoldersSummarySchema = z.object({
+	/** Songs in the folders, counting each folder a song is in. */
+	songs: int,
+	/** Of those, the copies of songs that are in more than one playlist. */
+	copies: int,
+	bytesCopied: int,
+	/** Songs this export moved into, between or out of the folders. */
+	moved: int,
+	/** Places left empty because the path would be longer than a player reads. */
+	tooLong: int,
+	/** Places left empty because a file manplay did not put there is in the way. */
+	inTheWay: int,
+});
+
+export type PlaylistFoldersSummary = z.infer<typeof playlistFoldersSummarySchema>;
 
 const usbExportReportSchema = z.object({
 	copied: int,
@@ -1988,6 +2049,8 @@ const usbExportReportSchema = z.object({
 	libraryTracks: int,
 	/** Folder on the drive with copies of both previous databases. */
 	backup: z.string().nullable(),
+	/** Whether rekordbox's libraries were written. */
+	rekordbox: z.boolean().default(true),
 	/** Whether the OneLibrary (`exportLibrary.db`) was written alongside `export.pdb`. */
 	oneLibrary: z.boolean(),
 	/** Why it was not; the drive's old OneLibrary was then removed. */
@@ -1998,6 +2061,14 @@ const usbExportReportSchema = z.object({
 	seratoCratesRemoved: int.default(0),
 	/** Why the Serato crates could not be written; the rekordbox libraries were. */
 	seratoError: z.string().nullable().default(null),
+	/** The Gemini library; null when the export was not asked to write it. */
+	gemini: geminiSummarySchema.nullable().default(null),
+	/** Why it could not be written; the rekordbox libraries were. */
+	geminiError: z.string().nullable().default(null),
+	/** The playlist folders; null when the export was not asked for them. */
+	playlistFolders: playlistFoldersSummarySchema.nullable().default(null),
+	/** Why they could not be finished; the rekordbox libraries were written. */
+	playlistFoldersError: z.string().nullable().default(null),
 	failed: z.array(fileFailureSchema),
 });
 

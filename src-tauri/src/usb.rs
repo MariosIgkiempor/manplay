@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 /// Where players look for the database, relative to the drive root.
 pub const PDB_PATH: &str = "PIONEER/rekordbox/export.pdb";
 pub const ONE_LIBRARY_PATH: &str = "PIONEER/rekordbox/exportLibrary.db";
+/// The drive's songs and playlists as manplay keeps them on a drive it writes no rekordbox
+/// library to, in `export.pdb`'s format. Every other library on the drive is written from it.
+pub const OWN_LIBRARY_PATH: &str = ".manplay/library.pdb";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,14 +57,20 @@ pub fn reveal(mount: &Path) -> Result<(), String> {
     tauri_plugin_opener::open_path(mount, None::<&str>).map_err(|e| e.to_string())
 }
 
-/// The rekordbox library on a drive, or an empty one if it has none yet.
+/// The drive's songs and playlists: its rekordbox library, else the list manplay keeps on a
+/// drive without one (see [`OWN_LIBRARY_PATH`]), else nothing yet.
 pub fn library(mount: &Path) -> Result<pdb::Library, String> {
-    let path = mount.join(PDB_PATH);
-    match std::fs::read(&path) {
-        Ok(bytes) => pdb::read(&bytes).map_err(|e| format!("{}: {e}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(pdb::Library::default()),
-        Err(e) => Err(format!("{}: {e}", path.display())),
+    for rel in [PDB_PATH, OWN_LIBRARY_PATH] {
+        let path = mount.join(rel);
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                return pdb::read(&bytes).map_err(|e| format!("{}: {e}", path.display()));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        }
     }
+    Ok(pdb::Library::default())
 }
 
 /// Size of one of the drive's libraries.
@@ -69,6 +78,7 @@ pub fn library(mount: &Path) -> Result<pdb::Library, String> {
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub tracks: usize,
+    /// Playlists, or what the format has for them: crates, playlist folders.
     pub playlists: usize,
 }
 
@@ -89,12 +99,20 @@ pub struct Formats {
     pub device_library: Option<Summary>,
     /// `exportLibrary.db`, read by the CDJ-3000X, OPUS-QUAD, XDJ-AZ and OMNIS-DUO.
     pub one_library: Option<Summary>,
+    /// Serato's `database V2` and crates, read by Serato DJ.
+    pub serato: Option<Summary>,
+    /// The `GEMINI` library, read by Gemini MDJ players.
+    pub gemini: Option<Summary>,
+    /// The playlists as folders of songs, for players that only browse folders.
+    pub playlist_folders: Option<Summary>,
     /// Why a file that is there could not be read.
     pub device_library_error: Option<String>,
     pub one_library_error: Option<String>,
+    pub serato_error: Option<String>,
+    pub gemini_error: Option<String>,
 }
 
-/// Reads both libraries on a drive (the `OneLibrary` from a temporary copy).
+/// Reads every library on a drive (the SQLite ones from a temporary copy, so nothing is written).
 pub fn formats(mount: &Path) -> Formats {
     let mut f = Formats::default();
     if mount.join(PDB_PATH).is_file() {
@@ -110,6 +128,18 @@ pub fn formats(mount: &Path) -> Formats {
             Err(e) => f.one_library_error = Some(e),
         }
     }
+    let size = |(tracks, playlists)| Summary { tracks, playlists };
+    match crate::serato::held(mount) {
+        Some(Ok(found)) => f.serato = Some(size(found)),
+        Some(Err(e)) => f.serato_error = Some(e),
+        None => {}
+    }
+    match crate::gemini::held(mount) {
+        Some(Ok(found)) => f.gemini = Some(size(found)),
+        Some(Err(e)) => f.gemini_error = Some(e),
+        None => {}
+    }
+    f.playlist_folders = crate::playlist_folders::held(mount).map(size);
     f
 }
 

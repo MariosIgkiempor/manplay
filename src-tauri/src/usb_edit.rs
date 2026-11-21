@@ -2,18 +2,20 @@
 //!
 //! Each edit reads the drive's library (`export.pdb`, plus anything only its `OneLibrary` has),
 //! changes its playlist tree and writes both databases back, as an export does, so every player
-//! reads the same playlists. Songs and their files are never touched: a song taken out of every
-//! playlist stays on the drive, as it does in rekordbox. The first edit of a day keeps a copy of
-//! the databases it started from.
+//! reads the same playlists. No song is deleted: a song taken out of every playlist stays on the
+//! drive, as it does in rekordbox. On a drive with playlist folders the songs follow their
+//! playlists (see [`playlist_folders`]), and a Gemini library there is rewritten to match. The
+//! first edit of a day keeps a copy of the databases it started from.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::gemini;
 use crate::pdb::{Library, Playlist};
-use crate::usb::{ONE_LIBRARY_PATH, PDB_PATH};
-use crate::usb_export::{read_libraries, write_libraries};
+use crate::playlist_folders;
+use crate::usb_export::{has_library, has_rekordbox, read_libraries, write_libraries};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(
@@ -167,13 +169,33 @@ pub struct Outcome {
 
 /// Reads the drive's library, applies `edit` and writes it back as both databases.
 pub fn edit(mount: &Path, edit: Edit, stamp: &str, today: &str) -> Result<Outcome, String> {
-    if !mount.join(PDB_PATH).is_file() && !mount.join(ONE_LIBRARY_PATH).is_file() {
-        return Err("This drive has no rekordbox library yet.".into());
+    if !has_library(mount) {
+        return Err("This drive has no library yet.".into());
     }
+    let rekordbox = has_rekordbox(mount);
     let (mut lib, sequence) = read_libraries(mount)?;
     let created = apply(&mut lib, edit)?;
-    let (_, one) = write_libraries(mount, &lib, sequence, stamp, today)?;
+    // A drive with playlist folders or a Gemini library keeps them in step with its playlists.
+    let arrangement = playlist_folders::move_homes(mount, &mut lib, playlist_folders::is_on(mount));
+    let unmoved = arrangement
+        .failed
+        .first()
+        .map(|(path, error)| format!("{path}: {error}"));
+    let (_, one) = write_libraries(mount, &lib, sequence, stamp, today, rekordbox)?;
     one.map_err(|e| format!("The Device Library was saved, but the OneLibrary was not: {e}"))?;
+    let (_, copies) = arrangement
+        .fill(mount, &lib, |_, _, _| {})
+        .map_err(|e| format!("The playlists were saved, but their folders were not: {e}"))?;
+    if gemini::present(mount) {
+        gemini::write(mount, &lib, &HashMap::new(), stamp, &copies).map_err(|e| {
+            format!("The rekordbox libraries were saved, but the Gemini library was not: {e}")
+        })?;
+    }
+    if let Some(unmoved) = unmoved {
+        return Err(format!(
+            "The playlists were saved, but a song could not be moved to its playlist folder: {unmoved}"
+        ));
+    }
     Ok(Outcome {
         library: lib,
         created,
@@ -181,14 +203,22 @@ pub fn edit(mount: &Path, edit: Edit, stamp: &str, today: &str) -> Result<Outcom
 }
 
 /// What a reset clears: everything rekordbox and manplay export (the libraries, the analysis
-/// files, artwork, and the songs copied into `Contents`). Player settings (`*SETTING.DAT`,
-/// `djprofile.nxs`), manplay's backups and anything else on the drive stay.
-pub const RESET_PATHS: [&str; 5] = [
+/// files, artwork, the songs in `Contents` and the playlist folders) and the libraries other
+/// players keep of those songs (Gemini's, and Serato's with its backups), which would otherwise
+/// list songs that are gone. Player settings (`*SETTING.DAT`, `djprofile.nxs`), manplay's
+/// backups and anything else on the drive stay, so the `PIONEER` folder itself does too.
+/// `.manplay` is manplay's own record of what it put on the drive.
+pub const RESET_PATHS: [&str; 10] = [
     "Contents",
+    "Playlists",
+    "GEMINI",
+    "_Serato_",
+    "_Serato_Backup",
     "PIONEER/rekordbox",
     "PIONEER/USBANLZ",
     "PIONEER/Artwork",
     "PIONEER/extracted",
+    ".manplay",
 ];
 
 /// The parts of [`RESET_PATHS`] that exist on the drive at `mount`.
@@ -217,6 +247,7 @@ pub fn reset(mount: &Path) -> Result<usize, String> {
 mod tests {
     use super::*;
     use crate::pdb;
+    use crate::usb::{ONE_LIBRARY_PATH, PDB_PATH};
     use std::fs;
 
     fn list(id: u32, parent_id: u32, name: &str, folder: bool, tracks: &[u32]) -> Playlist {
@@ -376,8 +407,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&mount);
         for dir in [
             "Contents/A",
+            "Playlists/Friday",
+            "GEMINI/wf",
+            "_Serato_/Subcrates",
+            "_Serato_Backup",
             "PIONEER/rekordbox",
             "PIONEER/USBANLZ/P001",
+            "PIONEER/manplay-backup",
             "Music",
         ] {
             std::fs::create_dir_all(mount.join(dir)).expect("mkdir");
@@ -386,7 +422,17 @@ mod tests {
         let got = reset_targets(&mount);
         assert_eq!(
             got,
-            ["Contents", "PIONEER/rekordbox", "PIONEER/USBANLZ"].map(|p| mount.join(p))
+            [
+                "Contents",
+                "Playlists",
+                "GEMINI",
+                "_Serato_",
+                "_Serato_Backup",
+                "PIONEER/rekordbox",
+                "PIONEER/USBANLZ"
+            ]
+            .map(|p| mount.join(p)),
+            "settings, backups and the user's own folders stay"
         );
         let _ = std::fs::remove_dir_all(mount);
     }

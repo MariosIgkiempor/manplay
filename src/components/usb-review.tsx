@@ -17,10 +17,17 @@ import { type ReactNode, useState } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { LinkButton } from "#/components/check-list.tsx";
 import { Hint } from "#/components/ui/hint.tsx";
-import { pathArtUrl, type SongRef, type UsbDiff, type UsbMode } from "#/lib/api.ts";
+import {
+	pathArtUrl,
+	type SongRef,
+	type UsbDiff,
+	type UsbMode,
+	type UsbOutputs,
+} from "#/lib/api.ts";
 import { plural } from "#/lib/export-selection.ts";
 import { clock, formatBytes } from "#/lib/format.ts";
 import { typeScale } from "#/lib/type-scale.ts";
+import { reviewNotes } from "#/lib/usb-outputs.ts";
 import { cn } from "#/lib/utils.ts";
 
 type PlaylistChange = UsbDiff["playlists"][number];
@@ -355,13 +362,13 @@ function SongsRow({
 export function Review({
 	diff,
 	mode,
-	serato,
+	outputs,
 	sourceOf,
 }: {
 	diff: UsbDiff;
 	mode: UsbMode;
-	/** The playlists are also written as Serato crates. */
-	serato: boolean;
+	/** The formats the export writes. */
+	outputs: UsbOutputs;
 	/** Whether an exported playlist is a library playlist, a tag or a smart playlist. */
 	sourceOf: (name: string) => PlaylistSource;
 }) {
@@ -382,12 +389,11 @@ export function Review({
 						Other playlists on the drive stay as they are.
 					</p>
 				)}
-				{serato && (
-					<p className="px-3 py-2 text-muted-foreground text-xs">
-						Each exported playlist is also written as a Serato crate
-						{mode !== "add" && ", and removed playlists' crates go too"}.
+				{reviewNotes(outputs, mode).map((note) => (
+					<p key={note} className="px-3 py-2 text-muted-foreground text-xs">
+						{note}
 					</p>
-				)}
+				))}
 			</Card>
 			<Card title="Songs">
 				<SongsRow

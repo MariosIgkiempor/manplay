@@ -28,6 +28,7 @@ Windows 10/11 x64.
 | Source and destination pages | `src/routes/export.*.tsx`, `src/routes/import.*.tsx`, `src/lib/places.ts`, `src/components/place-crumb.tsx` |
 | Shared library data (op log: tags, playlists, smart playlists, analysis, Tag Database values; waveform files; one shared library per device, joined or left per destination) | `src-tauri/src/libsync/`, `docs/plans/shared-library/` |
 | rekordbox / USB export | `rekordbox.rs`, `usb*.rs`, `pdb/`, `onelib/` |
+| The formats a USB export writes (`usb_export::Outputs`): rekordbox, Serato crates, Gemini MDJ library (`GEMINI/`, the V-CASE format), playlists as folders (`Playlists/`); the drive's own song list when rekordbox is off (`.manplay/`) | `usb_export.rs`, `serato.rs`, `gemini.rs`, `playlist_folders.rs`, `usb_files.rs`, `src/lib/usb-outputs.ts`, `docs/gemini-vcase.md` |
 | Frontend API wrappers | `src/lib/api.ts`, `src/lib/queries.ts` |
 | Plans and research | `docs/plans/`, `docs/*.md` |
 

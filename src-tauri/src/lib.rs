@@ -8,6 +8,7 @@ mod audit;
 mod db;
 mod error;
 mod fsops;
+mod gemini;
 mod import;
 mod itunes;
 mod jellyfin;
@@ -15,6 +16,7 @@ mod libsync;
 mod onelib;
 mod pdb;
 mod playback;
+mod playlist_folders;
 mod process;
 mod r2;
 mod rekordbox;
@@ -30,6 +32,7 @@ mod tailscale;
 mod usb;
 mod usb_edit;
 mod usb_export;
+mod usb_files;
 mod webdav;
 
 use std::collections::{HashMap, HashSet};
@@ -2269,7 +2272,7 @@ async fn export_to_usb(
             store: Some(&state.db),
             camelot,
             mode: selection.usb_mode,
-            serato: selection.usb_serato,
+            outputs: selection.usb_outputs,
         };
         let report = usb_export::export(&mount, &sources, &playlists, &opts, |p| {
             let _ = app.emit("usb-export-progress", p);

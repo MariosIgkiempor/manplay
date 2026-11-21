@@ -301,8 +301,10 @@ export function ExportFooter({
 	warn?: boolean;
 	children: ReactNode;
 }) {
+	// The drawer pads its scrolling area, and a sticky bar stops at that padding: the negative
+	// offset takes it down to the drawer's edge, so no list shows underneath it.
 	return (
-		<div className="-mx-4 -mb-4 sticky bottom-0 z-10 mt-auto flex items-center gap-3 border-t bg-background/85 px-4 py-3 backdrop-blur-md">
+		<div className="-mx-4 -mb-4 -bottom-4 sticky z-10 mt-auto flex items-center gap-3 border-t bg-background/85 px-4 py-3 backdrop-blur-md">
 			<div
 				className={cn(
 					"min-w-0 flex-1 truncate text-sm tabular-nums",
