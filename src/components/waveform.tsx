@@ -1,23 +1,32 @@
 import { type PointerEvent, type RefObject, useCallback, useEffect, useRef } from "react";
 import type { TrackAnalysis } from "#/lib/api.ts";
 import type { Cue } from "#/lib/cues.ts";
-import { type SmoothClock, tick } from "#/lib/smooth-clock.ts";
+import { createSmoothClock, type SmoothClock, tick } from "#/lib/smooth-clock.ts";
 import { cn } from "#/lib/utils.ts";
-import { drawDetail, drawOverview } from "#/lib/waveform-draw.ts";
+import { drawDetail, drawOverview, renderOverview } from "#/lib/waveform-draw.ts";
 import { clampZoom, wheelZoom } from "#/lib/waveform-zoom.ts";
 
 /** Seconds shown either side of the playhead in the scrolling view, like a CDJ's zoom. */
 const WINDOW = 4;
 
-type Draw = (ctx: CanvasRenderingContext2D, w: number, h: number) => void;
+/** A canvas's size in device pixels, and how many of them make a CSS pixel. */
+interface CanvasSize {
+	w: number;
+	h: number;
+	scale: number;
+}
+
+type Draw = (ctx: CanvasRenderingContext2D, size: CanvasSize) => void;
 
 /**
- * A canvas kept at its box's size in device pixels. `paint` draws into it; the backing store is
- * only resized (which clears and reallocates it) when the box changes size.
+ * A canvas kept at its box's size in device pixels. `paint` draws into it. The box is measured
+ * when it changes size, not on every paint: asking a canvas its size each frame makes the page
+ * lay itself out each frame.
  */
 function useCanvas() {
 	const ref = useRef<HTMLCanvasElement>(null);
 	const last = useRef<Draw | null>(null);
+	const size = useRef<CanvasSize | null>(null);
 	const paint = useCallback((draw: Draw) => {
 		last.current = draw;
 		const canvas = ref.current;
@@ -25,9 +34,8 @@ function useCanvas() {
 		if (!canvas || !ctx) {
 			return;
 		}
-		const dpr = window.devicePixelRatio || 1;
-		const w = Math.round(canvas.clientWidth * dpr);
-		const h = Math.round(canvas.clientHeight * dpr);
+		size.current ??= measure(canvas);
+		const { w, h } = size.current;
 		if (w === 0 || h === 0) {
 			return;
 		}
@@ -36,24 +44,64 @@ function useCanvas() {
 			canvas.height = h;
 		}
 		ctx.clearRect(0, 0, w, h);
-		draw(ctx, w, h);
+		draw(ctx, size.current);
 	}, []);
 	useEffect(() => {
 		const canvas = ref.current;
 		if (!canvas) {
 			return;
 		}
-		const observer = new ResizeObserver(() => last.current && paint(last.current));
+		const observer = new ResizeObserver(() => {
+			size.current = measure(canvas);
+			if (last.current) {
+				paint(last.current);
+			}
+		});
 		observer.observe(canvas);
 		return () => observer.disconnect();
 	}, [paint]);
 	return { ref, paint };
 }
 
-/** The whole track as a CDJ overview: played part bright, the rest dimmed. Click or drag to seek. */
+function measure(canvas: HTMLCanvasElement): CanvasSize {
+	const scale = window.devicePixelRatio || 1;
+	return {
+		w: Math.round(canvas.clientWidth * scale),
+		h: Math.round(canvas.clientHeight * scale),
+		scale,
+	};
+}
+
+/**
+ * Runs `frame` after every render (a render is how a new song, zoom, cue or position arrives),
+ * and on every animation frame while `running`.
+ */
+function useFrames(frame: () => void, running: boolean) {
+	const latest = useRef(frame);
+	latest.current = frame;
+	useEffect(() => {
+		latest.current();
+	});
+	useEffect(() => {
+		if (!running) {
+			return;
+		}
+		let id = requestAnimationFrame(function loop() {
+			latest.current();
+			id = requestAnimationFrame(loop);
+		});
+		return () => cancelAnimationFrame(id);
+	}, [running]);
+}
+
+/**
+ * The whole track as a CDJ overview: played part bright, the rest dimmed. Click or drag to seek.
+ * While `running` the playhead follows `position` every frame.
+ */
 export function WaveformSeek({
 	analysis,
-	time,
+	position,
+	running,
 	duration,
 	disabled,
 	onSeek,
@@ -61,7 +109,9 @@ export function WaveformSeek({
 	className,
 }: {
 	analysis: TrackAnalysis;
-	time: number;
+	/** Seconds; read every frame. */
+	position: () => number;
+	running: boolean;
 	duration: number;
 	disabled: boolean;
 	onSeek: (seconds: number) => void;
@@ -70,9 +120,23 @@ export function WaveformSeek({
 }) {
 	const length = duration > 0 ? duration : analysis.duration;
 	const { ref, paint } = useCanvas();
-	useEffect(() => {
-		paint((ctx, w, h) => drawOverview(ctx, w, h, analysis, length > 0 ? time / length : 0, cues));
-	}, [paint, analysis, time, length, cues]);
+	const clock = useRef<SmoothClock>(createSmoothClock(position(), performance.now()));
+	// The bars only change with the song or the size, so they are drawn once and copied.
+	const bars = useRef<{ detail: readonly number[]; canvas: HTMLCanvasElement } | null>(null);
+	useFrames(() => {
+		const now = tick(clock.current, position(), performance.now(), running);
+		paint((ctx, size) => {
+			const kept = bars.current;
+			const fresh =
+				kept?.detail === analysis.detail &&
+				kept.canvas.width === size.w &&
+				kept.canvas.height === size.h
+					? kept
+					: { detail: analysis.detail, canvas: renderOverview(analysis, size.w, size.h) };
+			bars.current = fresh;
+			drawOverview(ctx, size, fresh.canvas, length > 0 ? now / length : 0, length, cues);
+		});
+	}, running);
 	return (
 		<div className={cn("relative h-8 flex-1", className)}>
 			<canvas ref={ref} className="pointer-events-none absolute inset-0 size-full" />
@@ -83,7 +147,7 @@ export function WaveformSeek({
 				min={0}
 				max={length > 0 ? length : 0}
 				step={0.1}
-				value={Math.min(time, length || 0)}
+				value={Math.min(position(), length || 0)}
 				disabled={disabled}
 				onChange={(e) => onSeek(Number(e.target.value))}
 			/>
@@ -155,7 +219,6 @@ export function WaveformDetail({
 	running,
 	window = WINDOW,
 	onScrub,
-	revision,
 	cues,
 	onZoom,
 	className,
@@ -167,8 +230,6 @@ export function WaveformDetail({
 	/** Seconds shown either side of the centre. */
 	window?: number;
 	onScrub?: (seconds: number) => void;
-	/** Anything that changes when a still picture should be redrawn, e.g. a seek while paused. */
-	revision?: unknown;
 	cues?: readonly Cue[];
 	/**
 	 * Pinching on a trackpad (or ⌃-scrolling): the new `window` from the old one. Without it the
@@ -179,25 +240,12 @@ export function WaveformDetail({
 }) {
 	const { ref, paint } = useCanvas();
 	usePinch(ref, onZoom);
-	const clock = useRef<SmoothClock>({ shown: position(), at: performance.now() });
+	const clock = useRef<SmoothClock>(createSmoothClock(position(), performance.now()));
 	const drag = useRef<{ x: number; from: number } | null>(null);
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: `revision` only asks for a redraw
-	useEffect(() => {
-		const frame = () => {
-			const now = tick(clock.current, position(), performance.now(), running);
-			paint((ctx, w, h) => drawDetail(ctx, w, h, analysis, now, window, cues));
-		};
-		frame();
-		if (!running) {
-			return;
-		}
-		let id = requestAnimationFrame(function loop() {
-			frame();
-			id = requestAnimationFrame(loop);
-		});
-		return () => cancelAnimationFrame(id);
-	}, [paint, analysis, position, running, window, revision, cues]);
+	useFrames(() => {
+		const now = tick(clock.current, position(), performance.now(), running);
+		paint((ctx, size) => drawDetail(ctx, size, analysis, now, window, cues));
+	}, running);
 
 	const onPointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
 		if (!onScrub) {

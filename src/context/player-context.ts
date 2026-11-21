@@ -6,7 +6,6 @@ export interface PlayerApi {
 	queue: readonly Track[];
 	index: number;
 	playing: boolean;
-	time: number;
 	duration: number;
 	volume: number;
 	error: string | null;
@@ -16,12 +15,24 @@ export interface PlayerApi {
 	next: () => void;
 	prev: () => void;
 	seek: (seconds: number) => void;
-	/** The audio element's position right now, finer than `time` (which updates a few times a second). */
+	/** The audio element's position right now, finer than {@link usePlayerTime}. */
 	getTime: () => number;
 	setVolume: (volume: number) => void;
 }
 
 export const PlayerContext = createContext<PlayerApi | null>(null);
+
+/**
+ * The position as the audio element reports it, a few times a second while it plays. It has a
+ * context of its own so that only what shows the time is drawn again on each report, not every
+ * list that asks the player which song is on.
+ */
+export const PlayerTimeContext = createContext(0);
+
+/** Seconds into the playing song, updated a few times a second. */
+export function usePlayerTime(): number {
+	return useContext(PlayerTimeContext);
+}
 
 export function usePlayer(): PlayerApi {
 	const ctx = useContext(PlayerContext);

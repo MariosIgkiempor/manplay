@@ -8,14 +8,14 @@ import {
 	TextCursorInput,
 	Volume2,
 } from "lucide-react";
-import { useState } from "react";
+import { type CSSProperties, useState } from "react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { WaveformDetail, WaveformSeek } from "#/components/waveform.tsx";
 import { useDetail } from "#/context/detail-context.ts";
-import { usePlayer } from "#/context/player-context.ts";
+import { usePlayer, usePlayerTime } from "#/context/player-context.ts";
 import { TrackOrderContext } from "#/context/track-order.ts";
 import type { Track, TrackAnalysis } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
@@ -166,6 +166,7 @@ function useCurrentTrack(): Track | null {
 
 export function PlayerBar() {
 	const p = usePlayer();
+	const time = usePlayerTime();
 	const current = useCurrentTrack();
 	const PlayIcon = p.playing ? Pause : Play;
 	const hasNext = p.index + 1 < p.queue.length;
@@ -175,12 +176,7 @@ export function PlayerBar() {
 	return (
 		<footer className="shrink-0 border-t bg-card">
 			{waveform && current && analysis && (
-				<WaveformDetail
-					analysis={analysis}
-					position={p.getTime}
-					running={p.playing}
-					revision={p.time}
-				/>
+				<WaveformDetail analysis={analysis} position={p.getTime} running={p.playing} />
 			)}
 			<div className="grid h-20 grid-cols-[1fr_2fr_1fr] items-center gap-4 px-4">
 				<div className="flex min-w-0 items-center gap-3">
@@ -221,7 +217,7 @@ export function PlayerBar() {
 						</Button>
 					</div>
 					<div className="flex items-center gap-2 text-muted-foreground text-xs tabular-nums">
-						<span className="w-10 text-right">{clock(p.time)}</span>
+						<span className="w-10 text-right">{clock(time)}</span>
 						<SeekBar analysis={current ? analysis : null} disabled={current === null} />
 						<span className="w-10">{clock(p.duration)}</span>
 					</div>
@@ -245,7 +241,8 @@ export function PlayerBar() {
 					<input
 						type="range"
 						aria-label="Volume"
-						className="h-1 w-28 accent-primary"
+						className="slider w-28"
+						style={{ "--fill": p.volume } as CSSProperties}
 						min={0}
 						max={1}
 						step={0.01}
@@ -261,12 +258,14 @@ export function PlayerBar() {
 /** The track's waveform when it has been analysed, else a plain slider. */
 function SeekBar({ analysis, disabled }: { analysis: TrackAnalysis | null; disabled: boolean }) {
 	const p = usePlayer();
+	const time = usePlayerTime();
 	const duration = Number.isFinite(p.duration) && p.duration > 0 ? p.duration : 0;
 	if (analysis) {
 		return (
 			<WaveformSeek
 				analysis={analysis}
-				time={p.time}
+				position={p.getTime}
+				running={p.playing}
 				duration={duration}
 				disabled={disabled}
 				onSeek={p.seek}
@@ -277,11 +276,14 @@ function SeekBar({ analysis, disabled }: { analysis: TrackAnalysis | null; disab
 		<input
 			type="range"
 			aria-label="Seek"
-			className="h-1 flex-1 accent-primary"
+			className="slider flex-1"
+			style={
+				{ "--fill": duration === 0 ? 0 : Math.min(time, duration) / duration } as CSSProperties
+			}
 			min={0}
 			max={duration}
 			step={0.1}
-			value={Math.min(p.time, duration)}
+			value={Math.min(time, duration)}
 			disabled={disabled}
 			onChange={(e) => p.seek(Number(e.target.value))}
 		/>

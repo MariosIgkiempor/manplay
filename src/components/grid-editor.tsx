@@ -15,7 +15,7 @@ import {
 	Play,
 	Undo2,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HotCuePads, MemoryCues } from "#/components/cue-pads.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { ButtonGroup, GroupButton, PropertyRow } from "#/components/property-row.tsx";
@@ -24,7 +24,7 @@ import { StatusButton, StatusPortal } from "#/components/status-action.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { WaveformDetail, WaveformSeek } from "#/components/waveform.tsx";
 import { useDetail } from "#/context/detail-context.ts";
-import { usePlayer } from "#/context/player-context.ts";
+import { usePlayer, usePlayerTime } from "#/context/player-context.ts";
 import { setBeatGrid, setTrackCues, type Track, type TrackAnalysis, trackCues } from "#/lib/api.ts";
 import {
 	downbeatAt,
@@ -124,6 +124,7 @@ function NotAnalyzed({ trackId }: { trackId: number }) {
 /** Where the editor looks: the player's position when it plays this song, else its own. */
 function usePosition(track: Track) {
 	const player = usePlayer();
+	const playerTime = usePlayerTime();
 	const live = player.current?.id === track.id;
 	const [cursor, setCursor] = useState(0);
 	const position = useCallback(
@@ -141,7 +142,7 @@ function usePosition(track: Track) {
 		playing: live && player.playing,
 		position,
 		moveTo,
-		revision: live ? player.time : cursor,
+		revision: live ? playerTime : cursor,
 		toggle: () => (live ? player.toggle() : player.play([track], 0)),
 	};
 }
@@ -186,7 +187,8 @@ function Editor({
 	const [taps, setTaps] = useState<number[]>([]);
 	const pos = usePosition(track);
 	const save = useSave(track.id);
-	const draft = withGrid(analysis, grid);
+	// The same object until the grid is edited, so the waveforms are not set up again each render.
+	const draft = useMemo(() => withGrid(analysis, grid), [analysis, grid]);
 	// What the song had when the editor opened, for Revert.
 	const [opened] = useState(() => ({ grid: savedGrid, cues: savedCues }));
 	const changed = !sameGrid(grid, opened.grid) || !sameCues(cues, opened.cues);
@@ -293,7 +295,6 @@ function Editor({
 					analysis={draft}
 					position={pos.position}
 					running={pos.playing}
-					revision={`${pos.revision}`}
 					window={zoom}
 					onZoom={setZoom}
 					cues={cues}
@@ -303,7 +304,8 @@ function Editor({
 				<div className="border-white/5 border-t px-3 pt-2">
 					<WaveformSeek
 						analysis={draft}
-						time={pos.position()}
+						position={pos.position}
+						running={pos.playing}
 						duration={analysis.duration}
 						disabled={false}
 						cues={cues}
@@ -312,9 +314,15 @@ function Editor({
 					/>
 				</div>
 				<Transport
-					grid={grid}
 					playing={pos.playing}
-					time={pos.position()}
+					clock={
+						<Clock
+							grid={grid}
+							position={pos.position}
+							running={pos.playing}
+							revision={pos.revision}
+						/>
+					}
 					zoom={zoom}
 					snapOn={snapOn}
 					onSnap={setSnapOn}
@@ -518,9 +526,8 @@ function DownbeatButton({ onDownbeat, children }: { onDownbeat: () => void; chil
 }
 
 function Transport({
-	grid,
 	playing,
-	time,
+	clock,
 	zoom,
 	snapOn,
 	onSnap,
@@ -532,9 +539,9 @@ function Transport({
 	onCue,
 	onStep,
 }: {
-	grid: Grid;
 	playing: boolean;
-	time: number;
+	/** Where the playhead is, as a time and a bar and beat. */
+	clock: ReactNode;
 	zoom: number;
 	snapOn: boolean;
 	onSnap: (on: boolean) => void;
@@ -550,7 +557,6 @@ function Transport({
 	onCue: () => void;
 	onStep: (beats: number) => void;
 }) {
-	const at = barBeat(grid, time);
 	return (
 		<div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 px-3 py-2.5">
 			{/* Playing and where you are first; grid tools and zoom after, all from the left. */}
@@ -591,12 +597,8 @@ function Transport({
 					<ChevronsRight />
 				</DeckButton>
 			</div>
-			<div className="flex items-baseline gap-3 tabular-nums">
-				<span className="font-medium text-lg text-neutral-50 tracking-tight">{stamp(time)}</span>
-				<span className="text-neutral-400 text-xs" title="Bar and beat by the grid">
-					{at ? `Bar ${at.bar}, beat ${at.beat}` : "Before the grid"}
-				</span>
-			</div>
+			{clock}
+			<div className="ml-auto">{help}</div>
 			<div className="flex basis-full flex-wrap items-center gap-2 border-white/5 border-t pt-2.5">
 				<div className="flex items-center gap-2">
 					{tools}
@@ -644,8 +646,47 @@ function Transport({
 						</button>
 					))}
 				</fieldset>
-				<div className="ml-auto">{help}</div>
 			</div>
+		</div>
+	);
+}
+
+/**
+ * The playhead as a time and as a bar and beat. While the song plays it follows the audio every
+ * frame on its own, so the editor around it is not drawn again sixty times a second.
+ */
+function Clock({
+	grid,
+	position,
+	running,
+	revision,
+}: {
+	grid: Grid;
+	position: () => number;
+	running: boolean;
+	/** Changes when the position moved while paused. */
+	revision: unknown;
+}) {
+	const [time, setTime] = useState(position);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `revision` only asks to read again
+	useEffect(() => {
+		setTime(position());
+		if (!running) {
+			return;
+		}
+		let id = requestAnimationFrame(function loop() {
+			setTime(position());
+			id = requestAnimationFrame(loop);
+		});
+		return () => cancelAnimationFrame(id);
+	}, [position, running, revision]);
+	const at = barBeat(grid, time);
+	return (
+		<div className="flex min-w-0 items-baseline gap-3 tabular-nums">
+			<span className="font-medium text-lg text-neutral-50 tracking-tight">{stamp(time)}</span>
+			<span className="truncate text-neutral-400 text-xs" title="Bar and beat by the grid">
+				{at ? `Bar ${at.bar}, beat ${at.beat}` : "Before the grid"}
+			</span>
 		</div>
 	);
 }

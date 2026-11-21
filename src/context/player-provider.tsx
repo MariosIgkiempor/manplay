@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type PlayerApi, PlayerContext } from "#/context/player-context.ts";
+import { type PlayerApi, PlayerContext, PlayerTimeContext } from "#/context/player-context.ts";
 import { playableUrl, type Track } from "#/lib/api.ts";
 
 const RESTART_THRESHOLD_SECONDS = 3;
@@ -123,7 +123,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			queue,
 			index,
 			playing,
-			time,
 			duration,
 			volume,
 			error,
@@ -140,7 +139,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			queue,
 			index,
 			playing,
-			time,
 			duration,
 			volume,
 			error,
@@ -155,7 +153,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
 	return (
 		<PlayerContext.Provider value={value}>
-			{children}
+			<PlayerTimeContext.Provider value={time}>{children}</PlayerTimeContext.Provider>
 			{/* biome-ignore lint/a11y/useMediaCaption: music playback has no captions */}
 			<audio
 				ref={audioRef}
