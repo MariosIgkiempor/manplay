@@ -13,6 +13,7 @@ mod import;
 mod itunes;
 mod jellyfin;
 mod libsync;
+mod lookup;
 mod onelib;
 mod pdb;
 mod playback;
@@ -62,6 +63,8 @@ struct AppState {
     usb_exporting: AtomicBool,
     /// Set to stop the running analysis after the files in progress.
     cancel_analysis: AtomicBool,
+    /// The tag lookup in progress, if any, and the pacing of its requests.
+    lookup: lookup::Session,
     /// The background reads of the destinations and the plans they made, awaiting review.
     scans: Mutex<sync_scans::ScanStore>,
     /// Wakes the background reader when something was queued.
@@ -3686,6 +3689,59 @@ async fn tags_preview(
         .map_err(|e| Error::Msg(e.to_string()))?
 }
 
+/// Looks up the songs at or under `paths` in `MusicBrainz` and says, per song, which tags it
+/// would give. Nothing is written. Emits `lookup-progress`; stops early on [`cancel_tag_lookup`],
+/// returning the songs done so far.
+#[tauri::command]
+async fn tags_lookup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<PathBuf>,
+    refresh: bool,
+) -> Result<Vec<lookup::SongLookup>, Error> {
+    lookup_allowed(&state)?;
+    let root = library_root(&state)?;
+    if state.lookup.running.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a tag lookup is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.lookup.running);
+    state.lookup.cancelled.store(false, Ordering::SeqCst);
+
+    let files = tauri::async_runtime::spawn_blocking(move || tags::songs(&root, &paths))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    let source = lookup::musicbrainz::MusicBrainz::new(&state.http, &state.lookup.pace);
+    let discogs = discogs(&state);
+    let cache = lookup::Cache::new(&state.db, unix_now());
+    let total = files.len();
+    let mut looked_up = Vec::with_capacity(total);
+    for (done, file) in files.into_iter().enumerate() {
+        if state.lookup.cancelled.load(Ordering::SeqCst) {
+            break;
+        }
+        let _ = app.emit("lookup-progress", lookup::Progress { done, total });
+        let path = file.clone();
+        let song = tauri::async_runtime::spawn_blocking(move || lookup::read_song(&path))
+            .await
+            .map_err(|e| Error::Msg(e.to_string()))?;
+        looked_up.push(lookup::song(&source, discogs.as_ref(), &cache, &file, song, refresh).await);
+    }
+    let _ = app.emit(
+        "lookup-progress",
+        lookup::Progress {
+            done: looked_up.len(),
+            total,
+        },
+    );
+    Ok(looked_up)
+}
+
+/// Stops the running tag lookup after the song in progress.
+#[tauri::command]
+fn cancel_tag_lookup(state: State<'_, AppState>) {
+    state.lookup.cancelled.store(true, Ordering::SeqCst);
+}
+
 const SETTING_LIBRARY_VIEW: &str = "library_view";
 
 /// Library tab last used (`albums`, `songs` or `artists`), so it is open again after leaving.
@@ -3805,7 +3861,7 @@ async fn tags_set_cover(
     app: AppHandle,
     state: State<'_, AppState>,
     request: tauri::ipc::Request<'_>,
-) -> Result<audit::FixReport, Error> {
+) -> Result<tags::CoverReport, Error> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err(Error::Msg("expected image bytes".to_owned()));
     };
@@ -3818,23 +3874,219 @@ async fn tags_set_cover(
         .and_then(|v| percent_encoding::percent_decode_str(v).decode_utf8().ok())
         .and_then(|p| serde_json::from_str(&p).ok())
         .ok_or_else(|| Error::Msg("missing paths".to_owned()))?;
+    write_cover(&app, &state, paths, bytes).await
+}
+
+/// Writes `bytes` as the front cover of the songs at or under `paths`, then drops their saved
+/// thumbnails and rescans.
+async fn write_cover(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    paths: Vec<PathBuf>,
+    bytes: Vec<u8>,
+) -> Result<tags::CoverReport, Error> {
+    let root = library_root(state)?;
+    if state.fixing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg("a fix is already running".to_owned()));
+    }
+    let _guard = SyncGuard(&state.fixing);
+    let (r, backups) = (root.clone(), cover_backups(state));
+    let (files, report) = tauri::async_runtime::spawn_blocking(move || {
+        tags::write_cover(&r, &paths, &bytes, &backups)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))??;
+    covers_changed(app, state, &files, root).await;
+    Ok(report)
+}
+
+/// Where the covers that were replaced are kept, so a cover change can be undone.
+fn cover_backups(state: &AppState) -> PathBuf {
+    state.data_dir.join("cover-backups")
+}
+
+/// After covers were rewritten: drops the songs' saved thumbnails and rescans.
+async fn covers_changed(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    files: &[PathBuf],
+    root: PathBuf,
+) {
+    if let Ok(dir) = app.path().app_cache_dir().map(|d| d.join("art")) {
+        for f in files {
+            art::forget(f, &dir);
+        }
+    }
+    refresh_after_fs_change(state, root).await;
+}
+
+/// Puts back the covers a cover change replaced, from what that change reported.
+#[tauri::command]
+async fn tags_restore_covers(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    previous: Vec<tags::PreviousCover>,
+) -> Result<audit::FixReport, Error> {
     let root = library_root(&state)?;
     if state.fixing.swap(true, Ordering::SeqCst) {
         return Err(Error::Msg("a fix is already running".to_owned()));
     }
     let _guard = SyncGuard(&state.fixing);
-    let r = root.clone();
+    let (r, backups) = (root.clone(), cover_backups(&state));
     let (files, report) =
-        tauri::async_runtime::spawn_blocking(move || tags::write_cover(&r, &paths, &bytes))
+        tauri::async_runtime::spawn_blocking(move || tags::restore_covers(&r, &previous, &backups))
             .await
             .map_err(|e| Error::Msg(e.to_string()))??;
-    if let Ok(dir) = app.path().app_cache_dir().map(|d| d.join("art")) {
-        for f in &files {
-            art::forget(f, &dir);
+    covers_changed(&app, &state, &files, root).await;
+    Ok(report)
+}
+
+fn lookup_allowed(state: &AppState) -> Result<(), Error> {
+    if with_db!(state, |c| db::service_on(c, lookup::SERVICE))? {
+        Ok(())
+    } else {
+        Err(Error::Msg(
+            "Tag lookup is off. Turn it on in Settings to search MusicBrainz.".to_owned(),
+        ))
+    }
+}
+
+/// Discogs as a second place to look, when the user has saved a token for it.
+fn discogs(state: &AppState) -> Option<lookup::discogs::Discogs<'_>> {
+    let token = lookup::discogs::load_token().ok().flatten()?;
+    Some(lookup::discogs::Discogs::new(
+        &state.http,
+        &state.lookup.discogs_pace,
+        &state.lookup.discogs_pages,
+        token,
+    ))
+}
+
+/// The front cover of `release`, from the source that knows the release.
+async fn fetch_cover(
+    state: &AppState,
+    release: &lookup::ReleaseId,
+    size: lookup::CoverSize,
+) -> Result<Vec<u8>, Error> {
+    use lookup::Source;
+    match release {
+        lookup::ReleaseId::MusicBrainz(_) => {
+            lookup::musicbrainz::MusicBrainz::new(&state.http, &state.lookup.pace)
+                .cover(release, size)
+                .await
+        }
+        lookup::ReleaseId::Discogs(_) => {
+            discogs(state)
+                .ok_or_else(|| {
+                    Error::Msg("Enter a Discogs token in Settings to use its covers".to_owned())
+                })?
+                .cover(release, size)
+                .await
         }
     }
-    refresh_after_fs_change(&state, root).await;
-    Ok(report)
+}
+
+/// Whether a Discogs token is saved, which is what makes lookups ask Discogs too.
+#[tauri::command]
+fn discogs_token_saved() -> Result<bool, Error> {
+    Ok(lookup::discogs::load_token()?.is_some())
+}
+
+/// Saves the user's Discogs token in the keychain, once Discogs has accepted it.
+#[tauri::command]
+async fn discogs_token_save(state: State<'_, AppState>, token: String) -> Result<(), Error> {
+    let token = lookup::discogs::Token::parse(&token)?;
+    lookup::discogs::Discogs::new(
+        &state.http,
+        &state.lookup.discogs_pace,
+        &state.lookup.discogs_pages,
+        token.clone(),
+    )
+    .check_token()
+    .await?;
+    lookup::discogs::save_token(&token)
+}
+
+#[tauri::command]
+fn discogs_token_forget() {
+    lookup::discogs::forget_token();
+}
+
+/// Fetches the front cover of `release` and sets it on the songs at or under `paths`, in
+/// place of any cover they have. The caller has shown the user the new cover first.
+#[tauri::command]
+async fn tags_lookup_cover(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<PathBuf>,
+    release: lookup::ReleaseId,
+) -> Result<tags::CoverReport, Error> {
+    lookup_allowed(&state)?;
+    let fetched = fetch_cover(&state, &release, lookup::CoverSize::Embedded).await?;
+    let image = tauri::async_runtime::spawn_blocking(move || lookup::fit_cover(fetched))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    write_cover(&app, &state, paths, image).await
+}
+
+/// Finds the releases of the album the songs at or under `paths` belong to, going by the first
+/// song's tags, to choose a cover from. Nothing is written.
+#[tauri::command]
+async fn cover_search(
+    state: State<'_, AppState>,
+    paths: Vec<PathBuf>,
+    refresh: bool,
+) -> Result<lookup::CoverSearch, Error> {
+    lookup_allowed(&state)?;
+    let root = library_root(&state)?;
+    let terms = tauri::async_runtime::spawn_blocking(move || {
+        let songs = tags::songs(&root, &paths)?;
+        Ok::<_, Error>(
+            songs
+                .first()
+                .and_then(|song| lookup::read_song(song))
+                .and_then(|song| lookup::ReleaseTerms::from_tags(&song.fields)),
+        )
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))??
+    .ok_or_else(|| {
+        Error::Msg("Needs an album or title tag, and an artist, to search with".to_owned())
+    })?;
+    let source = lookup::musicbrainz::MusicBrainz::new(&state.http, &state.lookup.pace);
+    let cache = lookup::Cache::new(&state.db, unix_now());
+    lookup::cover_search(&source, discogs(&state).as_ref(), &cache, terms, refresh).await
+}
+
+/// The small cover a `lookup-cover://` request asks for, by release id: what a match's cover
+/// looks like, shown before anything is written.
+async fn lookup_cover_response(app: &AppHandle, uri_path: &str) -> tauri::http::Response<Vec<u8>> {
+    let not_found = || {
+        tauri::http::Response::builder()
+            .status(404)
+            .body(Vec::new())
+            .unwrap_or_default()
+    };
+    let state = app.state::<AppState>();
+    let raw = uri_path.strip_prefix('/').unwrap_or(uri_path);
+    let Ok(release) = lookup::ReleaseId::try_from(raw.to_owned()) else {
+        return not_found();
+    };
+    if lookup_allowed(&state).is_err() {
+        return not_found();
+    }
+    let image = fetch_cover(&state, &release, lookup::CoverSize::Thumbnail).await;
+    image.map_or_else(
+        |_| not_found(),
+        |bytes| {
+            let png = bytes.starts_with(b"\x89PNG");
+            tauri::http::Response::builder()
+                .header("Content-Type", if png { "image/png" } else { "image/jpeg" })
+                .header("Cache-Control", "max-age=86400")
+                .body(bytes)
+                .unwrap_or_default()
+        },
+    )
 }
 
 // ---- library health ----------------------------------------------------------
@@ -4534,6 +4786,13 @@ pub fn run() {
             let target = ArtTarget::parse(request.uri().path());
             std::thread::spawn(move || responder.respond(art_response(&app, target)));
         })
+        .register_asynchronous_uri_scheme_protocol("lookup-cover", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            tauri::async_runtime::spawn(async move {
+                responder.respond(lookup_cover_response(&app, &path).await);
+            });
+        })
         .register_asynchronous_uri_scheme_protocol("pcm", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_owned();
@@ -4587,6 +4846,7 @@ pub fn run() {
                 analyzing: AtomicBool::new(false),
                 usb_exporting: AtomicBool::new(false),
                 cancel_analysis: AtomicBool::new(false),
+                lookup: lookup::Session::default(),
                 scans: Mutex::new(sync_scans::ScanStore::default()),
                 scan_wake: tokio::sync::Notify::new(),
                 destination_io: tokio::sync::Mutex::new(()),
@@ -4740,6 +5000,14 @@ pub fn run() {
             tag_value_create,
             tag_values_migrate,
             tags_preview,
+            tags_lookup,
+            tags_lookup_cover,
+            tags_restore_covers,
+            cover_search,
+            cancel_tag_lookup,
+            discogs_token_saved,
+            discogs_token_save,
+            discogs_token_forget,
             get_library_view,
             set_library_view,
             get_panel_tabs,
@@ -5296,6 +5564,7 @@ mod tests {
             analyzing: AtomicBool::new(false),
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
+            lookup: lookup::Session::default(),
             scans: Mutex::new(sync_scans::ScanStore::default()),
             scan_wake: tokio::sync::Notify::new(),
             destination_io: tokio::sync::Mutex::new(()),
@@ -5397,6 +5666,7 @@ mod tests {
             analyzing: AtomicBool::new(false),
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
+            lookup: lookup::Session::default(),
             scans: Mutex::new(sync_scans::ScanStore::default()),
             scan_wake: tokio::sync::Notify::new(),
             destination_io: tokio::sync::Mutex::new(()),
@@ -5445,6 +5715,7 @@ mod tests {
             analyzing: AtomicBool::new(false),
             usb_exporting: AtomicBool::new(false),
             cancel_analysis: AtomicBool::new(false),
+            lookup: lookup::Session::default(),
             scans: Mutex::new(sync_scans::ScanStore::default()),
             scan_wake: tokio::sync::Notify::new(),
             destination_io: tokio::sync::Mutex::new(()),

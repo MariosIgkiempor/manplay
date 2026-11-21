@@ -1,17 +1,18 @@
+import { Popover } from "@base-ui/react/popover";
 import { ImagePlus, LoaderCircle } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { CoverCard } from "#/components/cover-card.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { bumpArt } from "#/lib/art-version.ts";
+import { COVER_TYPES } from "#/lib/cover-choice.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { useTagsSetCover } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
 
-const COVER_TYPES = ["image/jpeg", "image/png"];
-
 /**
- * Cover art you can replace: click it to choose an image file, or press ⌘V with an image copied.
- * The new cover is written to the song, or every song of the album, straight away; the status
- * bar says "Saving…", then "Saved".
+ * Cover art you can replace. Click it and it grows into a card with the cover large and two
+ * buttons on it: upload a picture, or download one found online. ⌘V with a picture copied
+ * replaces the cover straight away; the status bar says "Saving…", then "Saved".
  */
 export function CoverPicker({
 	paths,
@@ -27,7 +28,9 @@ export function CoverPicker({
 	className?: string;
 }) {
 	const setCover = useTagsSetCover();
-	const fileInput = useRef<HTMLInputElement>(null);
+	const [open, setOpen] = useState(false);
+	const openRef = useRef(open);
+	openRef.current = open;
 	const [error, setError] = useState<string | null>(null);
 
 	const apply = async (file: Blob | null | undefined) => {
@@ -64,6 +67,10 @@ export function CoverPicker({
 			if (el instanceof HTMLElement && (el.isContentEditable || el.matches("input, textarea"))) {
 				return;
 			}
+			// The open card takes the paste itself.
+			if (openRef.current) {
+				return;
+			}
 			const item = [...(ev.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
 			if (item) {
 				ev.preventDefault();
@@ -78,40 +85,46 @@ export function CoverPicker({
 	return (
 		<>
 			<SaveState status={busy ? "saving" : error ? "error" : "saved"} error={error} />
-			<button
-				type="button"
-				aria-label={`Replace the cover of ${name}`}
-				title={error ?? `Click to choose a new cover, or paste one (${keyLabel("⌘V")})`}
-				disabled={busy}
-				onClick={() => fileInput.current?.click()}
-				className={cn(
-					"group/cover relative block size-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-					error && "ring-2 ring-destructive",
-					className,
-				)}
-			>
-				{children}
-				<span
+			<Popover.Root open={open} onOpenChange={setOpen}>
+				<Popover.Trigger
+					aria-label={`Change the cover of ${name}`}
+					title={error ?? `Click to change the cover, or paste one (${keyLabel("⌘V")})`}
+					disabled={busy}
 					className={cn(
-						"absolute inset-0 flex items-center justify-center rounded-lg bg-black/50 text-white transition-opacity [&_svg]:size-1/4 [&_svg]:max-w-8",
-						busy
-							? "opacity-100"
-							: "opacity-0 group-hover/cover:opacity-100 group-focus-visible/cover:opacity-100",
+						"group/cover relative block size-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+						error && "ring-2 ring-destructive",
+						className,
 					)}
 				>
-					{busy ? <LoaderCircle className="animate-spin" /> : <ImagePlus />}
-				</span>
-			</button>
-			<input
-				ref={fileInput}
-				type="file"
-				accept={COVER_TYPES.join(",")}
-				className="hidden"
-				onChange={(e) => {
-					void apply(e.target.files?.[0]);
-					e.target.value = "";
-				}}
-			/>
+					{children}
+					<span
+						className={cn(
+							"absolute inset-0 flex items-center justify-center rounded-lg bg-black/50 text-white transition-opacity [&_svg]:size-1/4 [&_svg]:max-w-8",
+							busy
+								? "opacity-100"
+								: "opacity-0 group-hover/cover:opacity-100 group-focus-visible/cover:opacity-100",
+						)}
+					>
+						{busy ? <LoaderCircle className="animate-spin" /> : <ImagePlus />}
+					</span>
+				</Popover.Trigger>
+				<Popover.Portal>
+					{/* Laid over the cover from its top left corner, so the cover itself seems to grow. */}
+					<Popover.Positioner
+						side="bottom"
+						align="start"
+						sideOffset={({ anchor }) => -anchor.height}
+						className="z-50"
+					>
+						<Popover.Popup
+							aria-label={`Change the cover of ${name}`}
+							className="size-80 max-w-[calc(100vw-2rem)] origin-top-left overflow-hidden rounded-xl bg-muted shadow-2xl outline-none ring-1 ring-foreground/15 transition-[transform,opacity] duration-150 data-[ending-style]:scale-[0.3] data-[starting-style]:scale-[0.3] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none"
+						>
+							<CoverCard paths={paths} name={name} onDone={() => setOpen(false)} />
+						</Popover.Popup>
+					</Popover.Positioner>
+				</Popover.Portal>
+			</Popover.Root>
 		</>
 	);
 }

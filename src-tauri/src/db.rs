@@ -773,6 +773,14 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              folder TEXT PRIMARY KEY,
              data   TEXT NOT NULL
          );
+         -- Answers from online music databases, by source and by what was asked.
+         CREATE TABLE IF NOT EXISTS lookup_cache (
+             source     TEXT NOT NULL,
+             key        TEXT NOT NULL,
+             data       TEXT NOT NULL,
+             fetched_at INTEGER NOT NULL,
+             PRIMARY KEY (source, key)
+         );
          CREATE TABLE IF NOT EXISTS itunes_imported (
              source      TEXT NOT NULL,
              size        INTEGER NOT NULL,
@@ -2740,7 +2748,15 @@ pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
 }
 
 /// The services a user can switch on or off.
-pub const SERVICES: [&str; 6] = ["downloads", "itunes", "tailscale", "r2", "rekordbox", "usb"];
+pub const SERVICES: [&str; 7] = [
+    "downloads",
+    "itunes",
+    "tailscale",
+    "r2",
+    "rekordbox",
+    "usb",
+    crate::lookup::SERVICE,
+];
 
 fn service_key(id: &str) -> String {
     format!("service.{id}")
@@ -2771,6 +2787,11 @@ pub fn set_service_enabled(conn: &Connection, id: &str, enabled: bool) -> Result
 /// Only an explicit "off" disables a service; unconfigured ones simply do nothing.
 pub fn service_off(conn: &Connection, id: &str) -> Result<bool, Error> {
     Ok(get_setting(conn, &service_key(id))?.as_deref() == Some("off"))
+}
+
+/// For a service that sends something outside: it runs only once explicitly switched on.
+pub fn service_on(conn: &Connection, id: &str) -> Result<bool, Error> {
+    Ok(get_setting(conn, &service_key(id))?.as_deref() == Some("on"))
 }
 
 /// Which service a target belongs to.
@@ -3519,6 +3540,37 @@ pub fn put_import_cache(conn: &Connection, folder: &str, data: &str) -> Result<(
         "INSERT INTO import_cache (folder, data) VALUES (?1, ?2)
          ON CONFLICT(folder) DO UPDATE SET data = excluded.data",
         (folder, data),
+    )?;
+    Ok(())
+}
+
+/// A saved lookup answer and the Unix time it was fetched.
+pub fn get_lookup_cache(
+    conn: &Connection,
+    source: &str,
+    key: &str,
+) -> Result<Option<(String, i64)>, Error> {
+    Ok(conn
+        .query_row(
+            "SELECT data, fetched_at FROM lookup_cache WHERE source = ?1 AND key = ?2",
+            [source, key],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
+}
+
+pub fn put_lookup_cache(
+    conn: &Connection,
+    source: &str,
+    key: &str,
+    data: &str,
+    fetched_at: i64,
+) -> Result<(), Error> {
+    conn.execute(
+        "INSERT INTO lookup_cache (source, key, data, fetched_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(source, key) DO UPDATE
+             SET data = excluded.data, fetched_at = excluded.fetched_at",
+        params![source, key, data, fetched_at],
     )?;
     Ok(())
 }

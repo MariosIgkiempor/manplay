@@ -2,12 +2,15 @@ import type { UndoEntry } from "#/context/undo-context.ts";
 import {
 	addToPlaylist,
 	deletePlaylist,
+	type PreviousCover,
 	removeFromPlaylist,
 	type TagPreview,
+	tagsRestoreCovers,
 	tagsWriteMany,
 	tagTracks,
 	untagTrack,
 } from "#/lib/api.ts";
+import { bumpArt } from "#/lib/art-version.ts";
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -26,6 +29,23 @@ export function undoTagWrite(before: TagPreview): UndoEntry | null {
 			const report = await tagsWriteMany(items);
 			if (report.failed.length > 0) {
 				throw new Error(report.failed[0]?.error ?? "write failed");
+			}
+		},
+	};
+}
+
+/** Puts back the covers a cover change replaced. `null` when no song was rewritten. */
+export function undoCoverChange(previous: readonly PreviousCover[]): UndoEntry | null {
+	if (previous.length === 0) {
+		return null;
+	}
+	return {
+		label: `Cover change on ${count(previous.length, "song", "songs")}`,
+		run: async () => {
+			const report = await tagsRestoreCovers(previous);
+			bumpArt();
+			if (report.failed.length > 0) {
+				throw new Error(report.failed[0]?.error ?? "could not restore the cover");
 			}
 		},
 	};

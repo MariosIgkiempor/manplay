@@ -144,6 +144,26 @@ describe("edits", () => {
 		expect(tag?.trackCount).toBe(2);
 	});
 
+	it("looks tags up only once the lookup service is switched on", async () => {
+		const library = await api.getLibraryRoot();
+		await expect(api.tagsLookup(library ?? "", false)).rejects.toThrow("Tag lookup is off");
+		await api.setServiceEnabled("lookup", true);
+		expect(await api.serviceFlags()).toMatchObject({ lookup: "on" });
+		const songs = await api.tagsLookup(library ?? "", false);
+		expect(new Set(songs.map((song) => song.outcome.kind))).toEqual(
+			new Set(["matched", "noMatch"]),
+		);
+		const cover = songs.flatMap((song) =>
+			song.outcome.kind === "matched" ? (song.outcome.candidates[0]?.cover ?? []) : [],
+		)[0];
+		expect(cover).toBeDefined();
+		if (cover) {
+			await expect(api.tagsLookupCover([library ?? ""], cover)).resolves.toBeDefined();
+		}
+		const found = await api.coverSearch(library ?? "", false);
+		expect(found.options.length).toBeGreaterThan(0);
+	});
+
 	it("keeps a display setting", async () => {
 		await api.setUiSetting("sort", { key: "bpm", desc: true });
 		expect(await api.getUiSetting("sort")).toEqual({ key: "bpm", desc: true });

@@ -72,6 +72,8 @@ interface State {
 	smart: SmartPlaylist[];
 	settings: Map<string, string | null>;
 	services: Map<string, string>;
+	/** A Discogs token is saved, so lookups ask Discogs too. */
+	discogsToken: boolean;
 	selections: Map<string, ExportSelection>;
 	deviceName: string;
 	defaultScope: Scope;
@@ -89,6 +91,7 @@ function createState(scenario: Scenario): State {
 		smart: setUp ? buildSmartPlaylists() : [],
 		settings: new Map(),
 		services: new Map(),
+		discogsToken: false,
 		selections: new Map(),
 		deviceName: "booth-macbook",
 		defaultScope: "shared",
@@ -104,6 +107,7 @@ const strings = (value: unknown): string[] =>
 	Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
 
 const FIX_NOTHING = { fixed: 0, failed: [] };
+const COVER_NOTHING = { ...FIX_NOTHING, previous: [] };
 const PULLED_NOTHING = { pulled: 0, skipped: 0, failed: [], failedTotal: 0 };
 
 /** The folders and files directly inside `folder`, from the paths of the library's songs. */
@@ -411,6 +415,90 @@ function playlistCommands(state: State): Record<string, Command> {
 	};
 }
 
+const LOOKUP_OFF = "Tag lookup is off. Turn it on in Settings to search MusicBrainz.";
+
+/** Made-up pressings of the album at `paths`, to choose a cover from. */
+function coverSearch(state: State, paths: string[]) {
+	if (state.services.get("lookup") !== "on") {
+		throw new Error(LOOKUP_OFF);
+	}
+	const track = state.tracks.find((t) =>
+		paths.some((p) => t.path === p || t.path.startsWith(`${p}/`)),
+	);
+	const pressings = [
+		[2017, "GB", "Vinyl"],
+		[2017, "DE", "CD"],
+		[2018, "US", "Digital Media"],
+		[2021, "JP", "CD"],
+		[2023, null, "Vinyl"],
+		[null, "FR", null],
+	] as const;
+	return {
+		album: track?.album ?? "",
+		artist: track?.artist ?? "",
+		options: pressings.map(([year, country, format], index) => ({
+			// Every other pressing is one Discogs knows, when a token is saved.
+			release:
+				state.discogsToken && index % 2 === 1
+					? `discogs-${27651 + index}`
+					: `22222222-2222-4222-8222-${String(index).padStart(12, "0")}`,
+			title: track?.album ?? "",
+			artist: track?.artist ?? "",
+			year,
+			country,
+			format,
+		})),
+	};
+}
+
+/**
+ * A made-up lookup: every song gets an outcome, cycling through a sure match, an unsure one with
+ * a second candidate, and no match, so the review shows each kind.
+ */
+function lookupSongs(state: State, paths: string[]) {
+	if (state.services.get("lookup") !== "on") {
+		throw new Error(LOOKUP_OFF);
+	}
+	const songs = state.tracks.filter((t) =>
+		paths.some((p) => t.path === p || t.path.startsWith(`${p}/`)),
+	);
+	return songs.map((track, index) => {
+		const release = (confidence: number) =>
+			`11111111-1111-4111-8111-${String(confidence).padStart(12, "0")}`;
+		const candidate = (confidence: number, likely: boolean, album: string) => ({
+			recording: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+			release: release(confidence),
+			cover: likely ? release(confidence) : null,
+			confidence,
+			likely,
+			fields: { title: track.title, artist: track.artist, album, label: "Night Shift Records" },
+			changes: [
+				...(album === track.album ? [] : [{ field: "album", from: track.album, to: album }]),
+				{ field: "label", from: null, to: "Night Shift Records" },
+				{ field: "track", from: null, to: String(index + 1) },
+				{ field: "isrc", from: null, to: `GBXYZ26${String(index).padStart(5, "0")}` },
+			],
+		});
+		const outcomes = [
+			{ kind: "matched", candidates: [candidate(100, true, track.album)] },
+			{
+				kind: "matched",
+				candidates: [
+					candidate(78, false, `${track.album} (Deluxe)`),
+					candidate(71, false, "Late Night Selections"),
+				],
+			},
+			{ kind: "noMatch" },
+		];
+		// Every other song has a cover already, so the review shows both kinds of cover offer.
+		return {
+			path: track.path,
+			hasCover: index % 2 === 1,
+			outcome: outcomes[index % outcomes.length],
+		};
+	});
+}
+
 function tagCommands(state: State): Record<string, Command> {
 	return {
 		list_tags: () => state.tags,
@@ -427,8 +515,23 @@ function tagCommands(state: State): Record<string, Command> {
 		tags_read: (args) => tagView(state, strings(args.get("paths"))),
 		tags_write: () => FIX_NOTHING,
 		tags_write_many: () => FIX_NOTHING,
-		tags_set_cover: () => FIX_NOTHING,
+		tags_set_cover: () => COVER_NOTHING,
+		tags_restore_covers: () => FIX_NOTHING,
 		tags_preview: () => ({ total: 0, files: [] }),
+		tags_lookup: (args) => lookupSongs(state, strings(args.get("paths"))),
+		cancel_tag_lookup: () => undefined,
+		discogs_token_saved: () => state.discogsToken,
+		discogs_token_save: (args) => {
+			if (!/^[A-Za-z0-9]+$/.test(String(args.get("token")).trim())) {
+				throw new Error("a Discogs token is letters and numbers only");
+			}
+			state.discogsToken = true;
+		},
+		discogs_token_forget: () => {
+			state.discogsToken = false;
+		},
+		tags_lookup_cover: () => COVER_NOTHING,
+		cover_search: (args) => coverSearch(state, strings(args.get("paths"))),
 		tag_values: (args) => tagValues(state, text(args.get("field"))),
 		tag_values_migrate: () => FIX_NOTHING,
 		share_preview: () => ({ name: "Closing Tracks", songs: 9, localTags: [] }),
@@ -666,7 +769,7 @@ function syncCommands(state: State): Record<string, Command> {
 		],
 		service_flags: () => [...state.services],
 		set_service_enabled: (args) =>
-			state.services.set(text(args.get("id")), args.get("enabled") === true ? "1" : "0"),
+			state.services.set(text(args.get("id")), args.get("enabled") === true ? "on" : "off"),
 	};
 }
 

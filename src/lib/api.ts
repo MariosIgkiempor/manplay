@@ -954,7 +954,14 @@ export function onPullProgress(handler: (p: PullProgress) => void): Promise<() =
 	});
 }
 
-export type ServiceId = "downloads" | "itunes" | "tailscale" | "r2" | "rekordbox" | "usb";
+export type ServiceId =
+	| "downloads"
+	| "itunes"
+	| "tailscale"
+	| "r2"
+	| "rekordbox"
+	| "usb"
+	| "lookup";
 
 /** Explicit on/off choices by service id; a service never switched is absent. */
 export async function serviceFlags(): Promise<Record<string, string>> {
@@ -1591,9 +1598,33 @@ export async function tagsWriteMany(
 	return fixReportSchema.parse(await invoke("tags_write_many", { items }));
 }
 
-/** Sets the front cover of every song at or under `path`, from JPEG/PNG bytes. */
-export async function tagsSetCover(path: TagPaths, image: Uint8Array): Promise<FixReport> {
-	return fixReportSchema.parse(
+const coverBackupSchema = z.string().brand<"CoverBackup">();
+
+const coverReportSchema = fixReportSchema.extend({
+	/** What each rewritten song held before, to put it back with. */
+	previous: z.array(
+		z.object({
+			path: z.string(),
+			/** The saved picture; null when the song had no front cover. */
+			backup: coverBackupSchema.nullable(),
+		}),
+	),
+});
+
+export type CoverReport = z.infer<typeof coverReportSchema>;
+export type PreviousCover = CoverReport["previous"][number];
+
+/** Puts back the covers a cover change replaced. */
+export async function tagsRestoreCovers(previous: readonly PreviousCover[]): Promise<FixReport> {
+	return fixReportSchema.parse(await invoke("tags_restore_covers", { previous }));
+}
+
+/**
+ * Sets the front cover of every song at or under `path`, from JPEG/PNG bytes. The covers it
+ * replaces are backed up first.
+ */
+export async function tagsSetCover(path: TagPaths, image: Uint8Array): Promise<CoverReport> {
+	return coverReportSchema.parse(
 		await invoke("tags_set_cover", image, {
 			headers: { "x-paths": encodeURIComponent(JSON.stringify(asPaths(path))) },
 		}),
@@ -1629,6 +1660,140 @@ export async function tagsPreview(
 	edits: Record<string, string>,
 ): Promise<TagPreview> {
 	return previewSchema.parse(await invoke("tags_preview", { paths: asPaths(path), edits }));
+}
+
+/**
+ * A recording in the source that knows it: MusicBrainz's UUID, or for Discogs a release and a
+ * track's place on it, as `discogs-<release>-<place>`.
+ */
+export const recordingIdSchema = z
+	.union([z.guid(), z.string().regex(/^discogs-\d+-\d+$/)])
+	.brand<"RecordingId">();
+/** A release in the source that knows it: MusicBrainz's UUID, or `discogs-<number>`. */
+export const releaseIdSchema = z
+	.union([z.guid(), z.string().regex(/^discogs-\d+$/)])
+	.brand<"ReleaseId">();
+
+const lookupCandidateSchema = z.object({
+	recording: recordingIdSchema,
+	release: releaseIdSchema.nullable(),
+	/** How sure the match is, 0 to 100. */
+	confidence: int.min(0).max(100),
+	/** Sure enough, and ahead of every other candidate, to be offered ready to apply. */
+	likely: z.boolean(),
+	/** Every tag this match knows, by tag editor field. */
+	fields: z.record(z.string(), z.string()),
+	/** The tags that differ from the song's own; `from` is null where the song has none. */
+	changes: z.array(
+		z.object({ field: z.string(), from: z.string().nullable(), to: z.string().nullable() }),
+	),
+	/** The release whose front cover this match can give; only for a song that has no cover. */
+	cover: releaseIdSchema.nullable(),
+});
+
+export type ReleaseId = z.infer<typeof releaseIdSchema>;
+
+export type LookupCandidate = z.infer<typeof lookupCandidateSchema>;
+
+const songLookupSchema = z.object({
+	path: z.string(),
+	/** The file already holds a cover, so a cover from a match would replace it. */
+	hasCover: z.boolean(),
+	outcome: z.discriminatedUnion("kind", [
+		z.object({ kind: z.literal("matched"), candidates: z.array(lookupCandidateSchema).min(1) }),
+		z.object({ kind: z.literal("noMatch") }),
+		z.object({ kind: z.literal("notEnoughTags") }),
+		z.object({ kind: z.literal("failed"), message: z.string() }),
+	]),
+});
+
+export type SongLookup = z.infer<typeof songLookupSchema>;
+
+/**
+ * Looks up every song at or under `path` in MusicBrainz and says which tags each match would
+ * give. Nothing is written. `refresh` asks again even where an answer is saved. Fails while the
+ * `lookup` service is off.
+ */
+export async function tagsLookup(path: TagPaths, refresh: boolean): Promise<SongLookup[]> {
+	return z
+		.array(songLookupSchema)
+		.parse(await invoke("tags_lookup", { paths: asPaths(path), refresh }));
+}
+
+/** Whether a Discogs token is saved, which is what makes lookups ask Discogs as well. */
+export async function discogsTokenSaved(): Promise<boolean> {
+	return z.boolean().parse(await invoke("discogs_token_saved"));
+}
+
+/** Saves a Discogs token in the keychain. Fails when Discogs does not accept it. */
+export async function discogsTokenSave(token: string): Promise<void> {
+	await invoke("discogs_token_save", { token });
+}
+
+export async function discogsTokenForget(): Promise<void> {
+	await invoke("discogs_token_forget");
+}
+
+/** Stops the running lookup after the song in progress; it returns the songs done so far. */
+export async function cancelTagLookup(): Promise<void> {
+	await invoke("cancel_tag_lookup");
+}
+
+/**
+ * Fetches the front cover of `release` and sets it on every song at or under `path`, in place
+ * of any cover they have.
+ */
+export async function tagsLookupCover(path: TagPaths, release: ReleaseId): Promise<CoverReport> {
+	return coverReportSchema.parse(
+		await invoke("tags_lookup_cover", { paths: asPaths(path), release }),
+	);
+}
+
+const coverSearchSchema = z.object({
+	/** The album and artist that were searched for. */
+	album: z.string(),
+	artist: z.string(),
+	/** Releases of that album. Whether one has a cover shows only when its picture loads. */
+	options: z.array(
+		z.object({
+			release: releaseIdSchema,
+			title: z.string(),
+			artist: z.string(),
+			year: int.nullable(),
+			country: z.string().nullable(),
+			format: z.string().nullable(),
+		}),
+	),
+});
+
+export type CoverSearch = z.infer<typeof coverSearchSchema>;
+export type CoverOption = CoverSearch["options"][number];
+
+/**
+ * Finds releases of the album the songs at or under `path` belong to, to choose a cover from.
+ * Sends the album's name and artist to MusicBrainz, and to Discogs when a token is saved. Fails while the `lookup` service is off.
+ */
+export async function coverSearch(path: TagPaths, refresh: boolean): Promise<CoverSearch> {
+	return coverSearchSchema.parse(await invoke("cover_search", { paths: asPaths(path), refresh }));
+}
+
+/** Where to load a small picture of a release's front cover from, to show before applying. */
+export function lookupCoverUrl(release: ReleaseId): string {
+	return convertFileSrc(release, "lookup-cover");
+}
+
+const lookupProgressSchema = z.object({ done: int, total: int });
+
+export type LookupProgress = z.infer<typeof lookupProgressSchema>;
+
+/** Subscribes to tag lookup progress; returns an unsubscribe function. */
+export function onLookupProgress(handler: (p: LookupProgress) => void): Promise<() => void> {
+	return listen("lookup-progress", (e) => {
+		const parsed = lookupProgressSchema.safeParse(e.payload);
+		if (parsed.success) {
+			handler(parsed.data);
+		}
+	});
 }
 
 const libraryViewSchema = z.enum(["albums", "songs", "artists"]);

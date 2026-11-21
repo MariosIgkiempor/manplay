@@ -261,7 +261,12 @@ async function answer(request, handlers, problems, page) {
 async function runDaemon(options) {
 	const { createServer } = await import("vite");
 	const { chromium, webkit } = await import("playwright");
-	const vite = await createServer({ root: ROOT, mode: "harness", server: { port: 3210 } });
+	// Another checkout's harness may hold 3210; then the next free port is used.
+	const vite = await createServer({
+		root: ROOT,
+		mode: "harness",
+		server: { port: 3210, strictPort: false },
+	});
 	await vite.listen();
 	const baseUrl = vite.resolvedUrls?.local[0] ?? "http://localhost:3210/";
 

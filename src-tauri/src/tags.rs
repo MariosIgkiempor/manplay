@@ -10,7 +10,7 @@ use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::read_from_path;
 use lofty::tag::{ItemKey, Tag, TagExt, TagType};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::audit::{FixFailure, FixReport, is_mp3, replace_file};
@@ -172,7 +172,7 @@ fn songs_at(root: &Path, path: &Path) -> Result<Vec<PathBuf>, Error> {
 }
 
 /// Audio files at or under each of `paths` (songs and/or folders), once each, in path order.
-fn songs(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, Error> {
+pub fn songs(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, Error> {
     let mut out = Vec::new();
     for path in paths {
         out.extend(songs_at(root, path)?);
@@ -578,34 +578,191 @@ fn cover_mime(bytes: &[u8]) -> Result<MimeType, Error> {
     Ok(mime)
 }
 
-/// Sets the front cover of every song at or under `paths` (songs and/or folders).
-/// Failures are reported per file and never undo the rest.
-pub fn write_cover(
-    root: &Path,
-    paths: &[PathBuf],
-    bytes: &[u8],
-) -> Result<(Vec<PathBuf>, FixReport), Error> {
-    let mime = cover_mime(bytes)?;
-    let files = songs(root, paths)?;
-    let mut report = FixReport::default();
-    for file in &files {
-        let change = |tag: &mut Tag| {
-            tag.remove_picture_type(PictureType::CoverFront);
+/// How long a replaced cover is kept in the backups folder.
+const COVER_BACKUPS_KEPT_FOR: std::time::Duration =
+    std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+/// The name of a replaced cover's file in the backups folder: the hash of the picture and its
+/// kind, so songs that shared a cover share one backup. Checked on the way in from the app,
+/// because it is joined onto a folder path.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(try_from = "String", into = "String")]
+pub struct CoverBackupName(String);
+
+impl CoverBackupName {
+    fn of(picture: &Picture) -> Self {
+        let extension = if picture.mime_type() == Some(&MimeType::Png) {
+            "png"
+        } else {
+            "jpg"
+        };
+        Self(format!(
+            "{}.{extension}",
+            blake3::hash(picture.data()).to_hex()
+        ))
+    }
+}
+
+impl TryFrom<String> for CoverBackupName {
+    type Error = String;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        let named_by_hash = raw
+            .strip_suffix(".jpg")
+            .or_else(|| raw.strip_suffix(".png"))
+            .is_some_and(|hash| {
+                hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            });
+        if named_by_hash {
+            Ok(Self(raw))
+        } else {
+            Err(format!("{raw:?} is not a cover backup"))
+        }
+    }
+}
+
+impl From<CoverBackupName> for String {
+    fn from(name: CoverBackupName) -> Self {
+        name.0
+    }
+}
+
+/// A song's front cover as it was before a new one was written, to put it back with.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviousCover {
+    pub path: String,
+    /// The saved picture; `None` when the song had no front cover.
+    pub backup: Option<CoverBackupName>,
+}
+
+/// What a cover write did, and what each rewritten song held before.
+#[derive(Serialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverReport {
+    pub fixed: usize,
+    pub failed: Vec<FixFailure>,
+    pub previous: Vec<PreviousCover>,
+}
+
+/// Saves the song's front cover into `backups`, unless that picture is there already.
+fn back_up_cover(file: &Path, backups: &Path) -> Result<Option<CoverBackupName>, Error> {
+    let tagged = read_from_path(file).map_err(|e| err(format!("unreadable tags: {e}")))?;
+    let Some(picture) = tagged
+        .primary_tag()
+        .and_then(|tag| tag.get_picture_type(PictureType::CoverFront))
+    else {
+        return Ok(None);
+    };
+    let name = CoverBackupName::of(picture);
+    let saved = backups.join(&name.0);
+    if !saved.exists() {
+        std::fs::create_dir_all(backups)?;
+        std::fs::write(&saved, picture.data())?;
+    }
+    Ok(Some(name))
+}
+
+/// Deletes backups older than [`COVER_BACKUPS_KEPT_FOR`]. Best effort: a backup that cannot
+/// be read or deleted is left for next time.
+fn prune_cover_backups(backups: &Path) {
+    let Ok(entries) = std::fs::read_dir(backups) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age > COVER_BACKUPS_KEPT_FOR);
+        if old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Puts `cover` in as the song's front cover, or takes the front cover out when `None`.
+fn set_front_cover(file: &Path, cover: Option<(&[u8], &MimeType)>) -> Result<(), Error> {
+    let change = |tag: &mut Tag| {
+        tag.remove_picture_type(PictureType::CoverFront);
+        if let Some((bytes, mime)) = cover {
             tag.push_picture(
                 Picture::unchecked(bytes.to_vec())
                     .pic_type(PictureType::CoverFront)
                     .mime_type(mime.clone())
                     .build(),
             );
-            Ok(())
-        };
-        match write_one(file, &change, &|_| Ok(())) {
-            Ok(()) => report.fixed += 1,
-            Err(e) => report.failed.push(FixFailure {
-                path: file.to_string_lossy().into_owned(),
-                error: e.to_string(),
-            }),
         }
+        Ok(())
+    };
+    write_one(file, &change, &|_| Ok(()))
+}
+
+fn failure(file: &Path, error: &Error) -> FixFailure {
+    FixFailure {
+        path: file.to_string_lossy().into_owned(),
+        error: error.to_string(),
+    }
+}
+
+/// Sets the front cover of every song at or under `paths` (songs and/or folders). The cover a
+/// song had is saved into `backups` first, and a song whose cover cannot be saved keeps it.
+/// Failures are reported per file and never undo the rest.
+pub fn write_cover(
+    root: &Path,
+    paths: &[PathBuf],
+    bytes: &[u8],
+    backups: &Path,
+) -> Result<(Vec<PathBuf>, CoverReport), Error> {
+    let mime = cover_mime(bytes)?;
+    let files = songs(root, paths)?;
+    prune_cover_backups(backups);
+    let mut report = CoverReport::default();
+    for file in &files {
+        let written = back_up_cover(file, backups).and_then(|backup| {
+            set_front_cover(file, Some((bytes, &mime)))?;
+            Ok(backup)
+        });
+        match written {
+            Ok(backup) => {
+                report.fixed += 1;
+                report.previous.push(PreviousCover {
+                    path: file.to_string_lossy().into_owned(),
+                    backup,
+                });
+            }
+            Err(e) => report.failed.push(failure(file, &e)),
+        }
+    }
+    Ok((files, report))
+}
+
+/// Puts back the covers a cover write replaced: each song gets its saved picture again, or
+/// loses its front cover when it had none.
+pub fn restore_covers(
+    root: &Path,
+    previous: &[PreviousCover],
+    backups: &Path,
+) -> Result<(Vec<PathBuf>, FixReport), Error> {
+    let mut files = Vec::with_capacity(previous.len());
+    let mut report = FixReport::default();
+    for item in previous {
+        let file = fsops::inside(root, Path::new(&item.path))?;
+        let restored = match &item.backup {
+            None => set_front_cover(&file, None),
+            Some(name) => std::fs::read(backups.join(&name.0))
+                .map_err(|e| err(format!("the saved cover is gone: {e}")))
+                .and_then(|bytes| {
+                    let mime = cover_mime(&bytes)?;
+                    set_front_cover(&file, Some((&bytes, &mime)))
+                }),
+        };
+        match restored {
+            Ok(()) => report.fixed += 1,
+            Err(e) => report.failed.push(failure(&file, &e)),
+        }
+        files.push(file);
     }
     Ok((files, report))
 }
@@ -762,6 +919,97 @@ mod tests {
     }
 
     /// One second of 8-bit mono silence as a WAV file.
+    fn picture(red: u8) -> Vec<u8> {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(2, 2, image::Rgb([red, 0, 0]))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .expect("png");
+        png.into_inner()
+    }
+
+    fn front_cover(file: &Path) -> Option<Vec<u8>> {
+        let tagged = read_from_path(file).expect("readable");
+        tagged
+            .primary_tag()
+            .and_then(|tag| tag.get_picture_type(PictureType::CoverFront))
+            .map(|picture| picture.data().to_vec())
+    }
+
+    #[test]
+    fn a_replaced_cover_is_backed_up_and_can_be_put_back() {
+        let root = std::env::temp_dir().join(format!("manplay-cover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let backups = root.join("backups");
+        let album = root.join("library").join("Artist").join("Album");
+        std::fs::create_dir_all(&album).expect("dirs");
+        let library = root.join("library");
+        let (bare, covered) = (album.join("a.wav"), album.join("b.wav"));
+        std::fs::write(&bare, silent_wav()).expect("song");
+        std::fs::write(&covered, silent_wav()).expect("song");
+        let (first, second) = (picture(10), picture(200));
+
+        let (_, before) =
+            write_cover(&library, std::slice::from_ref(&covered), &first, &backups).expect("write");
+        assert_eq!(before.previous[0].backup, None, "it had no cover to save");
+
+        let (files, report) =
+            write_cover(&library, std::slice::from_ref(&album), &second, &backups).expect("write");
+        assert_eq!((files.len(), report.fixed, report.failed.len()), (2, 2, 0));
+        assert_eq!(front_cover(&bare), Some(second.clone()));
+        assert_eq!(front_cover(&covered), Some(second.clone()));
+        let saved: Vec<Option<&CoverBackupName>> =
+            report.previous.iter().map(|p| p.backup.as_ref()).collect();
+        assert_eq!(saved.iter().filter(|backup| backup.is_some()).count(), 1);
+        let name = saved.iter().flatten().next().expect("a backup");
+        assert_eq!(
+            std::fs::read(backups.join(&name.0)).expect("backup file"),
+            first,
+            "the old picture is kept as it was"
+        );
+
+        let (_, undone) = restore_covers(&library, &report.previous, &backups).expect("restore");
+        assert_eq!((undone.fixed, undone.failed.len()), (2, 0));
+        assert_eq!(
+            front_cover(&bare),
+            None,
+            "a song that had no cover has none again"
+        );
+        assert_eq!(front_cover(&covered), Some(first));
+
+        let outside = PreviousCover {
+            path: root.join("elsewhere.wav").to_string_lossy().into_owned(),
+            backup: None,
+        };
+        assert!(
+            restore_covers(&library, &[outside], &backups).is_err(),
+            "only songs in the library are touched"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_cover_backup_is_named_by_its_hash() {
+        let hash = "a".repeat(64);
+        let cases = [
+            (format!("{hash}.jpg"), true),
+            (format!("{hash}.png"), true),
+            (format!("{hash}.gif"), false),
+            (hash.clone(), false),
+            (format!("{}.jpg", "a".repeat(63)), false),
+            (format!("{}.jpg", "A".repeat(64)), false),
+            (format!("../{hash}.jpg"), false),
+            (format!("{}/../x.jpg", "a".repeat(56)), false),
+            (String::new(), false),
+        ];
+        for (raw, valid) in cases {
+            assert_eq!(
+                CoverBackupName::try_from(raw.clone()).is_ok(),
+                valid,
+                "{raw:?}"
+            );
+        }
+    }
+
     fn silent_wav() -> Vec<u8> {
         let data = vec![128_u8; 8000];
         let mut w = Vec::new();

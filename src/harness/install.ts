@@ -97,6 +97,10 @@ function silentAudioUrl(seconds: number): string {
 }
 
 function fileUrl(backend: FakeBackend, path: string, protocol: string): string {
+	if (protocol === "lookup-cover") {
+		// A looked-up release's cover, drawn from its id.
+		return coverUrl(path);
+	}
 	if (protocol === "art") {
 		const album = albumOf(backend, path);
 		// One album in nine has no cover, so the placeholder is on screen too.

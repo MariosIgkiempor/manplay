@@ -7,7 +7,7 @@ import {
 	Undo2,
 	X,
 } from "lucide-react";
-import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { CoverPicker } from "#/components/cover-picker.tsx";
 import { NameSplitPills } from "#/components/name-split-pill.tsx";
 import { ErrorLine } from "#/components/page.tsx";
@@ -15,6 +15,7 @@ import { PageHeader } from "#/components/page-header.tsx";
 import { PropertyRow } from "#/components/property-row.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { type ComboOption, TagCombobox } from "#/components/tag-combobox.tsx";
+import { SuggestionPill, TagLookupStrip } from "#/components/tag-lookup-strip.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { pathArtUrl, type TagValue, type TagView } from "#/lib/api.ts";
@@ -23,6 +24,7 @@ import { useTagsRead, useTagsWrite, useTagValues } from "#/lib/queries.ts";
 import { TAG_GROUPS, type TagField, type TagGroup } from "#/lib/tag-fields.ts";
 import { fillFromPath } from "#/lib/tag-fill.ts";
 import { type SaveStatus, useAutosave } from "#/lib/unsaved.tsx";
+import { type TagSuggestions, useTagSuggestions } from "#/lib/use-tag-suggestions.ts";
 import { cn } from "#/lib/utils.ts";
 
 export interface TagTarget {
@@ -122,6 +124,9 @@ export function TagEditor({
 		save: writeNow,
 	});
 
+	// The lookup searches with the tags in the files, so pending edits are saved first.
+	const found = useTagSuggestions(where(target), target.isDir, () => autosave.flush());
+
 	// Cmd+S, or Cmd+Enter in a field, saves right away instead of waiting out the second.
 	const onKeyDown = (ev: KeyboardEvent) => {
 		if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
@@ -153,7 +158,15 @@ export function TagEditor({
 		>
 			{!embedded && <Header target={target} count={view.data ? count : null} onClose={onClose} />}
 			<div className={cn(!embedded && "min-h-0 flex-1 overflow-y-auto")}>
-				<Body view={view} target={target} draft={draft} onEdit={edit} onRevert={revert} />
+				{count > 0 && <TagLookupStrip found={found} />}
+				<Body
+					view={view}
+					target={target}
+					draft={draft}
+					found={found}
+					onEdit={edit}
+					onRevert={revert}
+				/>
 			</div>
 			<Footer notice={notice} autosave={autosave} />
 		</div>
@@ -251,12 +264,14 @@ function Body({
 	view,
 	target,
 	draft,
+	found,
 	onEdit,
 	onRevert,
 }: {
 	view: ReturnType<typeof useTagsRead>;
 	target: TagTarget;
 	draft: Draft;
+	found: TagSuggestions;
 	onEdit: (id: string, value: string) => void;
 	onRevert: (id: string) => void;
 }) {
@@ -283,6 +298,7 @@ function Body({
 					fields={view.data.fields}
 					isDir={target.isDir}
 					draft={draft}
+					found={found}
 					onEdit={onEdit}
 					onRevert={onRevert}
 				/>
@@ -297,6 +313,7 @@ function Group({
 	fields,
 	isDir,
 	draft,
+	found,
 	onEdit,
 	onRevert,
 }: {
@@ -305,6 +322,7 @@ function Group({
 	fields: Record<string, Shared>;
 	isDir: boolean;
 	draft: Draft;
+	found: TagSuggestions;
 	onEdit: (id: string, value: string) => void;
 	onRevert: (id: string) => void;
 }) {
@@ -314,12 +332,17 @@ function Group({
 	}
 	const filled = shown.filter((f) => fields[f.id]?.value || fields[f.id]?.mixed).length;
 	const changed = shown.filter((f) => draft[f.id] !== undefined).length;
+	const suggested = shown.filter((f) => found.inline.has(f.id)).length;
 	return (
-		<details open={OPEN_BY_DEFAULT.has(group.title) || filled > 0 || changed > 0} className="group">
+		<details
+			open={OPEN_BY_DEFAULT.has(group.title) || filled > 0 || changed > 0 || suggested > 0}
+			className="group"
+		>
 			<summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-1.5 text-sm hover:bg-muted/50 [&::-webkit-details-marker]:hidden">
 				<ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
 				<span className="font-medium">{group.title}</span>
 				<span className="ml-auto text-muted-foreground text-xs">
+					{suggested > 0 && <span className="mr-2 text-success">{suggested} found</span>}
 					{changed > 0 ? (
 						<span className="text-primary">{plural(changed, "change", "changes")}</span>
 					) : (
@@ -328,17 +351,30 @@ function Group({
 				</span>
 			</summary>
 			<div className="space-y-px px-3 pt-0.5 pb-3">
-				{shown.map((f) => (
-					<FieldInput
-						key={f.id}
-						field={f}
-						fill={fillFromPath(f.id, target)}
-						shared={fields[f.id]}
-						draft={draft[f.id]}
-						onChange={(v) => onEdit(f.id, f.kind === "number" ? v.replace(/[^\d]/g, "") : v)}
-						onRevert={() => onRevert(f.id)}
-					/>
-				))}
+				{shown.map((f) => {
+					const suggestion = found.inline.get(f.id);
+					return (
+						<FieldInput
+							key={f.id}
+							field={f}
+							fill={fillFromPath(f.id, target)}
+							shared={fields[f.id]}
+							draft={draft[f.id]}
+							onChange={(v) => onEdit(f.id, f.kind === "number" ? v.replace(/[^\d]/g, "") : v)}
+							onRevert={() => onRevert(f.id)}
+							found={
+								suggestion && (
+									<SuggestionPill
+										suggestion={suggestion}
+										group={isDir}
+										disabled={found.writing}
+										onTake={() => found.take(suggestion)}
+									/>
+								)
+							}
+						/>
+					);
+				})}
 			</div>
 		</details>
 	);
@@ -352,6 +388,8 @@ interface FieldProps {
 	draft: string | undefined;
 	onChange: (v: string) => void;
 	onRevert: () => void;
+	/** A value a lookup found for this field, shown under it until it is used. */
+	found?: ReactNode;
 }
 
 /**
@@ -359,7 +397,7 @@ interface FieldProps {
  * or focused. Edited fields are marked in the accent colour with an undo at the end.
  */
 function FieldInput(props: FieldProps) {
-	const { field, draft, onRevert, fill, shared, onChange } = props;
+	const { field, draft, onRevert, fill, shared, onChange, found } = props;
 	const id = useId();
 	const touched = draft !== undefined;
 	const canFill =
@@ -411,6 +449,7 @@ function FieldInput(props: FieldProps) {
 			) : (
 				<TextWithSplits id={id} {...props} />
 			)}
+			{found && <div className="mt-0.5 mb-1.5 px-2.5">{found}</div>}
 		</PropertyRow>
 	);
 }

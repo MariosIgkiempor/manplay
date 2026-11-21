@@ -9,9 +9,15 @@ import {
 	auditFix,
 	auditLibrary,
 	auditPlace,
+	type CoverReport,
 	carryOver,
+	coverSearch,
 	DEFAULT_PANEL_TABS,
+	discogsTokenForget,
+	discogsTokenSave,
+	discogsTokenSaved,
 	dismissCarry,
+	type FixReport,
 	fsCopy,
 	fsMakeDir,
 	fsMove,
@@ -45,6 +51,7 @@ import {
 	type PanelTabs,
 	type PlanId,
 	pickAndScan,
+	type ReleaseId,
 	type Resolution,
 	removeMissingNow,
 	rescanLibrary,
@@ -67,16 +74,21 @@ import {
 	syncScan,
 	syncScans,
 	type TagPaths,
+	tagsLookup,
+	tagsLookupCover,
 	tagsPreview,
 	tagsRead,
 	tagsSetCover,
 	tagsWrite,
+	tagsWriteMany,
 	tagTracks,
 	tagValueCreate,
 	tagValues,
 	tagValuesMigrate,
 } from "#/lib/api.ts";
-import { undoTagWrite } from "#/lib/undo-entries.ts";
+import { bumpArt } from "#/lib/art-version.ts";
+import type { CoverWrite, LookupWrite } from "#/lib/tag-lookup.ts";
+import { undoCoverChange, undoTagWrite } from "#/lib/undo-entries.ts";
 
 export function useTracks() {
 	return useQuery({ queryKey: ["tracks"], queryFn: listTracks });
@@ -624,11 +636,129 @@ export function useTagsWrite() {
 	});
 }
 
+/**
+ * Fetches and writes each cover in turn. One that cannot be fetched is reported, not thrown.
+ * `previous` is what the rewritten songs held before.
+ */
+async function writeLookupCovers(covers: readonly CoverWrite[]): Promise<CoverReport> {
+	const total: CoverReport = { fixed: 0, failed: [], previous: [] };
+	for (const cover of covers) {
+		try {
+			const report = await tagsLookupCover(cover.paths, cover.release);
+			total.fixed += report.fixed;
+			total.failed.push(...report.failed);
+			total.previous.push(...report.previous);
+		} catch (e) {
+			total.failed.push(...cover.paths.map((path) => ({ path, error: `Cover: ${String(e)}` })));
+		}
+	}
+	if (covers.length > 0) {
+		bumpArt();
+	}
+	return total;
+}
+
+/**
+ * Writes what was taken from a lookup: each song's tags in one go, undoable as one edit, then
+ * each cover, undoable as another. A cover that cannot be fetched is reported and does not stop
+ * the rest.
+ */
+export function useLookupApply() {
+	const queryClient = useQueryClient();
+	const { record } = useUndo();
+	return useMutation({
+		mutationFn: async ({ changes, covers }: LookupWrite) => {
+			const total: FixReport = { fixed: 0, failed: [] };
+			if (changes.length > 0) {
+				const report = await tagsWriteMany(
+					changes.map((f) => ({
+						path: f.path,
+						edits: Object.fromEntries(f.changes.map((c) => [c.field, c.to ?? ""])),
+					})),
+				);
+				const entry = undoTagWrite({ total: changes.length, files: changes });
+				if (entry && report.fixed > 0) {
+					record(entry);
+				}
+				total.fixed += report.fixed;
+				total.failed.push(...report.failed);
+			}
+			const covered = await writeLookupCovers(covers);
+			const coverUndo = undoCoverChange(covered.previous);
+			if (coverUndo) {
+				record(coverUndo);
+			}
+			total.fixed += covered.fixed;
+			total.failed.push(...covered.failed);
+			return total;
+		},
+		onSettled: async () => {
+			await refreshAfterFsChange(queryClient);
+			await queryClient.invalidateQueries({ queryKey: ["file-tags"] });
+		},
+	});
+}
+
+/**
+ * Looks the songs at or under `path` up online. `attempt` 0 may answer from saved results; a
+ * higher one asks again. Waits until `enabled`, since a lookup sends song names outside.
+ */
+export function useTagLookup(path: TagPaths, attempt: number, enabled: boolean) {
+	return useQuery({
+		queryKey: ["tag-lookup", path, attempt],
+		queryFn: () => tagsLookup(path, attempt > 0),
+		enabled,
+		retry: false,
+		staleTime: Number.POSITIVE_INFINITY,
+		gcTime: 0,
+	});
+}
+
+/** Sets a picture as the cover of every song at or under a path; Undo puts the old covers back. */
 export function useTagsSetCover() {
 	const queryClient = useQueryClient();
+	const { record } = useUndo();
 	return useMutation({
-		mutationFn: ({ path, image }: { path: TagPaths; image: Uint8Array }) =>
-			tagsSetCover(path, image),
+		mutationFn: async ({ path, image }: { path: TagPaths; image: Uint8Array }) => {
+			const report = await tagsSetCover(path, image);
+			const entry = undoCoverChange(report.previous);
+			if (entry) {
+				record(entry);
+			}
+			return report;
+		},
+		onSettled: () => refreshAfterFsChange(queryClient),
+	});
+}
+
+/**
+ * Finds releases of the album at `path` to choose a cover from. `attempt` 0 may answer from
+ * saved results. Waits until `enabled`: it sends the album's name outside, so it is asked for.
+ */
+export function useCoverSearch(path: TagPaths, attempt: number, enabled: boolean) {
+	return useQuery({
+		queryKey: ["cover-search", path, attempt],
+		queryFn: () => coverSearch(path, attempt > 0),
+		enabled,
+		retry: false,
+		staleTime: Number.POSITIVE_INFINITY,
+		gcTime: 0,
+	});
+}
+
+/** Sets a release's front cover on every song at or under a path; Undo puts the old ones back. */
+export function useLookupCoverSet() {
+	const queryClient = useQueryClient();
+	const { record } = useUndo();
+	return useMutation({
+		mutationFn: async ({ path, release }: { path: TagPaths; release: ReleaseId }) => {
+			const report = await tagsLookupCover(path, release);
+			const entry = undoCoverChange(report.previous);
+			if (entry) {
+				record(entry);
+			}
+			return report;
+		},
 		onSettled: () => refreshAfterFsChange(queryClient),
 	});
 }
@@ -658,6 +788,16 @@ export function useServices() {
 		},
 		setEnabled: (id: ServiceId, enabled: boolean) => set.mutate({ id, enabled }),
 	};
+}
+
+/** The Discogs token: whether one is saved, and saving or forgetting it. */
+export function useDiscogsToken() {
+	const queryClient = useQueryClient();
+	const saved = useQuery({ queryKey: ["discogs-token"], queryFn: discogsTokenSaved });
+	const done = () => queryClient.invalidateQueries({ queryKey: ["discogs-token"] });
+	const save = useMutation({ mutationFn: discogsTokenSave, onSuccess: done });
+	const forget = useMutation({ mutationFn: discogsTokenForget, onSuccess: done });
+	return { saved: saved.data ?? false, save, forget };
 }
 
 /** Tag database edits. Library tags live in the database; the rest rewrite the songs' files. */
