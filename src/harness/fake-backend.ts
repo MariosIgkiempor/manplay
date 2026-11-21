@@ -6,6 +6,7 @@ import type {
 	SmartRules,
 	Tag,
 	Track,
+	TrackAnalysis,
 } from "#/lib/api.ts";
 import {
 	buildAnalysis,
@@ -307,9 +308,25 @@ function libraryCommands(state: State): Record<string, Command> {
 
 function analysisCommands(state: State): Record<string, Command> {
 	const trackOf = (args: Args) => state.tracks.find((track) => track.id === args.get("trackId"));
+	// Grids saved in the grid editor, by track id, so an edit stays edited.
+	const grids = new Map<number, Pick<TrackAnalysis, "gridBpm" | "firstBeat" | "barOffset">>();
 	const analysisOf = (args: Args) => {
 		const track = trackOf(args);
-		return track ? buildAnalysis(track) : null;
+		const analysis = track ? buildAnalysis(track) : null;
+		const grid = track ? grids.get(track.id) : undefined;
+		return analysis && grid ? { ...analysis, ...grid } : analysis;
+	};
+	const setBeatGrid = (args: Args) => {
+		const track = trackOf(args);
+		if (track) {
+			const bpm = args.get("gridBpm");
+			grids.set(track.id, {
+				gridBpm: typeof bpm === "number" ? bpm : null,
+				firstBeat: count(args.get("firstBeat")),
+				barOffset: count(args.get("barOffset")),
+			});
+		}
+		return analysisOf(args);
 	};
 	return {
 		analysis_settings: () => state.analysis,
@@ -325,7 +342,7 @@ function analysisCommands(state: State): Record<string, Command> {
 		analyze_tracks: () => ({ analyzed: 0, failed: 0, cancelled: 0, tags: null }),
 		set_tempo_key: () => FIX_NOTHING,
 		track_analysis: analysisOf,
-		set_beat_grid: analysisOf,
+		set_beat_grid: setBeatGrid,
 		track_cues: (args) =>
 			count(args.get("trackId")) % 2 === 0
 				? []

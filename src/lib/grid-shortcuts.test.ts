@@ -34,8 +34,24 @@ describe("gridAction", () => {
 		expect(press("9", { code: "Digit9" })).toBeNull();
 	});
 
-	it("leaves ⌘ shortcuts alone except ⌘S", () => {
-		expect(press("s", { metaKey: true })).toBe("save");
-		expect(press("z", { metaKey: true })).toBeNull();
+	it.each([
+		{ keys: "⌘S", key: "s", more: { metaKey: true }, action: "save" },
+		{ keys: "⌘Z", key: "z", more: { metaKey: true }, action: "undo" },
+		{ keys: "Ctrl+Z", key: "z", more: { ctrlKey: true }, action: "undo" },
+		{ keys: "⇧⌘Z", key: "Z", more: { metaKey: true, shiftKey: true }, action: "redo" },
+		{ keys: "Ctrl+Y", key: "y", more: { ctrlKey: true }, action: "redo" },
+		{ keys: "⌘Y", key: "y", more: { metaKey: true }, action: null },
+		{ keys: "⌘A", key: "a", more: { metaKey: true }, action: null },
+		{ keys: "⇧⌘S", key: "S", more: { metaKey: true, shiftKey: true }, action: null },
+	])("reads $keys as $action", ({ key, more, action }) => {
+		expect(press(key, more)).toBe(action);
+	});
+
+	it.each([
+		{ key: "t", action: "tap" },
+		{ key: "r", action: "roundBpm" },
+		{ key: "k", action: "metronome" },
+	])("reads $key as $action", ({ key, action }) => {
+		expect(press(key)).toBe(action);
 	});
 });

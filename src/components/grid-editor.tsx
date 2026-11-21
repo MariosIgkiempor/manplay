@@ -8,11 +8,14 @@ import {
 	ChevronsLeft,
 	ChevronsRight,
 	Crosshair,
+	Drum,
 	Keyboard,
 	Magnet,
 	Pause,
 	PencilLine,
 	Play,
+	Redo2,
+	RotateCcw,
 	Undo2,
 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -31,10 +34,10 @@ import {
 	type Grid,
 	gridOf,
 	nudge,
+	roundBpm,
 	sameGrid,
 	setBpm,
 	shiftBar,
-	tapBpm,
 	withGrid,
 } from "#/lib/beat-grid.ts";
 import {
@@ -50,13 +53,32 @@ import {
 	stamp,
 	startOf,
 } from "#/lib/cues.ts";
+import {
+	canRedo,
+	canUndo,
+	type EditHistory,
+	record,
+	redo,
+	replacePresent,
+	startHistory,
+	undo,
+} from "#/lib/edit-history.ts";
 import { GRID_SHORTCUTS, type GridAction, gridAction } from "#/lib/grid-shortcuts.ts";
 import { formatBpm } from "#/lib/musical-key.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { useAnalyze, useTracks } from "#/lib/queries.ts";
+import {
+	addTap,
+	type Milliseconds,
+	TAP_RUN_GAP,
+	type TapReading,
+	tapTempo,
+} from "#/lib/tap-tempo.ts";
 import { typeScale } from "#/lib/type-scale.ts";
 import { useAutosave } from "#/lib/unsaved.tsx";
 import { useAnalysisProgress } from "#/lib/use-analysis-progress.ts";
+import { useMetronome } from "#/lib/use-metronome.ts";
+import { useStoredFlag, useStoredNumber } from "#/lib/use-stored-preference.ts";
 import { TRACK_ANALYSIS_KEY, useTrackAnalysis } from "#/lib/use-track-analysis.ts";
 import { cn } from "#/lib/utils.ts";
 import {
@@ -89,11 +111,16 @@ export function GridEditor({ trackId }: { trackId: number }) {
 	);
 }
 
-/** A key press meant for something else: typing, a shortcut with ⌘ or Ctrl, or an open dialog. */
-export function busyKey(e: globalThis.KeyboardEvent): boolean {
+/** A key press while typing (fields keep their own keys) or with a dialog open. */
+function typingKey(e: globalThis.KeyboardEvent): boolean {
 	const typing =
 		e.target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName);
-	return typing || e.metaKey || e.ctrlKey || document.querySelector("[role=dialog]") !== null;
+	return typing || document.querySelector("[role=dialog]") !== null;
+}
+
+/** A key press meant for something else: typing, a shortcut with ⌘ or Ctrl, or an open dialog. */
+export function busyKey(e: globalThis.KeyboardEvent): boolean {
+	return typingKey(e) || e.metaKey || e.ctrlKey;
 }
 
 /** A song without a kept waveform yet: analyse just this one, then the editor opens. */
@@ -170,6 +197,51 @@ function useSave(trackId: number) {
 	});
 }
 
+/** What the editor edits, undone and redone as one. */
+interface Draft {
+	grid: Grid;
+	cues: readonly Cue[];
+}
+
+const sameDraft = (a: Draft, b: Draft) => sameGrid(a.grid, b.grid) && sameCues(a.cues, b.cues);
+
+/** Edits kept as undo steps; a burst of one `group` of edit (taps, arrow presses) is one step. */
+function useDraft(saved: Draft) {
+	const [history, setHistory] = useState<EditHistory<Draft>>(() => startHistory(saved));
+	const edit = useCallback((change: (d: Draft) => Draft, group?: string) => {
+		const step = group ? { group, at: performance.now() } : null;
+		setHistory((h) => record(h, change(h.present), sameDraft, step));
+	}, []);
+	return {
+		history,
+		setHistory,
+		setGrid: (change: (g: Grid) => Grid, group?: string) =>
+			edit((d) => ({ ...d, grid: change(d.grid) }), group),
+		setCues: (change: (cs: readonly Cue[]) => readonly Cue[]) =>
+			edit((d) => ({ ...d, cues: change(d.cues) })),
+		replace: (draft: Draft) => edit(() => draft),
+	};
+}
+
+/** The taps of the current run; they clear once a pause would start a new one. */
+function useTaps() {
+	const [taps, setTaps] = useState<readonly Milliseconds[]>([]);
+	useEffect(() => {
+		if (taps.length === 0) {
+			return;
+		}
+		const id = window.setTimeout(() => setTaps([]), TAP_RUN_GAP);
+		return () => window.clearTimeout(id);
+	}, [taps]);
+	/** Adds a tap now and returns the run's reading. */
+	const tap = (): TapReading | null => {
+		const run = addTap(taps, performance.now());
+		setTaps(run);
+		return tapTempo(run);
+	};
+	return { tapping: taps.length > 0, reading: tapTempo(taps), count: taps.length, tap };
+}
+
 function Editor({
 	track,
 	analysis,
@@ -180,12 +252,31 @@ function Editor({
 	savedCues: readonly Cue[];
 }) {
 	const savedGrid = gridOf(analysis);
-	const [grid, setGrid] = useState<Grid>(savedGrid);
-	const [cues, setCues] = useState<readonly Cue[]>(savedCues);
+	const { history, setHistory, setGrid, setCues, replace } = useDraft({
+		grid: savedGrid,
+		cues: savedCues,
+	});
+	const { grid, cues } = history.present;
 	const [zoom, setZoom] = useState<number>(ZOOM_DEFAULT);
 	const [snapOn, setSnapOn] = useState(true);
-	const [taps, setTaps] = useState<number[]>([]);
+	const [metronomeOn, setMetronomeOn] = useState(false);
+	const [wholeTaps, setWholeTaps] = useStoredFlag("grid-editor.whole-bpm-taps", true);
+	// Per device: the delay depends on what you listen on (Bluetooth headphones add a lot).
+	const [clickEarlierMs, setClickEarlierMs] = useStoredNumber(
+		"grid-editor.metronome-earlier-ms",
+		0,
+	);
+	const taps = useTaps();
 	const pos = usePosition(track);
+	const { volume } = usePlayer();
+	useMetronome({
+		grid,
+		position: pos.position,
+		playing: pos.playing,
+		on: metronomeOn,
+		volume,
+		earlierMs: clickEarlierMs,
+	});
 	const save = useSave(track.id);
 	// The same object until the grid is edited, so the waveforms are not set up again each render.
 	const draft = useMemo(() => withGrid(analysis, grid), [analysis, grid]);
@@ -204,7 +295,9 @@ function Editor({
 			});
 			// The grid as kept (described from its first beat); adopt it unless edited since.
 			if (kept) {
-				setGrid((g) => (g === v.grid ? gridOf(kept) : g));
+				setHistory((h) =>
+					h.present.grid === v.grid ? replacePresent(h, { ...h.present, grid: gridOf(kept) }) : h,
+				);
 			}
 		},
 	});
@@ -212,13 +305,10 @@ function Editor({
 	const here = () => (snapOn ? snap(grid, pos.position()) : pos.position());
 
 	const tap = () => {
-		const now = performance.now();
-		// A pause of two seconds starts a new run of taps.
-		const run = taps.length > 0 && now - (taps.at(-1) ?? 0) < 2000 ? [...taps, now] : [now];
-		setTaps(run);
-		const bpm = tapBpm(run);
-		if (bpm !== null) {
-			setGrid((g) => setBpm(g, bpm, pos.position()));
+		const reading = taps.tap();
+		if (reading !== null) {
+			const bpm = wholeTaps ? Math.round(reading.bpm) : reading.bpm;
+			setGrid((g) => setBpm(g, bpm, pos.position()), "tap");
 		}
 	};
 	const pad = (slot: number) => {
@@ -232,12 +322,26 @@ function Editor({
 	const [help, setHelp] = useState(false);
 	const step = (beats: number) => pos.moveTo(Math.max(0, pos.position() + beats * period));
 	const tempo = (by: number) =>
-		setGrid((g) => (g.bpm ? setBpm(g, Math.round((g.bpm + by) * 100) / 100, pos.position()) : g));
+		setGrid(
+			(g) => (g.bpm ? setBpm(g, Math.round((g.bpm + by) * 100) / 100, pos.position()) : g),
+			"tempo",
+		);
+	const round = () => setGrid((g) => roundBpm(g, pos.position()));
+	const undoing = {
+		undo: () => setHistory(undo),
+		redo: () => setHistory(redo),
+		canUndo: canUndo(history),
+		canRedo: canRedo(history),
+	};
 	const actions: Partial<Record<GridAction, (alt: boolean) => void>> = {
 		play: () => pos.toggle(),
 		start: () => setCues((cs) => setStart(cs, here())),
 		downbeat: () => setGrid((g) => downbeatAt(g, pos.position())),
 		tap,
+		roundBpm: round,
+		metronome: () => setMetronomeOn((on) => !on),
+		undo: undoing.undo,
+		redo: undoing.redo,
 		memory: () => setCues((cs) => addMemory(cs, here())),
 		snap: () => setSnapOn((on) => !on),
 		zoom: () => setZoom(nextPreset),
@@ -246,8 +350,8 @@ function Editor({
 		zoomReset: () => setZoom(ZOOM_DEFAULT),
 		help: () => setHelp((h) => !h),
 		save: () => void autosave.flush(),
-		nudgeEarlier: (alt) => setGrid((g) => nudge(g, alt ? -FINE : -COARSE)),
-		nudgeLater: (alt) => setGrid((g) => nudge(g, alt ? FINE : COARSE)),
+		nudgeEarlier: (alt) => setGrid((g) => nudge(g, alt ? -FINE : -COARSE), "nudge"),
+		nudgeLater: (alt) => setGrid((g) => nudge(g, alt ? FINE : COARSE), "nudge"),
 		barEarlier: () => setGrid((g) => shiftBar(g, -1)),
 		barLater: () => setGrid((g) => shiftBar(g, 1)),
 		bpmUp: (alt) => tempo(alt ? 0.01 : 0.1),
@@ -263,7 +367,7 @@ function Editor({
 			]).flat(),
 		),
 	};
-	useGridKeys(actions);
+	useGridKeys(actions, undoing);
 
 	return (
 		<div className="space-y-6 pb-8">
@@ -277,15 +381,22 @@ function Editor({
 						<PencilLine className="size-3.5" /> Grid edited by you
 					</span>
 				)}
+				{undoing.canUndo && (
+					<StatusButton title={keyLabel("Undo the last edit (⌘Z)")} onClick={undoing.undo}>
+						<Undo2 /> Undo
+					</StatusButton>
+				)}
+				{undoing.canRedo && (
+					<StatusButton title={keyLabel("Redo the edit undone (⇧⌘Z)")} onClick={undoing.redo}>
+						<Redo2 /> Redo
+					</StatusButton>
+				)}
 				{changed && (
 					<StatusButton
-						title="Back to the grid and cues the song had when you opened it"
-						onClick={() => {
-							setGrid(opened.grid);
-							setCues(opened.cues);
-						}}
+						title="Back to the grid and cues the song had when you opened it. Undo brings the edits back."
+						onClick={() => replace(opened)}
 					>
-						<Undo2 /> Revert grid and cues
+						<RotateCcw /> Revert grid and cues
 					</StatusButton>
 				)}
 			</StatusPortal>
@@ -326,6 +437,8 @@ function Editor({
 					zoom={zoom}
 					snapOn={snapOn}
 					onSnap={setSnapOn}
+					metronomeOn={metronomeOn}
+					onMetronome={setMetronomeOn}
 					startAt={startOf(cues)?.start ?? null}
 					help={<ShortcutHelp open={help} onOpenChange={setHelp} />}
 					tools={
@@ -334,13 +447,23 @@ function Editor({
 								grid={grid}
 								onBpm={(bpm) => setGrid((g) => setBpm(g, bpm, pos.position()))}
 							/>
+							<TapButton
+								tapping={taps.tapping}
+								count={taps.count}
+								reading={taps.reading}
+								whole={wholeTaps}
+								onTap={tap}
+							/>
 							<DownbeatButton onDownbeat={() => setGrid((g) => downbeatAt(g, pos.position()))}>
 								<GridControls
 									grid={grid}
-									tapping={taps.length > 0}
+									wholeTaps={wholeTaps}
+									onWholeTaps={setWholeTaps}
+									clickEarlierMs={clickEarlierMs}
+									onClickEarlierMs={setClickEarlierMs}
 									onBpm={(bpm) => setGrid((g) => setBpm(g, bpm, pos.position()))}
-									onTap={tap}
-									onNudge={(s) => setGrid((g) => nudge(g, s))}
+									onRound={round}
+									onNudge={(s) => setGrid((g) => nudge(g, s), "nudge")}
 									onShiftBar={(n) => setGrid((g) => shiftBar(g, n))}
 								/>
 							</DownbeatButton>
@@ -413,14 +536,27 @@ function DeckButton({
 	);
 }
 
+/** Undo and redo of the editor's own edits. */
+interface Undoing {
+	undo: () => void;
+	redo: () => void;
+	canUndo: boolean;
+	canRedo: boolean;
+}
+
 /**
  * Runs the editor's keyboard shortcuts from anywhere in the open editor, not only once something
  * in it has focus. Ignored while typing, with a dialog open, or once the panel shows something else.
  */
-function useGridKeys(actions: Partial<Record<GridAction, (alt: boolean) => void>>) {
+function useGridKeys(
+	actions: Partial<Record<GridAction, (alt: boolean) => void>>,
+	undoing: Undoing,
+) {
 	const detail = useDetail();
 	const latest = useRef(actions);
 	latest.current = actions;
+	const latestUndoing = useRef(undoing);
+	latestUndoing.current = undoing;
 	// Only while the panel still shows a song.
 	const showing = useRef(false);
 	showing.current = detail.view?.kind === "song";
@@ -439,6 +575,24 @@ function useGridKeys(actions: Partial<Record<GridAction, (alt: boolean) => void>
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
+	}, []);
+	// ⌘Z undoes the editor's edits before the app-wide undo (of file changes) sees it; with no
+	// edit to undo here it is left to that.
+	useEffect(() => {
+		const onKey = (e: globalThis.KeyboardEvent) => {
+			const name = gridAction(e);
+			if (!showing.current || typingKey(e) || (name !== "undo" && name !== "redo")) {
+				return;
+			}
+			const edits = latestUndoing.current;
+			if (name === "undo" ? edits.canUndo : edits.canRedo) {
+				e.preventDefault();
+				e.stopImmediatePropagation();
+				edits[name]();
+			}
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
 	}, []);
 }
 
@@ -491,7 +645,7 @@ function ShortcutHelp({
 /** Makes the playhead beat 1 of a bar; its other half opens the rest of the beat grid settings. */
 function DownbeatButton({ onDownbeat, children }: { onDownbeat: () => void; children: ReactNode }) {
 	const half =
-		"flex h-7 items-center gap-1.5 text-neutral-300 text-xs outline-none transition-colors hover:bg-white/10 hover:text-neutral-50 focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5";
+		"flex h-7 items-center gap-1.5 whitespace-nowrap text-neutral-300 text-xs outline-none transition-colors hover:bg-white/10 hover:text-neutral-50 focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5";
 	return (
 		<div className="flex items-center rounded-md bg-white/5">
 			<button
@@ -531,6 +685,8 @@ function Transport({
 	zoom,
 	snapOn,
 	onSnap,
+	metronomeOn,
+	onMetronome,
 	startAt,
 	help,
 	tools,
@@ -545,6 +701,8 @@ function Transport({
 	zoom: number;
 	snapOn: boolean;
 	onSnap: (on: boolean) => void;
+	metronomeOn: boolean;
+	onMetronome: (on: boolean) => void;
 	/** Where the song starts (rekordbox's main cue), or null for its first beat. */
 	startAt: number | null;
 	/** The keyboard shortcuts button, at the end. */
@@ -616,6 +774,25 @@ function Transport({
 						)}
 					>
 						<Magnet />
+					</button>
+					<button
+						type="button"
+						aria-pressed={metronomeOn}
+						aria-label="Metronome"
+						title={
+							metronomeOn
+								? "Metronome: on. Clicks on every beat of the grid while the song plays (K)."
+								: "Metronome: off. Click to hear the grid's beats while the song plays (K)."
+						}
+						onClick={() => onMetronome(!metronomeOn)}
+						className={cn(
+							"grid size-7 place-items-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5",
+							metronomeOn
+								? "bg-primary/20 text-primary"
+								: "text-neutral-400 hover:bg-white/10 hover:text-neutral-100",
+						)}
+					>
+						<Drum />
 					</button>
 				</div>
 				<fieldset
@@ -726,18 +903,117 @@ function BpmField({ grid, onBpm }: { grid: Grid; onBpm: (bpm: number) => void })
 	);
 }
 
+/**
+ * Tap along to set the tempo. While tapping it shows the tempo the taps give and how many there
+ * have been; the grid follows from the fourth tap.
+ */
+function TapButton({
+	tapping,
+	count,
+	reading,
+	whole,
+	onTap,
+}: {
+	tapping: boolean;
+	count: number;
+	reading: TapReading | null;
+	whole: boolean;
+	onTap: () => void;
+}) {
+	const shown = reading && (whole ? String(Math.round(reading.bpm)) : formatBpm(reading.bpm));
+	return (
+		<button
+			type="button"
+			onClick={onTap}
+			aria-pressed={tapping}
+			title={`Tap along to the beat (T). The grid follows from the fourth tap${whole ? ", rounded to a whole BPM" : ""}; stop for two seconds to start over.`}
+			className={cn(
+				"flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-xs tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
+				tapping
+					? "bg-primary/20 text-primary"
+					: "bg-white/5 text-neutral-300 hover:bg-white/10 hover:text-neutral-50",
+			)}
+		>
+			<span className="font-medium">Tap</span>
+			{tapping && (
+				<span aria-live="polite">
+					{shown ?? "…"}
+					<span className="text-primary/70"> · {count}</span>
+				</span>
+			)}
+		</button>
+	);
+}
+
+/** Metronome timing steps: 10 ms a press, 50 ms with ⇧. */
+const CLICK_STEP_MS = 10;
+const CLICK_BIG_STEP_MS = 50;
+const CLICK_LIMIT_MS = 500;
+
+/**
+ * Moves the metronome's clicks earlier or later, for listening devices that delay sound more
+ * than they report, such as Bluetooth headphones. The grid does not move.
+ */
+function MetronomeTiming({
+	earlierMs,
+	onChange,
+}: {
+	earlierMs: number;
+	onChange: (ms: number) => void;
+}) {
+	const step = (e: React.MouseEvent, direction: 1 | -1) => {
+		const by = (e.shiftKey ? CLICK_BIG_STEP_MS : CLICK_STEP_MS) * direction;
+		onChange(Math.max(-CLICK_LIMIT_MS, Math.min(CLICK_LIMIT_MS, earlierMs + by)));
+	};
+	const shown =
+		earlierMs === 0
+			? "On time"
+			: `${Math.abs(earlierMs)} ms ${earlierMs > 0 ? "earlier" : "later"}`;
+	return (
+		<PropertyRow
+			label={<span className="truncate text-muted-foreground text-xs">Metronome</span>}
+			title={keyLabel(
+				"If the clicks sound late or early, move them until they land on the beat. Remembered on this device. 10 ms a press, 50 ms with ⇧.",
+			)}
+		>
+			<ButtonGroup>
+				<GroupButton label="Clicks earlier" onClick={(e) => step(e, 1)}>
+					<ChevronLeft />
+				</GroupButton>
+				<GroupButton
+					label="Clicks on time"
+					title="Play the clicks on the grid again"
+					disabled={earlierMs === 0}
+					onClick={() => onChange(0)}
+				>
+					<span className="min-w-20 text-center">{shown}</span>
+				</GroupButton>
+				<GroupButton label="Clicks later" onClick={(e) => step(e, -1)}>
+					<ChevronRight />
+				</GroupButton>
+			</ButtonGroup>
+		</PropertyRow>
+	);
+}
+
 function GridControls({
 	grid,
-	tapping,
+	wholeTaps,
+	onWholeTaps,
+	clickEarlierMs,
+	onClickEarlierMs,
 	onBpm,
-	onTap,
+	onRound,
 	onNudge,
 	onShiftBar,
 }: {
 	grid: Grid;
-	tapping: boolean;
+	wholeTaps: boolean;
+	onWholeTaps: (on: boolean) => void;
+	clickEarlierMs: number;
+	onClickEarlierMs: (ms: number) => void;
 	onBpm: (bpm: number) => void;
-	onTap: () => void;
+	onRound: () => void;
 	onNudge: (seconds: number) => void;
 	onShiftBar: (beats: number) => void;
 }) {
@@ -769,11 +1045,27 @@ function GridControls({
 						>
 							2×
 						</GroupButton>
-						<GroupButton active={tapping} title="Tap along to the beat (T)" onClick={onTap}>
-							Tap
+						<GroupButton
+							disabled={!grid.bpm || Number.isInteger(grid.bpm)}
+							title="Round the tempo to a whole BPM, keeping the beat at the playhead (R)"
+							onClick={onRound}
+						>
+							Round
 						</GroupButton>
 					</ButtonGroup>
 				</PropertyRow>
+				<PropertyRow label={label("Tap")} title="How the tempo you tap is used">
+					<ButtonGroup>
+						<GroupButton
+							active={wholeTaps}
+							title="Round the tapped tempo to a whole BPM, as most dance music is"
+							onClick={() => onWholeTaps(!wholeTaps)}
+						>
+							Whole BPM
+						</GroupButton>
+					</ButtonGroup>
+				</PropertyRow>
+				<MetronomeTiming earlierMs={clickEarlierMs} onChange={onClickEarlierMs} />
 				<PropertyRow
 					label={label("Move grid")}
 					title={keyLabel("10 ms a press, 1 ms with ⌥. Arrow keys do the same.")}

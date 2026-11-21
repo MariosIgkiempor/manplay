@@ -4,6 +4,10 @@ export type GridAction =
 	| "start"
 	| "downbeat"
 	| "tap"
+	| "roundBpm"
+	| "metronome"
+	| "undo"
+	| "redo"
 	| "memory"
 	| "snap"
 	| "zoom"
@@ -63,6 +67,8 @@ const PLAIN: Record<string, GridAction> = {
 	c: "start",
 	d: "downbeat",
 	t: "tap",
+	r: "roundBpm",
+	k: "metronome",
 	m: "memory",
 	s: "snap",
 	z: "zoom",
@@ -76,10 +82,22 @@ const SHIFTED: Record<string, GridAction> = {
 
 type Pad = `${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8}`;
 
+/** ⌘ (Ctrl) shortcuts: save, undo, and redo as ⇧⌘Z or, as on Windows, Ctrl+Y. */
+function commandAction(e: KeyPress): GridAction | null {
+	const key = e.key.toLowerCase();
+	if (key === "z") {
+		return e.shiftKey ? "redo" : "undo";
+	}
+	if (key === "y" && !e.shiftKey && e.ctrlKey) {
+		return "redo";
+	}
+	return !e.shiftKey && key === "s" ? "save" : null;
+}
+
 /** The action a key press means, or `null`. ⌥ is left to the action (finer steps). */
 export function gridAction(e: KeyPress): GridAction | null {
 	if (e.metaKey || e.ctrlKey) {
-		return !e.shiftKey && e.key.toLowerCase() === "s" ? "save" : null;
+		return commandAction(e);
 	}
 	const pad = /^Digit([1-8])$/.exec(e.code)?.[1] as Pad | undefined;
 	if (pad) {
@@ -111,6 +129,8 @@ export const GRID_SHORTCUTS: readonly { group: string; items: readonly [string, 
 			["⇧← ⇧→", "Beat 1 a beat earlier / later"],
 			["↑ ↓", "Tempo ±0.1 BPM (⌥ 0.01)"],
 			["T", "Tap the tempo"],
+			["R", "Round the tempo to a whole BPM"],
+			["K", "Metronome on the beats"],
 		],
 	},
 	{
@@ -127,6 +147,7 @@ export const GRID_SHORTCUTS: readonly { group: string; items: readonly [string, 
 		group: "Editor",
 		items: [
 			["[ ]", "Previous / next song"],
+			["⌘Z ⇧⌘Z", "Undo / redo"],
 			["⌘S", "Save now"],
 			["?", "Show these shortcuts"],
 		],

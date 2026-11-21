@@ -69,16 +69,28 @@ export function setBpm(g: Grid, bpm: number, anchor: number): Grid {
 	return normalize({ bpm, firstBeat: pinned - k * (60 / bpm), barOffset: g.barOffset });
 }
 
-/** BPM from tap times (ms), from the last few taps; null until there are enough. */
-export function tapBpm(taps: readonly number[]): number | null {
-	const recent = taps.slice(-9);
-	if (recent.length < 4) {
-		return null;
+/** The tempo rounded to a whole BPM, keeping the beat nearest `anchor` where it is. */
+export const roundBpm = (g: Grid, anchor: number): Grid =>
+	g.bpm === null ? g : setBpm(g, Math.round(g.bpm), anchor);
+
+/** A beat of the grid: when it falls, and whether it is beat 1 of a bar. */
+export interface Beat {
+	time: number;
+	downbeat: boolean;
+}
+
+/** The grid's beats after `from` up to and including `to` (seconds). */
+export function beatsBetween(g: Grid, from: number, to: number): Beat[] {
+	if (g.bpm === null || g.bpm <= 0 || to <= from) {
+		return [];
 	}
-	const first = recent[0] ?? 0;
-	const last = recent.at(-1) ?? 0;
-	const beat = (last - first) / (recent.length - 1);
-	return beat > 0 ? Math.round((60_000 / beat) * 100) / 100 : null;
+	const period = 60 / g.bpm;
+	const beats: Beat[] = [];
+	const first = Math.max(0, Math.floor((from - g.firstBeat) / period) + 1);
+	for (let k = first; g.firstBeat + k * period <= to; k++) {
+		beats.push({ time: g.firstBeat + k * period, downbeat: mod4(g.barOffset + k) === 0 });
+	}
+	return beats;
 }
 
 export function sameGrid(a: Grid, b: Grid): boolean {
