@@ -30,6 +30,7 @@ Windows 10/11 x64.
 | rekordbox / USB export | `rekordbox.rs`, `usb*.rs`, `pdb/`, `onelib/` |
 | The formats a USB export writes (`usb_export::Outputs`): rekordbox, Serato crates, VirtualDJ library (`VirtualDJ/`), Gemini MDJ library (`GEMINI/`, the V-CASE format), playlists as folders (`Playlists/`); the drive's own song list when rekordbox is off (`.manplay/`) | `usb_export.rs`, `serato.rs`, `virtualdj.rs`, `gemini.rs`, `playlist_folders.rs`, `usb_files.rs`, `src/lib/usb-outputs.ts`, `docs/virtualdj.md`, `docs/gemini-vcase.md` |
 | Frontend API wrappers | `src/lib/api.ts`, `src/lib/queries.ts` |
+| Harness: the UI in a headless browser on a fake backend, for looking at and driving the app | `scripts/harness.mjs`, `src/harness/`, `docs/harness.md` |
 | Plans and research | `docs/plans/`, `docs/*.md` |
 
 ## Commands
@@ -43,6 +44,25 @@ cargo test   --manifest-path src-tauri/Cargo.toml
 ```
 
 CI runs all of these on macOS and Windows. Run them before calling work done.
+
+## Seeing the UI
+
+To look at a screen or check a UI change, use the harness instead of the desktop app or OS
+screenshots. It runs the frontend in a headless browser against a made-up library:
+
+```bash
+pnpm harness start            # once; --platform windows for the Windows wording and webview
+pnpm harness goto /settings
+pnpm harness text             # the page as an accessibility tree (cheap; read this first)
+pnpm harness shot settings    # a PNG; prints its path
+pnpm harness click 'role=tab[name="Songs"]'
+pnpm harness tour             # a screenshot of every kind of page
+pnpm harness stop
+```
+
+Every command also prints new console errors. `docs/harness.md` has the rest: scenarios, backend
+events, adding a command to the fake backend. The backend is fake, so anything in Rust still needs
+`cargo test` or the real app.
 
 ## Rules for agents
 
