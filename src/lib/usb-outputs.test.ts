@@ -11,6 +11,7 @@ import {
 const none: UsbOutputs = {
 	rekordbox: false,
 	serato: false,
+	virtualDj: false,
 	gemini: false,
 	playlistFolders: false,
 };
@@ -34,6 +35,9 @@ const report: UsbExportReport = {
 	seratoCrates: null,
 	seratoCratesRemoved: 0,
 	seratoError: null,
+	virtualDjLists: null,
+	virtualDjListsRemoved: 0,
+	virtualDjError: null,
 	gemini: null,
 	geminiError: null,
 	playlistFolders: null,
@@ -45,11 +49,12 @@ describe("exportSteps", () => {
 	it.each<[string, UsbOutputs, string[]]>([
 		["rekordbox only", rekordbox, ["copying", "analyzing", "writing"]],
 		["Serato only", { ...none, serato: true }, ["copying", "writing", "libraries"]],
+		["VirtualDJ only", { ...none, virtualDj: true }, ["copying", "writing", "libraries"]],
 		["Gemini only", { ...none, gemini: true }, ["copying", "analyzing", "writing", "libraries"]],
 		["folders only", { ...none, playlistFolders: true }, ["copying", "writing", "folders"]],
 		[
 			"everything",
-			{ rekordbox: true, serato: true, gemini: true, playlistFolders: true },
+			{ rekordbox: true, serato: true, virtualDj: true, gemini: true, playlistFolders: true },
 			["copying", "analyzing", "writing", "folders", "libraries"],
 		],
 	])("lists the phases for %s", (_name, outputs, phases) => {
@@ -65,6 +70,10 @@ describe("exportSteps", () => {
 			"Write Serato crates and the Gemini library",
 		]);
 		expect(labels({ ...none, serato: true })).toContain("Save the drive's song list");
+		expect(labels({ ...none, serato: true, virtualDj: true, gemini: true })).toContain(
+			"Write Serato crates, the VirtualDJ library and the Gemini library",
+		);
+		expect(labels({ ...none, virtualDj: true })).toContain("Write the VirtualDJ library");
 	});
 });
 
@@ -75,6 +84,12 @@ describe("reviewNotes", () => {
 		expect(withoutRekordbox).toHaveLength(2);
 		expect(withoutRekordbox[0]).toContain("No rekordbox library is written");
 		expect(withoutRekordbox[1]).toContain("removed playlists' crates go too");
+		expect(reviewNotes({ ...rekordbox, virtualDj: true }, "add")[1]).toBe(
+			"Each exported playlist is written as a VirtualDJ list.",
+		);
+		expect(reviewNotes({ ...rekordbox, virtualDj: true }, "replaceAll")[1]).toContain(
+			"removed playlists' lists go too",
+		);
 	});
 });
 
@@ -107,6 +122,8 @@ describe("outputResults and outputProblems", () => {
 		const lines = outputResults({
 			...report,
 			seratoCrates: 2,
+			virtualDjLists: 3,
+			virtualDjListsRemoved: 1,
 			gemini: {
 				tracks: 2,
 				playlists: 1,
@@ -128,6 +145,7 @@ describe("outputResults and outputProblems", () => {
 		});
 		expect(lines).toEqual([
 			{ label: "Serato", text: "2 crates" },
+			{ label: "VirtualDJ", text: "3 lists, 1 list removed" },
 			{ label: "Gemini", text: "2 songs, 1 playlist, 2 waveforms" },
 			{ label: "Folders", text: "3 songs in Playlists, 1 copy for songs in several playlists" },
 		]);
@@ -136,6 +154,7 @@ describe("outputResults and outputProblems", () => {
 	it("report errors and what a player will not show", () => {
 		const problems = outputProblems({
 			...report,
+			virtualDjError: "database.xml is broken",
 			geminiError: "disk full",
 			gemini: {
 				tracks: 2,
@@ -156,8 +175,9 @@ describe("outputResults and outputProblems", () => {
 				inTheWay: 1,
 			},
 		});
-		expect(problems).toHaveLength(5);
-		expect(problems[0]).toContain("disk full");
-		expect(problems[3]).toContain("3 songs left out of a playlist");
+		expect(problems).toHaveLength(6);
+		expect(problems[0]).toContain("database.xml is broken");
+		expect(problems[1]).toContain("disk full");
+		expect(problems[4]).toContain("3 songs left out of a playlist");
 	});
 });

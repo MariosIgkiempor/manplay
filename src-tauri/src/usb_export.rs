@@ -1,7 +1,7 @@
 //! Copies playlists onto a USB drive and writes them in the formats asked for ([`Outputs`]):
 //! rekordbox's two libraries (the Device Library `export.pdb` for the CDJ-3000 and older, and
 //! `OneLibrary` `exportLibrary.db` for the CDJ-3000X, OPUS-QUAD, XDJ-AZ, OMNIS-DUO), Serato
-//! crates, a Gemini library, and the playlists as folders. All are written from one list of the
+//! crates, a `VirtualDJ` library, a Gemini library, and the playlists as folders. All are written from one list of the
 //! drive's songs and playlists, so they hold the same tracks, ids and playlists. That list is
 //! the rekordbox library when one is written, and manplay's own copy of it otherwise.
 //!
@@ -24,6 +24,7 @@ use crate::serato;
 use crate::usb::{BACKUP_DIR, ONE_LIBRARY_PATH, OWN_LIBRARY_PATH, PDB_PATH};
 use crate::usb_files::on_drive;
 use crate::usb_files::remove_if_there;
+use crate::virtualdj;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -83,6 +84,8 @@ pub struct Outputs {
     pub rekordbox: bool,
     /// The playlists as Serato crates (see [`serato`]).
     pub serato: bool,
+    /// The songs, their cues and the playlists as `VirtualDJ` reads them (see [`virtualdj`]).
+    pub virtual_dj: bool,
     /// The library Gemini MDJ players read (see [`gemini`]).
     pub gemini: bool,
     /// Each playlist as a folder of its songs, for players that only browse folders (see
@@ -96,6 +99,7 @@ impl Default for Outputs {
         Self {
             rekordbox: true,
             serato: false,
+            virtual_dj: false,
             gemini: false,
             playlist_folders: false,
         }
@@ -111,7 +115,7 @@ impl Outputs {
 
     /// The libraries written after the drive's own list of songs.
     fn any_other_library(self) -> bool {
-        self.serato || self.gemini
+        self.serato || self.virtual_dj || self.gemini
     }
 }
 
@@ -167,6 +171,12 @@ pub struct Report {
     pub serato_crates_removed: usize,
     /// Why the Serato crates could not be written. The rekordbox libraries were written.
     pub serato_error: Option<String>,
+    /// `VirtualDJ` lists written; `None` when the export was not asked to write them.
+    pub virtual_dj_lists: Option<usize>,
+    /// `VirtualDJ` lists taken off the drive with their playlists.
+    pub virtual_dj_lists_removed: usize,
+    /// Why the `VirtualDJ` library could not be written. The rekordbox libraries were written.
+    pub virtual_dj_error: Option<String>,
     /// The Gemini library written; `None` when the export was not asked to write it.
     pub gemini: Option<gemini::Summary>,
     /// Why it could not be written. The rekordbox libraries were written.
@@ -1018,12 +1028,26 @@ pub fn export(
             current: String::new(),
         });
     }
+    let removals = Removals {
+        playlists: &removed,
+        songs: &gone,
+    };
     if opts.outputs.serato {
-        let removals = SeratoRemovals {
-            playlists: &removed,
-            songs: &gone,
-        };
         write_serato(mount, &lib, playlists, &removals, opts.stamp, &mut report);
+    }
+    if opts.outputs.virtual_dj {
+        let cues: HashMap<u32, &[crate::db::Cue]> = planned
+            .iter()
+            .filter_map(|p| Some((*placed.get(&p.source.id)?, p.source.cues.as_deref()?)))
+            .collect();
+        write_virtual_dj(
+            mount,
+            &lib,
+            (playlists, &cues),
+            &removals,
+            opts.stamp,
+            &mut report,
+        );
     }
     if opts.outputs.gemini {
         let known: HashMap<u32, gemini::FromLibrary> = planned
@@ -1331,17 +1355,15 @@ fn remove_other_playlists(lib: &mut Library, exported: &[SourcePlaylist]) -> Vec
     gone
 }
 
-/// The exported playlists as Serato crates, with their songs as the drive's library now has
-/// them, and every song they hold.
-fn serato_library(
-    lib: &Library,
-    exported: &[SourcePlaylist],
-) -> (Vec<serato::Crate>, Vec<serato::Song>) {
+/// The exported playlists as the drive's library now has them, each with its songs in order.
+/// A name exported twice is given once.
+fn exported_on_drive<'a>(
+    lib: &'a Library,
+    exported: &'a [SourcePlaylist],
+) -> Vec<(&'a str, Vec<&'a pdb::Track>)> {
     let tracks: HashMap<u32, &pdb::Track> = lib.tracks.iter().map(|t| (t.id, t)).collect();
     let mut seen_names = HashSet::new();
-    let mut seen_songs = HashSet::new();
-    let mut songs = Vec::new();
-    let crates = exported
+    exported
         .iter()
         .filter(|p| seen_names.insert(p.name.as_str()))
         .filter_map(|p| {
@@ -1349,11 +1371,32 @@ fn serato_library(
                 .playlists
                 .iter()
                 .find(|e| e.parent_id == 0 && !e.is_folder && e.name == p.name)?;
-            let held: Vec<&pdb::Track> = on_drive
+            let held = on_drive
                 .track_ids
                 .iter()
                 .filter_map(|id| tracks.get(id).copied())
                 .collect();
+            Some((p.name.as_str(), held))
+        })
+        .collect()
+}
+
+/// The tempo the drive's library holds for a song; `None` when it has none.
+fn tempo_of(track: &pdb::Track) -> Option<f64> {
+    (track.tempo > 0).then(|| f64::from(track.tempo) / 100.0)
+}
+
+/// The exported playlists as Serato crates, with their songs as the drive's library now has
+/// them, and every song they hold.
+fn serato_library(
+    lib: &Library,
+    exported: &[SourcePlaylist],
+) -> (Vec<serato::Crate>, Vec<serato::Song>) {
+    let mut seen_songs = HashSet::new();
+    let mut songs = Vec::new();
+    let crates = exported_on_drive(lib, exported)
+        .into_iter()
+        .map(|(name, held)| {
             for t in &held {
                 if seen_songs.insert(t.id) {
                     songs.push(serato::Song {
@@ -1361,28 +1404,46 @@ fn serato_library(
                         title: t.title.clone(),
                         artist: t.artist.clone(),
                         album: t.album.clone(),
-                        bpm: (t.tempo > 0).then(|| f64::from(t.tempo) / 100.0),
+                        bpm: tempo_of(t),
                     });
                 }
             }
-            Some(serato::Crate {
-                name: p.name.clone(),
+            serato::Crate {
+                name: name.to_owned(),
                 tracks: held
                     .iter()
                     .map(|t| serato::SeratoPath::from_drive_path(&t.path))
                     .collect(),
-            })
+            }
         })
         .collect();
     (crates, songs)
 }
 
-/// What [`write_serato`] changes besides the exported playlists.
-struct SeratoRemovals<'a> {
+/// What an export changes on the drive besides the exported playlists, which the libraries
+/// written after the drive's own follow.
+struct Removals<'a> {
     /// Playlists this export took off the drive.
     playlists: &'a [pdb::Playlist],
     /// Paths of the songs this export deleted from the drive or moved on it.
     songs: &'a [String],
+}
+
+impl Removals<'_> {
+    fn playlist_names(&self) -> Vec<String> {
+        self.playlists
+            .iter()
+            .filter(|p| !p.is_folder)
+            .map(|p| p.name.clone())
+            .collect()
+    }
+}
+
+/// Seconds since 1970, UTC.
+fn unix_seconds_now() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(u32::MAX))
 }
 
 /// Writes the exported playlists to the drive as Serato crates with their songs in Serato's
@@ -1391,31 +1452,23 @@ fn write_serato(
     mount: &Path,
     lib: &Library,
     exported: &[SourcePlaylist],
-    removals: &SeratoRemovals,
+    removals: &Removals,
     stamp: &str,
     report: &mut Report,
 ) {
-    let remove_crates: Vec<String> = removals
-        .playlists
-        .iter()
-        .filter(|p| !p.is_folder)
-        .map(|p| p.name.clone())
-        .collect();
+    let remove_crates = removals.playlist_names();
     let deleted: Vec<serato::SeratoPath> = removals
         .songs
         .iter()
         .map(|path| serato::SeratoPath::from_drive_path(path))
         .collect();
     let (crates, songs) = serato_library(lib, exported);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(u32::MAX));
     let update = serato::Update {
         crates: &crates,
         songs: &songs,
         remove_crates: &remove_crates,
         deleted: &deleted,
-        now: serato::UnixSeconds(now),
+        now: serato::UnixSeconds(unix_seconds_now()),
     };
     let backup_rel = format!("{BACKUP_DIR}/{stamp}");
     match serato::write(mount, &update, &mount.join(&backup_rel)) {
@@ -1427,6 +1480,89 @@ fn write_serato(
             }
         }
         Err(e) => report.serato_error = Some(e.to_string()),
+    }
+}
+
+/// The exported playlists as `VirtualDJ` lists, with their songs as the drive's library now has
+/// them, and every song they hold. `cues` are the cues set in manplay, by drive track id.
+fn virtual_dj_library(
+    lib: &Library,
+    exported: &[SourcePlaylist],
+    cues: &HashMap<u32, &[crate::db::Cue]>,
+) -> (Vec<virtualdj::List>, Vec<virtualdj::Song>) {
+    let mut seen_songs = HashSet::new();
+    let mut songs = Vec::new();
+    let lists = exported_on_drive(lib, exported)
+        .into_iter()
+        .map(|(name, held)| {
+            for t in &held {
+                if seen_songs.insert(t.id) {
+                    songs.push(virtualdj::Song {
+                        path: virtualdj::VirtualDjPath::from_drive_path(&t.path),
+                        size_bytes: u64::from(t.file_size),
+                        title: t.title.clone(),
+                        artist: t.artist.clone(),
+                        album: t.album.clone(),
+                        genre: t.genre.clone(),
+                        bpm: tempo_of(t).map(virtualdj::BeatsPerMinute),
+                        key: t.key.clone(),
+                        length: (t.duration_secs > 0)
+                            .then(|| virtualdj::Seconds(f64::from(t.duration_secs))),
+                        cues: cues
+                            .get(&t.id)
+                            .map(|cues| virtualdj::cue_points(cues))
+                            .unwrap_or_default(),
+                    });
+                }
+            }
+            virtualdj::List {
+                name: name.to_owned(),
+                tracks: held
+                    .iter()
+                    .map(|t| virtualdj::VirtualDjPath::from_drive_path(&t.path))
+                    .collect(),
+            }
+        })
+        .collect();
+    (lists, songs)
+}
+
+/// Writes the exported playlists to the drive as `VirtualDJ` lists with their songs in the
+/// drive's `database.xml`, and takes away the lists of playlists and the songs this export
+/// removed. `cues` are the cues set in manplay, by drive track id.
+fn write_virtual_dj(
+    mount: &Path,
+    lib: &Library,
+    (exported, cues): (&[SourcePlaylist], &HashMap<u32, &[crate::db::Cue]>),
+    removals: &Removals,
+    stamp: &str,
+    report: &mut Report,
+) {
+    let remove_lists = removals.playlist_names();
+    let deleted: Vec<virtualdj::VirtualDjPath> = removals
+        .songs
+        .iter()
+        .map(|path| virtualdj::VirtualDjPath::from_drive_path(path))
+        .collect();
+    let (lists, songs) = virtual_dj_library(lib, exported, cues);
+    let update = virtualdj::Update {
+        lists: &lists,
+        songs: &songs,
+        remove_lists: &remove_lists,
+        deleted: &deleted,
+        root: &virtualdj::DriveRoot::of_mount(mount),
+        now: virtualdj::UnixSeconds(unix_seconds_now()),
+    };
+    let backup_rel = format!("{BACKUP_DIR}/{stamp}");
+    match virtualdj::write(mount, &update, &mount.join(&backup_rel)) {
+        Ok(written) => {
+            report.virtual_dj_lists = Some(written.lists);
+            report.virtual_dj_lists_removed = written.removed;
+            if written.backed_up && report.backup.is_none() {
+                report.backup = Some(format!("/{backup_rel}"));
+            }
+        }
+        Err(e) => report.virtual_dj_error = Some(e.to_string()),
     }
 }
 
@@ -1923,6 +2059,99 @@ mod tests {
     }
 
     #[test]
+    fn writes_a_virtualdj_library_with_the_cues_set_in_manplay() {
+        let lib_dir = dir("virtualdj-lib");
+        let usb = dir("virtualdj-usb");
+        let mut cued = source(&lib_dir, 1, "Burial", "Untrue", "01 Archangel.mp3", 1000);
+        cued.cues = Some(vec![crate::db::Cue {
+            slot: Some(0),
+            start: 12.5,
+            name: "Drop".into(),
+            color: String::new(),
+            main: false,
+        }]);
+        let sources = vec![
+            cued,
+            source(&lib_dir, 2, "Burial", "Untrue", "02 Near Dark.mp3", 2000),
+        ];
+        let warm = SourcePlaylist {
+            name: "Warm up".into(),
+            track_ids: vec![2, 1],
+        };
+        let peak = SourcePlaylist {
+            name: "Peak".into(),
+            track_ids: vec![1],
+        };
+        let with_virtual_dj = Options {
+            outputs: Outputs {
+                virtual_dj: true,
+                ..Outputs::default()
+            },
+            ..opts(1 << 40)
+        };
+        let both = [warm.clone(), peak];
+        let report = export(&usb, &sources, &both, &with_virtual_dj, |_| {}).expect("exports");
+        assert_eq!(
+            (report.virtual_dj_lists, report.virtual_dj_error),
+            (Some(2), None)
+        );
+        let list = fs::read_to_string(usb.join(virtualdj::LISTS_DIR).join("Warm up.vdjfolder"))
+            .expect("list");
+        let in_list = virtualdj::decode_list(&list).expect("decodes");
+        assert_eq!(in_list.len(), 2);
+        for path in &in_list {
+            assert!(Path::new(path).is_file(), "{path} is the song's full path");
+        }
+        assert!(in_list[0].ends_with("02 Near Dark.mp3"));
+        let database =
+            fs::read_to_string(usb.join(virtualdj::DATABASE_PATH)).expect("database.xml");
+        assert_eq!(
+            virtualdj::database_songs(&database).expect("reads").len(),
+            2
+        );
+        assert!(database.contains("Author=\"Burial\" Title=\"Song 1\" Album=\"Untrue\""));
+        assert!(database.contains("Bpm=\"0.428571\" Key=\"8A\""));
+        assert!(database.contains("<Infos SongLength=\"200.000000\""));
+        assert!(
+            database.contains("<Poi Name=\"Drop\" Pos=\"12.500000\" Num=\"1\" Type=\"cue\" />")
+        );
+
+        let replace = Options {
+            mode: Mode::ReplaceAll,
+            stamp: "2026-11-15-1300",
+            ..with_virtual_dj
+        };
+        let only_first = SourcePlaylist {
+            name: "Peak".into(),
+            track_ids: vec![1],
+        };
+        let report = export(&usb, &sources, &[only_first], &replace, |_| {}).expect("replaces");
+        assert_eq!(
+            (report.virtual_dj_lists, report.virtual_dj_lists_removed),
+            (Some(1), 1)
+        );
+        assert!(
+            !usb.join(virtualdj::LISTS_DIR)
+                .join("Warm up.vdjfolder")
+                .exists()
+        );
+        assert!(
+            usb.join("PIONEER/manplay-backup/2026-11-15-1300")
+                .join(virtualdj::LISTS_DIR)
+                .join("Warm up.vdjfolder")
+                .is_file()
+        );
+        let database =
+            fs::read_to_string(usb.join(virtualdj::DATABASE_PATH)).expect("database.xml");
+        let left = virtualdj::database_songs(&database).expect("reads");
+        assert_eq!(left.len(), 1, "the deleted song left the database");
+        assert!(left[0].ends_with("01 Archangel.mp3"));
+
+        let without = export(&usb, &sources, &[], &opts(1 << 40), |_| {}).expect("rekordbox only");
+        assert_eq!(without.virtual_dj_lists, None);
+    }
+
+    #[test]
     fn writes_a_gemini_library_only_when_asked() {
         let lib_dir = dir("gemini-lib");
         let usb = dir("gemini-usb");
@@ -1995,6 +2224,7 @@ mod tests {
             outputs: Outputs {
                 rekordbox: true,
                 serato: true,
+                virtual_dj: true,
                 gemini: true,
                 playlist_folders: true,
             },
@@ -2045,6 +2275,8 @@ mod tests {
         assert_eq!(size(formats.device_library), Some((2, 2)));
         assert_eq!(size(formats.one_library), Some((2, 2)));
         assert_eq!(size(formats.serato), Some((2, 2)));
+        assert_eq!(size(formats.virtual_dj), Some((2, 2)));
+        assert_eq!(formats.virtual_dj_error, None);
         assert_eq!(
             size(formats.gemini),
             Some((2, 2)),
@@ -2087,6 +2319,7 @@ mod tests {
             outputs: Outputs {
                 rekordbox: false,
                 serato: true,
+                virtual_dj: false,
                 gemini: false,
                 playlist_folders: false,
             },

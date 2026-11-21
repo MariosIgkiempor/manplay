@@ -1042,6 +1042,8 @@ const usbOutputsSchema = z.object({
 	rekordbox: z.boolean().default(true),
 	/** The playlists as Serato crates. */
 	serato: z.boolean().default(false),
+	/** The songs, their cues and the playlists as VirtualDJ reads them. */
+	virtualDj: z.boolean().default(false),
 	/** The library Gemini MDJ players read. */
 	gemini: z.boolean().default(false),
 	/** Each playlist as a folder of its songs, for players that only browse folders. */
@@ -1063,6 +1065,7 @@ const exportSelectionSchema = z.object({
 	usbOutputs: usbOutputsSchema.default({
 		rekordbox: true,
 		serato: false,
+		virtualDj: false,
 		gemini: false,
 		playlistFolders: false,
 	}),
@@ -1971,6 +1974,8 @@ const usbFormatsSchema = z.object({
 	oneLibrary: usbLibrarySummarySchema.nullable(),
 	/** Serato's `database V2` and crates (counted as playlists). */
 	serato: usbLibrarySummarySchema.nullable().default(null),
+	/** VirtualDJ's `database.xml` and lists (counted as playlists). */
+	virtualDj: usbLibrarySummarySchema.nullable().default(null),
 	/** The `GEMINI` library Gemini MDJ players read. */
 	gemini: usbLibrarySummarySchema.nullable().default(null),
 	/** The playlists as folders of songs; a song counts once for each folder it is in. */
@@ -1978,6 +1983,7 @@ const usbFormatsSchema = z.object({
 	deviceLibraryError: z.string().nullable(),
 	oneLibraryError: z.string().nullable(),
 	seratoError: z.string().nullable().default(null),
+	virtualDjError: z.string().nullable().default(null),
 	geminiError: z.string().nullable().default(null),
 });
 
@@ -2061,6 +2067,12 @@ const usbExportReportSchema = z.object({
 	seratoCratesRemoved: int.default(0),
 	/** Why the Serato crates could not be written; the rekordbox libraries were. */
 	seratoError: z.string().nullable().default(null),
+	/** VirtualDJ lists written; null when the export was not asked to write them. */
+	virtualDjLists: int.nullable().default(null),
+	/** VirtualDJ lists taken off the drive with their playlists. */
+	virtualDjListsRemoved: int.default(0),
+	/** Why the VirtualDJ library could not be written; the rekordbox libraries were. */
+	virtualDjError: z.string().nullable().default(null),
 	/** The Gemini library; null when the export was not asked to write it. */
 	gemini: geminiSummarySchema.nullable().default(null),
 	/** Why it could not be written; the rekordbox libraries were. */

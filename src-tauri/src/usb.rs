@@ -101,6 +101,8 @@ pub struct Formats {
     pub one_library: Option<Summary>,
     /// Serato's `database V2` and crates, read by Serato DJ.
     pub serato: Option<Summary>,
+    /// `VirtualDJ`'s `database.xml` and lists, read by `VirtualDJ`.
+    pub virtual_dj: Option<Summary>,
     /// The `GEMINI` library, read by Gemini MDJ players.
     pub gemini: Option<Summary>,
     /// The playlists as folders of songs, for players that only browse folders.
@@ -109,6 +111,7 @@ pub struct Formats {
     pub device_library_error: Option<String>,
     pub one_library_error: Option<String>,
     pub serato_error: Option<String>,
+    pub virtual_dj_error: Option<String>,
     pub gemini_error: Option<String>,
 }
 
@@ -132,6 +135,11 @@ pub fn formats(mount: &Path) -> Formats {
     match crate::serato::held(mount) {
         Some(Ok(found)) => f.serato = Some(size(found)),
         Some(Err(e)) => f.serato_error = Some(e),
+        None => {}
+    }
+    match crate::virtualdj::held(mount) {
+        Some(Ok(found)) => f.virtual_dj = Some(size(found)),
+        Some(Err(e)) => f.virtual_dj_error = Some(e),
         None => {}
     }
     match crate::gemini::held(mount) {

@@ -204,16 +204,17 @@ pub fn edit(mount: &Path, edit: Edit, stamp: &str, today: &str) -> Result<Outcom
 
 /// What a reset clears: everything rekordbox and manplay export (the libraries, the analysis
 /// files, artwork, the songs in `Contents` and the playlist folders) and the libraries other
-/// players keep of those songs (Gemini's, and Serato's with its backups), which would otherwise
+/// players keep of those songs (Gemini's, `VirtualDJ`'s, and Serato's with its backups), which would otherwise
 /// list songs that are gone. Player settings (`*SETTING.DAT`, `djprofile.nxs`), manplay's
 /// backups and anything else on the drive stay, so the `PIONEER` folder itself does too.
 /// `.manplay` is manplay's own record of what it put on the drive.
-pub const RESET_PATHS: [&str; 10] = [
+pub const RESET_PATHS: [&str; 11] = [
     "Contents",
     "Playlists",
     "GEMINI",
     "_Serato_",
     "_Serato_Backup",
+    "VirtualDJ",
     "PIONEER/rekordbox",
     "PIONEER/USBANLZ",
     "PIONEER/Artwork",
@@ -411,6 +412,7 @@ mod tests {
             "GEMINI/wf",
             "_Serato_/Subcrates",
             "_Serato_Backup",
+            "VirtualDJ/MyLists",
             "PIONEER/rekordbox",
             "PIONEER/USBANLZ/P001",
             "PIONEER/manplay-backup",
@@ -428,6 +430,7 @@ mod tests {
                 "GEMINI",
                 "_Serato_",
                 "_Serato_Backup",
+                "VirtualDJ",
                 "PIONEER/rekordbox",
                 "PIONEER/USBANLZ"
             ]

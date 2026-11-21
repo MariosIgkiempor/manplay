@@ -33,6 +33,7 @@ mod usb;
 mod usb_edit;
 mod usb_export;
 mod usb_files;
+mod virtualdj;
 mod webdav;
 
 use std::collections::{HashMap, HashSet};

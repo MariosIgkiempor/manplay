@@ -202,6 +202,13 @@ const FORMATS = [
 		holds: ["song", "crate"],
 	},
 	{
+		key: "virtualDj",
+		name: "VirtualDJ",
+		file: "VirtualDJ/database.xml",
+		players: "VirtualDJ, on a computer or a controller it drives",
+		holds: ["song", "list"],
+	},
+	{
 		key: "gemini",
 		name: "Gemini",
 		file: "GEMINI/gemini_bd.sqlite",
@@ -482,8 +489,8 @@ function ResetRow({ drive }: { drive: UsbDrive }) {
 					<div className="space-y-3">
 						<p>
 							{isMac
-								? "The rekordbox library (both formats), the Serato and Gemini libraries, analysis files, artwork and every song in Contents and Playlists move to the drive's Trash. Players will show the drive as empty. The space frees up when you empty the Trash; until then you can put them back from it."
-								: "The rekordbox library (both formats), the Serato and Gemini libraries, analysis files, artwork and every song in Contents and Playlists are deleted from the drive for good (Windows keeps no Recycle Bin on USB drives). Players will show the drive as empty."}
+								? "The rekordbox library (both formats), the Serato, VirtualDJ and Gemini libraries, analysis files, artwork and every song in Contents and Playlists move to the drive's Trash. Players will show the drive as empty. The space frees up when you empty the Trash; until then you can put them back from it."
+								: "The rekordbox library (both formats), the Serato, VirtualDJ and Gemini libraries, analysis files, artwork and every song in Contents and Playlists are deleted from the drive for good (Windows keeps no Recycle Bin on USB drives). Players will show the drive as empty."}
 						</p>
 						<div className="space-y-1.5">
 							<label htmlFor={field} className="block text-foreground text-xs">

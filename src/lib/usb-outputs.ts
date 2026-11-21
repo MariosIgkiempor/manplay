@@ -1,4 +1,4 @@
-import { Disc3, FolderTree, type LucideIcon, Radio, Usb } from "lucide-react";
+import { Disc3, FolderTree, Laptop, type LucideIcon, Radio, Usb } from "lucide-react";
 import type {
 	PlaylistFoldersSummary,
 	UsbExportProgress,
@@ -48,6 +48,18 @@ export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 			}.`,
 	},
 	{
+		key: "virtualDj",
+		icon: Laptop,
+		name: "VirtualDJ",
+		title: "VirtualDJ library",
+		detail:
+			"VirtualDJ shows each playlist as a list on the drive, with the cues set in manplay, and analyses new songs itself. Export again after moving the drive between a Mac and a PC.",
+		reviewNote: (mode) =>
+			`Each exported playlist is written as a VirtualDJ list${
+				mode === "add" ? "" : ", and removed playlists' lists go too"
+			}.`,
+	},
+	{
 		key: "gemini",
 		icon: Radio,
 		name: "Gemini",
@@ -87,6 +99,7 @@ export function reviewNotes(outputs: UsbOutputs, mode: UsbMode): string[] {
 export function exportSteps(outputs: UsbOutputs): [UsbExportProgress["phase"], string][] {
 	const libraries = [
 		outputs.serato && "Serato crates",
+		outputs.virtualDj && "the VirtualDJ library",
 		outputs.gemini && "the Gemini library",
 	].filter((name): name is string => Boolean(name));
 	const steps: [UsbExportProgress["phase"], string][] = [["copying", "Copy songs"]];
@@ -102,9 +115,16 @@ export function exportSteps(outputs: UsbOutputs): [UsbExportProgress["phase"], s
 		steps.push(["folders", "Fill the playlist folders"]);
 	}
 	if (libraries.length > 0) {
-		steps.push(["libraries", `Write ${libraries.join(" and ")}`]);
+		steps.push(["libraries", `Write ${listed(libraries)}`]);
 	}
 	return steps;
+}
+
+/** Names joined as a sentence lists them: `a`, `a and b`, `a, b and c`. */
+function listed(names: string[]): string {
+	return names.length < 3
+		? names.join(" and ")
+		: `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /** A line of the finished export's summary. */
@@ -136,6 +156,13 @@ export function outputResults(report: UsbExportReport): OutputResult[] {
 				? `, ${plural(report.seratoCratesRemoved, "crate")} removed`
 				: "";
 		out.push({ label: "Serato", text: `${plural(report.seratoCrates, "crate")}${removed}` });
+	}
+	if (report.virtualDjLists !== null) {
+		const removed =
+			report.virtualDjListsRemoved > 0
+				? `, ${plural(report.virtualDjListsRemoved, "list")} removed`
+				: "";
+		out.push({ label: "VirtualDJ", text: `${plural(report.virtualDjLists, "list")}${removed}` });
 	}
 	if (report.gemini) {
 		const g = report.gemini;
@@ -188,6 +215,9 @@ export function outputProblems(report: UsbExportReport): string[] {
 	}
 	if (report.seratoError) {
 		out.push(`The Serato crates could not be written: ${report.seratoError}`);
+	}
+	if (report.virtualDjError) {
+		out.push(`The VirtualDJ library could not be written: ${report.virtualDjError}`);
 	}
 	if (report.geminiError) {
 		out.push(`The Gemini library could not be written: ${report.geminiError}`);

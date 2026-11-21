@@ -158,6 +158,7 @@ fn create_export_selections(conn: &Connection) -> Result<(), Error> {
         ("usb_rekordbox", 1),
         ("usb_serato", 0),
         ("usb_gemini", 0),
+        ("usb_virtualdj", 0),
         ("usb_playlist_folders", 0),
     ] {
         add_column(
@@ -218,13 +219,14 @@ pub fn export_selection(
     let row: Option<(String, String, String, String, crate::usb_export::Outputs)> = conn
         .query_row(
             "SELECT playlists, tags, smart, usb_mode, usb_serato, usb_gemini,
-                    usb_playlist_folders, usb_rekordbox
+                    usb_playlist_folders, usb_rekordbox, usb_virtualdj
              FROM export_selections WHERE destination = ?1",
             params![destination],
             |r| {
                 let extras = crate::usb_export::Outputs {
                     rekordbox: r.get(7)?,
                     serato: r.get(4)?,
+                    virtual_dj: r.get(8)?,
                     gemini: r.get(5)?,
                     playlist_folders: r.get(6)?,
                 };
@@ -338,14 +340,15 @@ pub fn set_export_selection(
     conn.execute(
         "INSERT INTO export_selections
              (destination, playlists, tags, smart, usb_mode, usb_serato, usb_gemini,
-              usb_playlist_folders, usb_rekordbox)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+              usb_playlist_folders, usb_rekordbox, usb_virtualdj)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(destination) DO UPDATE SET
              playlists = excluded.playlists, tags = excluded.tags, smart = excluded.smart,
              usb_mode = excluded.usb_mode, usb_serato = excluded.usb_serato,
              usb_gemini = excluded.usb_gemini,
              usb_playlist_folders = excluded.usb_playlist_folders,
-             usb_rekordbox = excluded.usb_rekordbox",
+             usb_rekordbox = excluded.usb_rekordbox,
+             usb_virtualdj = excluded.usb_virtualdj",
         params![
             destination,
             playlists,
@@ -355,7 +358,8 @@ pub fn set_export_selection(
             selection.usb_outputs.serato,
             selection.usb_outputs.gemini,
             selection.usb_outputs.playlist_folders,
-            selection.usb_outputs.rekordbox
+            selection.usb_outputs.rekordbox,
+            selection.usb_outputs.virtual_dj
         ],
     )?;
     Ok(())
@@ -4158,6 +4162,7 @@ mod tests {
             usb_outputs: crate::usb_export::Outputs {
                 rekordbox: false,
                 serato: true,
+                virtual_dj: true,
                 gemini: false,
                 playlist_folders: true,
             },

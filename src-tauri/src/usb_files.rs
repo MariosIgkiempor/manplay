@@ -112,3 +112,45 @@ pub fn remove_mac_files(dir: &Path) {
         }
     }
 }
+
+/// Copies a file of one of the drive's libraries into `backup` (the folder an export keeps the
+/// old libraries in) at the same place, unless an earlier copy is there: that one is older, the
+/// one worth keeping.
+pub fn back_up(mount: &Path, path: &Path, backup: &Path) -> io::Result<bool> {
+    let Ok(rel) = path.strip_prefix(mount) else {
+        return Ok(false);
+    };
+    let copy = backup.join(rel);
+    if copy.exists() {
+        return Ok(true);
+    }
+    if let Some(dir) = copy.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::copy(path, copy)?;
+    Ok(true)
+}
+
+/// macOS keeps a file's extended attributes on FAT and exFAT in a `._<name>` file beside it.
+/// DJ software would list `._Funk.crate` as a broken crate, so it goes.
+pub fn remove_apple_double(path: &Path) {
+    if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+        let mut sidecar = std::ffi::OsString::from("._");
+        sidecar.push(name);
+        let _ = fs::remove_file(dir.join(sidecar));
+    }
+}
+
+/// Replaces `path` with `bytes` unless it already holds them, backing up what it held. Returns
+/// whether a copy was kept.
+pub fn replace(mount: &Path, path: &Path, bytes: &[u8], backup: &Path) -> io::Result<bool> {
+    let backed_up = match fs::read(path) {
+        Ok(old) if old == bytes => return Ok(false),
+        Ok(_) => back_up(mount, path, backup)?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e),
+    };
+    write_atomic(path, bytes)?;
+    remove_apple_double(path);
+    Ok(backed_up)
+}
