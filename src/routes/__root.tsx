@@ -38,7 +38,8 @@ function RootDocument({ children }: { children: ReactNode }) {
 	const [duplicatesOpen, setDuplicatesOpen] = useState(false);
 	const [issuesOpen, setIssuesOpen] = useState(false);
 	return (
-		<html lang="en" className="dark">
+		// The page's colour before the stylesheet has loaded, so a launch does not flash white.
+		<html lang="en" className="dark" style={{ backgroundColor: "#0e1012" }}>
 			<head>
 				<HeadContent />
 			</head>

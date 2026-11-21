@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -35,7 +36,7 @@ pub struct Track {
     pub added_at: Option<i64>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct NewTrack {
     pub path: String,
     pub artist: String,
@@ -55,6 +56,9 @@ pub struct NewTrack {
     pub tag_key: Option<String>,
     /// JSON object of the list fields (see `tags::LISTED`); `None` when the tag was unreadable.
     pub fields: Option<String>,
+    /// When the file was last modified, in Unix milliseconds. With the size it tells a scan
+    /// whether the file has to be read again; `None` when the file system would not say.
+    pub mtime_ms: Option<i64>,
 }
 
 /// Remembered tag values (artists, genres, ...), rebuilt on every scan.
@@ -747,6 +751,9 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "tracks", "added_at", "INTEGER")?;
     // Fingerprint of the audio alone (see `audioprint`): the key of a song's analysis and cues.
     add_column(&conn, "tracks", "audio_fp", "TEXT")?;
+    // The file's modification time when it was last read (Unix milliseconds); NULL for rows from
+    // before this column, which the next scan reads once more.
+    add_column(&conn, "tracks", "mtime_ms", "INTEGER")?;
     retire_fingerprint_keys(&conn)?;
     // What each side of a destination looked like at the last successful sync (see `Base`).
     add_column(&conn, "synced_files", "local_sig", "TEXT")?;
@@ -757,7 +764,10 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "synced_files", "base_modified", "INTEGER")?;
     add_column(&conn, "synced_files", "base_version", "TEXT")?;
     conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
+        "-- The song list counts each song's copies on the destinations: without this every song
+         -- walks the whole table.
+         CREATE INDEX IF NOT EXISTS synced_files_track ON synced_files(track_id);
+         CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
          CREATE INDEX IF NOT EXISTS tracks_audio_fp ON tracks(audio_fp);
          CREATE TABLE IF NOT EXISTS import_cache (
              folder TEXT PRIMARY KEY,
@@ -1302,8 +1312,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
         let mut stmt = tx.prepare(
             "INSERT INTO tracks (path, artist, album, title, size, fingerprint,
                                  duration_ms, bitrate, sample_rate, tag_bpm, tag_key, fields,
-                                 audio_fp, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                                 audio_fp, mtime_ms, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
                      CAST(strftime('%s', 'now') AS INTEGER))
              ON CONFLICT(path) DO UPDATE SET
                  artist = excluded.artist,
@@ -1319,6 +1329,7 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                  fields = COALESCE(excluded.fields, fields),
                  audio_fp = CASE WHEN excluded.audio_fp <> '' THEN excluded.audio_fp
                      ELSE COALESCE(audio_fp, excluded.audio_fp) END,
+                 mtime_ms = excluded.mtime_ms,
                  missing_since = NULL",
         )?;
         for t in tracks {
@@ -1336,7 +1347,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                 t.tag_bpm,
                 t.tag_key,
                 t.fields,
-                t.audio_fp
+                t.audio_fp,
+                t.mtime_ms
             ])?;
         }
     }
@@ -3126,6 +3138,42 @@ pub fn backup(conn: &Connection, dir: &Path, stamp: i64, keep: usize) -> Result<
     Ok(())
 }
 
+/// What the last scan read from each file still in the library, by path, so the next scan can
+/// skip the files that have not changed since (see `scan::scan`). Rows whose audio was never
+/// fingerprinted, or that have no modification time, are left out and so read again.
+pub fn scanned_tracks(conn: &Connection) -> Result<HashMap<String, NewTrack>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT path, artist, album, title, size, fingerprint, audio_fp, duration_ms, bitrate,
+                sample_rate, tag_bpm, tag_key, fields, mtime_ms
+         FROM tracks
+         WHERE missing_since IS NULL AND mtime_ms IS NOT NULL AND audio_fp IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(NewTrack {
+            path: r.get(0)?,
+            artist: r.get(1)?,
+            album: r.get(2)?,
+            title: r.get(3)?,
+            size: r.get(4)?,
+            fingerprint: r.get(5)?,
+            audio_fp: r.get(6)?,
+            duration_ms: r.get(7)?,
+            bitrate: r.get(8)?,
+            sample_rate: r.get(9)?,
+            tag_bpm: r.get(10)?,
+            tag_key: r.get(11)?,
+            fields: r.get(12)?,
+            mtime_ms: r.get(13)?,
+        })
+    })?;
+    let mut tracks = HashMap::new();
+    for row in rows {
+        let track = row?;
+        tracks.insert(track.path.clone(), track);
+    }
+    Ok(tracks)
+}
+
 // ---- moves and renames ------------------------------------------------------
 
 pub struct Known {
@@ -3744,6 +3792,49 @@ mod tests {
             version: version.to_owned(),
             signature: format!("sig-{path}-{version}"),
         }
+    }
+
+    #[test]
+    fn a_scan_remembers_only_rows_it_can_trust_again() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        let read_at = |path: &str, mtime_ms: Option<i64>| NewTrack {
+            mtime_ms,
+            ..track(path, path, None)
+        };
+        let never_fingerprinted = NewTrack {
+            audio_fp: None,
+            ..read_at("/m/unprinted.mp3", Some(4))
+        };
+        upsert(
+            &mut conn,
+            &[
+                read_at("/m/kept.mp3", Some(1_700_000_000_123)),
+                read_at("/m/untimed.mp3", None),
+                read_at("/m/gone.mp3", Some(3)),
+                never_fingerprinted,
+            ],
+        )
+        .expect("upsert");
+        let gone: i64 = conn
+            .query_row(
+                "SELECT id FROM tracks WHERE path = '/m/gone.mp3'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("id");
+        mark_missing(&mut conn, &[gone], 10).expect("missing");
+
+        let known = scanned_tracks(&conn).expect("known");
+        assert_eq!(known.keys().collect::<Vec<_>>(), ["/m/kept.mp3"]);
+        let kept = &known["/m/kept.mp3"];
+        assert_eq!(kept.mtime_ms, Some(1_700_000_000_123));
+        assert_eq!(kept.size, 1);
+        assert_eq!(kept.audio_fp.as_deref(), Some("/m/kept.mp3"));
+
+        // Reading the file again replaces the time kept for it.
+        upsert(&mut conn, &[read_at("/m/kept.mp3", Some(5))]).expect("again");
+        let known = scanned_tracks(&conn).expect("known");
+        assert_eq!(known["/m/kept.mp3"].mtime_ms, Some(5));
     }
 
     #[test]

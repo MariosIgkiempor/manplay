@@ -84,6 +84,18 @@ struct AppState {
     jellyfin_pushing: tokio::sync::Mutex<()>,
 }
 
+/// When the app started, for [`launch_mark`].
+static LAUNCHED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// With `MANPLAY_TIMING` set, prints how long after the app started a step of the launch was
+/// reached, to find what a slow start is waiting on. Says nothing otherwise.
+fn launch_mark(step: &str) {
+    let since = LAUNCHED.get_or_init(std::time::Instant::now).elapsed();
+    if std::env::var_os("MANPLAY_TIMING").is_some() {
+        eprintln!("launch {:>7.0} ms  {step}", since.as_secs_f64() * 1000.0);
+    }
+}
+
 const SETTING_ROOT: &str = "library_root";
 /// How long a track must stay missing before its record and remote copies are removed.
 const GRACE_SECS: i64 = 7 * 24 * 60 * 60;
@@ -92,10 +104,28 @@ const BACKUPS_KEEP: usize = 5;
 /// How long copies of files removed from destinations are kept.
 const SYNC_BACKUP_KEEP_SECS: i64 = 30 * 24 * 60 * 60;
 
+/// How much of the library a scan reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScanDepth {
+    /// Only the files that are new, or whose size or modification time changed since they were
+    /// last read. What every scan the app starts on its own does.
+    Changed,
+    /// Every file, whatever is remembered of it: for a rescan someone asked for, in case a file
+    /// was rewritten without its size or time changing.
+    Everything,
+}
+
 /// Scans `root` off the UI thread, stores the results, and remembers `root` as the library folder.
-async fn scan_and_store(state: &AppState, root: PathBuf) -> Result<usize, Error> {
+async fn scan_and_store(state: &AppState, root: PathBuf, depth: ScanDepth) -> Result<usize, Error> {
+    let known = match depth {
+        ScanDepth::Changed => {
+            let conn = state.db.lock().map_err(|_| Error::Lock)?;
+            db::scanned_tracks(&conn)?
+        }
+        ScanDepth::Everything => HashMap::new(),
+    };
     let scan_root = root.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || scan::scan(&scan_root))
+    let result = tauri::async_runtime::spawn_blocking(move || scan::scan(&scan_root, known))
         .await
         .map_err(|e| Error::Msg(e.to_string()))?;
     let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
@@ -409,7 +439,7 @@ async fn scan_library(
     root: PathBuf,
 ) -> Result<usize, Error> {
     allow_assets(&app, &root);
-    scan_and_store(&state, root).await
+    scan_and_store(&state, root, ScanDepth::Changed).await
 }
 
 /// Lets the player load files from `dir` through the asset protocol. The static scope in
@@ -427,9 +457,13 @@ fn get_library_root(state: State<'_, AppState>) -> Result<Option<String>, Error>
     db::get_setting(&conn, SETTING_ROOT)
 }
 
-/// Rescans the remembered library folder. `None` when no folder was ever chosen.
+/// Rescans the remembered library folder. `None` when no folder was ever chosen. With `full`
+/// every file is read again; without it only new and changed ones are (see [`ScanDepth`]).
 #[tauri::command]
-async fn rescan_library(state: State<'_, AppState>) -> Result<Option<usize>, Error> {
+async fn rescan_library(
+    state: State<'_, AppState>,
+    full: Option<bool>,
+) -> Result<Option<usize>, Error> {
     let saved = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         db::get_setting(&conn, SETTING_ROOT)?
@@ -444,7 +478,14 @@ async fn rescan_library(state: State<'_, AppState>) -> Result<Option<usize>, Err
             root.display()
         )));
     }
-    scan_and_store(&state, root).await.map(Some)
+    let depth = if full == Some(true) {
+        ScanDepth::Everything
+    } else {
+        ScanDepth::Changed
+    };
+    let found = scan_and_store(&state, root, depth).await.map(Some);
+    launch_mark("a library scan finished");
+    found
 }
 
 /// Wipes the track table and rebuilds it from the library folder. A backup is taken first.
@@ -467,13 +508,16 @@ async fn reset_library(state: State<'_, AppState>) -> Result<Option<usize>, Erro
         )?;
         db::clear_tracks(&conn)?;
     }
-    rescan_library(state).await
+    rescan_library(state, None).await
 }
 
 #[tauri::command]
 fn list_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, Error> {
+    static FIRST: std::sync::Once = std::sync::Once::new();
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
-    db::list(&conn)
+    let tracks = db::list(&conn);
+    FIRST.call_once(|| launch_mark("the song list reached the page"));
+    tracks
 }
 
 #[derive(serde::Serialize, Clone, Copy)]
@@ -1266,7 +1310,7 @@ async fn remote_pull(
         .collect();
     let outcome = sync::pull(&app, &state.http, &target, &root, &chosen).await;
     if outcome.pulled > 0 {
-        scan_and_store(&state, root).await?;
+        scan_and_store(&state, root, ScanDepth::Changed).await?;
         // The pulled songs no longer count as missing. Plans made before stay applicable.
         queue_scans(&app, &[target_id], false, ReadDepth::Full)?;
     }
@@ -1291,7 +1335,7 @@ async fn remote_download(
     let _claim = claim_sync(&state).await?;
     let outcome = sync::transfer::download(&app, &state.http, &target, &items, &dest).await?;
     if outcome.pulled > 0 {
-        scan_and_store(&state, root).await?;
+        scan_and_store(&state, root, ScanDepth::Changed).await?;
     }
     Ok(outcome)
 }
@@ -3162,7 +3206,7 @@ async fn apply_plans(
 
     // Library files rewritten by an update or merge: read them again.
     if summaries.iter().any(|s| s.updated + s.merged > 0) {
-        scan_and_store(state, root).await?;
+        scan_and_store(state, root, ScanDepth::Changed).await?;
     }
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     purge_expired(&conn, &state.data_dir.join("backups"), unix_now())?;
@@ -3475,7 +3519,7 @@ async fn fs_dir_sizes(
 /// tags and playlists (see `detect_moves`). The change itself already succeeded, so a failed
 /// rescan is only logged.
 async fn refresh_after_fs_change(state: &AppState, root: PathBuf) {
-    if let Err(e) = scan_and_store(state, root).await {
+    if let Err(e) = scan_and_store(state, root, ScanDepth::Changed).await {
         log::warn!("rescan after file change failed: {e}");
     }
 }
@@ -4355,7 +4399,7 @@ async fn itunes_import(state: State<'_, AppState>) -> Result<Option<ItunesStatus
         }
     }
     if !report.converted.is_empty() {
-        scan_and_store(&state, library).await?;
+        scan_and_store(&state, library, ScanDepth::Changed).await?;
     }
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     if !report.converted.is_empty() || !report.failed.is_empty() || report.error.is_some() {
@@ -4475,7 +4519,13 @@ fn art_response(app: &AppHandle, target: ArtTarget) -> tauri::http::Response<Vec
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[allow(clippy::expect_used)]
 pub fn run() {
+    launch_mark("the app started");
     tauri::Builder::default()
+        .on_page_load(|_, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                launch_mark("the page loaded");
+            }
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -4551,6 +4601,7 @@ pub fn run() {
             tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(reprint_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(scan_worker(app.handle().clone()));
+            launch_mark("the backend is set up");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -4839,6 +4890,58 @@ mod tests {
         f.apply(&f.scan_of(&["1", "2"], 0));
         f.apply(&f.scan_of(&[], 0));
         assert_eq!(f.visible(), 2);
+    }
+
+    /// How long each step of a launch takes on a real library:
+    /// `MANPLAY_BENCH_DB=<a copy of library.db> MANPLAY_BENCH_ROOT=<library folder>
+    /// cargo test --release launch_timing -- --ignored --nocapture`. It writes to the copy.
+    #[test]
+    #[ignore = "timing, not a check; needs a library"]
+    fn launch_timing() {
+        let (Ok(db_path), Ok(root)) = (
+            std::env::var("MANPLAY_BENCH_DB"),
+            std::env::var("MANPLAY_BENCH_ROOT"),
+        ) else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let dir = std::env::temp_dir().join("manplay-launch-timing");
+        let mut last = std::time::Instant::now();
+        let mut step = |name: &str| {
+            println!("{:>8.1} ms  {name}", last.elapsed().as_secs_f64() * 1000.0);
+            last = std::time::Instant::now();
+        };
+        let mut conn = db::open(Path::new(&db_path)).expect("open");
+        step("open the database");
+        let listed = db::list(&conn).expect("list").len();
+        step("list the songs");
+        let known = db::scanned_tracks(&conn).expect("known");
+        let remembered = known.len();
+        step("load what the last scan read");
+        let result = scan::scan(&root, known);
+        step("walk the folder and read changed files");
+        detect_moves(&mut conn, &dir, &root, &result).expect("moves");
+        step("detect moves");
+        db::upsert(&mut conn, &result.tracks).expect("upsert");
+        step("store the songs");
+        db::rekey_legacy(&mut conn).expect("rekey");
+        step("rekey legacy analysis");
+        libsync::apply::materialize_pending(&mut conn).expect("pending");
+        step("apply waiting shared edits");
+        db::replace_tag_values(&mut conn, &result.values).expect("values");
+        step("replace tag values");
+        reconcile_missing(&mut conn, &dir, &root, &result).expect("missing");
+        step("reconcile missing");
+        let everything = scan::scan(&root, HashMap::new()).tracks.len();
+        step("read every file, as a full rescan does");
+        let http = reqwest::Client::builder().build().is_ok();
+        step("make an HTTP client");
+        println!("{everything} read in full, HTTP client made: {http}");
+        println!(
+            "{listed} songs listed, {remembered} remembered, {} found, {} errors",
+            result.tracks.len(),
+            result.errors
+        );
     }
 
     #[test]

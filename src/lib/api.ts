@@ -160,9 +160,13 @@ export async function pickAndScan(): Promise<number | null> {
 	return int.parse(await invoke("scan_library", { root }));
 }
 
-/** Rescans the remembered library folder. Returns null when no folder has been chosen yet. */
-export async function rescanLibrary(): Promise<number | null> {
-	return int.nullable().parse(await invoke("rescan_library"));
+/**
+ * Rescans the remembered library folder. Returns null when no folder has been chosen yet.
+ * By default only files that are new or changed (by size or modification time) are read; `full`
+ * reads every file again.
+ */
+export async function rescanLibrary(full = false): Promise<number | null> {
+	return int.nullable().parse(await invoke("rescan_library", { full }));
 }
 
 /** Backs up, clears the track table and rescans. Returns null when no folder has been chosen. */

@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::properties::FileProperties;
@@ -76,20 +78,25 @@ pub struct ScanResult {
     pub values: std::collections::HashMap<(&'static str, String), i64>,
 }
 
-/// Counts the names in the suggestion fields of one file's tag.
+/// Counts the names in the suggestion fields of one file, from the list fields kept for it
+/// (`NewTrack::fields`), so a file the scan did not read again is counted like one it did.
 fn collect_values(
-    tag: Option<&lofty::tag::Tag>,
+    fields: Option<&str>,
     into: &mut std::collections::HashMap<(&'static str, String), i64>,
 ) {
-    let Some(tag) = tag else { return };
+    let Some(listed) = fields.and_then(|json| {
+        serde_json::from_str::<std::collections::BTreeMap<String, String>>(json).ok()
+    }) else {
+        return;
+    };
     for field in crate::tags::SUGGEST {
-        let Some(text) = crate::tags::read_field(Some(tag), field) else {
+        let Some(text) = listed.get(*field) else {
             continue;
         };
         let names = if crate::tags::MULTI.contains(field) {
-            crate::tags::split_names(&text)
+            crate::tags::split_names(text)
         } else {
-            vec![text]
+            vec![text.clone()]
         };
         for name in names.into_iter().filter(|n| !n.is_empty()) {
             *into.entry((*field, name)).or_insert(0) += 1;
@@ -120,16 +127,47 @@ pub fn folder_names(root: &Path, path: &Path) -> Option<(String, String)> {
     }
 }
 
-fn read_track(
-    root: &Path,
-    entry: &walkdir::DirEntry,
-    values: &mut std::collections::HashMap<(&'static str, String), i64>,
-) -> Option<NewTrack> {
-    let path = entry.path();
+/// An audio file the walk found, with what tells whether it changed since it was last read.
+struct Found {
+    path: PathBuf,
+    size: u64,
+    /// Unix milliseconds; `None` when the file system gives no modification time.
+    mtime_ms: Option<i64>,
+}
+
+impl Found {
+    fn of(entry: &walkdir::DirEntry) -> Option<Self> {
+        let meta = entry.metadata().ok()?;
+        let mtime_ms = meta
+            .modified()
+            .ok()
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|since| i64::try_from(since.as_millis()).ok());
+        Some(Self {
+            path: entry.path().to_owned(),
+            size: meta.len(),
+            mtime_ms,
+        })
+    }
+
+    /// The library's row for this file, when the file is as it was when that row was read:
+    /// same size, same modification time.
+    fn unchanged(&self, known: &mut HashMap<String, NewTrack>) -> Option<NewTrack> {
+        let path = self.path.to_str()?;
+        let same = known.get(path).is_some_and(|k| {
+            self.mtime_ms.is_some()
+                && k.mtime_ms == self.mtime_ms
+                && u64::try_from(k.size).is_ok_and(|size| size == self.size)
+        });
+        same.then(|| known.remove(path)).flatten()
+    }
+}
+
+fn read_track(root: &Path, found: &Found) -> Option<NewTrack> {
+    let path = found.path.as_path();
     let folders = folder_names(root, path);
     let tagged = read_from_path(path).ok();
     let tag = tagged.as_ref().and_then(|f| f.primary_tag());
-    collect_values(tag, values);
     let tag_text = |get: fn(&lofty::tag::Tag) -> Option<std::borrow::Cow<'_, str>>| {
         tag.and_then(get).map(std::borrow::Cow::into_owned)
     };
@@ -151,7 +189,6 @@ fn read_track(
         .unwrap_or_else(|| "Unknown".to_owned());
     let stem = path.file_stem()?.to_str()?.to_owned();
     let title = tag_text(Accessor::title).unwrap_or(stem);
-    let len = entry.metadata().ok()?.len();
     let props = tagged.as_ref().map(AudioFile::properties);
     let millis = props.and_then(|p| i64::try_from(p.duration().as_millis()).ok());
     Some(NewTrack {
@@ -159,8 +196,8 @@ fn read_track(
         artist,
         album,
         title,
-        size: i64::try_from(len).ok()?,
-        fingerprint: fingerprint(path, len),
+        size: i64::try_from(found.size).ok()?,
+        fingerprint: fingerprint(path, found.size),
         audio_fp: Some(crate::audioprint::audio_print_path(path).unwrap_or_default()),
         duration_ms: millis.filter(|m| *m > 0),
         bitrate: props.and_then(FileProperties::audio_bitrate).map(i64::from),
@@ -171,27 +208,81 @@ fn read_track(
         tag_key: crate::tags::read_field(tag, "key")
             .and_then(|k| crate::analysis::normalize_key(&k)),
         fields: tag.and_then(listed_fields),
+        mtime_ms: found.mtime_ms,
     })
+}
+
+/// Reads the given files on a few threads, since each one is opened, parsed and fingerprinted
+/// on its own. The results come back in the order of `files`; `None` for a file that failed.
+fn read_tracks(root: &Path, files: &[&Found]) -> Vec<Option<NewTrack>> {
+    let workers = std::thread::available_parallelism()
+        .map_or(2, std::num::NonZero::get)
+        .clamp(1, 8)
+        .min(files.len().max(1));
+    let next = AtomicUsize::new(0);
+    let mut read: Vec<(usize, Option<NewTrack>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(found) = files.get(i) else { break };
+                        mine.push((i, read_track(root, found)));
+                    }
+                    mine
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().unwrap_or_default())
+            .collect()
+    });
+    read.sort_by_key(|(i, _)| *i);
+    let mut tracks: Vec<Option<NewTrack>> = read.into_iter().map(|(_, track)| track).collect();
+    // A reader that panicked took its files with it: they count as unread.
+    tracks.resize_with(files.len(), || None);
+    tracks
 }
 
 /// Library layout is `…/artist/album/track.ext`. Tags win (album artist, then artist; album),
 /// matching Jellyfin; folder names are the fallback for untagged files, then "Unknown".
-pub fn scan(root: &Path) -> ScanResult {
-    let mut result = ScanResult {
-        tracks: Vec::new(),
-        errors: 0,
-        values: std::collections::HashMap::new(),
-    };
+///
+/// `known` is what earlier scans read, by path (`db::scanned_tracks`). A file with the size and
+/// modification time it had then is taken from there instead of being opened, so a scan of a
+/// library that has not changed only walks its folders. Pass an empty map to read every file.
+pub fn scan(root: &Path, mut known: HashMap<String, NewTrack>) -> ScanResult {
+    let mut errors = 0;
+    let mut files: Vec<Found> = Vec::new();
     for entry in WalkDir::new(root) {
         match entry {
-            Err(_) => result.errors += 1,
-            Ok(e) if e.file_type().is_file() && is_audio(e.path()) => {
-                match read_track(root, &e, &mut result.values) {
-                    Some(t) => result.tracks.push(t),
-                    None => result.errors += 1,
-                }
-            }
+            Err(_) => errors += 1,
+            Ok(e) if e.file_type().is_file() && is_audio(e.path()) => match Found::of(&e) {
+                Some(found) => files.push(found),
+                None => errors += 1,
+            },
             Ok(_) => {}
+        }
+    }
+    let mut slots: Vec<Option<NewTrack>> = files.iter().map(|f| f.unchanged(&mut known)).collect();
+    let changed: Vec<usize> = (0..files.len()).filter(|i| slots[*i].is_none()).collect();
+    let to_read: Vec<&Found> = changed.iter().map(|i| &files[*i]).collect();
+    for (i, track) in changed.iter().zip(read_tracks(root, &to_read)) {
+        slots[*i] = track;
+    }
+    let mut result = ScanResult {
+        tracks: Vec::with_capacity(slots.len()),
+        errors,
+        values: HashMap::new(),
+    };
+    for slot in slots {
+        match slot {
+            Some(track) => {
+                collect_values(track.fields.as_deref(), &mut result.values);
+                result.tracks.push(track);
+            }
+            None => result.errors += 1,
         }
     }
     result
@@ -323,13 +414,144 @@ mod tests {
         std::fs::create_dir_all(&album).unwrap_or_default();
         std::fs::write(album.join("01 tone.wav"), wav(8000, 2)).unwrap_or_default();
 
-        let result = scan(&root);
+        let result = scan(&root, HashMap::new());
         assert_eq!(result.errors, 0);
         let track = result.tracks.first().expect("one track");
         assert_eq!(track.artist, "Artist");
         assert_eq!(track.sample_rate, Some(8000));
         let ms = track.duration_ms.expect("duration");
         assert!((1900..=2100).contains(&ms), "duration was {ms} ms");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A library of `names` (WAV files of `seconds` each) under one album folder.
+    fn library(tag: &str, names: &[(&str, u32)]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("manplay-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let album = root.join("Artist").join("Album");
+        std::fs::create_dir_all(&album).expect("album folder");
+        for (name, seconds) in names {
+            std::fs::write(album.join(name), wav(8000, *seconds)).expect("song");
+        }
+        root
+    }
+
+    fn by_path(result: &ScanResult) -> HashMap<String, NewTrack> {
+        result
+            .tracks
+            .iter()
+            .map(|t| (t.path.clone(), t.clone()))
+            .collect()
+    }
+
+    /// What a scan remembers of each file, marked so a test can tell a remembered row from a
+    /// file that was read again.
+    fn remembered(result: &ScanResult) -> HashMap<String, NewTrack> {
+        let mut known = by_path(result);
+        for track in known.values_mut() {
+            track.title = "remembered".to_owned();
+        }
+        known
+    }
+
+    /// Titles in the order the scan gave them, which is the folder's own order.
+    fn titles(result: &ScanResult) -> Vec<&str> {
+        result.tracks.iter().map(|t| t.title.as_str()).collect()
+    }
+
+    #[test]
+    fn many_files_come_back_in_walk_order() {
+        let names: Vec<String> = (0..40).map(|i| format!("{i:02}.wav")).collect();
+        let files: Vec<(&str, u32)> = names.iter().map(|n| (n.as_str(), 1)).collect();
+        let root = library("order", &files);
+
+        let result = scan(&root, HashMap::new());
+        assert_eq!(result.errors, 0);
+        let found: Vec<&str> = result.tracks.iter().map(|t| t.path.as_str()).collect();
+        let walked: Vec<String> = WalkDir::new(&root)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .filter_map(|e| e.path().to_str().map(str::to_owned))
+            .collect();
+        assert_eq!(walked.len(), 40);
+        assert_eq!(
+            found, walked,
+            "tracks follow the walk, not the reader that finished first"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_unchanged_file_is_not_read_again() {
+        let root = library("unchanged", &[("a.wav", 1), ("b.wav", 1)]);
+        let first = scan(&root, HashMap::new());
+
+        let second = scan(&root, remembered(&first));
+        assert_eq!(second.errors, 0);
+        assert_eq!(titles(&second), ["remembered", "remembered"]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_changed_or_new_file_is_read() {
+        let root = library("changed", &[("a.wav", 1), ("b.wav", 1)]);
+        let first = scan(&root, HashMap::new());
+        let album = root.join("Artist").join("Album");
+        // A different length is a different size; a new file is not remembered at all.
+        std::fs::write(album.join("b.wav"), wav(8000, 2)).expect("rewrite");
+        std::fs::write(album.join("c.wav"), wav(8000, 1)).expect("new");
+
+        let second = scan(&root, remembered(&first));
+        let mut read = titles(&second);
+        read.sort_unstable();
+        assert_eq!(read, ["b", "c", "remembered"]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// What makes a remembered row stale, or not good enough to stand in for the file.
+    #[test]
+    fn a_remembered_row_is_only_used_for_the_file_it_was_read_from() {
+        type Change = fn(&mut NewTrack);
+        let stale: [(&str, Change); 3] = [
+            ("another time", |t| t.mtime_ms = t.mtime_ms.map(|at| at - 1)),
+            ("another size", |t| t.size += 1),
+            ("no time kept", |t| t.mtime_ms = None),
+        ];
+        for (case, change) in stale {
+            let root = library("stale", &[("a.wav", 1)]);
+            let mut known = remembered(&scan(&root, HashMap::new()));
+            known.values_mut().for_each(change);
+
+            let again = scan(&root, known);
+            assert_eq!(titles(&again), ["a"], "{case}");
+
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn remembered_files_still_count_toward_the_suggested_values() {
+        let root = library("values", &[("a.wav", 1), ("b.wav", 1)]);
+        let mut known = remembered(&scan(&root, HashMap::new()));
+        for track in known.values_mut() {
+            track.fields =
+                Some(r#"{"genre":"House; Disco","label":"Low Tide","year":"2024"}"#.into());
+        }
+
+        let result = scan(&root, known);
+        assert_eq!(result.values.get(&("genre", "House".to_owned())), Some(&2));
+        assert_eq!(result.values.get(&("genre", "Disco".to_owned())), Some(&2));
+        assert_eq!(
+            result.values.get(&("label", "Low Tide".to_owned())),
+            Some(&2)
+        );
+        // Year is listed for the song lists but is not a field with suggestions.
+        assert!(result.values.keys().all(|(field, _)| *field != "year"));
 
         let _ = std::fs::remove_dir_all(&root);
     }

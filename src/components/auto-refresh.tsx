@@ -6,6 +6,7 @@ let launched = false;
 
 /**
  * Rescans the remembered library folder once per app launch so the library matches the disk.
+ * Files that have not changed since they were last read are not opened again, so this is quick.
  * Only reads files; it imports, exports and syncs nothing. Renders nothing.
  */
 export function AutoRefresh() {
@@ -15,7 +16,7 @@ export function AutoRefresh() {
 			return;
 		}
 		launched = true;
-		mutate("saved");
+		mutate("changed");
 	}, [mutate]);
 	return null;
 }

@@ -399,17 +399,19 @@ export function useAnalysisFailures(enabled: boolean) {
 
 export const SCAN_KEY = ["scan"] as const;
 
-export type ScanMode = "saved" | "pick";
+export type ScanMode = "saved" | "changed" | "pick";
 
 /**
- * Scans the library: `"saved"` rescans the remembered folder, `"pick"` asks for a new one.
+ * Scans the library: `"saved"` reads every file of the remembered folder again, `"changed"` only
+ * its new and changed files (what a launch does), `"pick"` asks for a new folder.
  * Nothing is sent to a sync destination until it is reviewed and confirmed in Export.
  */
 export function useScan() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationKey: SCAN_KEY,
-		mutationFn: (mode: ScanMode) => (mode === "pick" ? pickAndScan() : rescanLibrary()),
+		mutationFn: (mode: ScanMode) =>
+			mode === "pick" ? pickAndScan() : rescanLibrary(mode === "saved"),
 		onSuccess: async (count) => {
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
 			await queryClient.invalidateQueries({ queryKey: ["library-root"] });

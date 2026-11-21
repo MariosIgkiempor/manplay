@@ -19,7 +19,8 @@
         "fullscreen": false,
         "minWidth": 960,
         "minHeight": 600,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "backgroundColor": "#0e1012"
       }
     ],
     "security": {
