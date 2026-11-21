@@ -1,6 +1,7 @@
 //! Copies playlists onto a CDJ USB drive and rewrites both its rekordbox libraries: the Device
 //! Library (`export.pdb`, CDJ-3000 and older) and `OneLibrary` (`exportLibrary.db`, CDJ-3000X,
 //! OPUS-QUAD, XDJ-AZ, OMNIS-DUO), from one list so they hold the same tracks, ids and playlists.
+//! It can also write the exported playlists as Serato crates pointing at the same files.
 //!
 //! The drive's existing library is kept: its tracks keep their ids (so rekordbox's beat grids and
 //! `exportExt.pdb` tags still line up) and its playlists stay, except ones with the same name as
@@ -15,7 +16,8 @@ use crate::analysis::{self, Detail};
 use crate::anlz;
 use crate::onelib;
 use crate::pdb::{self, Library};
-use crate::usb::{ONE_LIBRARY_PATH, PDB_PATH};
+use crate::serato;
+use crate::usb::{BACKUP_DIR, ONE_LIBRARY_PATH, PDB_PATH};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -104,6 +106,12 @@ pub struct Report {
     pub one_library: bool,
     /// Why it was not; the drive's old copy is then removed so players never read a stale one.
     pub one_library_error: Option<String>,
+    /// Serato crates written; `None` when the export was not asked to write them.
+    pub serato_crates: Option<usize>,
+    /// Serato crates taken off the drive with their playlists.
+    pub serato_crates_removed: usize,
+    /// Why the Serato crates could not be written. The rekordbox libraries were written.
+    pub serato_error: Option<String>,
     pub failed: Vec<Failure>,
 }
 
@@ -603,6 +611,8 @@ pub struct Options<'a> {
     /// Show detected keys as Camelot codes (`8A`) rather than `Am`.
     pub camelot: bool,
     pub mode: Mode,
+    /// Also write the exported playlists as Serato crates.
+    pub serato: bool,
 }
 
 /// What happens to what is already on the drive.
@@ -807,9 +817,12 @@ pub fn export(
         total,
         current: String::new(),
     });
-    if opts.mode.removes_playlists() {
-        report.playlists_removed = remove_other_playlists(&mut lib, playlists);
-    }
+    let removed = if opts.mode.removes_playlists() {
+        remove_other_playlists(&mut lib, playlists)
+    } else {
+        Vec::new()
+    };
+    report.playlists_removed = removed.len();
     let mut next_playlist = lib.playlists.iter().map(|p| p.id).max().unwrap_or(0) + 1;
     let mut next_sort = lib
         .playlists
@@ -852,6 +865,13 @@ pub fn export(
     };
     let (backup, one) = write_libraries(mount, &lib, sequence, opts.stamp, opts.today)?;
     report.backup = backup;
+    if opts.serato {
+        let removals = SeratoRemovals {
+            playlists: &removed,
+            songs: &unheld,
+        };
+        write_serato(mount, &lib, playlists, &removals, opts.stamp, &mut report);
+    }
     // Only once the libraries no longer list them, so a player never sees a missing file.
     delete_track_files(mount, &lib, &unheld, &mut report);
     match one {
@@ -1132,13 +1152,113 @@ pub fn preview(
 }
 
 /// Keeps only the top-level playlists this export rewrites (so they keep their ids and place)
-/// and drops every other playlist and folder. Returns how many went.
-fn remove_other_playlists(lib: &mut Library, exported: &[SourcePlaylist]) -> usize {
+/// and drops every other playlist and folder. Returns the ones that went.
+fn remove_other_playlists(lib: &mut Library, exported: &[SourcePlaylist]) -> Vec<pdb::Playlist> {
     let names: HashSet<&str> = exported.iter().map(|p| p.name.as_str()).collect();
-    let before = lib.playlists.len();
-    lib.playlists
-        .retain(|p| p.parent_id == 0 && !p.is_folder && names.contains(p.name.as_str()));
-    before - lib.playlists.len()
+    let (keep, gone) = std::mem::take(&mut lib.playlists)
+        .into_iter()
+        .partition(|p| p.parent_id == 0 && !p.is_folder && names.contains(p.name.as_str()));
+    lib.playlists = keep;
+    gone
+}
+
+/// The exported playlists as Serato crates, with their songs as the drive's library now has
+/// them, and every song they hold.
+fn serato_library(
+    lib: &Library,
+    exported: &[SourcePlaylist],
+) -> (Vec<serato::Crate>, Vec<serato::Song>) {
+    let tracks: HashMap<u32, &pdb::Track> = lib.tracks.iter().map(|t| (t.id, t)).collect();
+    let mut seen_names = HashSet::new();
+    let mut seen_songs = HashSet::new();
+    let mut songs = Vec::new();
+    let crates = exported
+        .iter()
+        .filter(|p| seen_names.insert(p.name.as_str()))
+        .filter_map(|p| {
+            let on_drive = lib
+                .playlists
+                .iter()
+                .find(|e| e.parent_id == 0 && !e.is_folder && e.name == p.name)?;
+            let held: Vec<&pdb::Track> = on_drive
+                .track_ids
+                .iter()
+                .filter_map(|id| tracks.get(id).copied())
+                .collect();
+            for t in &held {
+                if seen_songs.insert(t.id) {
+                    songs.push(serato::Song {
+                        path: serato::SeratoPath::from_drive_path(&t.path),
+                        title: t.title.clone(),
+                        artist: t.artist.clone(),
+                        album: t.album.clone(),
+                        bpm: (t.tempo > 0).then(|| f64::from(t.tempo) / 100.0),
+                    });
+                }
+            }
+            Some(serato::Crate {
+                name: p.name.clone(),
+                tracks: held
+                    .iter()
+                    .map(|t| serato::SeratoPath::from_drive_path(&t.path))
+                    .collect(),
+            })
+        })
+        .collect();
+    (crates, songs)
+}
+
+/// What [`write_serato`] changes besides the exported playlists.
+struct SeratoRemovals<'a> {
+    /// Playlists this export took off the drive.
+    playlists: &'a [pdb::Playlist],
+    /// Songs this export deletes from the drive.
+    songs: &'a [pdb::Track],
+}
+
+/// Writes the exported playlists to the drive as Serato crates with their songs in Serato's
+/// `database V2`, and takes away the crates of playlists and the songs this export removed.
+fn write_serato(
+    mount: &Path,
+    lib: &Library,
+    exported: &[SourcePlaylist],
+    removals: &SeratoRemovals,
+    stamp: &str,
+    report: &mut Report,
+) {
+    let remove_crates: Vec<String> = removals
+        .playlists
+        .iter()
+        .filter(|p| !p.is_folder)
+        .map(|p| p.name.clone())
+        .collect();
+    let deleted: Vec<serato::SeratoPath> = removals
+        .songs
+        .iter()
+        .map(|t| serato::SeratoPath::from_drive_path(&t.path))
+        .collect();
+    let (crates, songs) = serato_library(lib, exported);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(u32::MAX));
+    let update = serato::Update {
+        crates: &crates,
+        songs: &songs,
+        remove_crates: &remove_crates,
+        deleted: &deleted,
+        now: serato::UnixSeconds(now),
+    };
+    let backup_rel = format!("{BACKUP_DIR}/{stamp}");
+    match serato::write(mount, &update, &mount.join(&backup_rel)) {
+        Ok(written) => {
+            report.serato_crates = Some(written.crates);
+            report.serato_crates_removed = written.removed;
+            if written.backed_up && report.backup.is_none() {
+                report.backup = Some(format!("/{backup_rel}"));
+            }
+        }
+        Err(e) => report.serato_error = Some(e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -1186,6 +1306,7 @@ mod tests {
             store: None,
             camelot: true,
             mode: Mode::Add,
+            serato: false,
         }
     }
 
@@ -1560,6 +1681,73 @@ mod tests {
         assert_eq!(t.tempo, 12_600);
         let written = fs::read(on_drive(&usb, &t.analyze_path)).expect("dat");
         assert_eq!(written, anlz::files(&t.path, &kept, &[], None).0);
+    }
+
+    #[test]
+    fn writes_serato_crates_beside_the_rekordbox_library() {
+        let lib_dir = dir("serato-lib");
+        let usb = dir("serato-usb");
+        let sources = vec![
+            source(&lib_dir, 1, "Burial", "Untrue", "01 Archangel.mp3", 1000),
+            source(&lib_dir, 2, "Burial", "Untrue", "02 Near Dark.mp3", 2000),
+        ];
+        let warm = SourcePlaylist {
+            name: "Warm up".into(),
+            track_ids: vec![2, 1],
+        };
+        let peak = SourcePlaylist {
+            name: "Peak".into(),
+            track_ids: vec![1],
+        };
+        let with_serato = Options {
+            serato: true,
+            ..opts(1 << 40)
+        };
+        let report =
+            export(&usb, &sources, &[warm.clone(), peak], &with_serato, |_| {}).expect("exports");
+        assert_eq!(report.serato_crates, Some(2));
+        let crate_of = |name: &str| {
+            let bytes = fs::read(usb.join(serato::SUBCRATES_DIR).join(name)).expect("crate");
+            serato::decode_crate(&bytes).expect("decodes")
+        };
+        let paths: Vec<String> = crate_of("Warm up.crate")
+            .iter()
+            .map(|p| p.as_str().to_owned())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "Contents/Burial/Untrue/02 Near Dark.mp3",
+                "Contents/Burial/Untrue/01 Archangel.mp3"
+            ]
+        );
+        assert!(
+            usb.join(&paths[0]).is_file(),
+            "crate paths are from the drive root"
+        );
+        let database = fs::read(usb.join(serato::DATABASE_PATH)).expect("database V2");
+        assert_eq!(serato::database_songs(&database).expect("reads").len(), 2);
+
+        let replace = Options {
+            mode: Mode::ReplacePlaylists,
+            stamp: "2026-11-15-1300",
+            ..with_serato
+        };
+        let report = export(&usb, &sources, &[warm], &replace, |_| {}).expect("replaces");
+        assert_eq!(
+            (report.serato_crates, report.serato_crates_removed),
+            (Some(1), 1)
+        );
+        assert!(!usb.join(serato::SUBCRATES_DIR).join("Peak.crate").exists());
+        assert!(
+            usb.join("PIONEER/manplay-backup/2026-11-15-1300")
+                .join(serato::SUBCRATES_DIR)
+                .join("Peak.crate")
+                .is_file()
+        );
+
+        let without = export(&usb, &sources, &[], &opts(1 << 40), |_| {}).expect("rekordbox only");
+        assert_eq!(without.serato_crates, None);
     }
 
     #[test]

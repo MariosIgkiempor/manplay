@@ -19,6 +19,7 @@ mod process;
 mod r2;
 mod rekordbox;
 mod scan;
+mod serato;
 mod smart;
 mod stream;
 mod sync;
@@ -2268,6 +2269,7 @@ async fn export_to_usb(
             store: Some(&state.db),
             camelot,
             mode: selection.usb_mode,
+            serato: selection.usb_serato,
         };
         let report = usb_export::export(&mount, &sources, &playlists, &opts, |p| {
             let _ = app.emit("usb-export-progress", p);

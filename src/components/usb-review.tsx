@@ -355,10 +355,13 @@ function SongsRow({
 export function Review({
 	diff,
 	mode,
+	serato,
 	sourceOf,
 }: {
 	diff: UsbDiff;
 	mode: UsbMode;
+	/** The playlists are also written as Serato crates. */
+	serato: boolean;
 	/** Whether an exported playlist is a library playlist, a tag or a smart playlist. */
 	sourceOf: (name: string) => PlaylistSource;
 }) {
@@ -377,6 +380,12 @@ export function Review({
 				{mode === "add" && (
 					<p className="px-3 py-2 text-muted-foreground text-xs">
 						Other playlists on the drive stay as they are.
+					</p>
+				)}
+				{serato && (
+					<p className="px-3 py-2 text-muted-foreground text-xs">
+						Each exported playlist is also written as a Serato crate
+						{mode !== "add" && ", and removed playlists' crates go too"}.
 					</p>
 				)}
 			</Card>

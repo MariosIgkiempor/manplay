@@ -99,6 +99,8 @@ pub struct ExportSelection {
     pub smart: Vec<i64>,
     /// USB drives: what happens to the playlists and songs already there.
     pub usb_mode: crate::usb_export::Mode,
+    /// USB drives: also write the playlists as Serato crates.
+    pub usb_serato: bool,
 }
 
 fn mode_text(mode: crate::usb_export::Mode) -> String {
@@ -151,6 +153,12 @@ fn create_export_selections(conn: &Connection) -> Result<(), Error> {
         "usb_mode",
         "TEXT NOT NULL DEFAULT 'add'",
     )?;
+    add_column(
+        conn,
+        "export_selections",
+        "usb_serato",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     migrate_rekordbox_selection(conn)
 }
 
@@ -199,15 +207,15 @@ pub fn export_selection(
     conn: &Connection,
     destination: &str,
 ) -> Result<Option<ExportSelection>, Error> {
-    let row: Option<(String, String, String, String)> = conn
+    let row: Option<(String, String, String, String, bool)> = conn
         .query_row(
-            "SELECT playlists, tags, smart, usb_mode FROM export_selections
+            "SELECT playlists, tags, smart, usb_mode, usb_serato FROM export_selections
              WHERE destination = ?1",
             params![destination],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()?;
-    let Some((playlists, tags, smart, usb_mode)) = row else {
+    let Some((playlists, tags, smart, usb_mode, usb_serato)) = row else {
         return Ok(None);
     };
     Ok(Some(ExportSelection {
@@ -215,6 +223,7 @@ pub fn export_selection(
         tags: serde_json::from_str(&tags).unwrap_or_default(),
         smart: ids_from_stored(conn, "smart_playlists", &smart)?,
         usb_mode: mode_from(&usb_mode),
+        usb_serato,
     }))
 }
 
@@ -310,17 +319,18 @@ pub fn set_export_selection(
     let smart = serde_json::to_string(&uids_for(conn, "smart_playlists", &selection.smart)?)
         .map_err(|e| Error::Msg(e.to_string()))?;
     conn.execute(
-        "INSERT INTO export_selections (destination, playlists, tags, smart, usb_mode)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO export_selections (destination, playlists, tags, smart, usb_mode, usb_serato)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(destination) DO UPDATE SET
              playlists = excluded.playlists, tags = excluded.tags, smart = excluded.smart,
-             usb_mode = excluded.usb_mode",
+             usb_mode = excluded.usb_mode, usb_serato = excluded.usb_serato",
         params![
             destination,
             playlists,
             tags,
             smart,
-            mode_text(selection.usb_mode)
+            mode_text(selection.usb_mode),
+            selection.usb_serato
         ],
     )?;
     Ok(())
@@ -4120,6 +4130,7 @@ mod tests {
             tags: vec![],
             smart: vec![smart],
             usb_mode: crate::usb_export::Mode::ReplaceAll,
+            usb_serato: true,
         };
         set_export_selection(&conn, "usb:1234", &usb).expect("save");
         set_export_selection(&conn, "usb:1234", &usb).expect("overwrite");

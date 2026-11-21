@@ -3,6 +3,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import {
 	Check,
 	ChevronDown,
+	Disc3,
 	HardDrive,
 	HardDriveUpload,
 	ListPlus,
@@ -202,18 +203,24 @@ function Swatch({ className, children }: { className: string; children: ReactNod
 	);
 }
 
-const STEPS: [UsbExportProgress["phase"], string][] = [
-	["copying", "Copy songs"],
-	["analyzing", "Beat grids and waveforms"],
-	["writing", "Write the rekordbox library"],
-];
+function steps(serato: boolean): [UsbExportProgress["phase"], string][] {
+	return [
+		["copying", "Copy songs"],
+		["analyzing", "Beat grids and waveforms"],
+		[
+			"writing",
+			serato ? "Write the rekordbox library and Serato crates" : "Write the rekordbox library",
+		],
+	];
+}
 
 /** The three things an export does, in order, with the current one's progress. */
-function Steps({ progress }: { progress: UsbExportProgress | null }) {
-	const at = progress ? STEPS.findIndex(([p]) => p === progress.phase) : -1;
+function Steps({ progress, serato }: { progress: UsbExportProgress | null; serato: boolean }) {
+	const all = steps(serato);
+	const at = progress ? all.findIndex(([p]) => p === progress.phase) : -1;
 	return (
 		<ol className="space-y-3" aria-live="polite">
-			{STEPS.map(([phase, label], i) => {
+			{all.map(([phase, label], i) => {
 				const done = i < at;
 				const current = i === at;
 				const pct =
@@ -314,6 +321,16 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 				<dd>
 					{report.oneLibrary ? "Every Pioneer and AlphaTheta player" : "CDJ-3000 and older only"}
 				</dd>
+				{report.seratoCrates !== null && (
+					<>
+						<dt className="text-muted-foreground">Serato</dt>
+						<dd className="tabular-nums">
+							{plural(report.seratoCrates, "crate")}
+							{report.seratoCratesRemoved > 0 &&
+								`, ${plural(report.seratoCratesRemoved, "crate")} removed`}
+						</dd>
+					</>
+				)}
 				{report.backup && (
 					<>
 						<dt className="text-muted-foreground">Previous library</dt>
@@ -326,6 +343,11 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 			{report.oneLibraryError && (
 				<ErrorLine>
 					{`The OneLibrary for the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo could not be written, so the old one was removed: ${report.oneLibraryError}`}
+				</ErrorLine>
+			)}
+			{report.seratoError && (
+				<ErrorLine>
+					{`The Serato crates could not be written. The rekordbox library was: ${report.seratoError}`}
 				</ErrorLine>
 			)}
 			{report.failed.length > 0 && (
@@ -389,6 +411,7 @@ function startingSelection(
 		tags: tags.filter((t) => onDrive.has(tagPlaylistName(t.name))).map((t) => t.name),
 		smart: [],
 		usbMode: "add",
+		usbSerato: false,
 	};
 }
 
@@ -510,10 +533,17 @@ function Body({ x, onLeave }: { x: ExportState; onLeave: () => void }) {
 		return <Summary report={x.run.data} drive={x.drive} />;
 	}
 	if (x.run.isPending) {
-		return <Steps progress={x.progress} />;
+		return <Steps progress={x.progress} serato={x.selection.usbSerato} />;
 	}
 	if (x.review.isSuccess) {
-		return <Review diff={x.review.data} mode={x.selection.usbMode} sourceOf={x.sourceOf} />;
+		return (
+			<Review
+				diff={x.review.data}
+				mode={x.selection.usbMode}
+				serato={x.selection.usbSerato}
+				sourceOf={x.sourceOf}
+			/>
+		);
 	}
 	return (
 		<ExportChooser
@@ -651,6 +681,23 @@ function ReviewSplitButton({ x }: { x: ExportState }) {
 									</Menu.RadioItem>
 								))}
 							</Menu.RadioGroup>
+							<Menu.Separator className="my-1.5 h-px bg-border" />
+							<Menu.CheckboxItem
+								checked={x.selection.usbSerato}
+								onCheckedChange={(usbSerato: boolean) => x.setDraft({ ...x.selection, usbSerato })}
+								className="flex cursor-default items-start gap-3 rounded-md px-2 py-2 outline-none data-[highlighted]:bg-muted"
+							>
+								<Disc3 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+									<span className="font-medium text-sm">Also as Serato crates</span>
+									<span className="text-muted-foreground text-xs">
+										Serato DJ shows each playlist as a crate and analyses new songs itself.
+									</span>
+								</span>
+								<Menu.CheckboxItemIndicator className="mt-0.5 text-primary">
+									<Check className="size-4" />
+								</Menu.CheckboxItemIndicator>
+							</Menu.CheckboxItem>
 							<p className="px-2 pt-1.5 pb-1 text-muted-foreground text-xs">
 								You see every change before anything is written. Remembered for {x.drive.name}.
 							</p>

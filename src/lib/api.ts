@@ -1045,6 +1045,8 @@ const exportSelectionSchema = z.object({
 	smart: z.array(int).default([]),
 	/** USB drives: what happens to the playlists and songs already there. */
 	usbMode: z.enum(["add", "replacePlaylists", "replaceAll"]).default("add"),
+	/** USB drives: also write the playlists as Serato crates. */
+	usbSerato: z.boolean().default(false),
 });
 
 export type UsbMode = ExportSelection["usbMode"];
@@ -1990,6 +1992,12 @@ const usbExportReportSchema = z.object({
 	oneLibrary: z.boolean(),
 	/** Why it was not; the drive's old OneLibrary was then removed. */
 	oneLibraryError: z.string().nullable(),
+	/** Serato crates written; null when the export was not asked to write them. */
+	seratoCrates: int.nullable().default(null),
+	/** Serato crates taken off the drive with their playlists. */
+	seratoCratesRemoved: int.default(0),
+	/** Why the Serato crates could not be written; the rekordbox libraries were. */
+	seratoError: z.string().nullable().default(null),
 	failed: z.array(fileFailureSchema),
 });
 
