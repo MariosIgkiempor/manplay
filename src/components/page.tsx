@@ -40,9 +40,7 @@ export function Page({
 				actions={actions}
 				tabs={tabs}
 			/>
-			<div className={cn("mx-auto w-full space-y-8", PAGE_BODY, !wide && "max-w-5xl")}>
-				{children}
-			</div>
+			<div className={cn("w-full space-y-8", PAGE_BODY, !wide && "max-w-5xl")}>{children}</div>
 		</main>
 	);
 }
@@ -111,13 +109,12 @@ export function EmptyState({
 	className?: string;
 }) {
 	return (
-		<div
-			className={cn(
-				"flex flex-col items-center gap-2 px-4 py-12 text-center [&_svg:not([class*='size-'])]:size-6",
-				className,
+		<div className={cn("flex flex-col items-center gap-2 px-4 py-12 text-center", className)}>
+			{icon && (
+				<div className="mb-1 text-muted-foreground/60 [&_svg:not([class*='size-'])]:size-6">
+					{icon}
+				</div>
 			)}
-		>
-			{icon && <div className="mb-1 text-muted-foreground/60">{icon}</div>}
 			<p className="font-medium text-sm">{title}</p>
 			{children && <p className={cn(typeScale.description, "max-w-sm")}>{children}</p>}
 			{action && <div className="mt-2">{action}</div>}

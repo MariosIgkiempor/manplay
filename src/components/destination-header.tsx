@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
 import { PlaceCrumb } from "#/components/place-crumb.tsx";
+import { PAGE_ART } from "#/lib/page-layout.ts";
 import type { PlaceKey, PlaceSection } from "#/lib/places.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -44,7 +45,7 @@ export function DestinationHeader({
 }) {
 	return (
 		<PageHeader
-			art={<BrandIcon brand={brand} className="size-28 shrink-0 rounded-xl" />}
+			art={<BrandIcon brand={brand} className={PAGE_ART} />}
 			kind={
 				<>
 					<PlaceCrumb section={section} current={place} />

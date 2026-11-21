@@ -19,7 +19,7 @@ import { SidebarSmartPlaylists } from "#/components/sidebar-smart-playlists.tsx"
 import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
-import { keyLabel } from "#/lib/platform.ts";
+import { useKeyLabel } from "#/lib/platform.ts";
 import { useClashes, useTracks } from "#/lib/queries.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
 import { usePaneWidth, useStoredFlag } from "#/lib/use-pane-width.ts";
@@ -138,6 +138,7 @@ export function Sidebar() {
 	const [collapsed, setCollapsed] = useStoredFlag("manplay.sidebar-collapsed");
 	const toggle = () => setCollapsed(!collapsed);
 	useToggleKey(toggle);
+	const shortcut = useKeyLabel("⌘\\");
 
 	const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
 	const toggleButton = (
@@ -145,7 +146,7 @@ export function Sidebar() {
 			type="button"
 			onClick={toggle}
 			aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-			title={`${collapsed ? "Expand" : "Collapse"} sidebar (${keyLabel("⌘\\")})`}
+			title={`${collapsed ? "Expand" : "Collapse"} sidebar (${shortcut})`}
 			className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-4"
 		>
 			<ToggleIcon />

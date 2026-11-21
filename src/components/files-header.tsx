@@ -6,8 +6,10 @@ import { HeaderMenu, type HeaderMenuEntry } from "#/components/header-menu.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { type SyncTarget, targetShortName } from "#/lib/api.ts";
+import { PAGE_ART } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { SCAN_KEY, useLibraryRoot, useScan } from "#/lib/queries.ts";
+import { cn } from "#/lib/utils.ts";
 
 export interface FilesHeaderProps {
 	/** The destination shown in the first pane, if any. */
@@ -99,7 +101,7 @@ export function FilesHeader(p: FilesHeaderProps) {
 			art={
 				<BrandIcon
 					brand={target ? brandOf(target) : "library"}
-					className="size-28 rounded-lg shadow-lg"
+					className={cn(PAGE_ART, "shadow-lg")}
 				/>
 			}
 			title={target ? targetShortName(target) : "Files"}

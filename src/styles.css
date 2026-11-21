@@ -134,6 +134,47 @@
 	display: none;
 }
 
+/*
+ * Sliders (seek, volume): a thin track, filled up to a small round thumb, the same in WebKit
+ * and WebView2. `--fill` is how far along the value is, 0 to 1.
+ */
+input[type="range"].slider {
+	appearance: none;
+	height: 1rem;
+	background: transparent;
+	cursor: pointer;
+	--reach: calc(6px + (100% - 12px) * var(--fill, 0));
+}
+.slider::-webkit-slider-runnable-track {
+	height: 4px;
+	border-radius: 9999px;
+	background: linear-gradient(to right, var(--primary) var(--reach), var(--muted) var(--reach));
+}
+.slider::-webkit-slider-thumb {
+	appearance: none;
+	width: 12px;
+	height: 12px;
+	margin-top: -4px;
+	border-radius: 9999px;
+	background: var(--foreground);
+	box-shadow: 0 0 0 1px oklch(0 0 0 / 35%);
+}
+.slider:focus-visible {
+	outline: none;
+}
+.slider:focus-visible::-webkit-slider-thumb {
+	box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 60%, transparent);
+}
+.slider:disabled {
+	cursor: default;
+}
+.slider:disabled::-webkit-slider-runnable-track {
+	background: var(--muted);
+}
+.slider:disabled::-webkit-slider-thumb {
+	visibility: hidden;
+}
+
 /* The import toolbar's progress bar while the total is not known yet. */
 @keyframes import-sweep {
 	from {
@@ -154,6 +195,8 @@
 	) {
 	height: 2rem;
 	padding-inline: 0.75rem;
+	/* One text size per group, whatever size each button asked for on its own. */
+	font-size: var(--text-sm);
 	border-width: 0;
 	border-radius: 0;
 	box-shadow: -1px 0 0 0 var(--color-input);

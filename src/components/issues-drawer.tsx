@@ -312,7 +312,7 @@ function ResultLine({ notice }: { notice: FixNotice }) {
 /** Slide-over listing every file issue, with checkboxes to choose what to fix. */
 export function IssuesDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
 	return (
-		<Drawer open={open} onClose={onClose} title="File issues" width="w-[36rem]">
+		<Drawer open={open} onClose={onClose} title="File issues" width="w-[44rem]">
 			<IssuesBody />
 		</Drawer>
 	);

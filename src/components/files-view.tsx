@@ -1,3 +1,5 @@
+import { useNavigate } from "@tanstack/react-router";
+import { FolderOpen } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FilePane } from "#/components/file-pane.tsx";
 import { FileShortcuts } from "#/components/file-shortcuts.tsx";
@@ -5,11 +7,12 @@ import { FilesHeader } from "#/components/files-header.tsx";
 import { FilesSourcePicker } from "#/components/files-source-picker.tsx";
 import { type FixNotice, HealthBar } from "#/components/library-health.tsx";
 import { NoticeBar } from "#/components/notice-bar.tsx";
-import { LoadingLine } from "#/components/page.tsx";
+import { EmptyState, LoadingLine } from "#/components/page.tsx";
 import { RemotePane } from "#/components/remote-pane.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TagCopyDialog } from "#/components/tag-copy-dialog.tsx";
 import type { TagTarget } from "#/components/tag-editor.tsx";
+import { Button } from "#/components/ui/button.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { useUndo } from "#/context/undo-context.ts";
 import { confirmFix, type FixReport } from "#/lib/api.ts";
@@ -138,10 +141,21 @@ async function pasteTagsOnto(
 
 /** Shown instead of the panes until the library folder is known. */
 function NoFolderNote({ loaded }: { loaded: boolean }) {
+	const navigate = useNavigate();
 	return (
 		<div className="p-6">
 			{loaded ? (
-				<p className="text-muted-foreground text-sm">Choose a library folder in Library first.</p>
+				<EmptyState
+					icon={<FolderOpen />}
+					title="No library folder yet"
+					action={
+						<Button variant="outline" onClick={() => void navigate({ to: "/" })}>
+							Open Library
+						</Button>
+					}
+				>
+					Files shows the folders of your library once you have chosen one.
+				</EmptyState>
 			) : (
 				<LoadingLine>Loading…</LoadingLine>
 			)}

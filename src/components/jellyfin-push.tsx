@@ -156,7 +156,7 @@ export function JellyfinPushRow({ targetId }: { targetId: number }) {
 				open={open}
 				onClose={() => setOpen(false)}
 				title="Send playlists to Jellyfin"
-				width="w-[40rem]"
+				width="w-[44rem]"
 			>
 				{open && <Review targetId={targetId} onClose={() => setOpen(false)} />}
 			</Drawer>

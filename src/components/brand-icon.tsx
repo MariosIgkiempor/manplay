@@ -6,7 +6,7 @@ const BRANDS = {
 	cloudflare: { icon: siCloudflare, label: "Cloudflare" },
 	tailscale: { icon: siTailscale, label: "Tailscale" },
 	itunes: { icon: siItunes, label: "iTunes" },
-	rekordbox: { icon: siPioneerdj, label: "Rekordbox" },
+	rekordbox: { icon: siPioneerdj, label: "rekordbox" },
 } as const;
 
 export type Brand = keyof typeof BRANDS | "downloads" | "usb" | "library";

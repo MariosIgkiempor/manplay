@@ -20,10 +20,17 @@ export function ChangeBar({ parts }: { parts: readonly { tone: Tone; count: numb
 	if (shown.length === 0) {
 		return null;
 	}
+	// Two parts can share a tone (songs to copy here, songs to send), so the tone alone is no key.
+	const seen = new Map<Tone, number>();
+	const keyed = shown.map((p) => {
+		const nth = seen.get(p.tone) ?? 0;
+		seen.set(p.tone, nth + 1);
+		return { ...p, key: `${p.tone}:${nth}` };
+	});
 	return (
 		<div aria-hidden="true" className="flex h-1 gap-px overflow-hidden rounded-full bg-muted">
-			{shown.map((p) => (
-				<div key={p.tone} className={TONE[p.tone].bar} style={{ flexGrow: p.count }} />
+			{keyed.map((p) => (
+				<div key={p.key} className={TONE[p.tone].bar} style={{ flexGrow: p.count }} />
 			))}
 		</div>
 	);

@@ -5,8 +5,12 @@ import { type MenuEntry, RowMenu } from "#/components/menu.tsx";
 import { StatusIcon } from "#/components/status-icon.tsx";
 import { cn } from "#/lib/utils.ts";
 
-/** Icon, name and where; a bar for how full it is; what happened last; one action. */
-const GRID = "grid-cols-[2rem_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto_1rem]";
+/**
+ * Icon, name and where; a bar for how full it is; what happened last; one action. The action's
+ * column has a width of its own, so the columns before it line up from row to row whatever each
+ * row's button says.
+ */
+const GRID = "grid-cols-[2rem_minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(8rem,auto)_1rem]";
 
 /** How much of something a place holds: the library for a sync, space for a drive. */
 export function PlaceFill({

@@ -116,7 +116,7 @@ function RekordboxRow() {
 	return (
 		<PlaceRow
 			brand="rekordbox"
-			name="Rekordbox XML"
+			name="rekordbox XML"
 			where={baseName(s.path)}
 			whereTitle={s.path}
 			fill={
@@ -194,9 +194,12 @@ export function Destinations() {
 			title="Destinations"
 			count={count}
 			action={
-				<Button size="sm" onClick={add}>
-					<Plus /> Add destination
-				</Button>
+				// With no destinations the empty state below carries the button.
+				count > 0 && (
+					<Button size="sm" variant="outline" onClick={add}>
+						<Plus /> Add destination
+					</Button>
+				)
 			}
 		>
 			{removal.error && <ErrorLine>{String(removal.error)}</ErrorLine>}

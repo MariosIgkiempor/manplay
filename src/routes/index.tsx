@@ -5,9 +5,9 @@ import { useMemo, useState } from "react";
 import { HeaderMenu } from "#/components/header-menu.tsx";
 import {
 	AnalyzeButton,
+	LibraryEmpty,
 	LibraryList,
 	LibrarySortMenu,
-	ScanButtons,
 } from "#/components/library-parts.tsx";
 import { PageHeader, PageIcon } from "#/components/page-header.tsx";
 import { SearchPalette } from "#/components/search-palette.tsx";
@@ -80,6 +80,10 @@ function Library() {
 		[visible, sorts.albums],
 	);
 
+	const hasRoot = typeof root.data === "string";
+	// Nothing to search or sort yet: say how to get songs in, instead of an empty list.
+	const libraryEmpty = root.isSuccess && tracks.isSuccess && tracks.data.length === 0;
+
 	return (
 		<main>
 			<PageHeader
@@ -91,13 +95,15 @@ function Library() {
 				title="Library"
 				titleHint={root.data ?? undefined}
 				meta={
-					<>
-						<span>{plural(tracks.data?.length ?? 0, "song")}</span>
-						<span>{plural(albumCount, "album")}</span>
-					</>
+					libraryEmpty ? undefined : (
+						<>
+							<span>{plural(tracks.data?.length ?? 0, "song")}</span>
+							<span>{plural(albumCount, "album")}</span>
+						</>
+					)
 				}
 				actions={
-					root.data ? (
+					hasRoot ? (
 						<>
 							<AnalyzeButton tracks={tracks.data ?? []} />
 							<HeaderMenu
@@ -112,34 +118,43 @@ function Library() {
 								]}
 							/>
 						</>
-					) : (
-						<ScanButtons hasRoot={false} scanning={scanning} onScan={(mode) => scan.mutate(mode)} />
-					)
+					) : null
 				}
-				tabs={<ViewToggle view={view} onChange={setView} />}
+				tabs={libraryEmpty ? null : <ViewToggle view={view} onChange={setView} />}
 			/>
-			{/* Search stays at hand while the list scrolls. */}
-			<div className={PAGE_TOOLBAR}>
-				<SearchPalette
-					pills={pills}
-					onPills={setPills}
-					text={search}
-					onText={setSearch}
-					trailing={<LibrarySortMenu view={view} sorts={sorts} segment />}
+			{libraryEmpty ? (
+				<LibraryEmpty
+					hasRoot={hasRoot}
+					scanning={scanning}
+					onPick={() => scan.mutate("pick")}
+					onRescan={() => scan.mutate("saved")}
 				/>
-			</div>
+			) : (
+				<>
+					{/* Search stays at hand while the list scrolls. */}
+					<div className={PAGE_TOOLBAR}>
+						<SearchPalette
+							pills={pills}
+							onPills={setPills}
+							text={search}
+							onText={setSearch}
+							trailing={<LibrarySortMenu view={view} sorts={sorts} segment />}
+						/>
+					</div>
 
-			<div className={cn("space-y-5", PAGE_BODY)}>
-				<LibraryList
-					view={view}
-					albums={albums}
-					tracks={visible}
-					targetCount={targetCount}
-					sorts={sorts}
-					onOpen={(key) => detail.open({ kind: "album", key })}
-					onOpenArtist={(name) => detail.open({ kind: "artist", name })}
-				/>
-			</div>
+					<div className={cn("space-y-5", PAGE_BODY)}>
+						<LibraryList
+							view={view}
+							albums={albums}
+							tracks={visible}
+							targetCount={targetCount}
+							sorts={sorts}
+							onOpen={(key) => detail.open({ kind: "album", key })}
+							onOpenArtist={(name) => detail.open({ kind: "artist", name })}
+						/>
+					</div>
+				</>
+			)}
 		</main>
 	);
 }

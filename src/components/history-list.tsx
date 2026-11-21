@@ -147,6 +147,18 @@ const took = (e: HistoryEntry) => {
 	return s > 0 ? ` · took ${duration(s)}` : "";
 };
 
+/**
+ * When a run finished, for its row: how long ago for today's, else the time of day. The day
+ * itself is the heading the row sits under.
+ */
+function finishedLabel(unixSeconds: number): string {
+	const finished = new Date(unixSeconds * 1000);
+	if (finished.toDateString() === new Date().toDateString()) {
+		return timeAgo(unixSeconds);
+	}
+	return finished.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 /** The day a run belongs under: Today, Yesterday, or the date. */
 function dayLabel(unixSeconds: number): string {
 	const day = new Date(unixSeconds * 1000);
@@ -205,13 +217,13 @@ function Row({
 							<>
 								<span className="block truncate font-medium text-sm leading-5">{entry.title}</span>
 								<span className="block truncate text-muted-foreground text-xs leading-5">
-									{timeAgo(entry.finishedAt)}
+									{finishedLabel(entry.finishedAt)}
 									{took(entry)}
 								</span>
 							</>
 						) : (
 							<span className="block truncate font-medium text-sm leading-5">
-								{timeAgo(entry.finishedAt)}
+								{finishedLabel(entry.finishedAt)}
 								<span className="font-normal text-muted-foreground">{took(entry)}</span>
 							</span>
 						)}

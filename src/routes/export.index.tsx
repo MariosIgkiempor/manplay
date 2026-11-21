@@ -29,9 +29,11 @@ function ExportPage() {
 					<span>
 						{targetCount} {targetCount === 1 ? "destination" : "destinations"}
 					</span>
-					<span>
-						{pending === 0 ? "Everything synced" : `${pending.toLocaleString()} songs to sync`}
-					</span>
+					{targetCount > 0 && (
+						<span>
+							{pending === 0 ? "Everything synced" : `${pending.toLocaleString()} songs to sync`}
+						</span>
+					)}
 				</>
 			}
 			actions={

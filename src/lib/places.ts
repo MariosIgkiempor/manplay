@@ -46,7 +46,7 @@ export function useExportPlaces(): PlaceOption[] {
 			? [
 					{
 						key: "rekordbox",
-						label: "Rekordbox XML",
+						label: "rekordbox XML",
 						brand: "rekordbox",
 						go: () => void navigate({ to: "/export/rekordbox" }),
 					} satisfies PlaceOption,

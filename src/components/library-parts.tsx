@@ -1,8 +1,9 @@
 import { useIsMutating } from "@tanstack/react-query";
-import { AudioWaveform, FolderOpen, RefreshCw } from "lucide-react";
+import { AudioWaveform, FolderOpen, Music, RefreshCw } from "lucide-react";
 import { useMemo } from "react";
 import { AlbumGrid } from "#/components/album-grid.tsx";
 import { ArtistGrid } from "#/components/artist-grid.tsx";
+import { EmptyState, LoadingLine } from "#/components/page.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { SortMenu } from "#/components/sort-menu.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
@@ -110,35 +111,53 @@ export function LibraryList({
 	);
 }
 
-export function ScanButtons({
+/** The library before it has songs: no folder chosen yet, or a folder without music in it. */
+export function LibraryEmpty({
 	hasRoot,
 	scanning,
-	onScan,
+	onPick,
+	onRescan,
 }: {
 	hasRoot: boolean;
 	scanning: boolean;
-	onScan: (mode: "saved" | "pick") => void;
+	onPick: () => void;
+	onRescan: () => void;
 }) {
+	if (scanning) {
+		return <LoadingLine className="justify-center py-16">Reading your music folder…</LoadingLine>;
+	}
+	if (hasRoot) {
+		return (
+			<EmptyState
+				icon={<Music />}
+				title="No songs in this folder yet"
+				action={
+					<div className="flex gap-2">
+						<Button variant="outline" onClick={onRescan}>
+							<RefreshCw /> Rescan
+						</Button>
+						<Button variant="outline" onClick={onPick}>
+							<FolderOpen /> Choose another folder
+						</Button>
+					</div>
+				}
+			>
+				Add music files to the folder, or bring some in from Import.
+			</EmptyState>
+		);
+	}
 	return (
-		<>
-			{hasRoot && (
-				<Button
-					variant="outline"
-					title="Look for added, changed and removed files"
-					onClick={() => onScan("saved")}
-					disabled={scanning}
-				>
-					<RefreshCw className={scanning ? "animate-spin" : ""} />
-					{scanning ? "Scanning…" : "Rescan"}
+		<EmptyState
+			icon={<FolderOpen />}
+			title="Choose your music folder"
+			action={
+				<Button onClick={onPick}>
+					<FolderOpen /> Choose folder
 				</Button>
-			)}
-			{!hasRoot && (
-				<Button variant="outline" onClick={() => onScan("pick")} disabled={scanning}>
-					<FolderOpen />
-					Choose folder
-				</Button>
-			)}
-		</>
+			}
+		>
+			manplay reads the songs in it and keeps them where they are.
+		</EmptyState>
 	);
 }
 

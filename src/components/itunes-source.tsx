@@ -285,23 +285,17 @@ function ItunesSettings({
 
 /** Songs in the iTunes folder that are not in the library yet. */
 export function ItunesPending() {
-	const { status, run, root, enabled } = useItunes();
+	const { status, enabled } = useItunes();
 	const path = status.data?.path ?? null;
 	const pending = useItunesPending(enabled && path !== null);
 	const songs = pending.data ?? [];
 	return (
 		<div className="space-y-3">
-			<div className="flex items-center justify-between gap-2">
-				<h3 className={typeScale.label}>Not in your library yet</h3>
-				<Button
-					size="sm"
-					onClick={() => run.mutate()}
-					disabled={run.isPending || root.data === null || songs.length === 0}
-				>
-					<RefreshCw className={run.isPending ? "animate-spin" : undefined} />
-					{run.isPending ? "Converting…" : `Import all (${songs.length})`}
-				</Button>
-			</div>
+			{/* The header's Import now brings these in; the list only says what it will bring. */}
+			<h3 className={typeScale.label}>
+				Not in your library yet
+				{songs.length > 0 && <span className="ml-2 tabular-nums">{songs.length}</span>}
+			</h3>
 			{songs.length === 0 ? (
 				<div className="flex items-center gap-2 rounded-lg border border-dashed p-4 text-muted-foreground text-sm">
 					<CheckCircle2 className="size-4" />

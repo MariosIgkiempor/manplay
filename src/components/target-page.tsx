@@ -310,11 +310,12 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 					titled={false}
 				/>
 			) : (
-				<div className="space-y-6">
-					<SettingsForm key={id} target={target}>
+				// Keyed as a whole: both forms start again for another destination.
+				<div key={id} className="space-y-6">
+					<SettingsForm target={target}>
 						<RemoveRow onRemove={() => removal.ask(target)} busy={removal.busy} />
 					</SettingsForm>
-					<JellyfinSection key={id} targetId={id} />
+					<JellyfinSection targetId={id} />
 				</div>
 			)}
 			{removal.error && <ErrorLine>{String(removal.error)}</ErrorLine>}

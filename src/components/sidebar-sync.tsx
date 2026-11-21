@@ -316,7 +316,7 @@ function ExportItems() {
 			{rekordbox?.path && (
 				<ChildRow
 					brand="rekordbox"
-					label="Rekordbox XML"
+					label="rekordbox XML"
 					title={rekordbox.path}
 					active={Boolean(matchRoute({ to: "/export/rekordbox" }))}
 					onOpen={() => void navigate({ to: "/export/rekordbox" })}

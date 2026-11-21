@@ -11,10 +11,12 @@ import { PlaceFrame } from "#/components/place-page.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
 import { JoinLibraryDialog } from "#/components/shared-library.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { PAGE_ART } from "#/lib/page-layout.ts";
 import type { DestinationService } from "#/lib/places.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { space, useUsbDrives } from "#/lib/use-usb.ts";
+import { cn } from "#/lib/utils.ts";
 
 const SERVICES: { id: DestinationService; brand: Brand; title: string; what: string }[] = [
 	{
@@ -27,7 +29,7 @@ const SERVICES: { id: DestinationService; brand: Brand; title: string; what: str
 	{
 		id: "rekordbox",
 		brand: "rekordbox",
-		title: "Rekordbox XML",
+		title: "rekordbox XML",
 		what: "A file rekordbox imports your playlists from",
 	},
 	{ id: "usb", brand: "usb", title: "CDJ USB drive", what: "A stick for Pioneer CDJs and XDJs" },
@@ -39,9 +41,14 @@ function Heading({ brand, title }: { brand?: Brand | undefined; title: string })
 		<PageHeader
 			art={
 				brand ? (
-					<BrandIcon brand={brand} className="size-28 shrink-0 rounded-xl" />
+					<BrandIcon brand={brand} className={PAGE_ART} />
 				) : (
-					<div className="grid size-28 shrink-0 place-items-center rounded-xl bg-muted text-muted-foreground [&_svg]:size-10">
+					<div
+						className={cn(
+							PAGE_ART,
+							"grid place-items-center bg-muted text-muted-foreground [&_svg]:size-10",
+						)}
+					>
 						<Plus />
 					</div>
 				)
@@ -168,7 +175,7 @@ function RekordboxStep() {
 	const { status, choose } = useRekordbox();
 	const path = status.data?.path ?? null;
 	return (
-		<PlaceFrame header={<Heading brand="rekordbox" title="Rekordbox XML" />}>
+		<PlaceFrame header={<Heading brand="rekordbox" title="rekordbox XML" />}>
 			<div className="space-y-3 rounded-lg border border-dashed p-5 text-center">
 				<p className="text-sm">
 					{path ? (

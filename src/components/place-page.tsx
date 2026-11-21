@@ -38,7 +38,7 @@ export function PlaceFrame({
 				<div className="min-h-0 flex-1">{children}</div>
 			) : (
 				<div className="min-h-0 flex-1 overflow-y-auto">
-					<div className={cn("mx-auto w-full max-w-5xl space-y-5", PAGE_BODY)}>{children}</div>
+					<div className={cn("w-full max-w-5xl space-y-5", PAGE_BODY)}>{children}</div>
 				</div>
 			)}
 		</main>

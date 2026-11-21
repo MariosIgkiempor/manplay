@@ -8,6 +8,7 @@ import { Input } from "#/components/ui/input.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
+import { PAGE_ART } from "#/lib/page-layout.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** Four album covers in a grid, one cover when fewer albums exist, or `fallback` for none. */
@@ -106,7 +107,12 @@ function Title({
 /** The square that heads a page without covers of its own: the page's icon on a tile. */
 export function PageIcon({ children }: { children: ReactNode }) {
 	return (
-		<div className="grid size-28 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground shadow-lg ring-1 ring-foreground/10 [&_svg]:size-10">
+		<div
+			className={cn(
+				PAGE_ART,
+				"grid place-items-center bg-muted text-muted-foreground shadow-lg ring-1 ring-foreground/10 [&_svg]:size-10 [@media(max-height:44rem)]:[&_svg]:size-6",
+			)}
+		>
 			{children}
 		</div>
 	);
@@ -279,7 +285,7 @@ export function CollectionHeader({
 	const [editing, setEditing] = useState(false);
 	return (
 		<PageHeader
-			art={<Cover tracks={tracks} fallback={fallbackIcon} className="size-28" />}
+			art={<Cover tracks={tracks} fallback={fallbackIcon} className={PAGE_ART} />}
 			kind={kind}
 			title={
 				<Title

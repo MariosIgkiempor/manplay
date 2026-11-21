@@ -200,7 +200,7 @@ function TrackNav({
 			>
 				<ChevronLeft />
 			</Button>
-			<span className="min-w-12 text-center tabular-nums">
+			<span className="min-w-12 whitespace-nowrap text-center tabular-nums">
 				{at + 1} of {ids.length}
 			</span>
 			<Button

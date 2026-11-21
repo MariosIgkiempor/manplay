@@ -6,8 +6,15 @@ import { Button } from "#/components/ui/button.tsx";
 import { type CarryCandidate, confirmTrash, type DuplicateGroup, fsReveal } from "#/lib/api.ts";
 import { extraCopies } from "#/lib/duplicates.ts";
 import { formatBytes } from "#/lib/format.ts";
+import { baseName, relSegments } from "#/lib/fs-path.ts";
 import { TRASH } from "#/lib/platform.ts";
-import { useCarryCandidates, useCarryDecision, useDuplicates, useFsTrash } from "#/lib/queries.ts";
+import {
+	useCarryCandidates,
+	useCarryDecision,
+	useDuplicates,
+	useFsTrash,
+	useLibraryRoot,
+} from "#/lib/queries.ts";
 
 /** Status bar notice: the same audio is stored in more than one file, or a song was re-encoded. */
 export function DuplicatesIndicator({ onClick }: { onClick: () => void }) {
@@ -45,6 +52,7 @@ export function DuplicatesIndicator({ onClick }: { onClick: () => void }) {
 
 function DuplicateList({ groups }: { groups: readonly DuplicateGroup[] }) {
 	const trash = useFsTrash();
+	const root = useLibraryRoot().data ?? "";
 	const [error, setError] = useState<string | null>(null);
 	return (
 		<div className="space-y-4">
@@ -67,11 +75,13 @@ function DuplicateList({ groups }: { groups: readonly DuplicateGroup[] }) {
 						<ul className="divide-y">
 							{g.tracks.map((t) => (
 								<li key={t.id} className="flex items-center gap-2 px-3 py-2">
-									<div className="min-w-0 flex-1">
-										<div className="break-all text-xs" title={t.path}>
-											{t.path}
+									{/* File name, then the folder it is in below the library: the full path on hover. */}
+									<div className="min-w-0 flex-1" title={t.path}>
+										<div className="truncate text-sm">{baseName(t.path)}</div>
+										<div className="truncate text-muted-foreground text-xs">
+											{relSegments(root, t.path).slice(0, -1).join(" / ") || "Library folder"} ·{" "}
+											{formatBytes(t.size)}
 										</div>
-										<div className="text-muted-foreground text-xs">{formatBytes(t.size)}</div>
 									</div>
 									<Button
 										variant="ghost"
@@ -89,7 +99,7 @@ function DuplicateList({ groups }: { groups: readonly DuplicateGroup[] }) {
 										disabled={trash.isPending}
 										onClick={async () => {
 											setError(null);
-											if (await confirmTrash([t.path.split(/[\\/]/).pop() ?? t.path])) {
+											if (await confirmTrash([baseName(t.path)])) {
 												trash.mutate([t.path]);
 											}
 										}}

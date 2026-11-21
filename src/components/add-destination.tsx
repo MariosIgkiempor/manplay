@@ -70,7 +70,7 @@ export function AddR2({ onAdded }: { onAdded: (id: number) => void }) {
 	});
 	return (
 		<form
-			className="space-y-3"
+			className="max-w-lg space-y-3"
 			onSubmit={(e) => {
 				e.preventDefault();
 				add.mutate(form);
