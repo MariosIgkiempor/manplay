@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SyncAction } from "#/lib/api.ts";
-import type { IncomingAction, ThereChoice, ThereFile } from "#/lib/sync-choices.ts";
+import type { IncomingAction, SyncDirection, ThereChoice, ThereFile } from "#/lib/sync-choices.ts";
 import {
 	type AlbumInfo,
 	albumChips,
@@ -8,7 +8,12 @@ import {
 	buildTree,
 	type ChipKind,
 	floatPlacement,
+	foldedLane,
 	groupByAlbum,
+	itemsByLane,
+	LANES,
+	type Lane,
+	nameOf,
 	type ReviewItem,
 	type SendAction,
 	sharedThere,
@@ -145,8 +150,35 @@ describe("groupByAlbum", () => {
 	});
 });
 
+describe("itemsByLane", () => {
+	it("splits the files into what goes there, what comes here and what is only there", () => {
+		const items = [
+			there("a.flac", { pull: true }),
+			bring("update", "b.flac"),
+			send("upload", "c.flac"),
+			send("move", "d.flac"),
+		];
+		const lanes = itemsByLane(items);
+		expect(LANES.map((l) => lanes[l].map(nameOf))).toEqual([
+			["c.flac", "d.flac"],
+			["b.flac"],
+			["a.flac"],
+		]);
+	});
+});
+
+describe("foldedLane", () => {
+	it.each<{ direction: SyncDirection; expected: Lane | null }>([
+		{ direction: "both", expected: null },
+		{ direction: "push", expected: "bring" },
+		{ direction: "pull", expected: "send" },
+	])("$direction folds $expected", ({ direction, expected }) => {
+		expect(foldedLane(direction)).toBe(expected);
+	});
+});
+
 describe("albumChips", () => {
-	it.each<{ name: string; items: ReviewItem[]; expected: [ChipKind, number][] }>([
+	it.each<{ name: string; items: ReviewItem[]; expected: [ChipKind, number, number][] }>([
 		{
 			name: "counts each kind of change in a fixed order",
 			items: [
@@ -160,21 +192,29 @@ describe("albumChips", () => {
 				bring("merge", "h.flac"),
 			],
 			expected: [
-				["new", 2],
-				["retagged", 1],
-				["changed", 1],
-				["moved", 1],
-				["editedThere", 1],
-				["bothEdited", 2],
+				["new", 2, 2],
+				["retagged", 1, 1],
+				["changed", 1, 1],
+				["moved", 1, 1],
+				["editedThere", 1, 1],
+				["bothEdited", 2, 2],
 			],
 		},
 		{
-			name: "files only there count by what they are set to",
+			name: "counts only the ticked changes as ticked",
+			items: [send("upload", "a.flac", { optional: true }), send("upload", "b.flac")],
+			expected: [["new", 2, 1]],
+		},
+		{
+			name: "files only there count by what they are set to, and leaving one is not ticked",
 			items: [there("a.flac", { pull: true }), there("b.flac", { remove: true })],
-			expected: [["left", 2]],
+			expected: [["left", 2, 0]],
 		},
 	])("$name", ({ items, expected }) => {
-		expect(albumChips(items, suggested).map((c) => [c.kind, c.count])).toEqual(expected);
+		const picked = (a: SyncAction) => !a.optional;
+		expect(albumChips(items, suggested, picked).map((c) => [c.kind, c.count, c.ticked])).toEqual(
+			expected,
+		);
 	});
 });
 

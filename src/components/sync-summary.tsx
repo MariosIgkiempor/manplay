@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Loader2, RefreshCw } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, Loader2, RefreshCw } from "lucide-react";
 import {
 	type Dispatch,
 	type ReactNode,
@@ -13,9 +13,10 @@ import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { SyncResult } from "#/components/sync-result.tsx";
 import { DeleteGuard, KINDS, LABEL } from "#/components/sync-review.tsx";
-import { AlbumMosaic } from "#/components/sync-review-albums.tsx";
 import type { ReviewControls } from "#/components/sync-review-item.tsx";
+import { ReviewLanes } from "#/components/sync-review-lanes.tsx";
 import { FolderTree } from "#/components/sync-review-tree.tsx";
+import { ReviewViewMenu } from "#/components/sync-review-view-menu.tsx";
 import { SyncShell, type SyncShellVariant } from "#/components/sync-shell.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
@@ -33,6 +34,7 @@ import {
 	type SyncAction,
 	type TargetPlan,
 	type TargetScan,
+	targetShortName,
 } from "#/lib/api.ts";
 import { formatBytes, timeAgo } from "#/lib/format.ts";
 import {
@@ -72,6 +74,7 @@ import {
 	type TrackLookup,
 } from "#/lib/sync-review-model.ts";
 import { parseReviewView, type ReviewView } from "#/lib/sync-review-view.ts";
+import { cn } from "#/lib/utils.ts";
 
 /** Which directions a sync starts with. */
 export type SyncMode = SyncDirection;
@@ -104,16 +107,25 @@ type Phase =
  */
 export function SyncPanel({
 	ids,
-	mode = "both",
+	mode: startMode = "both",
 	variant = "drawer",
 	onClose,
+	onModeChange,
 }: {
 	ids: number[];
+	/** The direction the review starts in; the toolbar switches it. */
 	mode?: SyncMode;
 	variant?: SyncShellVariant;
 	onClose?: () => void;
+	onModeChange?: (mode: SyncMode) => void;
 }) {
 	const rescan = useSyncRescan();
+	// Kept here so a Refresh, which starts the review afresh, keeps the chosen direction.
+	const [mode, setMode] = useState<SyncMode>(startMode);
+	const chooseMode = (next: SyncMode) => {
+		setMode(next);
+		onModeChange?.(next);
+	};
 	// Each round starts the review afresh; reads already shown are not shown again.
 	const [session, setSession] = useState<{ round: number; stale: ReadonlySet<PlanId> }>({
 		round: 0,
@@ -130,6 +142,7 @@ export function SyncPanel({
 			ids={ids}
 			stale={session.stale}
 			mode={mode}
+			onMode={chooseMode}
 			variant={variant}
 			onClose={onClose}
 			onRefresh={refresh}
@@ -202,18 +215,52 @@ function useTrackLookup(): TrackLookup {
 	}, [tracks]);
 }
 
-const VIEWS: { view: ReviewView; label: string }[] = [
-	{ view: "albums", label: "Albums" },
-	{ view: "folders", label: "Folders" },
+const MODES: {
+	mode: SyncMode;
+	label: string;
+	hint: string;
+	icon: ReactNode;
+	/** The button's colour while chosen; the icon keeps it while not. */
+	on: string;
+	tint: string;
+}[] = [
+	{
+		mode: "both",
+		label: "Both ways",
+		hint: "Tick what goes out and what comes in.",
+		icon: <ArrowUpDown />,
+		on: "border-foreground/30 bg-foreground/10 text-foreground",
+		tint: "[&_svg]:text-foreground",
+	},
+	{
+		mode: "push",
+		label: "Push only",
+		hint: "Tick only what goes to the destination.",
+		icon: <ArrowUp />,
+		on: "border-primary/50 bg-primary/15 text-primary",
+		tint: "[&_svg]:text-primary",
+	},
+	{
+		mode: "pull",
+		label: "Pull only",
+		hint: "Tick only what comes into your library.",
+		icon: <ArrowDown />,
+		on: "border-success/50 bg-success/15 text-success",
+		tint: "[&_svg]:text-success",
+	},
 ];
 
-/** Albums | Folders, and in Folders whether folders with nothing to do show too. */
+/** The direction buttons, and on the right the view menu: Albums or Folders, and its options. */
 function ReviewToolbar({
+	mode,
+	onMode,
 	view,
 	onView,
 	showUnchanged,
 	onShowUnchanged,
 }: {
+	mode: SyncMode;
+	onMode: (m: SyncMode) => void;
 	view: ReviewView;
 	onView: (v: ReviewView) => void;
 	showUnchanged: boolean;
@@ -221,36 +268,34 @@ function ReviewToolbar({
 }) {
 	return (
 		<div className="sticky top-0 z-30 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background px-[var(--diff-inset)] py-2 text-sm">
-			<fieldset className="inline-flex overflow-clip rounded-md border text-xs">
-				<legend className="sr-only">Show changes as</legend>
-				{VIEWS.map((v) => (
-					<button
-						key={v.view}
-						type="button"
-						aria-pressed={view === v.view}
-						onClick={() => onView(v.view)}
-						className="border-l px-2.5 py-1 font-medium text-muted-foreground outline-none first:border-l-0 hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/60 aria-pressed:bg-muted aria-pressed:text-foreground"
-					>
-						{v.label}
-					</button>
-				))}
+			<fieldset className="flex gap-1.5">
+				<legend className="sr-only">Sync direction</legend>
+				{MODES.map((m) => {
+					const chosen = mode === m.mode;
+					return (
+						<Button
+							key={m.mode}
+							size="sm"
+							variant="outline"
+							aria-pressed={chosen}
+							title={`${m.hint} Starts your ticks again.`}
+							onClick={() => onMode(m.mode)}
+							className={cn(chosen ? m.on : "text-muted-foreground", !chosen && m.tint)}
+						>
+							{m.icon}
+							{m.label}
+						</Button>
+					);
+				})}
 			</fieldset>
-			{view === "folders" && (
-				<label className="inline-flex cursor-pointer items-center gap-1.5 text-muted-foreground text-xs">
-					<input
-						type="checkbox"
-						className="size-3.5 accent-primary"
-						checked={showUnchanged}
-						onChange={(e) => onShowUnchanged(e.target.checked)}
-					/>
-					Show unchanged folders
-				</label>
-			)}
-			<span className="text-muted-foreground text-xs">
-				{view === "albums"
-					? "Open an album to see its files."
-					: "Dashed: only on the destination. Struck through: deleted there."}
-			</span>
+			<div className="ml-auto">
+				<ReviewViewMenu
+					view={view}
+					onView={onView}
+					showUnchanged={showUnchanged}
+					onShowUnchanged={onShowUnchanged}
+				/>
+			</div>
 		</div>
 	);
 }
@@ -258,6 +303,8 @@ function ReviewToolbar({
 /** One destination: how much already matches, what is ticked, then its files in the chosen view. */
 function TargetBlock({
 	t,
+	destination,
+	direction,
 	multi,
 	view,
 	showUnchanged,
@@ -265,6 +312,9 @@ function TargetBlock({
 	ui,
 }: {
 	t: Row;
+	/** The destination's short name, for the section titles. */
+	destination: string;
+	direction: SyncMode;
 	multi: boolean;
 	view: ReviewView;
 	showUnchanged: boolean;
@@ -301,32 +351,26 @@ function TargetBlock({
 		chooseThere: (files, c) => setThere((m) => chooseAll(m, id, files, c)),
 	};
 	const needChoice = t.incoming.filter((a) => !picked(a)).length;
+	const notes = [
+		...(t.plan.held.length > 0 ? [`${count(t.plan.held.length)} kept for 7 days`] : []),
+		...(t.plan.unchecked > 0 ? [`${count(t.plan.unchecked)} not compared`] : []),
+	];
+	const header = multi || needChoice > 0 || notes.length > 0;
 	return (
 		<section>
-			<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b px-[var(--diff-inset)] py-2">
-				{multi && <h3 className="break-words font-semibold text-sm">{t.plan.name}</h3>}
-				<Tally
-					items={[
-						...(["upload", "replace", "move"] as const).map((k) => ({
-							tone: LABEL[k].tone,
-							label: { upload: "new", replace: "changed", move: "moved" }[k],
-							count: t.sendSel.filter((a) => a.kind === k).length,
-						})),
-						{ tone: "change", label: `edited on ${t.plan.name}`, count: t.incomingSel.length },
-						{ tone: "add", label: "copy here", count: t.pulls.length },
-						{ tone: "remove", label: "delete there", count: t.deletes.length },
-					]}
-					empty="Nothing ticked"
-				/>
-				{needChoice > 0 && (
-					<span className="text-sm text-warning">{count(needChoice)} need a choice</span>
-				)}
-				<span className="ml-auto text-muted-foreground text-xs tabular-nums">
-					{count(t.plan.inSync)} already match
-					{t.plan.held.length > 0 && ` · ${count(t.plan.held.length)} kept for 7 days`}
-					{t.plan.unchecked > 0 && ` · ${count(t.plan.unchecked)} not compared`}
-				</span>
-			</div>
+			{header && (
+				<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b px-[var(--diff-inset)] py-2">
+					{multi && <h3 className="break-words font-semibold text-sm">{t.plan.name}</h3>}
+					{needChoice > 0 && (
+						<span className="text-sm text-warning">{count(needChoice)} need a choice</span>
+					)}
+					{notes.length > 0 && (
+						<span className="ml-auto text-muted-foreground text-xs tabular-nums">
+							{notes.join(" · ")}
+						</span>
+					)}
+				</div>
+			)}
 			{[...new Set([t.pullError, t.plan.error])].map(
 				(message) =>
 					message && (
@@ -342,7 +386,13 @@ function TargetBlock({
 			)}
 			{items.length > 0 &&
 				(view === "albums" ? (
-					<AlbumMosaic items={items} lookup={lookup} controls={controls} />
+					<ReviewLanes
+						items={items}
+						destination={destination}
+						direction={direction}
+						lookup={lookup}
+						controls={controls}
+					/>
 				) : (
 					<FolderTree
 						items={items}
@@ -592,6 +642,7 @@ function Gather({
 	ids,
 	stale,
 	mode,
+	onMode,
 	variant,
 	onClose,
 	onRefresh,
@@ -601,6 +652,7 @@ function Gather({
 	/** Reads shown before a Refresh: waited past, never shown again. */
 	stale: ReadonlySet<PlanId>;
 	mode: SyncMode;
+	onMode: (mode: SyncMode) => void;
 	variant: SyncShellVariant;
 	onClose: (() => void) | undefined;
 	onRefresh: (shown: readonly PlanId[]) => void;
@@ -639,6 +691,13 @@ function Gather({
 		setThere(new Map());
 		setChoices(new Map());
 		setUnderstood(false);
+	};
+	// Ticks are kept as changes from the direction's suggestions, so a new direction starts clean.
+	const switchMode = (next: SyncMode) => {
+		if (next !== mode) {
+			showLatest();
+			onMode(next);
+		}
 	};
 
 	const early = notReady({
@@ -684,6 +743,10 @@ function Gather({
 		.filter((r) => r.plan.actions.some((a) => applying.has(a.id)))
 		.map((r) => r.planId);
 	const refresh = () => onRefresh(reviewed.map((r) => r.planId));
+	const shortName = (plan: TargetPlan) => {
+		const target = syncTargets.data?.find((x) => x.id === plan.targetId);
+		return target ? targetShortName(target) : plan.name;
+	};
 
 	const run = () =>
 		runSync({
@@ -783,6 +846,8 @@ function Gather({
 			<div>
 				<NewerRead show={newer && !busy} onShow={showLatest} />
 				<ReviewToolbar
+					mode={mode}
+					onMode={switchMode}
 					view={view}
 					onView={setView}
 					showUnchanged={showUnchanged}
@@ -790,8 +855,11 @@ function Gather({
 				/>
 				{targets.map((t) => (
 					<TargetBlock
-						key={t.plan.targetId}
+						// A new direction starts the sections folded afresh.
+						key={`${t.plan.targetId}:${mode}`}
 						t={t}
+						destination={shortName(t.plan)}
+						direction={mode}
 						multi={ids.length > 1}
 						view={view}
 						showUnchanged={showUnchanged}

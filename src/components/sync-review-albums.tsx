@@ -31,7 +31,6 @@ import {
 	type ReviewItem,
 	type SharedThere,
 	sharedThere,
-	type ThereLookup,
 	type TrackLookup,
 	tickable,
 } from "#/lib/sync-review-model.ts";
@@ -39,17 +38,27 @@ import { cn } from "#/lib/utils.ts";
 
 const CARDS_PER_PAGE = 60;
 
-const CHIP: Record<ChipKind, { sign: string; tone: Tone | null; label: string }> = {
-	new: { sign: "+", tone: "add", label: "new" },
-	retagged: { sign: "~", tone: "change", label: "retagged" },
-	changed: { sign: "~", tone: "change", label: "changed" },
-	moved: { sign: "→", tone: "move", label: "moved" },
-	editedThere: { sign: "↓", tone: "change", label: "edited there" },
-	bothEdited: { sign: "⇄", tone: "remove", label: "both edited" },
-	copyHere: { sign: "↓", tone: "add", label: "copy here" },
-	deleteThere: { sign: "−", tone: "remove", label: "delete there" },
-	left: { sign: "·", tone: null, label: "left" },
+/**
+ * How a chip reads: ↑ changes the destination, ↓ changes the library, ⇄ needs a choice. `hint`
+ * is the longer form, shown on hover.
+ */
+const CHIP: Record<ChipKind, { sign: string; tone: Tone | null; verb: string; hint: string }> = {
+	new: { sign: "↑", tone: "add", verb: "Send", hint: "new to the destination" },
+	retagged: { sign: "↑", tone: "change", verb: "Retag", hint: "tags changed on the destination" },
+	changed: { sign: "↑", tone: "change", verb: "Replace", hint: "replaced on the destination" },
+	moved: { sign: "↑", tone: "move", verb: "Move", hint: "moved on the destination" },
+	editedThere: { sign: "↓", tone: "change", verb: "Update", hint: "updated in your library" },
+	bothEdited: { sign: "⇄", tone: "remove", verb: "Choose", hint: "edited on both sides" },
+	copyHere: { sign: "↓", tone: "add", verb: "Copy", hint: "copied into your library" },
+	deleteThere: { sign: "↑", tone: "remove", verb: "Delete", hint: "deleted from the destination" },
+	left: { sign: "·", tone: null, verb: "Leave", hint: "left as they are" },
 };
+
+/** `3`, or `1/3` when only some are ticked. */
+const chipCount = (ticked: number, count: number) =>
+	ticked === count || ticked === 0
+		? count.toLocaleString()
+		: `${ticked.toLocaleString()}/${count.toLocaleString()}`;
 
 function Cover({ group }: { group: AlbumGroup }) {
 	if (group.coverTrackId !== null) {
@@ -63,20 +72,32 @@ function Cover({ group }: { group: AlbumGroup }) {
 	);
 }
 
-/** Counts of what happens to an album's files: `+3 new`, `~1 retagged`, … */
-function Chips({ items, there }: { items: readonly ReviewItem[]; there: ThereLookup }) {
-	return albumChips(items, there).map((c) => {
-		const { sign, tone, label } = CHIP[c.kind];
+/**
+ * What happens to an album's files: `↑ Send 3`, `↓ Update 1`, … A kind with nothing ticked is
+ * greyed and struck through: this sync skips it. A choice still to make is never skipped.
+ */
+function Chips({ items, controls }: { items: readonly ReviewItem[]; controls: ReviewControls }) {
+	return albumChips(items, controls.there, controls.picked).map((c) => {
+		const { sign, tone, verb, hint } = CHIP[c.kind];
+		const skipped = c.ticked === 0 && c.kind !== "bothEdited" && c.kind !== "left";
 		return (
 			<span
 				key={c.kind}
-				className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] tabular-nums"
+				title={`${chipCount(c.ticked, c.count)} ${hint}${skipped ? " (skipped)" : ""}`}
+				className={cn(
+					"rounded-full bg-muted px-2 py-0.5 text-[11px] tabular-nums",
+					skipped && "text-muted-foreground line-through opacity-60",
+				)}
 			>
-				<span className={cn("font-semibold", tone ? TONE[tone].text : "text-muted-foreground")}>
+				<span
+					className={cn(
+						"font-semibold",
+						tone && !skipped ? TONE[tone].text : "text-muted-foreground",
+					)}
+				>
 					{sign}
-					{c.count.toLocaleString()}
 				</span>{" "}
-				{label}
+				{verb} {chipCount(c.ticked, c.count)}
 			</span>
 		);
 	});
@@ -412,7 +433,7 @@ function AlbumCard({
 						onToggle={onToggle}
 					/>
 					<div className="mt-2 flex flex-wrap items-center gap-1">
-						<Chips items={group.items} there={controls.there} />
+						<Chips items={group.items} controls={controls} />
 						{shared && !floating && (
 							<AlbumChoice shared={shared} controls={controls} album={title} />
 						)}

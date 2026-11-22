@@ -2,7 +2,7 @@ import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Drawer } from "#/components/drawer.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
-import { SyncPanel } from "#/components/sync-summary.tsx";
+import { type SyncMode, SyncPanel } from "#/components/sync-summary.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { type SyncKind, useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
@@ -43,14 +43,16 @@ export function SyncButton({
 	);
 }
 
-const ABOUT: Record<SyncKind, string> = {
-	sync: "Send your changes, bring in theirs, and decide what to do with files only they have.",
+const ABOUT: Record<SyncMode, string> = {
+	both: "Send your changes, bring in theirs, and decide what to do with files only they have.",
 	pull: "Starts with what comes into your library; nothing is sent.",
 	push: "Starts with what goes to destinations; nothing comes in.",
 };
 
+const modeOf = (kind: SyncKind): SyncMode => (kind === "sync" ? "both" : kind);
+
 /** The page header every other panel has: icon tile, title and a line on what this run does. */
-function SyncHeader({ kind }: { kind: SyncKind }) {
+function SyncHeader({ mode }: { mode: SyncMode }) {
 	return (
 		<PageHeader
 			variant="plain"
@@ -60,7 +62,7 @@ function SyncHeader({ kind }: { kind: SyncKind }) {
 				</div>
 			}
 			title="Sync with destinations"
-			subtitle={ABOUT[kind]}
+			subtitle={ABOUT[mode]}
 		/>
 	);
 }
@@ -72,29 +74,29 @@ function SyncHeader({ kind }: { kind: SyncKind }) {
 export function SyncDrawers() {
 	const { request, close } = useSyncActions();
 	const all = useIds(request?.ids);
-	// Keep the last kind while the drawer slides out.
-	const [last, setLast] = useState<SyncKind>("sync");
+	// Follows the review's direction switch, and stays put while the drawer slides out.
+	const [mode, setMode] = useState<SyncMode>("both");
 	useEffect(() => {
 		if (request) {
-			setLast(request.kind);
+			setMode(modeOf(request.kind));
 		}
 	}, [request]);
-	const kind = request?.kind ?? last;
 	return (
 		<Drawer
 			open={request !== null}
 			onClose={close}
 			title="Sync"
 			width="w-[44rem]"
-			header={<SyncHeader kind={kind} />}
+			header={<SyncHeader mode={mode} />}
 			bare
 		>
 			{request && (
 				<SyncPanel
 					key={request.session}
 					ids={all}
-					mode={request.kind === "sync" ? "both" : request.kind}
+					mode={modeOf(request.kind)}
 					onClose={close}
+					onModeChange={setMode}
 				/>
 			)}
 		</Drawer>

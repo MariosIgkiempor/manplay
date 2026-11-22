@@ -4,6 +4,7 @@ import {
 	type IncomingAction,
 	isSettled,
 	type PushAction,
+	type SyncDirection,
 	type ThereChoice,
 	type ThereFile,
 	thereOptions,
@@ -56,7 +57,35 @@ export function reviewItems(
 	];
 }
 
-/** The sign before a file: which way it goes, coloured like the tallies. */
+/**
+ * The review's sections: what goes to the destination, what comes into the library, and files
+ * only on the destination, which can go either way.
+ */
+export type Lane = ReviewItem["side"];
+
+export const LANES: readonly Lane[] = ["send", "bring", "there"];
+
+/** The review's files split by section, in the order they came. */
+export function itemsByLane(items: readonly ReviewItem[]): Record<Lane, ReviewItem[]> {
+	const lanes: Record<Lane, ReviewItem[]> = { send: [], bring: [], there: [] };
+	for (const item of items) {
+		lanes[item.side].push(item);
+	}
+	return lanes;
+}
+
+/** The section a one-way sync starts folded: the direction it leaves out. */
+export function foldedLane(direction: SyncDirection): Lane | null {
+	if (direction === "push") {
+		return "bring";
+	}
+	return direction === "pull" ? "send" : null;
+}
+
+/**
+ * The sign before a file: ↑ changes the destination, ↓ changes the library, ⇄ needs a choice.
+ * Coloured like the tallies.
+ */
 export function signOf(
 	item: ReviewItem,
 	there: ThereLookup,
@@ -66,7 +95,7 @@ export function signOf(
 		if (c === "pull") {
 			return { sign: "↓", tone: "add" };
 		}
-		return c === "delete" ? { sign: "−", tone: "remove" } : { sign: "·", tone: null };
+		return c === "delete" ? { sign: "↑", tone: "remove" } : { sign: "·", tone: null };
 	}
 	return ACTION_SIGN[item.action.kind];
 }
@@ -75,9 +104,9 @@ const ACTION_SIGN: Record<
 	(SendAction | IncomingAction)["kind"],
 	{ sign: string; tone: ChangeTone }
 > = {
-	upload: { sign: "+", tone: "add" },
-	replace: { sign: "~", tone: "change" },
-	move: { sign: "→", tone: "move" },
+	upload: { sign: "↑", tone: "add" },
+	replace: { sign: "↑", tone: "change" },
+	move: { sign: "↑", tone: "move" },
 	update: { sign: "↓", tone: "change" },
 	merge: { sign: "⇄", tone: "change" },
 	conflict: { sign: "⇄", tone: "remove" },
@@ -240,19 +269,36 @@ export function chipOf(item: ReviewItem, there: ThereLookup): ChipKind {
 	}
 }
 
-/** How many files of each kind an album holds, in a fixed order, leaving out kinds it lacks. */
+/** One count on an album card: how many files of a kind, and how many of them will run. */
+export interface AlbumChip {
+	kind: ChipKind;
+	count: number;
+	ticked: number;
+}
+
+/**
+ * How many files of each kind an album holds and how many are ticked, in a fixed order, leaving
+ * out kinds it lacks. A file only on the destination counts as ticked unless it is left alone.
+ */
 export function albumChips(
 	items: readonly ReviewItem[],
 	there: ThereLookup,
-): { kind: ChipKind; count: number }[] {
-	const counts = new Map<ChipKind, number>();
+	picked: (a: SyncAction) => boolean,
+): AlbumChip[] {
+	const chips = new Map<ChipKind, AlbumChip>();
 	for (const item of items) {
 		const kind = chipOf(item, there);
-		counts.set(kind, (counts.get(kind) ?? 0) + 1);
+		const chip = chips.get(kind) ?? { kind, count: 0, ticked: 0 };
+		chip.count += 1;
+		const runs = item.side === "there" ? there(item.file) !== "leave" : picked(item.action);
+		if (runs) {
+			chip.ticked += 1;
+		}
+		chips.set(kind, chip);
 	}
 	return CHIP_ORDER.flatMap((kind) => {
-		const count = counts.get(kind) ?? 0;
-		return count > 0 ? [{ kind, count }] : [];
+		const chip = chips.get(kind);
+		return chip ? [chip] : [];
 	});
 }
 
