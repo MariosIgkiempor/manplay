@@ -20,7 +20,8 @@
 		"test": "vitest run",
 		"ffmpeg": "node scripts/fetch-ffmpeg.mjs",
 		"postinstall": "node scripts/fetch-ffmpeg.mjs",
-		"harness": "node scripts/harness.mjs"
+		"harness": "node scripts/harness.mjs",
+		"setup-worktree": "node scripts/setup-worktree.mjs"
 	},
 	"dependencies": {
 		"@base-ui/react": "^1.9.0",

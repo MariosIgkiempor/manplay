@@ -40,6 +40,7 @@ Windows 10/11 x64.
 pnpm install          # also fetches ffmpeg
 pnpm tauri dev        # run the app
 pnpm verify           # typecheck + biome + vitest
+pnpm setup-worktree   # in a new git worktree: clone the main checkout's Rust build, then install
 cargo clippy --manifest-path src-tauri/Cargo.toml
 cargo test   --manifest-path src-tauri/Cargo.toml
 ```
