@@ -39,6 +39,15 @@ describe("indexIssues", () => {
 	it("does not leak above the root", () => {
 		expect(idx.folders.has("/")).toBe(false);
 	});
+
+	// Issues can arrive before the library folder is known; this used to never return.
+	it.each([
+		["no library folder yet", ""],
+		["a root the issues are outside of", "/elsewhere"],
+	])("returns with %s, Windows paths included", (_, root) => {
+		const index = indexIssues(root, [...issues, issue("C:\\Music\\x.mp3", "notMp3")]);
+		expect(index.byPath.size).toBe(4);
+	});
 });
 
 describe("fixablePaths", () => {

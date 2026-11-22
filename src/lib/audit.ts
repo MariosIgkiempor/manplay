@@ -49,13 +49,15 @@ export function indexIssues(root: string, issues: readonly AuditIssue[]): IssueI
 	const folders = new Map<string, FolderSummary>();
 	for (const [path, list] of byPath) {
 		let dir = parentPath(path);
-		// `parentPath` of a top-level path is the separator itself, so stop on length too.
+		// `parentPath` of a top-level path is the separator itself, so stop on length too, and once
+		// the top is reached: with no library folder known yet (`""`) every path is "inside" it.
 		while (dir.length >= root.length && dir.startsWith(root)) {
 			addToFolder(folders, dir, list);
-			if (dir === root) {
+			const up = parentPath(dir);
+			if (dir === root || up === dir) {
 				break;
 			}
-			dir = parentPath(dir);
+			dir = up;
 		}
 	}
 	return { byPath, folders };
