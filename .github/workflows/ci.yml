@@ -12,6 +12,10 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # Full debuginfo makes compiling and linking the manplay crate slower; line tables keep
+      # file and line numbers in panic backtraces.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
