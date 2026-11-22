@@ -50,6 +50,7 @@ import { isAudioName, joinPath, parentPath, relSegments } from "#/lib/fs-path.ts
 import { FILE_MANAGER, keyLabel, TRASH } from "#/lib/platform.ts";
 import { SEARCH_FIELD } from "#/lib/search-field.ts";
 import { applyClick, EMPTY_SELECTION, type Selection } from "#/lib/selection.ts";
+import { chordLabel, type FileShortcutId } from "#/lib/shortcuts.ts";
 import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
 import { labelOf } from "#/lib/tag-preview.ts";
 import {
@@ -65,6 +66,7 @@ import type { FsClipboard } from "#/lib/use-fs-ops.ts";
 import { useFsOps } from "#/lib/use-fs-ops.ts";
 import { undoMakeDir, undoRename } from "#/lib/use-fs-undo.ts";
 import { useIssueNav } from "#/lib/use-issue-nav.ts";
+import { shortcutFor, useBindings, useMacLabels } from "#/lib/use-shortcuts.ts";
 import { LOCAL_TREE, useTree } from "#/lib/use-tree.ts";
 import { expandOrEnter, useVimNav } from "#/lib/use-vim-nav.ts";
 import { cn } from "#/lib/utils.ts";
@@ -422,7 +424,13 @@ export function FilePane({
 			},
 		);
 
+	const bindings = useBindings();
+	const mac = useMacLabels();
 	const menuCtx = {
+		keyOf: (id: FileShortcutId) => {
+			const first = bindings.get(id)?.[0];
+			return first === undefined ? undefined : chordLabel(first, mac);
+		},
 		actions,
 		hasClipboard: clipboard !== null,
 		tagClipboard,
@@ -983,59 +991,44 @@ type KeyAction =
 	| "help"
 	| null;
 
-const KEYS: Record<string, KeyAction> = {
-	"mod+n": "newFolder",
-	"mod+c": "copy",
-	"mod+x": "cut",
-	"mod+v": "paste",
-	"mod+a": "all",
-	"mod+backspace": "delete",
-	delete: "delete",
-	arrowdown: "next",
-	arrowup: "prev",
-	"]": "nextIssue",
-	"[": "prevIssue",
-	i: "issues",
-	f: "fix",
-	arrowright: "expand",
-	arrowleft: "collapse",
-	f2: "rename",
-	enter: "open",
-	backspace: "up",
-	escape: "clear",
-	" ": "play",
-	"?": "help",
-	// Vim keys
-	j: "next",
-	k: "prev",
-	l: "expandIn",
-	h: "collapse",
-	H: "collapse",
-	L: "focusTags",
-	r: "rename",
-	d: "delete",
-	y: "copy",
-	x: "cut",
-	p: "paste",
-	a: "newFolder",
-	o: "open",
-	"-": "up",
-	g: "g",
-	G: "bottom",
-	"/": "search",
-	n: "searchNext",
-	N: "searchPrev",
+/** What each file browser shortcut (see `SHORTCUTS`, chosen in Settings) does here. */
+const FILE_ACTIONS: Record<FileShortcutId, Exclude<KeyAction, null>> = {
+	fileNext: "next",
+	filePrev: "prev",
+	fileOpenFolder: "expand",
+	fileCloseFolder: "collapse",
+	fileGoInto: "expandIn",
+	fileOpen: "open",
+	fileUp: "up",
+	fileFirst: "g",
+	fileLast: "bottom",
+	fileFilter: "search",
+	fileMatchNext: "searchNext",
+	fileMatchPrev: "searchPrev",
+	fileClear: "clear",
+	filePlay: "play",
+	fileNewFolder: "newFolder",
+	fileRename: "rename",
+	fileCut: "cut",
+	fileCopy: "copy",
+	filePaste: "paste",
+	fileDelete: "delete",
+	fileSelectAll: "all",
+	fileNextIssue: "nextIssue",
+	filePrevIssue: "prevIssue",
+	fileIssue: "issues",
+	fileFix: "fix",
+	fileTags: "focusTags",
+	fileHelp: "help",
 };
 
 function keyAction(ev: KeyboardEvent, editing: boolean): KeyAction {
 	const t = ev.target;
-	if (editing || ev.altKey || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) {
+	if (editing || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) {
 		return null;
 	}
-	const hasMod = ev.metaKey || ev.ctrlKey;
-	// Vim letters are case-sensitive (`L` differs from `l`) and never fire with ⌘/Ctrl held.
-	const exact = hasMod ? undefined : KEYS[ev.key];
-	return exact ?? KEYS[`${hasMod ? "mod+" : ""}${ev.key.toLowerCase()}`] ?? null;
+	const found = shortcutFor(ev.nativeEvent, "files");
+	return found ? FILE_ACTIONS[found.id as FileShortcutId] : null;
 }
 
 interface PaneActionSet {
@@ -1102,6 +1095,10 @@ function tagItems(
 	return items;
 }
 
+/** A menu item's shortcut when the action has a key (an unbound one shows none). */
+const withKey = (key: string | undefined): { shortcut?: string } =>
+	key === undefined ? {} : { shortcut: key };
+
 /** Right-click menu entries for `entry` (or for empty space when there is none). */
 function buildMenu(
 	ctx: {
@@ -1110,16 +1107,28 @@ function buildMenu(
 		tagClipboard: TagClipboard | null;
 		canMoveToOther: boolean;
 		fixing: boolean;
+		/** The first key of a file shortcut, as this platform writes it. */
+		keyOf: (id: FileShortcutId) => string | undefined;
 	},
 	target: { entry?: TreeRow; paths: string[]; dest: string; fixable: number },
 ): MenuItem[] {
-	const { actions: a } = ctx;
+	const { actions: a, keyOf } = ctx;
 	const { entry, paths, dest } = target;
 	const items: MenuItem[] = [];
 	if (entry?.entry.isDir) {
-		items.push({ label: "Open", icon: FolderOpen, shortcut: "↩", run: () => a.open(entry) });
+		items.push({
+			label: "Open",
+			icon: FolderOpen,
+			...withKey(keyOf("fileOpen")),
+			run: () => a.open(entry),
+		});
 	} else if (entry && isAudioName(entry.entry.name)) {
-		items.push({ label: "Play", icon: Play, shortcut: "Space", run: () => a.play(entry) });
+		items.push({
+			label: "Play",
+			icon: Play,
+			...withKey(keyOf("filePlay")),
+			run: () => a.play(entry),
+		});
 	}
 	if (entry && target.fixable > 0) {
 		items.push({
@@ -1131,21 +1140,36 @@ function buildMenu(
 	}
 	items.push(...tagItems(a, entry, paths, ctx.tagClipboard));
 	if (entry) {
-		items.push({ label: "Rename", icon: Pencil, shortcut: "F2", run: () => a.rename(entry.path) });
-		items.push({ label: "Cut", icon: Scissors, shortcut: "⌘X", run: () => a.cut(paths) });
-		items.push({ label: "Copy", icon: Copy, shortcut: "⌘C", run: () => a.copy(paths) });
+		items.push({
+			label: "Rename",
+			icon: Pencil,
+			...withKey(keyOf("fileRename")),
+			run: () => a.rename(entry.path),
+		});
+		items.push({
+			label: "Cut",
+			icon: Scissors,
+			...withKey(keyOf("fileCut")),
+			run: () => a.cut(paths),
+		});
+		items.push({
+			label: "Copy",
+			icon: Copy,
+			...withKey(keyOf("fileCopy")),
+			run: () => a.copy(paths),
+		});
 	}
 	items.push({
 		label: "Paste",
 		icon: ClipboardPaste,
-		shortcut: "⌘V",
+		...withKey(keyOf("filePaste")),
 		disabled: !ctx.hasClipboard,
 		run: () => a.paste(dest),
 	});
 	items.push({
 		label: "New folder",
 		icon: FolderPlus,
-		shortcut: "⌘N",
+		...withKey(keyOf("fileNewFolder")),
 		run: () => a.newFolder(dest),
 	});
 	items.push({
@@ -1160,7 +1184,7 @@ function buildMenu(
 		items.push({
 			label: `Move to ${TRASH}`,
 			icon: Trash2,
-			shortcut: "⌘⌫",
+			...withKey(keyOf("fileDelete")),
 			danger: true,
 			run: () => a.remove(paths),
 		});

@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UndoContext, type UndoEntry } from "#/context/undo-context.ts";
+import { isShortcut } from "#/lib/use-shortcuts.ts";
 import { cn } from "#/lib/utils.ts";
 
 const MAX_ENTRIES = 50;
@@ -57,10 +58,11 @@ export function UndoProvider({ children }: { children: ReactNode }) {
 		}
 	}, [queryClient]);
 
-	// Cmd+Z, except while typing (fields keep their own undo) or with a dialog open.
+	// ⌘Z (or the key chosen in Settings), except while typing (fields keep their own undo) or
+	// with a dialog open.
 	useEffect(() => {
 		const onKey = (ev: KeyboardEvent) => {
-			if (ev.key.toLowerCase() !== "z" || !(ev.metaKey || ev.ctrlKey) || ev.shiftKey) {
+			if (!isShortcut(ev, "undo")) {
 				return;
 			}
 			const el = ev.target instanceof HTMLElement ? ev.target : null;

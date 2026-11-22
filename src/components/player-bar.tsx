@@ -1,26 +1,24 @@
-import {
-	AudioWaveform,
-	PanelRight,
-	Pause,
-	Play,
-	SkipBack,
-	SkipForward,
-	Volume2,
-} from "lucide-react";
-import { type CSSProperties, useState } from "react";
+import { AudioWaveform, Pause, Play, SkipBack, SkipForward, Volume2 } from "lucide-react";
+import { type CSSProperties, useRef } from "react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
+import { DeckEditor } from "#/components/grid-editor.tsx";
+import { Marquee } from "#/components/marquee.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { WaveformDetail, WaveformSeek } from "#/components/waveform.tsx";
-import { type DetailView, useDetail } from "#/context/detail-context.ts";
+import { WaveformSeek } from "#/components/waveform.tsx";
+import { useDetail } from "#/context/detail-context.ts";
 import { usePlayer, usePlayerTime } from "#/context/player-context.ts";
 import { TrackOrderContext } from "#/context/track-order.ts";
 import type { Track, TrackAnalysis } from "#/lib/api.ts";
+import { type Cue, START_COLOR } from "#/lib/cues.ts";
 import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
-import { useTracks } from "#/lib/queries.ts";
+import { DECK_COLUMNS } from "#/lib/page-layout.ts";
+import { useTrackCues, useTracks } from "#/lib/queries.ts";
+import { useShortcut } from "#/lib/use-shortcuts.ts";
 import { useTrackAnalysis } from "#/lib/use-track-analysis.ts";
+import { setWaveformShown, useWaveformShown } from "#/lib/use-waveform-shown.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** BPM and key of the playing song, the two figures a DJ checks before mixing it. */
@@ -50,31 +48,12 @@ function TempoKey({ track }: { track: Track }) {
 	);
 }
 
-const WAVEFORM_KEY = "manplay.player-waveform";
-
-/** Whether the big waveform above the player bar is shown; remembered on this computer. */
-function useWaveformShown(): [boolean, (on: boolean) => void] {
-	const [on, setOn] = useState(() => {
-		try {
-			return localStorage.getItem(WAVEFORM_KEY) !== "0";
-		} catch {
-			return true;
-		}
-	});
-	const set = (next: boolean) => {
-		setOn(next);
-		try {
-			localStorage.setItem(WAVEFORM_KEY, next ? "1" : "0");
-		} catch {
-			// Not remembered; the toggle still works for now.
-		}
-	};
-	return [on, set];
-}
+const NO_CUES: readonly Cue[] = [];
 
 /**
- * Cover, title and artist of the playing song. The title opens the song and the artist the
- * artist; a right-click offers the same menu as a song in any list, stepping through the queue.
+ * Cover, title and artist of the playing song, as wide as the sidebar above it. Names too long for
+ * it scroll round. The title opens the song and the artist the artist; a right-click offers the
+ * same menu as a song in any list, stepping through the queue.
  */
 function NowPlaying({ track, error }: { track: Track; error: string | null }) {
 	const detail = useDetail();
@@ -84,57 +63,30 @@ function NowPlaying({ track, error }: { track: Track; error: string | null }) {
 			<AddToPlaylistMenu tracks={[track]} label={track.title}>
 				<div className="flex min-w-0 items-center gap-3">
 					<AlbumArt trackId={track.id} className="size-10 shrink-0 rounded-md" />
-					<div className="min-w-0">
-						<button
-							type="button"
-							title={`${track.title} · open song`}
-							onClick={() =>
-								detail.open({
-									kind: "song",
-									trackId: track.id,
-									list: p.queue.map((t) => t.id),
-								})
-							}
-							className={cn(
-								"block max-w-full truncate text-left font-medium text-sm hover:underline",
-							)}
-						>
-							{track.title}
-						</button>
-						<div className="flex min-w-0 text-muted-foreground text-xs">
+					<div className="min-w-0 flex-1">
+						<Marquee>
+							<button
+								type="button"
+								title={`${track.title} · open song`}
+								onClick={() =>
+									detail.open({
+										kind: "song",
+										trackId: track.id,
+										list: p.queue.map((t) => t.id),
+									})
+								}
+								className="text-left font-medium text-sm hover:underline"
+							>
+								{track.title}
+							</button>
+						</Marquee>
+						<Marquee className="text-muted-foreground text-xs">
 							{error ?? <ArtistLinks artist={track.artist} />}
-						</div>
+						</Marquee>
 					</div>
 				</div>
 			</AddToPlaylistMenu>
 		</TrackOrderContext.Provider>
-	);
-}
-
-/**
- * The side panel's button. Opening shows the playing song's metadata, or when nothing is
- * playing, whatever the panel showed last; pressed again, it closes the panel.
- */
-function PanelToggle({ track }: { track: Track | null }) {
-	const detail = useDetail();
-	const p = usePlayer();
-	const open = detail.view !== null;
-	const next: DetailView | null = track
-		? { kind: "song", trackId: track.id, tab: "metadata", list: p.queue.map((t) => t.id) }
-		: detail.last;
-	return (
-		<Button
-			variant="ghost"
-			size="icon-sm"
-			aria-label={open ? "Close the side panel" : "Open the side panel"}
-			aria-pressed={open}
-			title={open ? "Close the side panel" : "Open the side panel"}
-			disabled={!open && next === null}
-			className={open ? "text-primary" : "text-muted-foreground"}
-			onClick={() => (open ? detail.close() : next && detail.open(next))}
-		>
-			<PanelRight />
-		</Button>
 	);
 }
 
@@ -148,97 +100,170 @@ function useCurrentTrack(): Track | null {
 	return tracks.data?.find((t) => t.id === current.id) ?? current;
 }
 
-export function PlayerBar() {
+/**
+ * The song the bar shows: the playing one, or after the queue runs out the one that was playing,
+ * so the bar keeps its contents while it slides away.
+ */
+function useShownTrack(current: Track | null): Track | null {
+	const last = useRef<Track | null>(current);
+	if (current) {
+		last.current = current;
+	}
+	return current ?? last.current;
+}
+
+/**
+ * Back to the song's main cue (rekordbox's orange one) and stopped there, as the CUE button on a
+ * CDJ does while it plays. Shown only for songs that have one.
+ */
+function CueButton({ cue }: { cue: Cue }) {
+	const p = usePlayer();
+	return (
+		<button
+			type="button"
+			aria-label="Back to the cue"
+			title="Back to the cue and pause"
+			// Round and orange like the CUE button on the deck above and on a CDJ.
+			className="mx-0.5 grid size-8 shrink-0 place-items-center rounded-full border-2 font-semibold text-[9px] tracking-wide outline-none transition-colors hover:bg-[color-mix(in_oklch,var(--cue)_15%,transparent)] focus-visible:ring-2 focus-visible:ring-ring/60"
+			style={
+				{ borderColor: START_COLOR, color: START_COLOR, "--cue": START_COLOR } as CSSProperties
+			}
+			onClick={() => {
+				if (p.playing) {
+					p.toggle();
+				}
+				p.seek(cue.start);
+			}}
+		>
+			CUE
+		</button>
+	);
+}
+
+/** Time left, a little quieter, then the song's length: what a DJ reads to time the next mix. */
+function TimeLeft() {
 	const p = usePlayer();
 	const time = usePlayerTime();
-	const current = useCurrentTrack();
+	const duration = Number.isFinite(p.duration) && p.duration > 0 ? p.duration : 0;
+	const left = Math.max(0, duration - time);
+	return (
+		<span className="shrink-0 text-xs tabular-nums" title="Time left / length">
+			<span className="text-muted-foreground">−{clock(left)}</span>
+			<span className="text-muted-foreground/60"> / </span>
+			<span className="text-foreground">{clock(duration)}</span>
+		</span>
+	);
+}
+
+/** Previous, play, the main cue when the song has one, next, and the big waveform's switch. */
+function Transport({
+	mainCue,
+	waveform,
+	onWaveform,
+}: {
+	mainCue: Cue | null;
+	waveform: boolean;
+	onWaveform: (on: boolean) => void;
+}) {
+	const p = usePlayer();
 	const PlayIcon = p.playing ? Pause : Play;
 	const hasNext = p.index + 1 < p.queue.length;
-	const analysis = useTrackAnalysis(current?.id ?? null).data ?? null;
-	const [waveform, setWaveform] = useWaveformShown();
+	return (
+		<div className="flex shrink-0 items-center gap-1">
+			<Button variant="ghost" size="icon" aria-label="Previous" onClick={p.prev}>
+				<SkipBack />
+			</Button>
+			<Button size="icon" aria-label={p.playing ? "Pause" : "Play"} onClick={p.toggle}>
+				<PlayIcon />
+			</Button>
+			{mainCue && <CueButton cue={mainCue} />}
+			<Button variant="ghost" size="icon" aria-label="Next" disabled={!hasNext} onClick={p.next}>
+				<SkipForward />
+			</Button>
+			<Button
+				variant="ghost"
+				size="icon"
+				aria-label="Show the waveform"
+				aria-pressed={waveform}
+				title={waveform ? "Hide the waveform" : "Show the waveform"}
+				className={waveform ? "text-primary" : "text-muted-foreground"}
+				onClick={() => onWaveform(!waveform)}
+			>
+				<AudioWaveform />
+			</Button>
+		</div>
+	);
+}
+
+/**
+ * The player, below the pages. It slides up when a song starts and away when the queue runs out;
+ * pausing keeps it. The song column lines up with the sidebar, the buttons follow it on the left,
+ * and the song's waveform takes the rest of the width.
+ */
+export function PlayerBar() {
+	const p = usePlayer();
+	// Space by default, from anywhere unless typing or a focused list uses the key.
+	useShortcut("play", p.toggle);
+	const current = useCurrentTrack();
+	const shown = useShownTrack(current);
+	const open = current !== null;
+	const analysis = useTrackAnalysis(shown?.id ?? null).data ?? null;
+	const cues = useTrackCues(shown?.id ?? null).data ?? NO_CUES;
+	const mainCue = cues?.find((c) => c.main) ?? null;
+	const waveform = useWaveformShown();
 
 	return (
-		<footer className="shrink-0 bg-canvas">
-			{waveform && current && analysis && (
-				<WaveformDetail analysis={analysis} position={p.getTime} running={p.playing} />
+		<div
+			inert={!open}
+			className={cn(
+				"grid shrink-0 transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.3,0,0.2,1)] motion-reduce:transition-none",
+				open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
 			)}
-			<div className="grid h-16 grid-cols-[minmax(0,1fr)_minmax(0,2.4fr)_auto] items-center gap-6 px-4">
-				<div className="flex min-w-0 items-center gap-3">
-					{current && <NowPlaying track={current} error={p.error} />}
-				</div>
-
-				{/* The transport, then the song's timeline: its waveform once analysed. */}
-				<div className="flex min-w-0 items-center gap-3">
-					<div className="flex shrink-0 items-center gap-1">
-						<Button
-							variant="ghost"
-							size="icon"
-							aria-label="Previous"
-							disabled={current === null}
-							onClick={p.prev}
-						>
-							<SkipBack />
-						</Button>
-						<Button
-							size="icon"
-							aria-label={p.playing ? "Pause" : "Play"}
-							disabled={current === null}
-							onClick={p.toggle}
-						>
-							<PlayIcon />
-						</Button>
-						<Button
-							variant="ghost"
-							size="icon"
-							aria-label="Next"
-							disabled={!hasNext}
-							onClick={p.next}
-						>
-							<SkipForward />
-						</Button>
+		>
+			<footer className="min-h-0 overflow-hidden bg-canvas">
+				{shown && waveform && <DeckEditor track={shown} />}
+				<div className={cn(DECK_COLUMNS, "h-16 items-center")}>
+					<div className="min-w-0 pr-4 pl-3">
+						{shown && <NowPlaying track={shown} error={p.error} />}
 					</div>
-					<div className="flex min-w-0 flex-1 items-center gap-2 text-muted-foreground text-xs tabular-nums">
-						<span className="w-10 shrink-0 text-right">{clock(time)}</span>
-						<SeekBar analysis={current ? analysis : null} disabled={current === null} />
-						<span className="w-10 shrink-0">{clock(p.duration)}</span>
+
+					{/* The transport, then the song's timeline: its waveform once analysed. */}
+					<div className="flex min-w-0 items-center gap-3 pr-4">
+						<Transport mainCue={mainCue} waveform={waveform} onWaveform={setWaveformShown} />
+						<SeekBar analysis={analysis} cues={cues} />
+						<TimeLeft />
+						<VolumeAndTempo track={shown} />
 					</div>
 				</div>
+			</footer>
+		</div>
+	);
+}
 
-				<div className="flex items-center justify-end gap-2">
-					{current && <TempoKey track={current} />}
-					<Volume2 className="size-4 text-muted-foreground" />
-					<input
-						type="range"
-						aria-label="Volume"
-						className="slider w-24"
-						style={{ "--fill": p.volume } as CSSProperties}
-						min={0}
-						max={1}
-						step={0.01}
-						value={p.volume}
-						onChange={(e) => p.setVolume(Number(e.target.value))}
-					/>
-					<span aria-hidden="true" className="mx-1 h-5 w-px bg-hairline" />
-					<Button
-						variant="ghost"
-						size="icon-sm"
-						aria-label="Show the waveform"
-						aria-pressed={waveform}
-						title={waveform ? "Hide the waveform" : "Show the waveform"}
-						className={waveform ? "text-primary" : "text-muted-foreground"}
-						onClick={() => setWaveform(!waveform)}
-					>
-						<AudioWaveform />
-					</Button>
-					<PanelToggle track={current} />
-				</div>
-			</div>
-		</footer>
+/** The song's BPM and key, then the volume, at the bar's right end. */
+function VolumeAndTempo({ track }: { track: Track | null }) {
+	const p = usePlayer();
+	return (
+		<div className="flex shrink-0 items-center justify-end gap-2 pl-3">
+			{track && <TempoKey track={track} />}
+			<Volume2 className="size-4 text-muted-foreground" />
+			<input
+				type="range"
+				aria-label="Volume"
+				className="slider w-24"
+				style={{ "--fill": p.volume } as CSSProperties}
+				min={0}
+				max={1}
+				step={0.01}
+				value={p.volume}
+				onChange={(e) => p.setVolume(Number(e.target.value))}
+			/>
+		</div>
 	);
 }
 
 /** The track's waveform when it has been analysed, else a plain slider. */
-function SeekBar({ analysis, disabled }: { analysis: TrackAnalysis | null; disabled: boolean }) {
+function SeekBar({ analysis, cues }: { analysis: TrackAnalysis | null; cues: readonly Cue[] }) {
 	const p = usePlayer();
 	const time = usePlayerTime();
 	const duration = Number.isFinite(p.duration) && p.duration > 0 ? p.duration : 0;
@@ -249,10 +274,11 @@ function SeekBar({ analysis, disabled }: { analysis: TrackAnalysis | null; disab
 				position={p.getTime}
 				running={p.playing}
 				duration={duration}
-				disabled={disabled}
+				disabled={false}
 				onSeek={p.seek}
+				cues={cues}
 				quiet
-				className="h-7"
+				className="h-7 min-w-0"
 			/>
 		);
 	}
@@ -268,7 +294,6 @@ function SeekBar({ analysis, disabled }: { analysis: TrackAnalysis | null; disab
 			max={duration}
 			step={0.1}
 			value={Math.min(time, duration)}
-			disabled={disabled}
 			onChange={(e) => p.seek(Number(e.target.value))}
 		/>
 	);

@@ -1,13 +1,10 @@
 import { type ComponentType, createContext, type ReactNode, useCallback, useContext } from "react";
 import type { TagTarget } from "#/components/tag-editor.tsx";
 
-/** The two tabs of a song's view. */
-export type SongTab = "grid" | "metadata";
-
 /** What the side panel shows, with history behind it. */
 export type DetailView =
-	/** A song: its grid and cues or its metadata; `list` is the songs the grid steps through. */
-	| { kind: "song"; trackId: number; tab?: SongTab; list?: readonly number[] | undefined }
+	/** A song's metadata; `list` is the songs its Previous / Next buttons step through. */
+	| { kind: "song"; trackId: number; list?: readonly number[] | undefined }
 	| { kind: "album"; key: string }
 	| { kind: "artist"; name: string }
 	/** Tag editor for several songs (a selection or a value's songs). */

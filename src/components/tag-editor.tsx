@@ -25,6 +25,7 @@ import { useTagsRead, useTagsWrite, useTagValues } from "#/lib/queries.ts";
 import { TAG_GROUPS, type TagField, type TagGroup } from "#/lib/tag-fields.ts";
 import { fillFromPath } from "#/lib/tag-fill.ts";
 import { type SaveStatus, useAutosave } from "#/lib/unsaved.tsx";
+import { isShortcut } from "#/lib/use-shortcuts.ts";
 import { type TagSuggestions, useTagSuggestions } from "#/lib/use-tag-suggestions.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -128,7 +129,7 @@ export function TagEditor({
 	// The lookup searches with the tags in the files, so pending edits are saved first.
 	const found = useTagSuggestions(where(target), target.isDir, () => autosave.flush());
 
-	// Cmd+S, or Cmd+Enter in a field, saves right away instead of waiting out the second.
+	// The save shortcut (⌘S), or ⌘Enter in a field, saves right away instead of waiting out the second.
 	const onKeyDown = (ev: KeyboardEvent) => {
 		if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
 			ev.preventDefault();
@@ -139,7 +140,7 @@ export function TagEditor({
 	flushRef.current = autosave.flush;
 	useEffect(() => {
 		const onKey = (ev: globalThis.KeyboardEvent) => {
-			if (ev.key.toLowerCase() !== "s" || !(ev.metaKey || ev.ctrlKey) || ev.shiftKey) {
+			if (!isShortcut(ev, "save")) {
 				return;
 			}
 			ev.preventDefault();

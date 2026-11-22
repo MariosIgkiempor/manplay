@@ -25,6 +25,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
 	const current = queue[index] ?? null;
 	const currentPath = current?.path ?? null;
+	// Whether the next song loaded starts playing; `load` turns it off for one song.
+	const autoplay = useRef(true);
 
 	const start = useCallback(() => {
 		audioRef.current?.play().catch((e: unknown) => setError(describeError(e)));
@@ -41,7 +43,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			.then((src) => {
 				if (!stale) {
 					audio.src = src;
-					start();
+					if (autoplay.current) {
+						start();
+					}
+					autoplay.current = true;
 				}
 			})
 			.catch((e: unknown) => {
@@ -66,6 +71,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			if (target === undefined) {
 				return;
 			}
+			autoplay.current = true;
 			setQueue(nextQueue);
 			setIndex(startIndex);
 			// Same file again: the src effect will not fire, so restart it by hand.
@@ -75,6 +81,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			}
 		},
 		[currentPath, start],
+	);
+
+	const load = useCallback(
+		(nextQueue: readonly Track[], startIndex: number) => {
+			const target = nextQueue[startIndex];
+			if (target === undefined || target.path === currentPath) {
+				return;
+			}
+			autoplay.current = false;
+			setQueue(nextQueue);
+			setIndex(startIndex);
+		},
+		[currentPath],
 	);
 
 	const playNext = useCallback(
@@ -136,7 +155,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 		if (index + 1 < queue.length) {
 			setIndex(index + 1);
 		} else {
+			// The queue has run out: nothing is loaded any more, so the player bar can go.
 			setPlaying(false);
+			setQueue([]);
+			setIndex(0);
 		}
 	}, [index, queue.length]);
 
@@ -150,6 +172,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			volume,
 			error,
 			play,
+			load,
 			playNext,
 			addToQueue,
 			toggle,
@@ -168,6 +191,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			volume,
 			error,
 			play,
+			load,
 			playNext,
 			addToQueue,
 			toggle,
@@ -186,6 +210,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 				ref={audioRef}
 				onPlay={() => setPlaying(true)}
 				onPause={() => setPlaying(false)}
+				// A new source stops the old one without a pause event; a song loaded to edit stays still.
+				onEmptied={() => setPlaying(false)}
 				onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
 				onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
 				onEnded={onEnded}

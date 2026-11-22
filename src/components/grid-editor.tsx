@@ -1,6 +1,9 @@
 import { Popover } from "@base-ui/react/popover";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import {
+	ArrowLeft,
+	ArrowRight,
 	AudioWaveform,
 	ChevronDown,
 	ChevronLeft,
@@ -11,24 +14,20 @@ import {
 	Drum,
 	Keyboard,
 	Magnet,
-	Pause,
 	PencilLine,
-	Play,
 	Redo2,
 	RotateCcw,
 	Undo2,
 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HotCuePads, MemoryCues } from "#/components/cue-pads.tsx";
-import { EmptyState, ErrorLine } from "#/components/page.tsx";
+import { PadStrip } from "#/components/cue-pads.tsx";
 import { ButtonGroup, GroupButton, PropertyRow } from "#/components/property-row.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { StatusButton, StatusPortal } from "#/components/status-action.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { WaveformDetail, WaveformSeek } from "#/components/waveform.tsx";
-import { useDetail } from "#/context/detail-context.ts";
+import { WaveformDetail } from "#/components/waveform.tsx";
 import { usePlayer, usePlayerTime } from "#/context/player-context.ts";
-import { setBeatGrid, setTrackCues, type Track, type TrackAnalysis, trackCues } from "#/lib/api.ts";
+import { setBeatGrid, setTrackCues, type Track, type TrackAnalysis } from "#/lib/api.ts";
 import {
 	downbeatAt,
 	type Grid,
@@ -41,7 +40,6 @@ import {
 	withGrid,
 } from "#/lib/beat-grid.ts";
 import {
-	addMemory,
 	barBeat,
 	type Cue,
 	clearStart,
@@ -63,10 +61,12 @@ import {
 	startHistory,
 	undo,
 } from "#/lib/edit-history.ts";
-import { GRID_SHORTCUTS, type GridAction, gridAction } from "#/lib/grid-shortcuts.ts";
+import { keyTakenElsewhere, typingKey } from "#/lib/keyboard.ts";
 import { formatBpm } from "#/lib/musical-key.ts";
+import { DECK_COLUMNS } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
-import { useAnalyze, useTracks } from "#/lib/queries.ts";
+import { cuesKey, useAnalyze, useTrackCues } from "#/lib/queries.ts";
+import { chordLabel, type FileShortcutId, SHORTCUTS, type ShortcutId } from "#/lib/shortcuts.ts";
 import {
 	addTap,
 	type Milliseconds,
@@ -78,6 +78,15 @@ import { typeScale } from "#/lib/type-scale.ts";
 import { useAutosave } from "#/lib/unsaved.tsx";
 import { useAnalysisProgress } from "#/lib/use-analysis-progress.ts";
 import { useMetronome } from "#/lib/use-metronome.ts";
+import {
+	isShortcut,
+	keyHint,
+	shortcutFor,
+	useBindings,
+	useMacLabels,
+	useShortcutHint,
+	useShortcutLabel,
+} from "#/lib/use-shortcuts.ts";
 import { useStoredFlag, useStoredNumber } from "#/lib/use-stored-preference.ts";
 import { TRACK_ANALYSIS_KEY, useTrackAnalysis } from "#/lib/use-track-analysis.ts";
 import { cn } from "#/lib/utils.ts";
@@ -93,84 +102,64 @@ import {
 const COARSE = 0.01;
 const FINE = 0.001;
 
-const cuesKey = (trackId: number) => ["track-cues", trackId] as const;
-
-/** Beat grid and cues for one song, edited on the deck: waveform, transport, hot cue pads. */
-export function GridEditor({ trackId }: { trackId: number }) {
-	const tracks = useTracks();
-	const analysis = useTrackAnalysis(trackId);
-	const cues = useQuery({ queryKey: cuesKey(trackId), queryFn: () => trackCues(trackId) });
-	const track = tracks.data?.find((t) => t.id === trackId);
-	if (analysis.isPending || cues.isPending || !track) {
+/**
+ * The loaded song's beat grid and cues, edited on the deck above the player bar: grid controls on
+ * the left, under the sidebar; the waveform and hot cue pads on the right.
+ */
+export function DeckEditor({ track }: { track: Track }) {
+	const analysis = useTrackAnalysis(track.id);
+	const cues = useTrackCues(track.id);
+	if (analysis.isPending || cues.isPending) {
 		return null;
 	}
 	return analysis.data ? (
-		<Editor key={trackId} track={track} analysis={analysis.data} savedCues={cues.data ?? []} />
+		<Editor key={track.id} track={track} analysis={analysis.data} savedCues={cues.data ?? []} />
 	) : (
-		<NotAnalyzed trackId={trackId} />
+		<NotAnalyzed trackId={track.id} />
 	);
 }
 
-/** A key press while typing (fields keep their own keys) or with a dialog open. */
-function typingKey(e: globalThis.KeyboardEvent): boolean {
-	const typing =
-		e.target instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName);
-	return typing || document.querySelector("[role=dialog]") !== null;
-}
-
-/** A key press meant for something else: typing, a shortcut with ⌘ or Ctrl, or an open dialog. */
-export function busyKey(e: globalThis.KeyboardEvent): boolean {
-	return typingKey(e) || e.metaKey || e.ctrlKey;
-}
-
-/** A song without a kept waveform yet: analyse just this one, then the editor opens. */
+/** A song without a kept waveform yet: analyse just this one, then the deck shows it. */
 function NotAnalyzed({ trackId }: { trackId: number }) {
 	const analyze = useAnalyze();
 	const { running } = useAnalysisProgress();
 	const failed = analyze.isError || (analyze.data !== undefined && analyze.data.failed > 0);
 	return (
-		<EmptyState
-			icon={<AudioWaveform />}
-			title="Not analyzed yet"
-			action={
-				<Button disabled={running} onClick={() => analyze.mutate([trackId])}>
+		<div className={cn(DECK_COLUMNS, "dark h-14 items-center bg-neutral-950 text-neutral-300")}>
+			<div />
+			<div className="flex min-w-0 items-center gap-3 pr-4 text-sm">
+				<AudioWaveform className="size-4 shrink-0 text-neutral-500" />
+				<span className="truncate">
+					{failed
+						? analyze.isError
+							? String(analyze.error)
+							: "The audio could not be analyzed."
+						: "Analyze the song to see its waveform and edit its beat grid."}
+				</span>
+				<Button
+					size="sm"
+					variant="secondary"
+					className="ml-auto shrink-0"
+					disabled={running}
+					onClick={() => analyze.mutate([trackId])}
+				>
 					{analyze.isPending ? "Analyzing…" : running ? "Library analysis running…" : "Analyze now"}
 				</Button>
-			}
-		>
-			Analyze the song to get a beat grid and waveform to edit.
-			{failed && (
-				<ErrorLine>
-					{analyze.isError ? String(analyze.error) : "The audio could not be analyzed."}
-				</ErrorLine>
-			)}
-		</EmptyState>
+			</div>
+		</div>
 	);
 }
 
-/** Where the editor looks: the player's position when it plays this song, else its own. */
-function usePosition(track: Track) {
+/** The player's position: the deck always edits the loaded song. */
+function useDeckPosition() {
 	const player = usePlayer();
-	const playerTime = usePlayerTime();
-	const live = player.current?.id === track.id;
-	const [cursor, setCursor] = useState(0);
-	const position = useCallback(
-		() => (live ? player.getTime() : cursor),
-		[live, player.getTime, cursor],
-	);
-	const moveTo = (seconds: number) => {
-		if (live) {
-			player.seek(seconds);
-		} else {
-			setCursor(seconds);
-		}
-	};
+	const revision = usePlayerTime();
 	return {
-		playing: live && player.playing,
-		position,
-		moveTo,
-		revision: live ? playerTime : cursor,
-		toggle: () => (live ? player.toggle() : player.play([track], 0)),
+		playing: player.playing,
+		position: player.getTime,
+		moveTo: player.seek,
+		revision,
+		toggle: player.toggle,
 	};
 }
 
@@ -257,9 +246,10 @@ function Editor({
 		cues: savedCues,
 	});
 	const { grid, cues } = history.present;
-	const [zoom, setZoom] = useState<number>(ZOOM_DEFAULT);
-	const [snapOn, setSnapOn] = useState(true);
-	const [metronomeOn, setMetronomeOn] = useState(false);
+	// Kept from song to song (and between launches), like the deck's settings on a CDJ.
+	const [zoom, setZoom] = useStoredNumber("grid-editor.zoom", ZOOM_DEFAULT);
+	const [snapOn, setSnapOn] = useStoredFlag("grid-editor.snap", true);
+	const [metronomeOn, setMetronomeOn] = useStoredFlag("grid-editor.metronome", false);
 	const [wholeTaps, setWholeTaps] = useStoredFlag("grid-editor.whole-bpm-taps", true);
 	// Per device: the delay depends on what you listen on (Bluetooth headphones add a lot).
 	const [clickEarlierMs, setClickEarlierMs] = useStoredNumber(
@@ -267,7 +257,8 @@ function Editor({
 		0,
 	);
 	const taps = useTaps();
-	const pos = usePosition(track);
+	const pos = useDeckPosition();
+	const armed = useArmed();
 	const { volume } = usePlayer();
 	useMetronome({
 		grid,
@@ -333,16 +324,12 @@ function Editor({
 		canUndo: canUndo(history),
 		canRedo: canRedo(history),
 	};
-	const actions: Partial<Record<GridAction, (alt: boolean) => void>> = {
-		play: () => pos.toggle(),
+	const actions: DeckActions = {
 		start: () => setCues((cs) => setStart(cs, here())),
 		downbeat: () => setGrid((g) => downbeatAt(g, pos.position())),
 		tap,
 		roundBpm: round,
 		metronome: () => setMetronomeOn((on) => !on),
-		undo: undoing.undo,
-		redo: undoing.redo,
-		memory: () => setCues((cs) => addMemory(cs, here())),
 		snap: () => setSnapOn((on) => !on),
 		zoom: () => setZoom(nextPreset),
 		zoomIn: () => setZoom((z) => stepZoom(z, 1)),
@@ -360,17 +347,21 @@ function Editor({
 		beatOn: () => step(1),
 		barBack: () => step(-4),
 		barOn: () => step(4),
-		...Object.fromEntries(
-			Array.from({ length: 8 }, (_, i) => [
-				[`pad${i + 1}`, () => pad(i)],
-				[`clearPad${i + 1}`, () => setCues((cs) => cs.filter((c) => c.slot !== i))],
-			]).flat(),
-		),
+		...padKeys(pad, (slot) => setCues((cs) => cs.filter((c) => c.slot !== slot))),
 	};
-	useGridKeys(actions, undoing);
+	useGridKeys(actions, undoing, armed);
+
+	const padActions = {
+		onSet: (slot: number) => setCues((cs) => setHot(cs, slot, here())),
+		onJump: pos.moveTo,
+		onChange: (slot: number, patch: Partial<Cue>) =>
+			setCues((cs) => cs.map((c) => (c.slot === slot ? { ...c, ...patch } : c))),
+		onDelete: (slot: number) => setCues((cs) => cs.filter((c) => c.slot !== slot)),
+	};
+	const setGridBpm = (bpm: number) => setGrid((g) => setBpm(g, bpm, pos.position()));
 
 	return (
-		<div className="space-y-6 pb-8">
+		<>
 			<SaveState status={autosave.status} error={autosave.error} />
 			<StatusPortal>
 				{track.edited.grid && (
@@ -393,39 +384,26 @@ function Editor({
 				)}
 				{changed && (
 					<StatusButton
-						title="Back to the grid and cues the song had when you opened it. Undo brings the edits back."
+						title="Back to the grid and cues the song had when it was loaded. Undo brings the edits back."
 						onClick={() => replace(opened)}
 					>
 						<RotateCcw /> Revert grid and cues
 					</StatusButton>
 				)}
 			</StatusPortal>
-
-			<Deck>
-				<WaveformDetail
-					analysis={draft}
-					position={pos.position}
-					running={pos.playing}
-					window={zoom}
-					onZoom={setZoom}
-					cues={cues}
-					onScrub={pos.moveTo}
-					className="h-44 rounded-t-lg bg-transparent"
-				/>
-				<div className="border-white/5 border-t px-3 pt-2">
-					<WaveformSeek
-						analysis={draft}
-						position={pos.position}
-						running={pos.playing}
-						duration={analysis.duration}
-						disabled={false}
-						cues={cues}
-						onSeek={pos.moveTo}
-						className="h-7"
-					/>
-				</div>
-				<Transport
-					playing={pos.playing}
+			<section
+				aria-label="Beat grid and cues"
+				data-deck
+				className={cn(
+					DECK_COLUMNS,
+					"dark relative bg-neutral-950 text-neutral-200",
+					// Lit after a click in the deck, while ⌘Z undoes grid edits rather than file changes.
+					"after:pointer-events-none after:absolute after:inset-0 after:ring-1 after:ring-inset after:transition-colors",
+					armed ? "after:ring-primary/60" : "after:ring-transparent",
+				)}
+			>
+				<DeckControls
+					armed={armed}
 					clock={
 						<Clock
 							grid={grid}
@@ -434,19 +412,11 @@ function Editor({
 							revision={pos.revision}
 						/>
 					}
-					zoom={zoom}
-					snapOn={snapOn}
-					onSnap={setSnapOn}
-					metronomeOn={metronomeOn}
-					onMetronome={setMetronomeOn}
 					startAt={startOf(cues)?.start ?? null}
 					help={<ShortcutHelp open={help} onOpenChange={setHelp} />}
-					tools={
+					tempo={
 						<>
-							<BpmField
-								grid={grid}
-								onBpm={(bpm) => setGrid((g) => setBpm(g, bpm, pos.position()))}
-							/>
+							<BpmField grid={grid} onBpm={setGridBpm} />
 							<TapButton
 								tapping={taps.tapping}
 								count={taps.count}
@@ -454,57 +424,85 @@ function Editor({
 								whole={wholeTaps}
 								onTap={tap}
 							/>
-							<DownbeatButton onDownbeat={() => setGrid((g) => downbeatAt(g, pos.position()))}>
-								<GridControls
-									grid={grid}
-									wholeTaps={wholeTaps}
-									onWholeTaps={setWholeTaps}
-									clickEarlierMs={clickEarlierMs}
-									onClickEarlierMs={setClickEarlierMs}
-									onBpm={(bpm) => setGrid((g) => setBpm(g, bpm, pos.position()))}
-									onRound={round}
-									onNudge={(s) => setGrid((g) => nudge(g, s), "nudge")}
-									onShiftBar={(n) => setGrid((g) => shiftBar(g, n))}
-								/>
-							</DownbeatButton>
 						</>
 					}
-					onZoom={setZoom}
-					onToggle={pos.toggle}
+					downbeat={
+						<DownbeatButton onDownbeat={() => setGrid((g) => downbeatAt(g, pos.position()))}>
+							<GridControls
+								grid={grid}
+								wholeTaps={wholeTaps}
+								onWholeTaps={setWholeTaps}
+								clickEarlierMs={clickEarlierMs}
+								onClickEarlierMs={setClickEarlierMs}
+								onBpm={setGridBpm}
+								onRound={round}
+								onShiftBar={(n) => setGrid((g) => shiftBar(g, n))}
+							/>
+						</DownbeatButton>
+					}
+					onNudge={(seconds) => setGrid((g) => nudge(g, seconds), "nudge")}
 					onCue={() => setCues((cs) => (startOf(cs) ? clearStart(cs) : setStart(cs, here())))}
 					onStep={step}
 				/>
-			</Deck>
-
-			<HotCuePads
-				cues={cues}
-				actions={{
-					onSet: (slot) => setCues((cs) => setHot(cs, slot, here())),
-					onJump: pos.moveTo,
-					onChange: (slot, patch) =>
-						setCues((cs) => cs.map((c) => (c.slot === slot ? { ...c, ...patch } : c))),
-					onDelete: (slot) => setCues((cs) => cs.filter((c) => c.slot !== slot)),
-				}}
-			/>
-
-			<MemoryCues
-				cues={cues}
-				onAdd={() => setCues((cs) => addMemory(cs, here()))}
-				onJump={pos.moveTo}
-				onRename={(cue, name) => setCues((cs) => cs.map((c) => (c === cue ? { ...c, name } : c)))}
-				onDelete={(cue) => setCues((cs) => cs.filter((c) => c !== cue))}
-			/>
-		</div>
+				<div className="min-w-0 space-y-2 pt-0 pr-4 pb-2.5">
+					<div className="relative">
+						<WaveformDetail
+							analysis={draft}
+							position={pos.position}
+							running={pos.playing}
+							window={zoom}
+							onZoom={setZoom}
+							cues={cues}
+							onScrub={pos.moveTo}
+							className="h-32 bg-transparent"
+						/>
+						<WaveformCorner
+							zoom={zoom}
+							onZoom={setZoom}
+							snapOn={snapOn}
+							onSnap={setSnapOn}
+							metronomeOn={metronomeOn}
+							onMetronome={setMetronomeOn}
+						/>
+					</div>
+					<PadStrip cues={cues} actions={padActions} />
+				</div>
+			</section>
+		</>
 	);
 }
 
-/** The dark player surface the waveforms and transport sit on, like a CDJ's screen. */
-function Deck({ children }: { children: ReactNode }) {
-	return (
-		<div className="overflow-hidden rounded-lg bg-neutral-950 text-neutral-200 shadow-inner ring-1 ring-white/10">
-			{children}
-		</div>
-	);
+/**
+ * Whether the deck takes the keyboard: from a click or focus in it (or a menu it opened) until a
+ * click elsewhere or Escape. So Space,
+ * arrows and letters still mean what they always do in the lists until you start editing.
+ */
+function useArmed(): boolean {
+	const [armed, setArmed] = useState(false);
+	useEffect(() => {
+		const inside = (target: EventTarget | null) =>
+			target instanceof Element && target.closest("[data-deck], [data-deck-popup]") !== null;
+		const onPointer = (e: PointerEvent) => setArmed(inside(e.target));
+		const onFocus = (e: FocusEvent) => {
+			if (inside(e.target)) {
+				setArmed(true);
+			}
+		};
+		const onKey = (e: globalThis.KeyboardEvent) => {
+			if (e.key === "Escape" && !typingKey(e)) {
+				setArmed(false);
+			}
+		};
+		window.addEventListener("pointerdown", onPointer, true);
+		window.addEventListener("focusin", onFocus);
+		window.addEventListener("keydown", onKey);
+		return () => {
+			window.removeEventListener("pointerdown", onPointer, true);
+			window.removeEventListener("focusin", onFocus);
+			window.removeEventListener("keydown", onKey);
+		};
+	}, []);
+	return armed;
 }
 
 function DeckButton({
@@ -536,6 +534,24 @@ function DeckButton({
 	);
 }
 
+/** The deck's bindable actions (see `SHORTCUTS`). */
+type DeckShortcutId = Exclude<
+	ShortcutId,
+	| FileShortcutId
+	| "undo"
+	| "redo"
+	| "save"
+	| "play"
+	| "palette"
+	| "pageSearch"
+	| "sidebar"
+	| "prevSong"
+	| "nextSong"
+>;
+
+/** What each deck key does; ⌥ held asks for a finer step. Save is ⌘S, fixed. */
+type DeckActions = Record<DeckShortcutId, (alt: boolean) => void> & { save: () => void };
+
 /** Undo and redo of the editor's own edits. */
 interface Undoing {
 	undo: () => void;
@@ -544,33 +560,76 @@ interface Undoing {
 	canRedo: boolean;
 }
 
+/** The sixteen pad keys: 1–8 set or jump, ⇧1–8 clear (by default). */
+function padKeys(
+	press: (slot: number) => void,
+	clear: (slot: number) => void,
+): Pick<
+	DeckActions,
+	`pad${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8}` | `clearPad${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8}`
+> {
+	return {
+		pad1: () => press(0),
+		pad2: () => press(1),
+		pad3: () => press(2),
+		pad4: () => press(3),
+		pad5: () => press(4),
+		pad6: () => press(5),
+		pad7: () => press(6),
+		pad8: () => press(7),
+		clearPad1: () => clear(0),
+		clearPad2: () => clear(1),
+		clearPad3: () => clear(2),
+		clearPad4: () => clear(3),
+		clearPad5: () => clear(4),
+		clearPad6: () => clear(5),
+		clearPad7: () => clear(6),
+		clearPad8: () => clear(7),
+	};
+}
+
+/** Whether a key press is the undo or the redo shortcut. */
+function undoOrRedo(e: KeyboardEvent): "undo" | "redo" | null {
+	if (isShortcut(e, "undo")) {
+		return "undo";
+	}
+	return isShortcut(e, "redo") ? "redo" : null;
+}
+
+/** The deck action a key press asks for, ready to run, or null. */
+function deckShortcut(
+	e: KeyboardEvent,
+	actions: DeckActions,
+): { run: (alt: boolean) => void; alt: boolean } | null {
+	const found = shortcutFor(e, "deck");
+	return found ? { run: actions[found.id as DeckShortcutId], alt: found.alt } : null;
+}
+
 /**
- * Runs the editor's keyboard shortcuts from anywhere in the open editor, not only once something
- * in it has focus. Ignored while typing, with a dialog open, or once the panel shows something else.
+ * Runs the editor's keyboard shortcuts from anywhere in the app while the deck is shown, except
+ * where the key is taken (typing, a dialog, a focused list). Undo and redo are the exception:
+ * they go to the grid only after a click in the deck (see `useArmed`), else to the app's undo.
  */
-function useGridKeys(
-	actions: Partial<Record<GridAction, (alt: boolean) => void>>,
-	undoing: Undoing,
-) {
-	const detail = useDetail();
+function useGridKeys(actions: DeckActions, undoing: Undoing, armed: boolean) {
 	const latest = useRef(actions);
 	latest.current = actions;
 	const latestUndoing = useRef(undoing);
 	latestUndoing.current = undoing;
-	// Only while the panel still shows a song.
 	const showing = useRef(false);
-	showing.current = detail.view?.kind === "song";
+	showing.current = armed;
 	useEffect(() => {
 		const onKey = (e: globalThis.KeyboardEvent) => {
-			const name = gridAction(e);
-			// ⌘S saves even from a field; everything else waits until you stop typing.
-			if (!showing.current || (busyKey(e) && name !== "save")) {
+			// ⌘S saves even from a field; everything else is the whole app's, unless typing or the
+			// focused list uses the key itself.
+			if (isShortcut(e, "save")) {
+				e.preventDefault();
+				latest.current.save();
 				return;
 			}
-			const run = name === null ? undefined : latest.current[name];
-			if (run) {
+			const found = keyTakenElsewhere(e) ? null : deckShortcut(e, latest.current);
+			if (found) {
 				e.preventDefault();
-				run(e.altKey);
+				found.run(found.alt);
 			}
 		};
 		window.addEventListener("keydown", onKey);
@@ -580,7 +639,7 @@ function useGridKeys(
 	// edit to undo here it is left to that.
 	useEffect(() => {
 		const onKey = (e: globalThis.KeyboardEvent) => {
-			const name = gridAction(e);
+			const name = undoOrRedo(e);
 			if (!showing.current || typingKey(e) || (name !== "undo" && name !== "redo")) {
 				return;
 			}
@@ -596,7 +655,7 @@ function useGridKeys(
 	}, []);
 }
 
-/** The keyboard button in the header, and the cheat sheet it opens (also on ?). */
+/** The keyboard button, and the cheat sheet it opens (also on its key, ? at first). */
 function ShortcutHelp({
 	open,
 	onOpenChange,
@@ -604,36 +663,66 @@ function ShortcutHelp({
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 }) {
+	const bindings = useBindings();
+	const mac = useMacLabels();
+	const navigate = useNavigate();
+	const title = useShortcutHint("help", "Keyboard shortcuts");
+	const deck = SHORTCUTS.filter((d) => d.scope === "deck" && !/^(clear)?[pP]ad\d$/.test(d.id));
+	const groups = [...new Set(deck.map((d) => d.group))];
+	const keysOf = (id: ShortcutId) =>
+		(bindings.get(id) ?? []).map((k) => chordLabel(k, mac)).join(" ") || "–";
+	const pads = (prefix: "pad" | "clearPad") =>
+		[1, 2, 3, 4, 5, 6, 7, 8]
+			.map((n) => (bindings.get(`${prefix}${n}` as ShortcutId) ?? [])[0])
+			.map((k) => (k ? chordLabel(k, mac) : "–"))
+			.join(" ");
 	return (
 		<Popover.Root open={open} onOpenChange={onOpenChange}>
 			<Popover.Trigger
 				aria-label="Keyboard shortcuts"
-				title="Keyboard shortcuts (?)"
+				title={title}
 				className="grid size-7 place-items-center rounded-md text-neutral-400 outline-none transition-colors hover:bg-white/10 hover:text-neutral-100 focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-white/10 data-[popup-open]:text-neutral-50 [&_svg]:size-4"
 			>
 				<Keyboard />
 			</Popover.Trigger>
 			<Popover.Portal>
 				<Popover.Positioner sideOffset={6} align="end" className="z-50">
-					<Popover.Popup className="w-[34rem] rounded-lg border bg-popover p-4 text-popover-foreground text-sm shadow-lg outline-none">
+					<Popover.Popup
+						data-deck-popup
+						className="w-[34rem] rounded-lg border bg-popover p-4 text-popover-foreground text-sm shadow-lg outline-none"
+					>
 						<div className="grid grid-cols-2 gap-x-6 gap-y-4">
-							{GRID_SHORTCUTS.map((g) => (
-								<section key={g.group} className="space-y-1.5">
-									<h3 className="font-medium text-muted-foreground text-xs">{g.group}</h3>
+							{groups.map((group) => (
+								<section key={group} className="space-y-1.5">
+									<h3 className="font-medium text-muted-foreground text-xs">{group}</h3>
 									<dl className="space-y-1">
-										{g.items.map(([keys, what]) => (
-											<div key={keys} className="flex items-baseline justify-between gap-3">
-												<dt className="text-xs">{keyLabel(what)}</dt>
-												<dd>
-													<kbd className="whitespace-nowrap rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-														{keyLabel(keys)}
-													</kbd>
-												</dd>
-											</div>
-										))}
+										{deck
+											.filter((d) => d.group === group)
+											.map((d) => (
+												<HelpRow key={d.id} what={d.label} keys={keysOf(d.id)} />
+											))}
+										{group === "Cues" && (
+											<>
+												<HelpRow what="Hot cues A–H" keys={pads("pad")} />
+												<HelpRow what="Clear hot cues A–H" keys={pads("clearPad")} />
+											</>
+										)}
 									</dl>
 								</section>
 							))}
+						</div>
+						<div className="mt-4 flex items-center justify-between border-t pt-3 text-muted-foreground text-xs">
+							<span>{keyLabel("⌥ with the arrows takes finer steps.")}</span>
+							<Button
+								size="xs"
+								variant="outline"
+								onClick={() => {
+									onOpenChange(false);
+									void navigate({ to: "/settings", search: { section: "shortcuts" } });
+								}}
+							>
+								Change keys
+							</Button>
 						</div>
 					</Popover.Popup>
 				</Popover.Positioner>
@@ -642,15 +731,29 @@ function ShortcutHelp({
 	);
 }
 
+function HelpRow({ what, keys }: { what: string; keys: string }) {
+	return (
+		<div className="flex items-baseline justify-between gap-3">
+			<dt className="text-xs">{what}</dt>
+			<dd>
+				<kbd className="whitespace-nowrap rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+					{keys}
+				</kbd>
+			</dd>
+		</div>
+	);
+}
+
 /** Makes the playhead beat 1 of a bar; its other half opens the rest of the beat grid settings. */
 function DownbeatButton({ onDownbeat, children }: { onDownbeat: () => void; children: ReactNode }) {
+	const title = useShortcutHint("downbeat", "Make the playhead beat 1 of a bar");
 	const half =
 		"flex h-7 items-center gap-1.5 whitespace-nowrap text-neutral-300 text-xs outline-none transition-colors hover:bg-white/10 hover:text-neutral-50 focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5";
 	return (
 		<div className="flex items-center rounded-md bg-white/5">
 			<button
 				type="button"
-				title="Make the playhead beat 1 of a bar (D)"
+				title={title}
 				onClick={onDownbeat}
 				className={cn(half, "rounded-l-md px-2")}
 			>
@@ -669,7 +772,10 @@ function DownbeatButton({ onDownbeat, children }: { onDownbeat: () => void; chil
 				</Popover.Trigger>
 				<Popover.Portal>
 					<Popover.Positioner sideOffset={6} align="end" className="z-50">
-						<Popover.Popup className="w-80 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg outline-none">
+						<Popover.Popup
+							data-deck-popup
+							className="w-80 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg outline-none"
+						>
 							{children}
 						</Popover.Popup>
 					</Popover.Positioner>
@@ -679,45 +785,51 @@ function DownbeatButton({ onDownbeat, children }: { onDownbeat: () => void; chil
 	);
 }
 
-function Transport({
-	playing,
+/** A round button on the deck, lit when `on`. */
+const DECK_TOGGLE =
+	"grid size-7 place-items-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5";
+const deckToggle = (on: boolean) =>
+	cn(
+		DECK_TOGGLE,
+		on ? "bg-primary/20 text-primary" : "text-neutral-400 hover:bg-white/10 hover:text-neutral-100",
+	);
+
+/**
+ * The grid editor's controls, in the column under the sidebar: setting the start and stepping
+ * by beats, where the playhead is, the tempo, and beat 1 with the grid's nudge. Play is the
+ * player bar's, right below.
+ */
+function DeckControls({
+	armed,
 	clock,
-	zoom,
-	snapOn,
-	onSnap,
-	metronomeOn,
-	onMetronome,
 	startAt,
 	help,
-	tools,
-	onZoom,
-	onToggle,
+	tempo,
+	downbeat,
+	onNudge,
 	onCue,
 	onStep,
 }: {
-	playing: boolean;
+	armed: boolean;
 	/** Where the playhead is, as a time and a bar and beat. */
 	clock: ReactNode;
-	zoom: number;
-	snapOn: boolean;
-	onSnap: (on: boolean) => void;
-	metronomeOn: boolean;
-	onMetronome: (on: boolean) => void;
 	/** Where the song starts (rekordbox's main cue), or null for its first beat. */
 	startAt: number | null;
-	/** The keyboard shortcuts button, at the end. */
+	/** The keyboard shortcuts button. */
 	help: ReactNode;
-	/** BPM and beat grid controls, shown beside snap. */
-	tools: ReactNode;
-	onZoom: (z: number) => void;
-	onToggle: () => void;
+	/** The BPM field and tap button. */
+	tempo: ReactNode;
+	/** Beat 1 at the playhead, and the rest of the grid's settings. */
+	downbeat: ReactNode;
+	/** Moves the whole grid by `seconds` (negative: earlier). */
+	onNudge: (seconds: number) => void;
 	/** Sets the start (main) cue at the playhead, or clears it when set. */
 	onCue: () => void;
 	onStep: (beats: number) => void;
 }) {
+	const cueKey = keyHint(useShortcutLabel("start"));
 	return (
-		<div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 px-3 py-2.5">
-			{/* Playing and where you are first; grid tools and zoom after, all from the left. */}
+		<div className="flex min-w-0 flex-col gap-2 py-2.5 pr-3 pl-3">
 			<div className="flex items-center gap-0.5">
 				{/* The CDJ's CUE button: where the song starts. Lit while set; pressing it then clears it. */}
 				<button
@@ -726,11 +838,11 @@ function Transport({
 					aria-pressed={startAt !== null}
 					title={
 						startAt === null
-							? "The song starts at its first beat. Click to start it at the playhead (C)."
+							? `The song starts at its first beat. Click to start it at the playhead${cueKey}.`
 							: `The song starts at ${stamp(startAt)}. Click to start it at its first beat again.`
 					}
 					aria-label={startAt === null ? "Set the start at the playhead" : "Clear the start"}
-					className="mr-2 grid size-9 place-items-center rounded-full border-2 font-semibold text-[10px] tracking-wide outline-none transition-colors hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring/60"
+					className="mr-1.5 grid size-8 shrink-0 place-items-center rounded-full border-2 font-semibold text-[9px] tracking-wide outline-none transition-colors hover:brightness-110 focus-visible:ring-2 focus-visible:ring-ring/60"
 					style={
 						startAt === null
 							? { borderColor: START_COLOR, color: START_COLOR }
@@ -745,9 +857,6 @@ function Transport({
 				<DeckButton label="Back one beat" onClick={() => onStep(-1)}>
 					<ChevronLeft />
 				</DeckButton>
-				<DeckButton label={playing ? "Pause (Space)" : "Play (Space)"} onClick={onToggle} primary>
-					{playing ? <Pause /> : <Play />}
-				</DeckButton>
 				<DeckButton label="On one beat" onClick={() => onStep(1)}>
 					<ChevronRight />
 				</DeckButton>
@@ -756,75 +865,134 @@ function Transport({
 				</DeckButton>
 			</div>
 			{clock}
-			<div className="ml-auto">{help}</div>
-			<div className="flex basis-full flex-wrap items-center gap-2 border-white/5 border-t pt-2.5">
-				<div className="flex items-center gap-2">
-					{tools}
-					<button
-						type="button"
-						aria-pressed={snapOn}
-						aria-label="Snap to beat"
-						title={snapOn ? "Snap to beat: on" : "Snap to beat: off"}
-						onClick={() => onSnap(!snapOn)}
-						className={cn(
-							"grid size-7 place-items-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5",
-							snapOn
-								? "bg-primary/20 text-primary"
-								: "text-neutral-400 hover:bg-white/10 hover:text-neutral-100",
-						)}
-					>
-						<Magnet />
-					</button>
-					<button
-						type="button"
-						aria-pressed={metronomeOn}
-						aria-label="Metronome"
-						title={
-							metronomeOn
-								? "Metronome: on. Clicks on every beat of the grid while the song plays (K)."
-								: "Metronome: off. Click to hear the grid's beats while the song plays (K)."
-						}
-						onClick={() => onMetronome(!metronomeOn)}
-						className={cn(
-							"grid size-7 place-items-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5",
-							metronomeOn
-								? "bg-primary/20 text-primary"
-								: "text-neutral-400 hover:bg-white/10 hover:text-neutral-100",
-						)}
-					>
-						<Drum />
-					</button>
-				</div>
-				<fieldset
-					className="flex rounded-md bg-white/5 p-0.5"
-					aria-label="Zoom"
-					title={`Showing ${zoomLabel(zoom)}. Pinch the waveform or press + and − to zoom, 0 to reset.`}
+			<div className="flex min-w-0 items-center gap-1.5">{tempo}</div>
+			<div className="flex min-w-0 items-center gap-1.5">
+				{downbeat}
+				<NudgeButtons onNudge={onNudge} />
+				<div
+					className={cn("ml-auto rounded-md", armed && "[&_button]:text-primary")}
+					title={
+						armed
+							? keyLabel("⌘Z undoes grid edits until you click elsewhere or press Esc.")
+							: undefined
+					}
 				>
-					{!ZOOM_PRESETS.some((z) => Math.abs(z - zoom) < 1e-6) && (
-						<span className="rounded bg-white/15 px-2 py-0.5 text-neutral-50 text-xs tabular-nums">
-							{zoomLabel(zoom)}
-						</span>
-					)}
-					{ZOOM_PRESETS.map((z) => (
-						<button
-							key={z}
-							type="button"
-							aria-pressed={Math.abs(z - zoom) < 1e-6}
-							title={`Show ${z * 2} seconds`}
-							onClick={() => onZoom(z)}
-							className={cn(
-								"rounded px-2 py-0.5 text-xs tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-								Math.abs(z - zoom) < 1e-6
-									? "bg-white/15 text-neutral-50"
-									: "text-neutral-400 hover:text-neutral-100",
-							)}
-						>
-							{z * 2}s
-						</button>
-					))}
-				</fieldset>
+					{help}
+				</div>
 			</div>
 		</div>
+	);
+}
+
+/** Moves the whole grid earlier or later: 10 ms a press, 1 ms with ⌥, as ← and → do. */
+function NudgeButtons({ onNudge }: { onNudge: (seconds: number) => void }) {
+	const half =
+		"grid h-7 w-7 place-items-center text-neutral-300 outline-none transition-colors hover:bg-white/10 hover:text-neutral-50 focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5";
+	return (
+		<fieldset className="flex items-center rounded-md bg-white/5" aria-label="Move the grid">
+			<button
+				type="button"
+				aria-label="Move the grid earlier"
+				title={keyLabel("Move the grid 10 ms earlier (←; ⌥ for 1 ms)")}
+				onClick={(e) => onNudge(e.altKey ? -FINE : -COARSE)}
+				className={cn(half, "rounded-l-md")}
+			>
+				<ArrowLeft />
+			</button>
+			<button
+				type="button"
+				aria-label="Move the grid later"
+				title={keyLabel("Move the grid 10 ms later (→; ⌥ for 1 ms)")}
+				onClick={(e) => onNudge(e.altKey ? FINE : COARSE)}
+				className={cn(half, "rounded-r-md border-white/10 border-l")}
+			>
+				<ArrowRight />
+			</button>
+		</fieldset>
+	);
+}
+
+/** Snap and the metronome, then the zoom presets, small in the waveform's top corner. */
+function WaveformCorner({
+	zoom,
+	onZoom,
+	snapOn,
+	onSnap,
+	metronomeOn,
+	onMetronome,
+}: {
+	zoom: number;
+	onZoom: (z: number) => void;
+	snapOn: boolean;
+	onSnap: (on: boolean) => void;
+	metronomeOn: boolean;
+	onMetronome: (on: boolean) => void;
+}) {
+	const snapKey = keyHint(useShortcutLabel("snap"));
+	const metronomeKey = keyHint(useShortcutLabel("metronome"));
+	return (
+		<div className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded-md bg-neutral-950/80 p-0.5 backdrop-blur-sm">
+			<button
+				type="button"
+				aria-pressed={snapOn}
+				aria-label="Snap to beat"
+				title={`Snap to beat: ${snapOn ? "on" : "off"}${snapKey}`}
+				onClick={() => onSnap(!snapOn)}
+				className={deckToggle(snapOn)}
+			>
+				<Magnet />
+			</button>
+			<button
+				type="button"
+				aria-pressed={metronomeOn}
+				aria-label="Metronome"
+				title={
+					metronomeOn
+						? `Metronome: on. Clicks on every beat of the grid while the song plays${metronomeKey}.`
+						: `Metronome: off. Click to hear the grid's beats while the song plays${metronomeKey}.`
+				}
+				onClick={() => onMetronome(!metronomeOn)}
+				className={deckToggle(metronomeOn)}
+			>
+				<Drum />
+			</button>
+			<span aria-hidden="true" className="h-4 w-px bg-white/10" />
+			<ZoomPresets zoom={zoom} onZoom={onZoom} />
+		</div>
+	);
+}
+
+/** The zoom presets; pinching the waveform and + − zoom too. */
+function ZoomPresets({ zoom, onZoom }: { zoom: number; onZoom: (z: number) => void }) {
+	return (
+		<fieldset
+			className="flex"
+			aria-label="Zoom"
+			title={`Showing ${zoomLabel(zoom)}. Pinch the waveform or press + and − to zoom, 0 to reset.`}
+		>
+			{!ZOOM_PRESETS.some((z) => Math.abs(z - zoom) < 1e-6) && (
+				<span className="rounded bg-white/15 px-1.5 py-0.5 text-[11px] text-neutral-50 tabular-nums">
+					{zoomLabel(zoom)}
+				</span>
+			)}
+			{ZOOM_PRESETS.map((z) => (
+				<button
+					key={z}
+					type="button"
+					aria-pressed={Math.abs(z - zoom) < 1e-6}
+					title={`Show ${z * 2} seconds`}
+					onClick={() => onZoom(z)}
+					className={cn(
+						"rounded px-1.5 py-0.5 text-[11px] tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+						Math.abs(z - zoom) < 1e-6
+							? "bg-white/15 text-neutral-50"
+							: "text-neutral-400 hover:text-neutral-100",
+					)}
+				>
+					{z * 2}s
+				</button>
+			))}
+		</fieldset>
 	);
 }
 
@@ -920,13 +1088,14 @@ function TapButton({
 	whole: boolean;
 	onTap: () => void;
 }) {
+	const tapKey = keyHint(useShortcutLabel("tap"));
 	const shown = reading && (whole ? String(Math.round(reading.bpm)) : formatBpm(reading.bpm));
 	return (
 		<button
 			type="button"
 			onClick={onTap}
 			aria-pressed={tapping}
-			title={`Tap along to the beat (T). The grid follows from the fourth tap${whole ? ", rounded to a whole BPM" : ""}; stop for two seconds to start over.`}
+			title={`Tap along to the beat${tapKey}. The grid follows from the fourth tap${whole ? ", rounded to a whole BPM" : ""}; stop for two seconds to start over.`}
 			className={cn(
 				"flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-xs tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
 				tapping
@@ -1004,7 +1173,6 @@ function GridControls({
 	onClickEarlierMs,
 	onBpm,
 	onRound,
-	onNudge,
 	onShiftBar,
 }: {
 	grid: Grid;
@@ -1014,9 +1182,12 @@ function GridControls({
 	onClickEarlierMs: (ms: number) => void;
 	onBpm: (bpm: number) => void;
 	onRound: () => void;
-	onNudge: (seconds: number) => void;
 	onShiftBar: (beats: number) => void;
 }) {
+	const roundTitle = useShortcutHint(
+		"roundBpm",
+		"Round the tempo to a whole BPM, keeping the beat at the playhead",
+	);
 	const label = (text: string) => (
 		<span className="truncate text-muted-foreground text-xs">{text}</span>
 	);
@@ -1047,7 +1218,7 @@ function GridControls({
 						</GroupButton>
 						<GroupButton
 							disabled={!grid.bpm || Number.isInteger(grid.bpm)}
-							title="Round the tempo to a whole BPM, keeping the beat at the playhead (R)"
+							title={roundTitle}
 							onClick={onRound}
 						>
 							Round
@@ -1067,19 +1238,6 @@ function GridControls({
 				</PropertyRow>
 				<MetronomeTiming earlierMs={clickEarlierMs} onChange={onClickEarlierMs} />
 				<PropertyRow
-					label={label("Move grid")}
-					title={keyLabel("10 ms a press, 1 ms with ⌥. Arrow keys do the same.")}
-				>
-					<ButtonGroup>
-						<GroupButton onClick={(e) => onNudge(e.altKey ? -FINE : -COARSE)}>
-							<ChevronLeft /> Earlier
-						</GroupButton>
-						<GroupButton onClick={(e) => onNudge(e.altKey ? FINE : COARSE)}>
-							Later <ChevronRight />
-						</GroupButton>
-					</ButtonGroup>
-				</PropertyRow>
-				<PropertyRow
 					label={label("Beat 1")}
 					title={keyLabel("Which beat of the bar is beat 1. ⇧← and ⇧→ do the same.")}
 				>
@@ -1093,9 +1251,6 @@ function GridControls({
 					</ButtonGroup>
 				</PropertyRow>
 			</div>
-			<p className="text-muted-foreground text-xs">
-				{keyLabel("Hold ⌥ to move the grid 1 ms at a time.")}
-			</p>
 		</div>
 	);
 }

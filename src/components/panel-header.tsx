@@ -98,8 +98,14 @@ export function PanelHeader({
 				tabs={tabs}
 				actions={
 					<>
-						<Button size="sm" disabled={tracks.length === 0} onClick={() => player.play(tracks, 0)}>
-							<Play /> Play
+						<Button
+							size="icon"
+							aria-label="Play"
+							title="Play"
+							disabled={tracks.length === 0}
+							onClick={() => player.play(tracks, 0)}
+						>
+							<Play />
 						</Button>
 						{actions}
 					</>

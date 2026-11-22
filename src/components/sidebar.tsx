@@ -29,10 +29,10 @@ import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { directionTo, markDirection } from "#/lib/page-transition.ts";
-import { useKeyLabel } from "#/lib/platform.ts";
 import { useClashes, useTracks } from "#/lib/queries.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
 import { usePaneWidth, useStoredFlag } from "#/lib/use-pane-width.ts";
+import { useShortcut, useShortcutHint } from "#/lib/use-shortcuts.ts";
 import { cn } from "#/lib/utils.ts";
 
 const INITIAL = 240;
@@ -73,7 +73,7 @@ function NavLink({
 			title={collapsed ? label : undefined}
 			aria-label={collapsed ? label : undefined}
 			className={collapsed ? railLinkClass : linkClass}
-			activeOptions={{ exact: true }}
+			activeOptions={{ exact: true, includeSearch: false }}
 			activeProps={activeProps}
 		>
 			<span className="[&_svg]:size-4">{icon}</span>
@@ -117,20 +117,6 @@ function RailSyncLinks({ syncing }: { syncing: boolean }) {
 	);
 }
 
-/** ⌘\ folds the sidebar away and back. */
-function useToggleKey(toggle: () => void) {
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
-				e.preventDefault();
-				toggle();
-			}
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, [toggle]);
-}
-
 /** The current row, scrolled into view whenever the page changes. */
 function useCurrentRowInView(aside: React.RefObject<HTMLElement | null>) {
 	const href = useRouterState({ select: (s) => s.location.href });
@@ -172,6 +158,28 @@ function useFoldGlide(aside: React.RefObject<HTMLElement | null>): () => void {
 	};
 }
 
+/**
+ * Publishes the sidebar's drawn width as `--sidebar-width` on the document, so the player bar's
+ * song column lines up with it while it is dragged, folded or gliding.
+ */
+function useWidthVariable(aside: React.RefObject<HTMLElement | null>) {
+	useLayoutEffect(() => {
+		const el = aside.current;
+		if (!el) {
+			return;
+		}
+		const root = document.documentElement;
+		const observer = new ResizeObserver(() => {
+			root.style.setProperty("--sidebar-width", `${el.getBoundingClientRect().width}px`);
+		});
+		observer.observe(el);
+		return () => {
+			observer.disconnect();
+			root.style.removeProperty("--sidebar-width");
+		};
+	}, [aside]);
+}
+
 /** Before a sidebar click navigates, notes which way the page should move for it. */
 function noteDirection(aside: HTMLElement, clickY: number) {
 	const current = currentRow(aside)?.getBoundingClientRect() ?? null;
@@ -200,9 +208,10 @@ export function Sidebar() {
 		setStoredCollapsed(next);
 	};
 	const toggle = () => setCollapsed(!collapsed);
-	useToggleKey(toggle);
-	const shortcut = useKeyLabel("⌘\\");
+	useShortcut("sidebar", toggle, { anywhere: true });
+	const toggleTitle = useShortcutHint("sidebar", collapsed ? "Expand sidebar" : "Collapse sidebar");
 	useCurrentRowInView(asideRef);
+	useWidthVariable(asideRef);
 
 	const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
 	const toggleButton = (
@@ -210,7 +219,7 @@ export function Sidebar() {
 			type="button"
 			onClick={toggle}
 			aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-			title={`${collapsed ? "Expand" : "Collapse"} sidebar (${shortcut})`}
+			title={toggleTitle}
 			className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-4"
 		>
 			<ToggleIcon />

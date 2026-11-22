@@ -1,66 +1,15 @@
+import { Link } from "@tanstack/react-router";
 import { X } from "lucide-react";
 import { useEffect } from "react";
 import { Button } from "#/components/ui/button.tsx";
 import { DIALOG_BACKDROP, DIALOG_FRAME } from "#/lib/page-layout.ts";
-import { keyLabel, TRASH } from "#/lib/platform.ts";
+import { keyLabel } from "#/lib/platform.ts";
+import { chordLabel, SHORTCUTS } from "#/lib/shortcuts.ts";
+import { shortcutFor, useBindings, useMacLabels } from "#/lib/use-shortcuts.ts";
 import { cn } from "#/lib/utils.ts";
 
-type Group = { title: string; keys: [keys: string[], what: string][] };
-
-/** Grouped by what you are trying to do; the vim letters sit beside the usual keys. */
-const GROUPS: Group[] = [
-	{
-		title: "Move around",
-		keys: [
-			[["↑", "↓"], "Previous / next item"],
-			[["←", "→"], "Close / open folder"],
-			[["Enter"], "Go into folder, or play song"],
-			[["⌫"], "Up one folder"],
-			[["/"], "Filter this folder"],
-			[["n", "N"], "Next / previous match"],
-		],
-	},
-	{
-		title: "Play",
-		keys: [
-			[["Space"], "Play or pause the selected song"],
-			[["Double-click"], "Play a song, open a folder"],
-		],
-	},
-	{
-		title: "Organize",
-		keys: [
-			[["⌘N"], "New folder"],
-			[["F2"], "Rename"],
-			[["⌘X", "⌘C", "⌘V"], "Cut, copy, paste"],
-			[["⌘⌫"], `Move to ${TRASH}`],
-			[["⌘Z"], "Undo"],
-			[["⌘A"], "Select all"],
-		],
-	},
-	{
-		title: "Fix and tag",
-		keys: [
-			[["[", "]"], "Previous / next issue"],
-			[["i"], "Show the issue"],
-			[["f"], "Fix the issue"],
-			[["L"], "Jump to the metadata panel"],
-		],
-	},
-	{
-		title: "Vim keys",
-		keys: [
-			[["j", "k"], "Next / previous"],
-			[["h", "l"], "Close / open folder"],
-			[["gg", "G"], "First / last item"],
-			[["-"], "Up one folder"],
-			[["y", "x", "p"], "Copy, cut, paste"],
-			[["r", "d", "a"], "Rename, delete, new folder"],
-		],
-	},
-];
-
-function Key({ children }: { children: string }) {
+/** One key, as on the keyboard; ⌘ reads Ctrl on Windows. */
+export function Key({ children }: { children: string }) {
 	return (
 		<kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border border-b-2 bg-muted/60 px-1.5 font-sans text-[11px] text-foreground">
 			{keyLabel(children)}
@@ -68,11 +17,20 @@ function Key({ children }: { children: string }) {
 	);
 }
 
-/** Every file browser shortcut on one sheet; `?` opens it, Escape closes it. */
+/** Every file browser shortcut on one sheet, with the keys chosen in Settings; its key opens it. */
 export function FileShortcuts({ onClose }: { onClose: () => void }) {
+	const bindings = useBindings();
+	const mac = useMacLabels();
+	const files = SHORTCUTS.filter((d) => d.scope === "files");
+	const groups = [...new Set(files.map((d) => d.group))];
 	useEffect(() => {
+		// The key press that opened the sheet reaches this listener too; only later ones close it.
+		const openedAt = performance.now();
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape" || e.key === "?") {
+			if (e.timeStamp < openedAt) {
+				return;
+			}
+			if (e.key === "Escape" || shortcutFor(e, "files")?.id === "fileHelp") {
 				e.preventDefault();
 				onClose();
 			}
@@ -98,24 +56,37 @@ export function FileShortcuts({ onClose }: { onClose: () => void }) {
 					</Button>
 				</div>
 				<div className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
-					{GROUPS.map((g) => (
-						<section key={g.title}>
-							<h3 className="mb-1.5 text-muted-foreground text-xs">{g.title}</h3>
+					{groups.map((group) => (
+						<section key={group}>
+							<h3 className="mb-1.5 text-muted-foreground text-xs">{group}</h3>
 							<dl className="space-y-1">
-								{g.keys.map(([keys, what]) => (
-									<div key={what} className="flex items-center justify-between gap-3 text-sm">
-										<dt className="text-foreground/90">{what}</dt>
-										<dd className="flex shrink-0 gap-1">
-											{keys.map((k) => (
-												<Key key={k}>{k}</Key>
-											))}
-										</dd>
-									</div>
-								))}
+								{files
+									.filter((d) => d.group === group)
+									.map((d) => (
+										<div key={d.id} className="flex items-center justify-between gap-3 text-sm">
+											<dt className="text-foreground/90">{d.label}</dt>
+											<dd className="flex shrink-0 gap-1">
+												{(bindings.get(d.id) ?? []).map((k) => (
+													<Key key={k}>{chordLabel(k, mac)}</Key>
+												))}
+											</dd>
+										</div>
+									))}
 							</dl>
 						</section>
 					))}
 				</div>
+				<p className="mt-5 flex items-center justify-between gap-3 text-muted-foreground text-xs">
+					Double-click plays a song or opens a folder.
+					<Link
+						to="/settings"
+						search={{ section: "shortcuts" }}
+						onClick={onClose}
+						className="text-foreground underline-offset-2 hover:underline"
+					>
+						Change keys in Settings
+					</Link>
+				</p>
 			</div>
 		</div>
 	);

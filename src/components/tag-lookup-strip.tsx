@@ -1,5 +1,5 @@
 import { Menu } from "@base-ui/react/menu";
-import { Check, ChevronsUpDown, Music, RefreshCw, Search, X } from "lucide-react";
+import { Check, ChevronsUpDown, Globe, Music, RefreshCw, X } from "lucide-react";
 import { useState } from "react";
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -30,7 +30,7 @@ export function TagLookupStrip({ found }: { found: TagSuggestions }) {
 	if (found.stage === "idle") {
 		const button = (
 			<Button variant="ghost" size="sm" onClick={found.start}>
-				<Search /> Look up tags
+				<Globe /> Look up tags
 			</Button>
 		);
 		// In the side panel the button sits in its top bar, so it costs no row of its own.

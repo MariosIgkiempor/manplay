@@ -1,11 +1,12 @@
 import { useMutationState } from "@tanstack/react-query";
-import { CircleAlert, Undo2 } from "lucide-react";
+import { CircleAlert, PanelRight, Undo2 } from "lucide-react";
 import { type ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnalysisStatusPill } from "#/components/analysis-status-pill.tsx";
 import { SyncStatusPill } from "#/components/sync-status-pill.tsx";
 import { WaveformStatusPill } from "#/components/waveform-status-pill.tsx";
-import { StatusSlotContext, useDetail } from "#/context/detail-context.ts";
+import { type DetailView, StatusSlotContext, useDetail } from "#/context/detail-context.ts";
+import { usePlayer } from "#/context/player-context.ts";
 import {
 	ActiveStatusContext,
 	type StatusScope,
@@ -14,6 +15,7 @@ import {
 import { useUndo } from "#/context/undo-context.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { SCAN_KEY, SYNC_KEY } from "#/lib/queries.ts";
+import { cn } from "#/lib/utils.ts";
 
 /** A labelled value in a status bar. */
 export function Stat({ label, value }: { label: string; value: number | string }) {
@@ -87,8 +89,39 @@ function StatusErrors() {
 }
 
 /**
+ * The side panel's button, at the status bar's right end. Opening shows the playing song's
+ * metadata, or when nothing is playing, whatever the panel showed last; pressed again, it closes
+ * the panel.
+ */
+function PanelToggle() {
+	const detail = useDetail();
+	const { current, queue } = usePlayer();
+	const open = detail.view !== null;
+	const next: DetailView | null = current
+		? { kind: "song", trackId: current.id, list: queue.map((t) => t.id) }
+		: detail.last;
+	const label = open ? "Close the side panel" : "Open the side panel";
+	return (
+		<button
+			type="button"
+			aria-label={label}
+			aria-pressed={open}
+			title={label}
+			disabled={!open && next === null}
+			onClick={() => (open ? detail.close() : next && detail.open(next))}
+			className={cn(
+				"-mr-1.5 grid size-6 shrink-0 place-items-center rounded-md outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5",
+				open ? "text-primary" : "text-muted-foreground",
+			)}
+		>
+			<PanelRight />
+		</button>
+	);
+}
+
+/**
  * The window's status bar. Left: undo, errors and notices. Middle: sync and analysis progress.
- * Right: whether edits are saved, and the figures of the area last used.
+ * Right: whether edits are saved, the figures of the area last used, and the side panel's button.
  */
 export function StatusBarHost({
 	notices,
@@ -114,6 +147,7 @@ export function StatusBarHost({
 			<div className="flex min-w-0 items-center justify-end gap-4">
 				<div ref={setSaveSlot} className="flex min-w-0 items-center gap-3 empty:hidden" />
 				<div ref={setSlot} className="flex min-w-0 items-center justify-end gap-4" />
+				<PanelToggle />
 			</div>
 		</footer>
 	);

@@ -20,7 +20,7 @@ import { cn } from "#/lib/utils.ts";
 function Content({ view }: { view: DetailView }) {
 	switch (view.kind) {
 		case "song":
-			return <SongPanel trackId={view.trackId} requested={view.tab} list={view.list} />;
+			return <SongPanel trackId={view.trackId} list={view.list} />;
 		case "album":
 			return <AlbumPanel albumKey={view.key} />;
 		case "artist":

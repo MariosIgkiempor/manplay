@@ -38,3 +38,9 @@ export const DIALOG_FRAME =
  */
 export const CARD =
 	"rounded-xl border border-foreground/9 bg-background shadow-[0_1px_0_0_oklch(1_0_0/4%)_inset]";
+
+/**
+ * The bottom deck's columns: the sidebar's width on the left (the song, the grid editor's
+ * controls), the rest for the transport and waveforms, lined up with the page above.
+ */
+export const DECK_COLUMNS = "grid grid-cols-[max(var(--sidebar-width,15rem),13rem)_minmax(0,1fr)]";

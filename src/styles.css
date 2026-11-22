@@ -270,3 +270,23 @@ input[type="range"].slider {
 		transition: none;
 	}
 }
+
+/* A key the shortcut recorder cannot take as it is: one short shake, like a refused password. */
+@keyframes keycap-shake {
+	0%,
+	100% {
+		translate: 0;
+	}
+	20%,
+	60% {
+		translate: -4px;
+	}
+	40%,
+	80% {
+		translate: 4px;
+	}
+}
+.animate-keycap-shake {
+	display: inline-block;
+	animation: keycap-shake 320ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}

@@ -85,6 +85,7 @@ import {
 	tagValueCreate,
 	tagValues,
 	tagValuesMigrate,
+	trackCues,
 } from "#/lib/api.ts";
 import { bumpArt } from "#/lib/art-version.ts";
 import type { CoverWrite, LookupWrite } from "#/lib/tag-lookup.ts";
@@ -92,6 +93,17 @@ import { undoCoverChange, undoTagWrite } from "#/lib/undo-entries.ts";
 
 export function useTracks() {
 	return useQuery({ queryKey: ["tracks"], queryFn: listTracks });
+}
+
+export const cuesKey = (trackId: number) => ["track-cues", trackId] as const;
+
+/** A song's hot and memory cues; `trackId` null asks for nothing. */
+export function useTrackCues(trackId: number | null) {
+	return useQuery({
+		queryKey: cuesKey(trackId ?? -1),
+		queryFn: () => trackCues(trackId ?? -1),
+		enabled: trackId !== null,
+	});
 }
 
 const HISTORY_LIMIT = 200;

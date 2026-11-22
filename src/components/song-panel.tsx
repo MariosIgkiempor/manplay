@@ -1,60 +1,38 @@
-import {
-	Activity,
-	AudioWaveform,
-	ChevronLeft,
-	ChevronRight,
-	Clock,
-	Disc3,
-	KeyRound,
-	Music,
-	TextCursorInput,
-} from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { Activity, ChevronLeft, ChevronRight, Clock, Disc3, KeyRound, Music } from "lucide-react";
+import { type ReactNode, useMemo, useRef } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
 import { CoverPicker } from "#/components/cover-picker.tsx";
-import { busyKey, GridEditor } from "#/components/grid-editor.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { type Fact, PANEL_ART, PanelHeader } from "#/components/panel-header.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { TagEditor } from "#/components/tag-editor.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Segmented } from "#/components/view-toggle.tsx";
-import { type SongTab, useDetail, useDetailNav } from "#/context/detail-context.ts";
+import { useDetail, useDetailNav } from "#/context/detail-context.ts";
+import { PanelBarActions, useHasPanelBar } from "#/context/panel-bar.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import { albumKey, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
-import { usePanelTabs, useSyncTargets, useTracks } from "#/lib/queries.ts";
+import { useSyncTargets, useTracks } from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
+import { useShortcut, useShortcutLabel } from "#/lib/use-shortcuts.ts";
 
 /**
- * One song in the left split, with its beat grid and cues on one tab and its metadata on the
- * other. `list` is the songs the Previous / Next buttons step through.
+ * One song in the left split: its metadata. The beat grid and cues are edited on the deck above
+ * the player. `list` is the songs the Previous / Next buttons step through.
  */
 export function SongPanel({
 	trackId,
-	requested,
 	list,
 }: {
 	trackId: number;
-	/** The tab asked for when opening, e.g. "Edit metadata…"; else the one last used. */
-	requested: SongTab | undefined;
 	list: readonly number[] | undefined;
 }) {
 	const tracks = useTracks();
 	const targets = useSyncTargets();
 	const go = useDetailNav();
-	const { tabs, setTab: setPanelTab } = usePanelTabs();
-	const tab = tabs.song;
-	const setTab = (next: SongTab) => setPanelTab("song", next);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: only when opened with a tab asked for
-	useEffect(() => {
-		if (requested) {
-			setTab(requested);
-		}
-	}, [requested, trackId]);
 	const track = tracks.data?.find((t) => t.id === trackId);
 	if (!track) {
 		return <EmptyState title={tracks.isPending ? "Loading song…" : "Song not found"} />;
@@ -73,7 +51,7 @@ export function SongPanel({
 		},
 	].filter((f) => f !== false) as Fact[];
 	return (
-		<div className="space-y-6 pb-8">
+		<div className="pb-8">
 			<PanelHeader
 				kind={
 					<>
@@ -104,26 +82,31 @@ export function SongPanel({
 				}
 				tracks={[track]}
 				facts={facts}
-				// The tabs' rule is the header's bottom edge, under the song stepper too.
-				tabs={
-					<div className="flex items-end justify-between gap-3">
-						<Segmented
-							className="border-b-0"
-							value={tab}
-							onChange={setTab}
-							label="Song view"
-							items={[
-								{ value: "grid", label: "Grid & cues", icon: <AudioWaveform /> },
-								{ value: "metadata", label: "Metadata", icon: <TextCursorInput /> },
-							]}
-						/>
-						<TrackNav trackId={trackId} list={list} tracks={tracks.data ?? []} />
-					</div>
-				}
-				badge={<SyncBadge state={syncState([track], targets.data?.length ?? 0)} showLabel />}
 			/>
-			{tab === "grid" ? <GridEditor trackId={trackId} /> : <SongMetadata track={track} />}
+			<SongBarActions
+				badge={<SyncBadge state={syncState([track], targets.data?.length ?? 0)} />}
+				nav={<TrackNav trackId={trackId} list={list} tracks={tracks.data ?? []} />}
+			/>
+			<SongMetadata track={track} />
 		</div>
+	);
+}
+
+/**
+ * Whether the song is synced, then the song stepper, at the end of the panel's top bar beside
+ * Close; after the header without a top bar.
+ */
+function SongBarActions({ badge, nav }: { badge: ReactNode; nav: ReactNode }) {
+	const content = (
+		<div className="order-last flex items-center gap-1.5 pl-1">
+			<span className="grid size-7 place-items-center empty:hidden">{badge}</span>
+			{nav}
+		</div>
+	);
+	return useHasPanelBar() ? (
+		<PanelBarActions>{content}</PanelBarActions>
+	) : (
+		<div className="flex justify-end px-5 pt-2">{content}</div>
 	);
 }
 
@@ -172,16 +155,10 @@ function TrackNav({
 	// Only while the panel still shows a song.
 	const enabled = useRef(false);
 	enabled.current = detail.view?.kind === "song";
-	useEffect(() => {
-		const onKey = (e: globalThis.KeyboardEvent) => {
-			if (enabled.current && (e.key === "[" || e.key === "]") && !busyKey(e)) {
-				e.preventDefault();
-				goRef.current(e.key === "[" ? -1 : 1);
-			}
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, []);
+	useShortcut("prevSong", () => enabled.current && goRef.current(-1));
+	useShortcut("nextSong", () => enabled.current && goRef.current(1));
+	const prevKey = useShortcutLabel("prevSong");
+	const nextKey = useShortcutLabel("nextSong");
 
 	if (at < 0 || ids.length < 2) {
 		return null;
@@ -189,13 +166,13 @@ function TrackNav({
 	const prev = byId.get(ids[at - 1] ?? -1);
 	const next = byId.get(ids[at + 1] ?? -1);
 	return (
-		<div className="flex items-center gap-1 pb-1 text-muted-foreground text-xs">
+		<div className="flex items-center gap-0.5 text-muted-foreground text-xs">
 			<Button
 				size="icon-sm"
 				variant="ghost"
 				aria-label="Previous song"
 				disabled={!prev}
-				title={prev ? `${prev.title} ([)` : undefined}
+				title={prev ? `${prev.title}${prevKey ? ` (${prevKey})` : ""}` : undefined}
 				onClick={() => goRef.current(-1)}
 			>
 				<ChevronLeft />
@@ -208,7 +185,7 @@ function TrackNav({
 				variant="ghost"
 				aria-label="Next song"
 				disabled={!next}
-				title={next ? `${next.title} (])` : undefined}
+				title={next ? `${next.title}${nextKey ? ` (${nextKey})` : ""}` : undefined}
 				onClick={() => goRef.current(1)}
 			>
 				<ChevronRight />

@@ -1,14 +1,16 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { Crosshair, Palette, PencilLine, Plus, Trash2, TriangleAlert, X } from "lucide-react";
+import { Crosshair, Palette, PencilLine, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { InlineEdit, InlineInput } from "#/components/inline-edit.tsx";
+import { InlineInput } from "#/components/inline-edit.tsx";
 import { type MenuEntry, MenuItems, MenuLabel } from "#/components/menu.tsx";
-import { Section } from "#/components/page.tsx";
-import { SettingRows } from "#/components/setting-row.tsx";
-import { Button } from "#/components/ui/button.tsx";
-import { beforeStart, CUE_COLORS, type Cue, MEMORY_COLOR, PAD_LETTERS, stamp } from "#/lib/cues.ts";
+import { CUE_COLORS, type Cue, PAD_LETTERS, stamp } from "#/lib/cues.ts";
 import { popup } from "#/lib/menu-styles.ts";
+import type { ShortcutId } from "#/lib/shortcuts.ts";
+import { keyHint, useShortcutLabel } from "#/lib/use-shortcuts.ts";
 import { cn } from "#/lib/utils.ts";
+
+/** The shortcut of pad `slot` (0 for A). */
+const padShortcut = (slot: number) => `pad${Math.min(8, Math.max(1, slot + 1))}` as ShortcutId;
 
 interface PadActions {
 	/** Set, or move, hot cue `slot` to the playhead. */
@@ -48,15 +50,43 @@ function padMenu(cue: Cue, slot: number, a: PadActions, rename: () => void): Men
  * One pad, as on a CDJ: lit in its colour when set (press to jump there), dark and outlined
  * when free (press to set it at the playhead). Right-click a set pad for the rest.
  */
-function Pad({ slot, cue, actions }: { slot: number; cue: Cue | undefined; actions: PadActions }) {
-	const [renaming, setRenaming] = useState(false);
+function Pad({
+	slot,
+	cue,
+	actions,
+	strip = false,
+}: {
+	slot: number;
+	cue: Cue | undefined;
+	actions: PadActions;
+	/** One line, for the row under the deck's waveform. */
+	strip?: boolean;
+}) {
 	const letter = PAD_LETTERS[slot] ?? "";
+	const padKey = keyHint(useShortcutLabel(padShortcut(slot)));
+	if (strip) {
+		return cue ? (
+			<SetPad slot={slot} cue={cue} actions={actions} strip />
+		) : (
+			<button
+				type="button"
+				onClick={() => actions.onSet(slot)}
+				title={`Set hot cue ${letter} at the playhead${padKey}`}
+				className="group flex h-8 min-w-0 items-center gap-2 rounded-md border border-foreground/15 border-dashed px-2 text-left outline-none transition-colors hover:border-foreground/40 hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-ring/60"
+			>
+				<span className="font-semibold text-muted-foreground text-xs">{letter}</span>
+				<span className="truncate text-muted-foreground/0 text-xs transition-colors group-hover:text-muted-foreground">
+					Set here
+				</span>
+			</button>
+		);
+	}
 	if (!cue) {
 		return (
 			<button
 				type="button"
 				onClick={() => actions.onSet(slot)}
-				title={`Set hot cue ${letter} at the playhead (${slot + 1})`}
+				title={`Set hot cue ${letter} at the playhead${padKey}`}
 				className="group flex h-16 flex-col justify-between rounded-md border border-foreground/15 border-dashed p-2 text-left outline-none transition-colors hover:border-foreground/40 hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-ring/60"
 			>
 				<span className="font-semibold text-muted-foreground text-sm">{letter}</span>
@@ -66,13 +96,34 @@ function Pad({ slot, cue, actions }: { slot: number; cue: Cue | undefined; actio
 			</button>
 		);
 	}
+	return <SetPad slot={slot} cue={cue} actions={actions} />;
+}
+
+/** A pad with a cue on it: press to jump there; right-click to move, rename, colour or delete. */
+function SetPad({
+	slot,
+	cue,
+	actions,
+	strip = false,
+}: {
+	slot: number;
+	cue: Cue;
+	actions: PadActions;
+	strip?: boolean;
+}) {
+	const [renaming, setRenaming] = useState(false);
+	const letter = PAD_LETTERS[slot] ?? "";
+	const padKey = keyHint(useShortcutLabel(padShortcut(slot)));
 	const color = cue.color || CUE_COLORS[0].hex;
 	return (
 		<ContextMenu.Root>
 			<ContextMenu.Trigger
 				render={
 					<div
-						className="relative flex h-16 flex-col justify-between overflow-hidden rounded-md p-2 text-left"
+						className={cn(
+							"relative flex overflow-hidden rounded-md text-left",
+							strip ? "h-8 min-w-0 items-center gap-2 px-2" : "h-16 flex-col justify-between p-2",
+						)}
 						style={{
 							background: `color-mix(in oklch, ${color} 22%, var(--card))`,
 							boxShadow: `inset 0 0 0 1px color-mix(in oklch, ${color} 60%, transparent)`,
@@ -80,22 +131,29 @@ function Pad({ slot, cue, actions }: { slot: number; cue: Cue | undefined; actio
 					/>
 				}
 			>
-				<span className="absolute inset-x-0 top-0 h-1" style={{ background: color }} />
+				<span
+					className={cn("absolute inset-x-0 top-0", strip ? "h-0.5" : "h-1")}
+					style={{ background: color }}
+				/>
 				<button
 					type="button"
 					onClick={() => actions.onJump(cue.start)}
-					title={`Jump to hot cue ${letter} (${slot + 1})`}
+					title={`Jump to hot cue ${letter}${padKey}`}
 					className="absolute inset-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 					aria-label={`Jump to hot cue ${letter}`}
 				/>
 				<span className="pointer-events-none relative flex items-baseline justify-between gap-2">
-					<span className="font-semibold text-sm" style={{ color }}>
+					<span className={cn("font-semibold", strip ? "text-xs" : "text-sm")} style={{ color }}>
 						{letter}
 					</span>
-					<span className="text-[11px] text-muted-foreground tabular-nums">{stamp(cue.start)}</span>
+					{!strip && (
+						<span className="text-[11px] text-muted-foreground tabular-nums">
+							{stamp(cue.start)}
+						</span>
+					)}
 				</span>
 				{renaming ? (
-					<span className="relative">
+					<span className="relative min-w-0 flex-1">
 						<InlineInput
 							initial={cue.name}
 							label={`Name hot cue ${letter}`}
@@ -110,13 +168,17 @@ function Pad({ slot, cue, actions }: { slot: number; cue: Cue | undefined; actio
 					</span>
 				) : (
 					<span className="pointer-events-none relative truncate text-xs">
-						{cue.name || <span className="text-muted-foreground">Hot cue {letter}</span>}
+						{cue.name || (
+							<span className="text-muted-foreground">
+								{strip ? stamp(cue.start) : `Hot cue ${letter}`}
+							</span>
+						)}
 					</span>
 				)}
 			</ContextMenu.Trigger>
 			<ContextMenu.Portal>
 				<ContextMenu.Positioner className="z-50">
-					<ContextMenu.Popup className={popup} finalFocus={false}>
+					<ContextMenu.Popup data-deck-popup className={popup} finalFocus={false}>
 						<MenuLabel>Hot cue {letter}</MenuLabel>
 						<MenuItems items={padMenu(cue, slot, actions, () => setRenaming(true))} />
 					</ContextMenu.Popup>
@@ -126,126 +188,20 @@ function Pad({ slot, cue, actions }: { slot: number; cue: Cue | undefined; actio
 	);
 }
 
-/** The eight hot cue pads, A–H. */
-export function HotCuePads({ cues, actions }: { cues: readonly Cue[]; actions: PadActions }) {
+/** The eight hot cue pads in one row, under the deck's waveform. */
+export function PadStrip({ cues, actions }: { cues: readonly Cue[]; actions: PadActions }) {
 	return (
-		<Section title="Hot cues" count={cues.filter((c) => c.slot !== null).length}>
-			<div className="grid grid-cols-4 gap-2 @3xl/split:grid-cols-8">
-				{PAD_LETTERS.map((_, slot) => (
-					<Pad
-						// biome-ignore lint/suspicious/noArrayIndexKey: pads are fixed places A–H
-						key={slot}
-						slot={slot}
-						cue={cues.find((c) => c.slot === slot)}
-						actions={actions}
-					/>
-				))}
-			</div>
-		</Section>
-	);
-}
-
-/** A memory cue's marker: a small diamond in its colour. */
-function Marker({ color, start = false }: { color: string; start?: boolean }) {
-	return start ? (
-		<span
-			aria-hidden
-			className="size-0 border-x-[5px] border-x-transparent border-b-[8px]"
-			style={{ borderBottomColor: color }}
-		/>
-	) : (
-		<span aria-hidden className="size-2 rotate-45 rounded-[1px]" style={{ background: color }} />
-	);
-}
-
-function TimeButton({ time, onJump }: { time: number; onJump: (t: number) => void }) {
-	return (
-		<button
-			type="button"
-			onClick={() => onJump(time)}
-			title="Jump here"
-			className="rounded-sm text-sm tabular-nums outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60"
-		>
-			{stamp(time)}
-		</button>
-	);
-}
-
-/**
- * The memory cues, in time order. Players set to auto-cue on memory cues load the song at the
- * earliest one, so the start is exported as a memory cue and warned about when another comes
- * before it.
- */
-export function MemoryCues({
-	cues,
-	onAdd,
-	onJump,
-	onRename,
-	onDelete,
-}: {
-	cues: readonly Cue[];
-	onAdd: () => void;
-	onJump: (time: number) => void;
-	onRename: (cue: Cue, name: string) => void;
-	onDelete: (cue: Cue) => void;
-}) {
-	const list = cues.filter((c) => c.slot === null && !c.main).sort((a, b) => a.start - b.start);
-	const early = beforeStart(cues)[0];
-	return (
-		<Section
-			title="Memory cues"
-			count={list.length}
-			action={
-				<Button
-					size="sm"
-					variant="ghost"
-					title="Add a memory cue at the playhead (M)"
-					onClick={onAdd}
-				>
-					<Plus /> Memory cue
-				</Button>
-			}
-		>
-			{list.length === 0 ? (
-				<p className="text-muted-foreground text-sm">
-					None yet. Press M to add one at the playhead.
-				</p>
-			) : (
-				<SettingRows>
-					{list.map((c) => (
-						<div key={`${c.start}`} className="group flex min-h-11 items-center gap-2.5 py-1.5">
-							<Marker color={MEMORY_COLOR} />
-							<TimeButton time={c.start} onJump={onJump} />
-							<div className="min-w-0 flex-1">
-								<InlineEdit
-									value={c.name}
-									label="Memory cue name"
-									placeholder="Add a name"
-									className="text-sm"
-									parse={(v) => v.trim()}
-									onCommit={(name) => onRename(c, name)}
-								/>
-							</div>
-							<Button
-								size="icon-sm"
-								variant="ghost"
-								aria-label={`Remove memory cue at ${stamp(c.start)}`}
-								title="Remove"
-								className="opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-								onClick={() => onDelete(c)}
-							>
-								<X />
-							</Button>
-						</div>
-					))}
-				</SettingRows>
-			)}
-			{early && (
-				<p className="flex items-center gap-2 text-warning text-xs">
-					<TriangleAlert className="size-3.5 shrink-0" />
-					The memory cue at {stamp(early.start)} comes first, so players will load the song there.
-				</p>
-			)}
-		</Section>
+		<fieldset className="grid grid-cols-8 gap-1.5" aria-label="Hot cues">
+			{PAD_LETTERS.map((_, slot) => (
+				<Pad
+					// biome-ignore lint/suspicious/noArrayIndexKey: pads are fixed places A–H
+					key={slot}
+					slot={slot}
+					cue={cues.find((c) => c.slot === slot)}
+					actions={actions}
+					strip
+				/>
+			))}
+		</fieldset>
 	);
 }

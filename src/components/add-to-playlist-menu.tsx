@@ -1,5 +1,5 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
-import { useIsMutating } from "@tanstack/react-query";
+import { useIsMutating, useQueryClient } from "@tanstack/react-query";
 import {
 	AudioWaveform,
 	Copy,
@@ -24,6 +24,7 @@ import { usePlayer } from "#/context/player-context.ts";
 import { TrackOrderContext } from "#/context/track-order.ts";
 import { albumKey } from "#/lib/albums.ts";
 import { fsReveal, type Track } from "#/lib/api.ts";
+import { loadForEditing } from "#/lib/load-for-editing.ts";
 import { popup } from "#/lib/menu-styles.ts";
 import { FILE_MANAGER } from "#/lib/platform.ts";
 import { ANALYSIS_KEY, useAnalyze, useRedetect } from "#/lib/queries.ts";
@@ -94,6 +95,7 @@ export function AddToPlaylistMenu({
 	const go = useDetailNav();
 	const order = useContext(TrackOrderContext);
 	const player = usePlayer();
+	const queryClient = useQueryClient();
 	const analyze = useAnalyze();
 	const redetect = useRedetect();
 	const hasEdits = tracks.some((t) => t.edited.bpm || t.edited.key || t.edited.grid);
@@ -118,13 +120,16 @@ export function AddToPlaylistMenu({
 			icon: <TextCursorInput />,
 			onSelect: () =>
 				song
-					? go({ kind: "song", trackId: song.id, tab: "metadata", list: order ?? undefined })
+					? go({ kind: "song", trackId: song.id, list: order ?? undefined })
 					: go({ kind: "edit", target }),
 		},
 		song && {
 			label: "Edit grid & cues…",
 			icon: <Grid3x3 />,
-			onSelect: () => go({ kind: "song", trackId: song.id, tab: "grid", list: order ?? undefined }),
+			onSelect: () => {
+				const all = queryClient.getQueryData<readonly Track[]>(["tracks"]) ?? [song];
+				loadForEditing(player, song, order ?? undefined, all);
+			},
 		},
 		{
 			label: "Analyze BPM & key",

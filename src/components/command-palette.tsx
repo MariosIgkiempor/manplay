@@ -38,6 +38,7 @@ import { type PaletteItem, rankMatches } from "#/lib/command-palette.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { useScan, useSyncTargets, useTracks } from "#/lib/queries.ts";
+import { useShortcut } from "#/lib/use-shortcuts.ts";
 import { useSmartPlaylists } from "#/lib/use-smart.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -246,16 +247,7 @@ export function CommandPalette() {
 	const detail = useDetail();
 	const player = usePlayer();
 
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "k") {
-				e.preventDefault();
-				setOpen((o) => !o);
-			}
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, []);
+	useShortcut("palette", () => setOpen((o) => !o), { anywhere: true });
 
 	useEffect(() => {
 		if (!open) {
