@@ -132,7 +132,7 @@ export function BrandGlyph({ brand, className }: { brand: Logo | Lettermark; cla
 		<span
 			aria-hidden="true"
 			className={cn(
-				"inline-grid h-4 min-w-4 shrink-0 place-items-center rounded-[4px] bg-white/10 px-0.5 font-semibold text-[0.5625rem] leading-none tracking-tight",
+				"inline-grid h-4 min-w-4 shrink-0 place-items-center rounded-[4px] bg-foreground/10 px-0.5 font-semibold text-[0.5625rem] leading-none tracking-tight",
 				className,
 			)}
 		>

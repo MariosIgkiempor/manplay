@@ -138,7 +138,7 @@ function Toolbar(p: ToolbarProps) {
 		// The frame's own header, as every card has: what it holds on the left, its buttons right.
 		// It stays in view (opaque, in the frame's shade) while the list scrolls.
 		<div className="sticky top-0 z-10 rounded-t-2xl bg-background">
-			<div className="relative flex h-14 items-center gap-1.5 rounded-t-2xl bg-white/[0.018] pr-2 pl-4">
+			<div className="relative flex h-14 items-center gap-1.5 rounded-t-2xl bg-foreground/[0.018] pr-2 pl-4">
 				<h2 className="min-w-0 flex-1 truncate font-medium text-[0.9375rem]">
 					<ToolbarText {...p} />
 				</h2>

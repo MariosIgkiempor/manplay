@@ -91,6 +91,7 @@ export function drawTimeline(
 	dim: CanvasImageSource,
 	lit: CanvasImageSource,
 	played: number,
+	playheadColour: string,
 ) {
 	const { w, h, scale } = size;
 	const at = Math.round(Math.max(0, Math.min(1, played)) * w);
@@ -102,8 +103,10 @@ export function drawTimeline(
 		ctx.drawImage(lit, 0, 0, at, h, 0, 0, at, h);
 	}
 	const line = Math.max(1, Math.round(1.5 * scale));
-	ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+	ctx.globalAlpha = 0.85;
+	ctx.fillStyle = playheadColour;
 	ctx.fillRect(at - line / 2, h * 0.1, line, h * 0.8);
+	ctx.globalAlpha = 1;
 }
 
 /** The overview with the part before `played` (0–1) bright, cue pins and the playhead. */

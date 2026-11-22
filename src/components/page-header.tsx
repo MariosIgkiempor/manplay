@@ -22,7 +22,10 @@ export function Cover({
 	className?: string;
 }) {
 	const covers = useMemo(() => groupAlbums(tracks).map((a) => a.coverTrackId), [tracks]);
-	const frame = cn("shrink-0 overflow-hidden rounded-lg shadow-md ring-1 ring-white/10", className);
+	const frame = cn(
+		"shrink-0 overflow-hidden rounded-lg shadow-md ring-1 ring-foreground/10",
+		className,
+	);
 	if (covers.length >= 4) {
 		return (
 			<div className={cn(frame, "grid grid-cols-2 grid-rows-2")}>

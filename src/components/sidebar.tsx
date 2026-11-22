@@ -46,9 +46,9 @@ const CollapsedContext = createContext(false);
 
 // The right padding matches a list row's trailing slot, so badges line up with the counts.
 const linkClass =
-	"relative flex items-center gap-2 truncate rounded-md py-1.5 pr-2 pl-5 text-sm text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground";
+	"relative flex items-center gap-2 truncate rounded-md py-1.5 pr-2 pl-5 text-sm text-muted-foreground transition-colors hover:bg-foreground/[0.04] hover:text-foreground";
 const railLinkClass =
-	"relative grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground";
+	"relative grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.04] hover:text-foreground";
 const activeProps = { className: rowActive } as const;
 
 function NavLink({

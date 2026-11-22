@@ -68,17 +68,24 @@ export function PanelHeader({
 	plain = false,
 }: Props) {
 	const player = usePlayer();
-	// In the side panel the name goes in its top bar; elsewhere it heads the header as usual.
-	const inBar = useHasPanelBar() && !plain;
+	// In the side panel its top bar says what is shown ("Song", "Album") and the name stays beside
+	// the art; elsewhere the kind sits above the name as usual.
+	const inBar = useHasPanelBar() && !plain && kind !== undefined;
 	return (
 		<>
-			{inBar && <PanelBarTitle>{title}</PanelBarTitle>}
+			{inBar && (
+				<PanelBarTitle>
+					<span className="flex items-center gap-2 [&_svg]:size-4 [&_svg]:text-muted-foreground">
+						{kind}
+					</span>
+				</PanelBarTitle>
+			)}
 			<PageHeader
 				variant={plain ? "plain" : "panel"}
 				art={art && <div className="size-24 shrink-0 @lg/split:size-28">{art}</div>}
-				kind={kind}
+				kind={inBar ? undefined : kind}
 				badge={badge}
-				title={inBar ? null : title}
+				title={title}
 				subtitle={subtitle}
 				meta={
 					(meta !== undefined || (facts && facts.length > 0)) && (

@@ -13,6 +13,8 @@ import { SaveSlotContext } from "#/context/status-context.ts";
 import { SyncActionsProvider } from "#/context/sync-actions-provider.tsx";
 import { SyncProgressProvider } from "#/context/sync-progress-provider.tsx";
 import { UndoProvider } from "#/context/undo-provider.tsx";
+import { themeBootScript } from "#/lib/theme.ts";
+import { useAppliedTheme } from "#/lib/use-theme.ts";
 import appCss from "../styles.css?url";
 
 const queryClient = new QueryClient();
@@ -25,6 +27,7 @@ export const Route = createRootRoute({
 			{ title: "manplay" },
 		],
 		links: [{ rel: "stylesheet", href: appCss }],
+		scripts: [{ children: themeBootScript() }],
 	}),
 	shellComponent: RootDocument,
 });
@@ -32,9 +35,11 @@ export const Route = createRootRoute({
 function RootDocument({ children }: { children: ReactNode }) {
 	const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
 	const [saveSlot, setSaveSlot] = useState<HTMLElement | null>(null);
+	useAppliedTheme();
 	return (
-		// The page's colour before the stylesheet has loaded, so a launch does not flash white.
-		<html lang="en" className="dark" style={{ backgroundColor: "#0b0d10" }}>
+		// The theme class and colour are set by the head's boot script before the first paint, and
+		// kept by `useAppliedTheme`, so React leaves them alone.
+		<html lang="en" suppressHydrationWarning>
 			<head>
 				<HeadContent />
 			</head>

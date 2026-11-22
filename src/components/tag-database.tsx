@@ -589,7 +589,9 @@ function rowTint(checked: boolean, open: boolean): string {
 	if (checked) {
 		return "bg-primary/[0.09] shadow-[inset_2px_0_0_0_var(--primary)]";
 	}
-	return open ? "bg-white/[0.03] shadow-[inset_2px_0_0_0_var(--primary)]" : "hover:bg-white/[0.03]";
+	return open
+		? "bg-foreground/[0.03] shadow-[inset_2px_0_0_0_var(--primary)]"
+		: "hover:bg-foreground/[0.03]";
 }
 
 function Row({

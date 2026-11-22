@@ -20,7 +20,7 @@ export const PAGE_ART = "size-16 shrink-0 rounded-lg [@media(max-height:44rem)]:
 export const WELL =
 	"rounded-xl border border-hairline bg-well shadow-[0_1px_2px_0_oklch(0_0_0/30%)]";
 /** The frame round a well: a thin lip, a shade lighter than the page, that names the group. */
-export const FRAME = "rounded-2xl border border-hairline bg-white/[0.018] p-1";
+export const FRAME = "rounded-2xl border border-hairline bg-foreground/[0.018] p-1";
 
 /** A well whose direct children are rows split by hairlines. */
 export const WELL_ROWS = `${WELL} divide-y divide-hairline overflow-hidden`;
@@ -30,11 +30,11 @@ export const DIALOG_BACKDROP =
 	"absolute inset-0 animate-in bg-canvas/70 backdrop-blur-sm fade-in-0 duration-150 motion-reduce:animate-none";
 /** A dialog's own frame: a touch brighter edge than a page's, rising slightly as it opens. */
 export const DIALOG_FRAME =
-	"relative animate-in rounded-2xl border border-white/10 bg-background shadow-2xl fade-in-0 zoom-in-[0.97] duration-150 motion-reduce:animate-none";
+	"relative animate-in rounded-2xl border border-foreground/10 bg-background shadow-2xl fade-in-0 zoom-in-[0.97] duration-150 motion-reduce:animate-none";
 
 /**
  * A card set into the window's canvas: the page, and any pane opened beside it. A hairline a
  * touch brighter than the ones inside, with a faint highlight along its top edge.
  */
 export const CARD =
-	"rounded-xl border border-white/9 bg-background shadow-[0_1px_0_0_oklch(1_0_0/4%)_inset]";
+	"rounded-xl border border-foreground/9 bg-background shadow-[0_1px_0_0_oklch(1_0_0/4%)_inset]";

@@ -196,7 +196,7 @@ function Row({
 	const { Icon, tone, label } = STATUS[entry.status];
 	return (
 		<li className="group/row">
-			<div className="flex items-center gap-2 px-3 transition-colors hover:bg-white/[0.03]">
+			<div className="flex items-center gap-2 px-3 transition-colors hover:bg-foreground/[0.03]">
 				<button
 					type="button"
 					aria-expanded={open}

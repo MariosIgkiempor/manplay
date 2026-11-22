@@ -204,7 +204,7 @@ function Header({
 }) {
 	const [artFailed, setArtFailed] = useState(false);
 	const artVersion = useArtVersion();
-	// In the side panel the name goes in its top bar.
+	// In the side panel its top bar says what this is, and the name stays beside the art.
 	const inBar = useHasPanelBar();
 	const Icon = target.isDir ? Folder : FileIcon;
 	let what = target.isDir ? "Folder" : "Song";
@@ -215,7 +215,13 @@ function Header({
 	}
 	return (
 		<div className="border-hairline border-b px-5 pt-5 pb-5">
-			{inBar && <PanelBarTitle>{target.name}</PanelBarTitle>}
+			{inBar && (
+				<PanelBarTitle>
+					<span className="flex items-center gap-2 [&_svg]:size-4 [&_svg]:text-muted-foreground">
+						<TextCursorInput /> Edit metadata
+					</span>
+				</PanelBarTitle>
+			)}
 			<PageHeader
 				variant="plain"
 				art={
@@ -237,9 +243,11 @@ function Header({
 					</CoverPicker>
 				}
 				kind={
-					<>
-						<TextCursorInput /> Edit metadata
-					</>
+					inBar ? undefined : (
+						<>
+							<TextCursorInput /> Edit metadata
+						</>
+					)
 				}
 				badge={
 					onClose && (
@@ -254,11 +262,9 @@ function Header({
 					)
 				}
 				title={
-					inBar ? null : (
-						<h1 className="truncate font-semibold text-lg tracking-tight" title={target.name}>
-							{target.name}
-						</h1>
-					)
+					<h1 className="truncate font-semibold text-lg tracking-tight" title={target.name}>
+						{target.name}
+					</h1>
 				}
 				meta={<span>{what}</span>}
 			/>

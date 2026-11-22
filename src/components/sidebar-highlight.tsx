@@ -86,7 +86,7 @@ export function SidebarHighlight({ aside }: { aside: RefObject<HTMLElement | nul
 	return (
 		<div
 			aria-hidden="true"
-			className="-z-10 pointer-events-none absolute top-0 left-0 rounded-md bg-white/[0.07] shadow-[inset_0_0_0_1px_oklch(1_0_0/5%)] motion-reduce:transition-none"
+			className="-z-10 pointer-events-none absolute top-0 left-0 rounded-md bg-foreground/[0.07] shadow-[inset_0_0_0_1px_oklch(1_0_0/5%)] motion-reduce:transition-none"
 			style={{
 				width: box.width,
 				height: box.height,

@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppUpdate } from "#/components/app-update.tsx";
+import { AppearanceSettings } from "#/components/appearance-settings.tsx";
 import { FrameHeader } from "#/components/frame.tsx";
 import { LibrarySettings } from "#/components/library-settings.tsx";
 import { LookupSettings } from "#/components/lookup-settings.tsx";
@@ -18,6 +19,7 @@ function SettingsPage() {
 				<LibrarySettings />
 				<SharedLibrarySettings />
 				<LookupSettings />
+				<AppearanceSettings />
 				<AppUpdate />
 			</div>
 			<StatusBar>

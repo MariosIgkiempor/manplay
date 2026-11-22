@@ -1,7 +1,10 @@
 import { type PointerEvent, type RefObject, useCallback, useEffect, useRef } from "react";
 import type { TrackAnalysis } from "#/lib/api.ts";
 import type { Cue } from "#/lib/cues.ts";
+import { seekSeconds } from "#/lib/seek-position.ts";
 import { createSmoothClock, type SmoothClock, tick } from "#/lib/smooth-clock.ts";
+import type { ResolvedTheme } from "#/lib/theme.ts";
+import { useResolvedTheme } from "#/lib/use-theme.ts";
 import { cn } from "#/lib/utils.ts";
 import {
 	drawDetail,
@@ -107,6 +110,7 @@ function useFrames(frame: () => void, running: boolean) {
 /** A seek bar's bars, drawn once per song and size: the deck's colours, or quiet dim and lit. */
 interface SeekBars {
 	detail: readonly number[];
+	theme: ResolvedTheme;
 	canvas: HTMLCanvasElement;
 	lit: HTMLCanvasElement | null;
 }
@@ -115,22 +119,23 @@ function renderBars(
 	analysis: TrackAnalysis,
 	size: { w: number; h: number; scale: number },
 	quiet: boolean,
+	theme: ResolvedTheme,
 ): SeekBars {
+	const detail = analysis.detail;
 	if (!quiet) {
-		return { detail: analysis.detail, canvas: renderOverview(analysis, size.w, size.h), lit: null };
+		return { detail, theme, canvas: renderOverview(analysis, size.w, size.h), lit: null };
 	}
 	return {
-		detail: analysis.detail,
-		canvas: renderTimeline(analysis, size.w, size.h, size.scale, "#ffffff"),
-		lit: renderTimeline(analysis, size.w, size.h, size.scale, accent()),
+		detail,
+		theme,
+		canvas: renderTimeline(analysis, size.w, size.h, size.scale, cssColour("--foreground", "#fff")),
+		lit: renderTimeline(analysis, size.w, size.h, size.scale, cssColour("--primary", "#3fa6f0")),
 	};
 }
 
-/** The app's accent colour as the canvas can use it. */
-function accent(): string {
-	return (
-		getComputedStyle(document.documentElement).getPropertyValue("--primary").trim() || "#3fa6f0"
-	);
+/** One of the theme's colours as the canvas can use it. */
+function cssColour(variable: string, fallback: string): string {
+	return getComputedStyle(document.documentElement).getPropertyValue(variable).trim() || fallback;
 }
 
 export function WaveformSeek({
@@ -158,8 +163,9 @@ export function WaveformSeek({
 }) {
 	const length = duration > 0 ? duration : analysis.duration;
 	const { ref, paint } = useCanvas();
+	const theme = useResolvedTheme();
 	const clock = useRef<SmoothClock>(createSmoothClock(position(), performance.now()));
-	// The bars only change with the song or the size, so they are drawn once and copied.
+	// The bars only change with the song, the size or the theme, so they are drawn once and copied.
 	const bars = useRef<SeekBars | null>(null);
 	useFrames(() => {
 		const now = tick(clock.current, position(), performance.now(), running);
@@ -167,19 +173,24 @@ export function WaveformSeek({
 			const kept = bars.current;
 			const fresh =
 				kept?.detail === analysis.detail &&
+				kept.theme === theme &&
 				kept.canvas.width === size.w &&
 				kept.canvas.height === size.h
 					? kept
-					: renderBars(analysis, size, quiet);
+					: renderBars(analysis, size, quiet, theme);
 			bars.current = fresh;
 			const played = length > 0 ? now / length : 0;
 			if (fresh.lit) {
-				drawTimeline(ctx, size, fresh.canvas, fresh.lit, played);
+				drawTimeline(ctx, size, fresh.canvas, fresh.lit, played, cssColour("--foreground", "#fff"));
 			} else {
 				drawOverview(ctx, size, fresh.canvas, played, length, cues);
 			}
 		});
 	}, running);
+	// Pointer seeks are mapped here, edge to edge; the range input still handles the keyboard.
+	const seekTo = (e: PointerEvent<HTMLInputElement>) => {
+		onSeek(seekSeconds(e.clientX, e.currentTarget.getBoundingClientRect(), length));
+	};
 	return (
 		<div className={cn("relative h-8 flex-1", className)}>
 			<canvas ref={ref} className="pointer-events-none absolute inset-0 size-full" />
@@ -187,6 +198,16 @@ export function WaveformSeek({
 				type="range"
 				aria-label="Seek"
 				className="absolute inset-0 size-full cursor-pointer opacity-0"
+				onPointerDown={(e) => {
+					if (disabled || e.button !== 0) return;
+					e.preventDefault();
+					e.currentTarget.focus();
+					seekTo(e);
+					e.currentTarget.setPointerCapture(e.pointerId);
+				}}
+				onPointerMove={(e) => {
+					if (e.currentTarget.hasPointerCapture(e.pointerId)) seekTo(e);
+				}}
 				min={0}
 				max={length > 0 ? length : 0}
 				step={0.1}

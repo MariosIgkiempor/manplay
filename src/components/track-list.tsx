@@ -519,7 +519,7 @@ function TrackRow({
 					rowColumns(layout),
 					// Like a highlighted line in a code listing: chosen rows take a cue tint, and the
 					// playing song a cue rule down its left edge.
-					isSelected ? "bg-primary/[0.09]" : "hover:bg-white/[0.03]",
+					isSelected ? "bg-primary/[0.09]" : "hover:bg-foreground/[0.03]",
 					(isCurrent || isSelected) && "shadow-[inset_2px_0_0_0_var(--primary)]",
 				)}
 				onClick={(e) => selection?.click(track.id, e)}

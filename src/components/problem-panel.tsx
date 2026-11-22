@@ -48,7 +48,7 @@ export function ProblemsCleared({ title, children }: { title: string; children: 
 
 /** A file row's layout in a problem list; the row's own content goes inside. */
 export const PROBLEM_ROW =
-	"flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-white/[0.02]";
+	"flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-foreground/[0.02]";
 
 /** The three lines of a file row: its name, where it is, and what is wrong with it. */
 export function ProblemText({

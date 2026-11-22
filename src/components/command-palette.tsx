@@ -220,7 +220,7 @@ function ResultIcon({ target }: { target: Target }) {
 			return <AlbumArt trackId={target.coverTrackId} className="size-7 rounded" />;
 		case "artist":
 			return (
-				<span className="grid size-7 place-items-center rounded-full bg-white/[0.06] text-muted-foreground">
+				<span className="grid size-7 place-items-center rounded-full bg-foreground/[0.06] text-muted-foreground">
 					<Mic2 />
 				</span>
 			);
@@ -329,7 +329,7 @@ export function CommandPalette() {
 											key={item.id}
 											value={item.id}
 											label={item.label}
-											className="group flex cursor-default items-center gap-3 rounded-lg px-2 py-1.5 text-sm outline-none transition-colors data-highlighted:bg-white/[0.06] [&_svg]:size-4"
+											className="group flex cursor-default items-center gap-3 rounded-lg px-2 py-1.5 text-sm outline-none transition-colors data-highlighted:bg-foreground/[0.06] [&_svg]:size-4"
 										>
 											<ResultIcon target={item.value} />
 											<span className="min-w-0 flex-1">

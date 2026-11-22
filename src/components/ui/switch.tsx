@@ -23,7 +23,7 @@ export function Switch({
 			aria-label={label}
 			disabled={disabled}
 			className={cn(
-				"relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-white/10 bg-white/10 transition-colors",
+				"relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-foreground/10 bg-foreground/10 transition-colors",
 				"outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
 				"data-checked:border-primary/60 data-checked:bg-primary",
 				"data-disabled:cursor-default data-disabled:opacity-50",

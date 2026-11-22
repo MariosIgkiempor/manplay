@@ -8,7 +8,7 @@ import { cn } from "#/lib/utils.ts";
 export const GUTTER = 20;
 export const rowBase =
 	"flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-5 text-sm text-muted-foreground";
-export const rowIdle = "transition-colors hover:bg-white/[0.04] hover:text-foreground";
+export const rowIdle = "transition-colors hover:bg-foreground/[0.04] hover:text-foreground";
 /**
  * The open page. Its raised chip is drawn once for the whole sidebar (`SidebarHighlight`), so it
  * can glide between rows; `CURRENT_ROW` marks the row for that, for scrolling it into view, and
