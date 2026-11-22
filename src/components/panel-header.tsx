@@ -41,7 +41,7 @@ function Facts({ facts }: { facts: readonly Fact[] }) {
 	return (
 		<dl className="contents">
 			{facts.map((f) => (
-				<div key={f.title} className="flex items-center gap-1" title={f.title}>
+				<div key={f.title} className="flex items-center gap-1" data-hint={f.title}>
 					<dt className="sr-only">{f.title}</dt>
 					<span aria-hidden="true" className="[&_svg]:size-3.5">
 						{f.icon}
@@ -101,7 +101,7 @@ export function PanelHeader({
 						<Button
 							size="icon"
 							aria-label="Play"
-							title="Play"
+							data-hint="Play"
 							disabled={tracks.length === 0}
 							onClick={() => player.play(tracks, 0)}
 						>
@@ -136,7 +136,7 @@ export function PanelBar({
 	return (
 		<div className="flex h-12 shrink-0 items-center gap-1 border-hairline border-b px-3">
 			{canGoBack && (
-				<Button variant="ghost" size="icon-sm" aria-label="Back" title="Back" onClick={onBack}>
+				<Button variant="ghost" size="icon-sm" aria-label="Back" data-hint="Back" onClick={onBack}>
 					<ArrowLeft />
 				</Button>
 			)}

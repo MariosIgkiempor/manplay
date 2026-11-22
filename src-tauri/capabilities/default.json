@@ -8,9 +8,6 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-theme",
-    "dialog:allow-open",
-    "dialog:allow-save",
-    "dialog:allow-ask",
     "updater:default",
     "process:allow-restart"
   ]

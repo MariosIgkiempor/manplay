@@ -228,7 +228,7 @@ function ShortcutRow({
 						trigger={
 							<Popover.Trigger
 								aria-label={`Add a key for ${def.label}`}
-								title="Add a key"
+								data-hint="Add a key"
 								className="grid size-8 place-items-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-primary/10 data-[popup-open]:text-primary [&_svg]:size-3.5"
 							>
 								<Plus />

@@ -31,7 +31,7 @@ export function NameSplitPills({
 					<button
 						type="button"
 						onClick={() => onChange(applySplit(value, suggestion))}
-						title={`Split into ${suggestion.parts.join(", ")}`}
+						data-hint={`Split into ${suggestion.parts.join(", ")}`}
 						className="inline-flex items-center gap-1 rounded-full py-0.5 pr-1 pl-2 hover:bg-primary/10"
 					>
 						<Scissors className="size-3" />

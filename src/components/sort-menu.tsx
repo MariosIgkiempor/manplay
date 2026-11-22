@@ -62,7 +62,7 @@ export function SortMenu<K extends string>({
 		<Menu.Root>
 			<Menu.Trigger
 				{...(segment ? { "data-slot": "button", "data-variant": "outline" } : {})}
-				title={`Sorted by ${current.label.toLowerCase()}, ${direction.toLowerCase()}`}
+				data-hint={`Sorted by ${current.label.toLowerCase()}, ${direction.toLowerCase()}`}
 				className={cn(
 					"flex h-7 items-center gap-1.5 rounded-md px-2 text-muted-foreground text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-muted data-[popup-open]:text-foreground [&_svg]:size-3.5",
 					className,

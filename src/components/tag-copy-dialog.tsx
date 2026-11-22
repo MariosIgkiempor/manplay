@@ -80,7 +80,7 @@ export function TagCopyDialog({
 								className="size-4 accent-primary"
 							/>
 							<span className="w-28 shrink-0 text-muted-foreground">{f.label}</span>
-							<span className="min-w-0 flex-1 truncate" title={fields[f.id]?.value ?? ""}>
+							<span className="min-w-0 flex-1 truncate" data-hint={fields[f.id]?.value ?? ""}>
 								{fields[f.id]?.value}
 							</span>
 						</label>

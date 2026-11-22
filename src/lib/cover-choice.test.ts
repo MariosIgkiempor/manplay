@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { CoverOption } from "#/lib/api.ts";
-import { type DownloadStage, downloadStage, optionCaption } from "#/lib/cover-choice.ts";
+import {
+	coverTypeOf,
+	type DownloadStage,
+	downloadStage,
+	optionCaption,
+} from "#/lib/cover-choice.ts";
 
 const option = (year: number | null, country: string | null, format: string | null) =>
 	({ release: "x", title: "Homework", artist: "Daft Punk", year, country, format }) as CoverOption;
@@ -42,5 +47,19 @@ describe("downloadStage", () => {
 		["a picture is showing", {}, "ready"],
 	])("%s", (_what, change, expected) => {
 		expect(downloadStage({ ...settled, ...change })).toBe(expected);
+	});
+});
+
+describe("coverTypeOf", () => {
+	it.each([
+		["/Users/dj/Pictures/cover.jpg", "image/jpeg"],
+		["C:\\Covers\\cover.JPEG", "image/jpeg"],
+		["cover.png", "image/png"],
+	])("reads %j as %j", (path, type) => {
+		expect(coverTypeOf(path)).toBe(type);
+	});
+
+	it.each(["cover.gif", "cover.webp", "cover", "song.mp3"])("refuses %j", (path) => {
+		expect(coverTypeOf(path)).toBeNull();
 	});
 });

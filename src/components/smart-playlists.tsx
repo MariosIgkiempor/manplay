@@ -25,6 +25,7 @@ import { ErrorLine } from "#/components/page.tsx";
 import { Picker, type PickerOption } from "#/components/picker.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { DateField } from "#/components/ui/date-field.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import {
 	type AddedRule,
@@ -127,7 +128,7 @@ function PickRow({
 				variant="ghost"
 				onClick={onOpen}
 				aria-label={`Open ${playlist.name}`}
-				title="Open to edit its rules"
+				data-hint="Open to edit its rules"
 			>
 				<ArrowUpRight />
 			</Button>
@@ -229,7 +230,7 @@ function TagPath({ name }: { name: string }) {
 		return (
 			<span
 				className="min-w-0 truncate text-muted-foreground italic"
-				title="Not a tag on this device"
+				data-hint="Not a tag on this device"
 			>
 				Unknown tag
 			</span>
@@ -508,7 +509,7 @@ function FilterRow({
 				{DEVICE_ONLY_FILTERS[kind] && (
 					<span
 						className="rounded border px-1.5 py-px text-muted-foreground text-xs"
-						title={DEVICE_ONLY_NOTE}
+						data-hint={DEVICE_ONLY_NOTE}
 					>
 						This device only
 					</span>
@@ -618,13 +619,12 @@ function AddedControl({
 				</>
 			)}
 			{(value?.kind === "after" || value?.kind === "before") && (
-				<Input
-					type="date"
-					aria-label="Date"
-					className="w-auto"
+				<DateField
+					label="Date"
+					clearable={false}
 					value={dateInput(value.date)}
-					onChange={(e) => {
-						const date = fromDateInput(e.target.value);
+					onChange={(text) => {
+						const date = fromDateInput(text);
 						if (date !== null) {
 							onChange({ ...value, date });
 						}
@@ -692,7 +692,7 @@ function RuleWord({
 	children: ReactNode;
 }) {
 	return (
-		<span className={cn("whitespace-nowrap font-medium", className)} title={title}>
+		<span className={cn("whitespace-nowrap font-medium", className)} data-hint={title}>
 			<Icon className="-mt-0.5 mr-1 inline size-3.5" aria-hidden="true" />
 			{children}
 		</span>

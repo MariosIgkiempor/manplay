@@ -82,7 +82,7 @@ function LinkButton({
 	return (
 		<button
 			type="button"
-			title={title}
+			data-hint={title}
 			className="max-w-full truncate text-left hover:text-foreground hover:underline"
 			onClick={(e) => {
 				e.stopPropagation();
@@ -221,7 +221,7 @@ function SongCell({
 		title = (
 			<button
 				type="button"
-				title={`Open ${track.title}`}
+				data-hint={`Open ${track.title}`}
 				className="max-w-full truncate text-left hover:underline"
 				onClick={(e) => {
 					e.stopPropagation();
@@ -243,7 +243,7 @@ function SongCell({
 			<div className="min-w-0 flex-1 leading-tight">
 				<div
 					className={cn("truncate text-sm", (isCurrent || isOpen) && "font-medium text-primary")}
-					title={track.title}
+					data-hint={track.title}
 				>
 					{title}
 				</div>
@@ -264,7 +264,7 @@ function SongCell({
 					</div>
 				)}
 				<div className="mt-0.5 flex h-5 items-center gap-3 text-muted-foreground text-xs tabular-nums">
-					<span className="flex items-center gap-1" title="Length">
+					<span className="flex items-center gap-1" data-hint="Length">
 						<Clock aria-hidden="true" className="size-3 opacity-60" />
 						{track.durationMs === null ? "–" : clock(track.durationMs / 1000)}
 					</span>
@@ -326,7 +326,10 @@ function FieldCell({
 	);
 	if (!onEdit) {
 		return (
-			<span title={hint} className={cn("flex items-center gap-1", value === "" && "opacity-50")}>
+			<span
+				data-hint={hint}
+				className={cn("flex items-center gap-1", value === "" && "opacity-50")}
+			>
 				{icon}
 				{value || "–"}
 			</span>

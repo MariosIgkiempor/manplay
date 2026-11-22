@@ -70,7 +70,7 @@ function NavLink({
 	return (
 		<Link
 			{...props}
-			title={collapsed ? label : undefined}
+			data-hint={collapsed ? label : undefined}
 			aria-label={collapsed ? label : undefined}
 			className={collapsed ? railLinkClass : linkClass}
 			activeOptions={{ exact: true, includeSearch: false }}
@@ -219,7 +219,7 @@ export function Sidebar() {
 			type="button"
 			onClick={toggle}
 			aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-			title={toggleTitle}
+			data-hint={toggleTitle}
 			className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-4"
 		>
 			<ToggleIcon />

@@ -54,7 +54,7 @@ export function ReviewViewMenu({
 							checked={showUnchanged}
 							onCheckedChange={onShowUnchanged}
 							disabled={view !== "folders"}
-							title={view === "folders" ? undefined : "Folders view only"}
+							data-hint={view === "folders" ? undefined : "Folders view only"}
 							className={item}
 						>
 							<span className="flex-1">Show unchanged folders</span>

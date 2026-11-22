@@ -267,7 +267,7 @@ function ThereRow({
 						"min-w-0 flex-1 break-words rounded-sm outline-1 outline-border outline-dashed outline-offset-2",
 						choice === "delete" && "text-muted-foreground line-through",
 					)}
-					title="Only on the destination"
+					data-hint="Only on the destination"
 				>
 					{nameOf(item)}
 				</span>

@@ -371,7 +371,7 @@ function Chip({
 			// Focusable so Alt+←/→ can reorder without a mouse.
 			// biome-ignore lint/a11y/noNoninteractiveTabindex: reorderable chip
 			tabIndex={0}
-			title="Drag, or press Alt and an arrow key, to reorder"
+			data-hint="Drag, or press Alt and an arrow key, to reorder"
 			onDragStart={(e) => {
 				e.dataTransfer.effectAllowed = "move";
 				e.dataTransfer.setData("text/plain", name);

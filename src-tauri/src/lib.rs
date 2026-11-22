@@ -9,6 +9,7 @@ mod audit;
 mod convert;
 mod db;
 mod error;
+mod file_picker;
 mod fsops;
 mod gemini;
 mod import;
@@ -3785,6 +3786,60 @@ async fn refresh_after_fs_change(state: &AppState, root: PathBuf) {
     }
 }
 
+/// Runs a file picker read off the main thread: a slow disk or network share must not freeze
+/// the window.
+async fn picker_task<T: Send + 'static>(
+    task: impl FnOnce() -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+/// The text on the clipboard, for Paste in the app's own text-field menu; empty when it holds
+/// none. Read here because the webview asks the user with a system bubble before it reads.
+#[tauri::command]
+async fn clipboard_read_text(app: AppHandle) -> Result<String, Error> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    Ok(app.clipboard().read_text().unwrap_or_default())
+}
+
+/// The folders the file picker's sidebar offers: the user's own, then every disk.
+#[tauri::command]
+async fn picker_places(app: AppHandle) -> Result<Vec<file_picker::Place>, Error> {
+    use file_picker::PlaceKind;
+    let paths = app.path();
+    let personal = [
+        (PlaceKind::Home, paths.home_dir()),
+        (PlaceKind::Desktop, paths.desktop_dir()),
+        (PlaceKind::Documents, paths.document_dir()),
+        (PlaceKind::Downloads, paths.download_dir()),
+        (PlaceKind::Music, paths.audio_dir()),
+    ]
+    .into_iter()
+    .filter_map(|(kind, path)| path.ok().map(|path| (kind, path)))
+    .collect();
+    picker_task(move || Ok(file_picker::places(personal))).await
+}
+
+#[tauri::command]
+async fn picker_list(path: PathBuf) -> Result<file_picker::Listing, Error> {
+    picker_task(move || file_picker::list(&path)).await
+}
+
+#[tauri::command]
+async fn picker_make_dir(parent: PathBuf, name: String) -> Result<PathBuf, Error> {
+    picker_task(move || file_picker::make_dir(&parent, &name)).await
+}
+
+/// The bytes of a picture picked for a cover, as the response body.
+#[tauri::command]
+async fn picker_read_image(path: PathBuf) -> Result<tauri::ipc::Response, Error> {
+    picker_task(move || file_picker::read_image(&path))
+        .await
+        .map(tauri::ipc::Response::new)
+}
+
 #[tauri::command]
 async fn fs_make_dir(
     state: State<'_, AppState>,
@@ -5097,9 +5152,9 @@ pub fn run() {
                 launch_mark("the page loaded");
             }
         })
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .register_asynchronous_uri_scheme_protocol("art", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let target = ArtTarget::parse(request.uri().path());
@@ -5308,6 +5363,11 @@ pub fn run() {
             smart_playlist_preview,
             usb_export_preview,
             rekordbox_set_selection,
+            clipboard_read_text,
+            picker_places,
+            picker_list,
+            picker_make_dir,
+            picker_read_image,
             fs_list,
             fs_dir_sizes,
             fs_reveal,

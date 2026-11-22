@@ -367,7 +367,7 @@ function Editor({
 				{track.edited.grid && (
 					<span
 						className="flex shrink-0 items-center gap-1.5 text-primary"
-						title="Re-analysis keeps this grid unless the BPM and key drawer says to replace edits"
+						data-hint="Re-analysis keeps this grid unless the BPM and key drawer says to replace edits"
 					>
 						<PencilLine className="size-3.5" /> Grid edited by you
 					</span>
@@ -520,7 +520,7 @@ function DeckButton({
 		<button
 			type="button"
 			aria-label={label}
-			title={label}
+			data-hint={label}
 			onClick={onClick}
 			className={cn(
 				"grid size-8 place-items-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-4",
@@ -680,7 +680,7 @@ function ShortcutHelp({
 		<Popover.Root open={open} onOpenChange={onOpenChange}>
 			<Popover.Trigger
 				aria-label="Keyboard shortcuts"
-				title={title}
+				data-hint={title}
 				className="grid size-7 place-items-center rounded-md text-neutral-400 outline-none transition-colors hover:bg-white/10 hover:text-neutral-100 focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-white/10 data-[popup-open]:text-neutral-50 [&_svg]:size-4"
 			>
 				<Keyboard />
@@ -753,7 +753,7 @@ function DownbeatButton({ onDownbeat, children }: { onDownbeat: () => void; chil
 		<div className="flex items-center rounded-md bg-white/5">
 			<button
 				type="button"
-				title={title}
+				data-hint={title}
 				onClick={onDownbeat}
 				className={cn(half, "rounded-l-md px-2")}
 			>
@@ -762,7 +762,7 @@ function DownbeatButton({ onDownbeat, children }: { onDownbeat: () => void; chil
 			<Popover.Root>
 				<Popover.Trigger
 					aria-label="Beat grid settings"
-					title="Beat grid settings"
+					data-hint="Beat grid settings"
 					className={cn(
 						half,
 						"rounded-r-md border-white/10 border-l px-1.5 data-[popup-open]:bg-white/10 data-[popup-open]:text-neutral-50 [&_svg]:size-3",
@@ -836,7 +836,7 @@ function DeckControls({
 					type="button"
 					onClick={onCue}
 					aria-pressed={startAt !== null}
-					title={
+					data-hint={
 						startAt === null
 							? `The song starts at its first beat. Click to start it at the playhead${cueKey}.`
 							: `The song starts at ${stamp(startAt)}. Click to start it at its first beat again.`
@@ -871,7 +871,7 @@ function DeckControls({
 				<NudgeButtons onNudge={onNudge} />
 				<div
 					className={cn("ml-auto rounded-md", armed && "[&_button]:text-primary")}
-					title={
+					data-hint={
 						armed
 							? keyLabel("⌘Z undoes grid edits until you click elsewhere or press Esc.")
 							: undefined
@@ -893,7 +893,7 @@ function NudgeButtons({ onNudge }: { onNudge: (seconds: number) => void }) {
 			<button
 				type="button"
 				aria-label="Move the grid earlier"
-				title={keyLabel("Move the grid 10 ms earlier (←; ⌥ for 1 ms)")}
+				data-hint={keyLabel("Move the grid 10 ms earlier (←; ⌥ for 1 ms)")}
 				onClick={(e) => onNudge(e.altKey ? -FINE : -COARSE)}
 				className={cn(half, "rounded-l-md")}
 			>
@@ -902,7 +902,7 @@ function NudgeButtons({ onNudge }: { onNudge: (seconds: number) => void }) {
 			<button
 				type="button"
 				aria-label="Move the grid later"
-				title={keyLabel("Move the grid 10 ms later (→; ⌥ for 1 ms)")}
+				data-hint={keyLabel("Move the grid 10 ms later (→; ⌥ for 1 ms)")}
 				onClick={(e) => onNudge(e.altKey ? FINE : COARSE)}
 				className={cn(half, "rounded-r-md border-white/10 border-l")}
 			>
@@ -936,7 +936,7 @@ function WaveformCorner({
 				type="button"
 				aria-pressed={snapOn}
 				aria-label="Snap to beat"
-				title={`Snap to beat: ${snapOn ? "on" : "off"}${snapKey}`}
+				data-hint={`Snap to beat: ${snapOn ? "on" : "off"}${snapKey}`}
 				onClick={() => onSnap(!snapOn)}
 				className={deckToggle(snapOn)}
 			>
@@ -946,7 +946,7 @@ function WaveformCorner({
 				type="button"
 				aria-pressed={metronomeOn}
 				aria-label="Metronome"
-				title={
+				data-hint={
 					metronomeOn
 						? `Metronome: on. Clicks on every beat of the grid while the song plays${metronomeKey}.`
 						: `Metronome: off. Click to hear the grid's beats while the song plays${metronomeKey}.`
@@ -968,7 +968,7 @@ function ZoomPresets({ zoom, onZoom }: { zoom: number; onZoom: (z: number) => vo
 		<fieldset
 			className="flex"
 			aria-label="Zoom"
-			title={`Showing ${zoomLabel(zoom)}. Pinch the waveform or press + and − to zoom, 0 to reset.`}
+			data-hint={`Showing ${zoomLabel(zoom)}. Pinch the waveform or press + and − to zoom, 0 to reset.`}
 		>
 			{!ZOOM_PRESETS.some((z) => Math.abs(z - zoom) < 1e-6) && (
 				<span className="rounded bg-white/15 px-1.5 py-0.5 text-[11px] text-neutral-50 tabular-nums">
@@ -980,7 +980,7 @@ function ZoomPresets({ zoom, onZoom }: { zoom: number; onZoom: (z: number) => vo
 					key={z}
 					type="button"
 					aria-pressed={Math.abs(z - zoom) < 1e-6}
-					title={`Show ${z * 2} seconds`}
+					data-hint={`Show ${z * 2} seconds`}
 					onClick={() => onZoom(z)}
 					className={cn(
 						"rounded px-1.5 py-0.5 text-[11px] tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
@@ -1029,7 +1029,7 @@ function Clock({
 	return (
 		<div className="flex min-w-0 items-baseline gap-3 tabular-nums">
 			<span className="font-medium text-lg text-neutral-50 tracking-tight">{stamp(time)}</span>
-			<span className="truncate text-neutral-400 text-xs" title="Bar and beat by the grid">
+			<span className="truncate text-neutral-400 text-xs" data-hint="Bar and beat by the grid">
 				{at ? `Bar ${at.bar}, beat ${at.beat}` : "Before the grid"}
 			</span>
 		</div>
@@ -1055,7 +1055,7 @@ function BpmField({ grid, onBpm }: { grid: Grid; onBpm: (bpm: number) => void })
 				inputMode="decimal"
 				aria-label="BPM"
 				placeholder="–"
-				title="Tempo of the grid. Type a new one and press Enter."
+				data-hint="Tempo of the grid. Type a new one and press Enter."
 				className="h-7 w-14 bg-transparent text-right font-medium text-neutral-50 text-sm tabular-nums outline-none placeholder:text-neutral-500"
 				onChange={(e) => setText(e.target.value)}
 				onBlur={commit}
@@ -1095,7 +1095,7 @@ function TapButton({
 			type="button"
 			onClick={onTap}
 			aria-pressed={tapping}
-			title={`Tap along to the beat${tapKey}. The grid follows from the fourth tap${whole ? ", rounded to a whole BPM" : ""}; stop for two seconds to start over.`}
+			data-hint={`Tap along to the beat${tapKey}. The grid follows from the fourth tap${whole ? ", rounded to a whole BPM" : ""}; stop for two seconds to start over.`}
 			className={cn(
 				"flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-xs tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
 				tapping

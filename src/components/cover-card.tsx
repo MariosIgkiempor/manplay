@@ -9,10 +9,19 @@ import {
 	X,
 } from "lucide-react";
 import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { lookupCoverUrl, pathArtUrl, type ReleaseId, type TagPaths } from "#/lib/api.ts";
+import {
+	lookupCoverUrl,
+	pathArtUrl,
+	pickCoverFile,
+	pickerReadImage,
+	type ReleaseId,
+	type TagPaths,
+} from "#/lib/api.ts";
 import { bumpArt, useArtVersion } from "#/lib/art-version.ts";
 import {
+	COVER_EXTENSIONS,
 	COVER_TYPES,
+	coverTypeOf,
 	type DownloadStage,
 	downloadStage,
 	optionCaption,
@@ -62,7 +71,6 @@ export function CoverCard({
 	const [problem, setProblem] = useState<string | null>(null);
 	const picked = usePickedCover(setProblem);
 	const [dragging, setDragging] = useState(false);
-	const fileInput = useRef<HTMLInputElement>(null);
 	const busy = setFile.isPending || setRelease.isPending;
 
 	const finish = (report: { failed: readonly { error: string }[] }) => {
@@ -79,6 +87,18 @@ export function CoverCard({
 		if (file && !busy) {
 			found.cancel();
 			void picked.pick(file);
+		}
+	};
+	const upload = async () => {
+		const path = await pickCoverFile(COVER_EXTENSIONS);
+		if (path === null) {
+			return;
+		}
+		try {
+			const image = await pickerReadImage(path);
+			applyFile(new Blob([image], { type: coverTypeOf(path) ?? "" }));
+		} catch (e) {
+			fail(e);
 		}
 	};
 	const confirm = () => {
@@ -145,7 +165,7 @@ export function CoverCard({
 					key={inView.release}
 					src={lookupCoverUrl(inView.release)}
 					alt={`Cover found online: ${optionCaption(inView)}`}
-					title={optionCaption(inView)}
+					data-hint={optionCaption(inView)}
 					draggable={false}
 					onLoad={() => found.arrived(inView.release)}
 					onError={() => found.missing(inView.release)}
@@ -172,8 +192,8 @@ export function CoverCard({
 							type="button"
 							className={cn(ON_PHOTO, GLASS, "disabled:opacity-60")}
 							disabled={busy}
-							title="Choose a picture from this computer. You can also drop or paste one."
-							onClick={() => fileInput.current?.click()}
+							data-hint="Choose a picture from this computer. You can also drop or paste one."
+							onClick={() => void upload()}
 						>
 							<Upload />
 							{/* Once Download has something to say, Upload gives it the room. */}
@@ -188,16 +208,6 @@ export function CoverCard({
 					</>
 				)}
 			</div>
-			<input
-				ref={fileInput}
-				type="file"
-				accept={COVER_TYPES.join(",")}
-				className="hidden"
-				onChange={(e) => {
-					applyFile(e.target.files?.[0]);
-					e.target.value = "";
-				}}
-			/>
 		</div>
 	);
 }
@@ -323,7 +333,7 @@ function DownloadButton({
 			className={cn(ON_PHOTO, STAGE_COLOUR[stage], "min-w-0 disabled:opacity-60")}
 			disabled={disabled || working}
 			aria-busy={working}
-			title={stage === "failed" && error ? `${error} Press to try again.` : STAGE_HINT[stage]}
+			data-hint={stage === "failed" && error ? `${error} Press to try again.` : STAGE_HINT[stage]}
 			onClick={onPress}
 		>
 			{working ? <LoaderCircle className="animate-spin" /> : <Download />}
@@ -361,7 +371,7 @@ function Decide({
 					className={round}
 					disabled={disabled}
 					aria-label="Previous cover"
-					title={`Cover ${position + 1} of ${count}`}
+					data-hint={`Cover ${position + 1} of ${count}`}
 					onClick={() => onStep(-1)}
 				>
 					<ChevronLeft />
@@ -392,7 +402,7 @@ function Decide({
 					className={round}
 					disabled={disabled}
 					aria-label="Next cover"
-					title={`Cover ${position + 1} of ${count}`}
+					data-hint={`Cover ${position + 1} of ${count}`}
 					onClick={() => onStep(1)}
 				>
 					<ChevronRight />

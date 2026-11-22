@@ -65,11 +65,11 @@ export function ProblemText({
 }) {
 	return (
 		<div className="min-w-0 flex-1 space-y-0.5">
-			<div className="truncate font-medium text-sm" title={hint}>
+			<div className="truncate font-medium text-sm" data-hint={hint}>
 				{name}
 			</div>
 			{where !== undefined && (
-				<div className="truncate text-muted-foreground text-xs" title={hint}>
+				<div className="truncate text-muted-foreground text-xs" data-hint={hint}>
 					{where}
 				</div>
 			)}

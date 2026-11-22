@@ -110,7 +110,7 @@ export function ScopeSwitch({
 						type="button"
 						aria-pressed={on}
 						aria-label={compact ? o.hint : undefined}
-						title={o.hint}
+						data-hint={o.hint}
 						disabled={disabled}
 						// Keeps focus where it was, so the new-item row's name field stays open.
 						onMouseDown={(e) => e.preventDefault()}

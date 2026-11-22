@@ -21,7 +21,7 @@ export function PropertyRow({
 }) {
 	return (
 		<div
-			title={title}
+			data-hint={title}
 			className={cn(
 				"group/field grid min-h-8 grid-cols-[7rem_minmax(0,1fr)_1.5rem] items-center gap-2",
 				className,
@@ -61,7 +61,7 @@ export function GroupButton({
 	return (
 		<button
 			type="button"
-			title={title}
+			data-hint={title}
 			aria-label={label}
 			aria-pressed={active ? true : undefined}
 			disabled={disabled}

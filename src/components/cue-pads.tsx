@@ -71,7 +71,7 @@ function Pad({
 			<button
 				type="button"
 				onClick={() => actions.onSet(slot)}
-				title={`Set hot cue ${letter} at the playhead${padKey}`}
+				data-hint={`Set hot cue ${letter} at the playhead${padKey}`}
 				className="group flex h-8 min-w-0 items-center gap-2 rounded-md border border-foreground/15 border-dashed px-2 text-left outline-none transition-colors hover:border-foreground/40 hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-ring/60"
 			>
 				<span className="font-semibold text-muted-foreground text-xs">{letter}</span>
@@ -86,7 +86,7 @@ function Pad({
 			<button
 				type="button"
 				onClick={() => actions.onSet(slot)}
-				title={`Set hot cue ${letter} at the playhead${padKey}`}
+				data-hint={`Set hot cue ${letter} at the playhead${padKey}`}
 				className="group flex h-16 flex-col justify-between rounded-md border border-foreground/15 border-dashed p-2 text-left outline-none transition-colors hover:border-foreground/40 hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-ring/60"
 			>
 				<span className="font-semibold text-muted-foreground text-sm">{letter}</span>
@@ -138,7 +138,7 @@ function SetPad({
 				<button
 					type="button"
 					onClick={() => actions.onJump(cue.start)}
-					title={`Jump to hot cue ${letter}${padKey}`}
+					data-hint={`Jump to hot cue ${letter}${padKey}`}
 					className="absolute inset-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 					aria-label={`Jump to hot cue ${letter}`}
 				/>

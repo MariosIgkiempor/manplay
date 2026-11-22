@@ -63,7 +63,13 @@ export function TagLookupStrip({ found }: { found: TagSuggestions }) {
 
 function Close({ found, label }: { found: TagSuggestions; label: string }) {
 	return (
-		<Button variant="ghost" size="icon-xs" aria-label={label} title={label} onClick={found.dismiss}>
+		<Button
+			variant="ghost"
+			size="icon-xs"
+			aria-label={label}
+			data-hint={label}
+			onClick={found.dismiss}
+		>
 			<X />
 		</Button>
 	);
@@ -132,7 +138,7 @@ function Results({ found }: { found: TagSuggestions }) {
 						<Button
 							variant="outline"
 							size="xs"
-							title="Only the tags and covers these songs do not have yet"
+							data-hint="Only the tags and covers these songs do not have yet"
 							onClick={found.takeFills}
 							disabled={found.writing}
 						>
@@ -145,7 +151,7 @@ function Results({ found }: { found: TagSuggestions }) {
 					size="icon-xs"
 					className="ml-auto"
 					aria-label="Search again"
-					title="Search again"
+					data-hint="Search again"
 					onClick={found.searchAgain}
 				>
 					<RefreshCw />
@@ -246,7 +252,7 @@ function Unmatched({ found }: { found: TagSuggestions }) {
 			<ul className="mt-1.5 space-y-1">
 				{unmatched.map(({ path, reason }) => (
 					<li key={path} className="flex items-baseline gap-2">
-						<span className="min-w-0 flex-1 truncate" title={path}>
+						<span className="min-w-0 flex-1 truncate" data-hint={path}>
 							{fileName(path)}
 						</span>
 						<span className="shrink-0 text-muted-foreground">{reason}</span>
@@ -290,7 +296,7 @@ export function SuggestionPill({
 			disabled={disabled}
 			onClick={onTake}
 			aria-label={`Use ${suggestion.value} for ${label}`}
-			title={olds.length > 0 ? `Found online. Replaces ${olds.join(", ")}` : "Found online"}
+			data-hint={olds.length > 0 ? `Found online. Replaces ${olds.join(", ")}` : "Found online"}
 			className={cn(GHOST, suggestionTone(suggestion.fills))}
 		>
 			<span className="truncate">{suggestion.value}</span>
@@ -320,7 +326,7 @@ function ApartChip({
 			type="button"
 			disabled={disabled}
 			onClick={onTake}
-			title={values}
+			data-hint={values}
 			aria-label={`Use the found ${labelOf(suggestion.field)} for ${count(suggestion.changes.length, "song", "songs")}`}
 			className={cn(GHOST, suggestionTone(suggestion.fills))}
 		>
@@ -395,7 +401,7 @@ function Confidence({ candidate }: { candidate: LookupCandidate }) {
 				"shrink-0 rounded-md px-1.5 py-0.5 text-xs tabular-nums",
 				candidate.likely ? "bg-success/15 text-success" : "bg-warning/15 text-warning",
 			)}
-			title={
+			data-hint={
 				candidate.likely
 					? "Title, artist and length agree"
 					: "Not sure this is the same recording: check before using"
@@ -436,7 +442,7 @@ function MatchChoice({ song, found }: { song: MatchedSong; found: TagSuggestions
 		<Menu.Root>
 			<Menu.Trigger
 				aria-label={`Match: ${releaseOf(current)}`}
-				title="Choose another match"
+				data-hint="Choose another match"
 				className="flex h-6 min-w-0 items-center gap-1.5 rounded-md border border-input bg-transparent pr-1.5 pl-2 text-xs outline-none transition-colors hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-[popup-open]:bg-muted/50 motion-reduce:transition-none dark:bg-input/30"
 			>
 				<span className="min-w-0 flex-1 truncate text-left">{releaseOf(current)}</span>

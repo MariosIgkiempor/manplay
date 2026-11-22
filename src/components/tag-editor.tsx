@@ -17,7 +17,9 @@ import { SaveState } from "#/components/save-state.tsx";
 import { type ComboOption, TagCombobox } from "#/components/tag-combobox.tsx";
 import { SuggestionPill, TagLookupStrip } from "#/components/tag-lookup-strip.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Input } from "#/components/ui/input.tsx";
+import { inputClassName } from "#/components/ui/input.tsx";
+import { Select, type SelectOption } from "#/components/ui/select.tsx";
+import { SuggestInput } from "#/components/ui/suggest-input.tsx";
 import { PanelBarTitle, useHasPanelBar } from "#/context/panel-bar.tsx";
 import { pathArtUrl, type TagValue, type TagView } from "#/lib/api.ts";
 import { useArtVersion } from "#/lib/art-version.ts";
@@ -263,7 +265,7 @@ function Header({
 					)
 				}
 				title={
-					<h1 className="truncate font-semibold text-lg tracking-tight" title={target.name}>
+					<h1 className="truncate font-semibold text-lg tracking-tight" data-hint={target.name}>
 						{target.name}
 					</h1>
 				}
@@ -422,7 +424,7 @@ function FieldInput(props: FieldProps) {
 				<>
 					<label
 						htmlFor={id}
-						title={field.hint ?? field.label}
+						data-hint={field.hint ?? field.label}
 						className={cn(
 							"truncate text-xs",
 							touched ? "font-medium text-primary" : "text-muted-foreground",
@@ -435,7 +437,7 @@ function FieldInput(props: FieldProps) {
 							type="button"
 							onClick={() => onChange(fill.value)}
 							aria-label={`Copy ${field.label} from ${fill.from}`}
-							title={`Copy from ${fill.from}: ${fill.value}`}
+							data-hint={`Copy from ${fill.from}: ${fill.value}`}
 							className="shrink-0 rounded-md p-0.5 text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/field:opacity-100"
 						>
 							<TextCursorInput className="size-3" />
@@ -449,7 +451,7 @@ function FieldInput(props: FieldProps) {
 						type="button"
 						onClick={onRevert}
 						aria-label={`Undo change to ${field.label}`}
-						title="Undo change"
+						data-hint="Undo change"
 						className="flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
 					>
 						<Undo2 className="size-3.5" />
@@ -480,20 +482,22 @@ function FlagSelect({ id, shared, draft, onChange, onRevert }: FieldProps & { id
 	} else if (mixed) {
 		value = "mixed";
 	}
+	const options: SelectOption[] = [
+		...(mixed && !touched ? [{ value: "mixed", label: "Differs between songs" }] : []),
+		{ value: "", label: "No" },
+		{ value: "1", label: "Yes" },
+	];
 	return (
-		<select
+		<Select
 			id={id}
 			value={value}
-			onChange={(e) => (e.target.value === "mixed" ? onRevert() : onChange(e.target.value))}
+			options={options}
+			onChange={(next) => (next === "mixed" ? onRevert() : onChange(next))}
 			className={cn(
-				"h-7 w-full rounded-lg border px-1.5 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+				"h-7 w-full px-1.5",
 				touched ? "border-primary/60 bg-primary/5 dark:bg-primary/10" : QUIET,
 			)}
-		>
-			{mixed && !touched && <option value="mixed">Differs between songs</option>}
-			<option value="">No</option>
-			<option value="1">Yes</option>
-		</select>
+		/>
 	);
 }
 
@@ -542,36 +546,29 @@ function PickControl({ id, field, shared, draft, onChange }: FieldProps & { id: 
 }
 
 function PlainControl({ id, field, shared, draft, onChange }: FieldProps & { id: string }) {
-	const listId = `${id}-list`;
 	const touched = draft !== undefined;
 	const hasValue = Boolean(shared?.mixed || shared?.value);
 	return (
 		<div className="relative">
-			<Input
+			<SuggestInput
 				id={id}
 				value={touched ? draft : (shared?.value ?? "")}
 				placeholder={placeholderFor(shared, touched)}
-				list={field.suggestions ? listId : undefined}
+				suggestions={field.suggestions ?? []}
 				inputMode={field.kind === "number" ? "numeric" : undefined}
-				onChange={(e) => onChange(e.target.value)}
+				onValueChange={onChange}
 				className={cn(
+					inputClassName,
 					"h-7 px-1.5",
 					touched ? "border-primary/60 bg-primary/5 dark:bg-primary/10" : QUIET,
 					hasValue && !touched && "pr-8",
 				)}
 			/>
-			{field.suggestions && (
-				<datalist id={listId}>
-					{field.suggestions.map((s) => (
-						<option key={s} value={s} />
-					))}
-				</datalist>
-			)}
 			{hasValue && !touched && (
 				<button
 					type="button"
 					aria-label={`Clear ${field.label}`}
-					title="Clear this field"
+					data-hint="Clear this field"
 					onClick={() => onChange("")}
 					className="absolute inset-y-0 right-1 my-auto flex size-5 items-center justify-center rounded-md text-muted-foreground/70 opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/field:opacity-100"
 				>

@@ -66,7 +66,7 @@ export function SongPanel({
 							<button
 								type="button"
 								className="flex min-w-0 max-w-full items-center gap-1 hover:text-foreground hover:underline"
-								title={track.album}
+								data-hint={track.album}
 								onClick={() => go({ kind: "album", key: albumKey(track.artist, track.album) })}
 							>
 								<Disc3 aria-hidden="true" className="size-3 shrink-0 opacity-60" />
@@ -172,7 +172,7 @@ function TrackNav({
 				variant="ghost"
 				aria-label="Previous song"
 				disabled={!prev}
-				title={prev ? `${prev.title}${prevKey ? ` (${prevKey})` : ""}` : undefined}
+				data-hint={prev ? `${prev.title}${prevKey ? ` (${prevKey})` : ""}` : undefined}
 				onClick={() => goRef.current(-1)}
 			>
 				<ChevronLeft />
@@ -185,7 +185,7 @@ function TrackNav({
 				variant="ghost"
 				aria-label="Next song"
 				disabled={!next}
-				title={next ? `${next.title}${nextKey ? ` (${nextKey})` : ""}` : undefined}
+				data-hint={next ? `${next.title}${nextKey ? ` (${nextKey})` : ""}` : undefined}
 				onClick={() => goRef.current(1)}
 			>
 				<ChevronRight />

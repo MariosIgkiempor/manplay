@@ -231,7 +231,7 @@ function NewMenu({
 			<Menu.Trigger
 				disabled={disabled}
 				aria-label="New playlist or folder"
-				title="New playlist or folder"
+				data-hint="New playlist or folder"
 				className="grid size-5 place-items-center rounded text-muted-foreground outline-none transition-colors hover:bg-foreground/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40 data-[popup-open]:bg-foreground/[0.06] [&_svg]:size-3.5"
 			>
 				<Plus />
@@ -549,7 +549,7 @@ function SongsView({
 							size="icon-xs"
 							variant="ghost"
 							aria-label={`Remove ${t.title} from the playlist`}
-							title="Remove from playlist"
+							data-hint="Remove from playlist"
 							className="opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
 							onClick={(e) => {
 								e.stopPropagation();

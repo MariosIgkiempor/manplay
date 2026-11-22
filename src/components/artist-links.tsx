@@ -37,13 +37,13 @@ export function ArtistLinks({
 	));
 	if (!icon) {
 		return (
-			<span className="min-w-0 truncate" title={names.join(", ")}>
+			<span className="min-w-0 truncate" data-hint={names.join(", ")}>
 				{links}
 			</span>
 		);
 	}
 	return (
-		<span className="flex min-w-0 items-center gap-1" title={names.join(", ")}>
+		<span className="flex min-w-0 items-center gap-1" data-hint={names.join(", ")}>
 			<Mic2 aria-hidden="true" className="size-3 shrink-0 opacity-60" />
 			<span className="min-w-0 truncate">{links}</span>
 		</span>

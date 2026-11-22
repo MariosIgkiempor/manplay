@@ -1,5 +1,5 @@
 import { RefreshCw, Square, SquareCheck, TriangleAlert, Wrench } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { fileMenuEntries } from "#/components/file-menu.tsx";
 import type { FixNotice } from "#/components/library-health.tsx";
 import { RowMenu } from "#/components/menu.tsx";
@@ -13,8 +13,9 @@ import {
 	ProblemText,
 } from "#/components/problem-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { PanelBarTitle } from "#/context/panel-bar.tsx";
-import { type AuditIssue, confirmFix } from "#/lib/api.ts";
+import type { AuditIssue } from "#/lib/api.ts";
 import { describeFixes } from "#/lib/audit.ts";
 import { useAudit, useAuditFix, useLibraryRoot } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
@@ -51,7 +52,7 @@ export function IssuesIndicator({ onClick }: { onClick: () => void }) {
 		<button
 			type="button"
 			onClick={onClick}
-			title={`${full}. Review and fix them.`}
+			data-hint={`${full}. Review and fix them.`}
 			aria-label={full}
 			className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-warning hover:bg-warning/15"
 		>
@@ -190,6 +191,10 @@ function usePicks(fixable: readonly FileIssues[]) {
 	return [picked, setPicked] as const;
 }
 
+function FixLines({ lines }: { lines: readonly string[] }) {
+	return <span className="whitespace-pre-line">{lines.join("\n")}</span>;
+}
+
 function Actions({
 	picked,
 	fixableCount,
@@ -198,6 +203,8 @@ function Actions({
 	onFixPicked,
 	onFixAll,
 	onRecheck,
+	pickedConsequence,
+	allConsequence,
 }: {
 	picked: number;
 	fixableCount: number;
@@ -206,21 +213,31 @@ function Actions({
 	onFixPicked: () => void;
 	onFixAll: () => void;
 	onRecheck: () => void;
+	pickedConsequence: ReactNode;
+	allConsequence: ReactNode;
 }) {
 	return (
 		<PanelActions>
-			<Button size="sm" disabled={picked === 0 || fixing} onClick={onFixPicked}>
+			<ConfirmButton
+				size="sm"
+				disabled={picked === 0 || fixing}
+				confirmLabel={`Fix ${picked} ticked`}
+				consequence={pickedConsequence}
+				onConfirm={onFixPicked}
+			>
 				<Wrench />
 				{fixing ? "Fixing…" : `Fix ticked (${picked})`}
-			</Button>
-			<Button
+			</ConfirmButton>
+			<ConfirmButton
 				size="sm"
 				variant="outline"
 				disabled={fixableCount === 0 || fixing}
-				onClick={onFixAll}
+				confirmLabel={`Fix all ${fixableCount}`}
+				consequence={allConsequence}
+				onConfirm={onFixAll}
 			>
 				Fix all ({fixableCount})
-			</Button>
+			</ConfirmButton>
 			<Button
 				variant="ghost"
 				size="sm"
@@ -255,8 +272,8 @@ function IssuesBody() {
 		});
 	const allPicked = fixable.length > 0 && picked.size === fixable.length;
 
-	const fix = async (paths: string[]) => {
-		if (paths.length === 0 || !(await confirmFix(describeFixes(audit.data ?? [], paths)))) {
+	const fix = (paths: string[]) => {
+		if (paths.length === 0) {
 			return;
 		}
 		setNotice(null);
@@ -289,8 +306,17 @@ function IssuesBody() {
 				fixableCount={fixable.length}
 				fixing={fixer.isPending}
 				checking={audit.isFetching}
-				onFixPicked={() => void fix([...picked])}
-				onFixAll={() => void fix(fixable.map((f) => f.path))}
+				onFixPicked={() => fix([...picked])}
+				onFixAll={() => fix(fixable.map((f) => f.path))}
+				pickedConsequence={<FixLines lines={describeFixes(audit.data ?? [], [...picked])} />}
+				allConsequence={
+					<FixLines
+						lines={describeFixes(
+							audit.data ?? [],
+							fixable.map((f) => f.path),
+						)}
+					/>
+				}
 				onRecheck={() => void audit.refetch()}
 			/>
 			{notice && <ResultLine notice={notice} />}
@@ -323,7 +349,7 @@ function ResultLine({ notice }: { notice: FixNotice }) {
 				{failed.length > 0 && `, ${failed.length} failed and left as they were:`}
 			</p>
 			{failed.slice(0, 3).map((f) => (
-				<p key={f.path} className="truncate text-xs" title={f.error}>
+				<p key={f.path} className="truncate text-xs" data-hint={f.error}>
 					{f.path.split(/[\\/]/).pop()}: {f.error}
 				</p>
 			))}

@@ -16,7 +16,6 @@ const invoke = vi.fn((command: string, args?: Record<string, unknown>) => {
 });
 vi.mock("@tauri-apps/api/core", () => ({ invoke, convertFileSrc: (path: string) => path }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), open: vi.fn(), save: vi.fn() }));
 
 const api = await import("#/lib/api.ts");
 
@@ -75,6 +74,12 @@ const READS: [name: string, read: () => Promise<unknown>][] = [
 	["listRecentlyDeleted", () => api.listRecentlyDeleted()],
 	["fsList", () => api.fsList("/Users/dj/Music/Library")],
 	["fsDirSizes", () => api.fsDirSizes("/Users/dj/Music/Library")],
+	["clipboardReadText", () => api.clipboardReadText()],
+	["pickerPlaces", () => api.pickerPlaces()],
+	["pickerList", () => api.pickerList("/Users/dj/Pictures")],
+	["pickerList in the library", () => api.pickerList("/Users/dj/Music/Library")],
+	["pickerMakeDir", () => api.pickerMakeDir("/Users/dj/Music", "New set")],
+	["pickerReadImage", () => api.pickerReadImage("/Users/dj/Pictures/Homework.jpg")],
 	["remoteList", () => api.remoteList(NAS_TARGET_ID, [])],
 	["remoteDirSizes", () => api.remoteDirSizes(NAS_TARGET_ID, [])],
 	["auditLibrary", () => api.auditLibrary()],

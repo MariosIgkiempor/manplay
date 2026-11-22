@@ -56,7 +56,7 @@ function FileTitle({
 }) {
 	return (
 		<div className="space-y-1">
-			<h2 className={cn("truncate", typeScale.panelTitle)} title={path ?? undefined}>
+			<h2 className={cn("truncate", typeScale.panelTitle)} data-hint={path ?? undefined}>
 				{path === null ? "rekordbox" : (path.split(/[\\/]/).pop() ?? path)}
 			</h2>
 			<p className="flex flex-wrap gap-x-3 text-muted-foreground text-xs tabular-nums">

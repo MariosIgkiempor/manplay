@@ -27,7 +27,7 @@ function PathTrail({ segments, empty }: { segments: readonly string[]; empty: st
 	return (
 		<span
 			className="flex min-w-0 items-center gap-0.5 text-muted-foreground text-xs"
-			title={segments.join(" / ")}
+			data-hint={segments.join(" / ")}
 		>
 			<Folder className="mr-0.5 size-3 shrink-0" />
 			{shown.map((seg, i) => (
@@ -99,7 +99,9 @@ export function FilesSourcePicker({
 		<Menu.Root>
 			<Menu.Trigger
 				aria-label="Choose what to browse"
-				title={current ? `${current.machine}: ${current.path.join(" / ")}` : (library ?? undefined)}
+				data-hint={
+					current ? `${current.machine}: ${current.path.join(" / ")}` : (library ?? undefined)
+				}
 				className={CRUMB}
 			>
 				{icon}

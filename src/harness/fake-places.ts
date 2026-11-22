@@ -5,12 +5,14 @@ import type {
 	DeletedItem,
 	DuplicateGroup,
 	ExportSelection,
+	FsEntry,
 	ImportFolder,
 	ImportFolderId,
 	ImportGroup,
 	ImportScan,
 	ImportTrack,
 	MissingTrack,
+	PickerPlace,
 	RekordboxStatus,
 	SyncAction,
 	SyncRun,
@@ -546,3 +548,45 @@ export const RECENTLY_DELETED: DeletedItem[] = [
 		songs: 6,
 	},
 ];
+
+const pickerFolder = (name: string): FsEntry => ({ name, isDir: true, size: 0, modified: NOW });
+const pickerFile = (name: string, size: number): FsEntry => ({
+	name,
+	isDir: false,
+	size,
+	modified: NOW,
+});
+
+/** The file picker's sidebar on this made-up computer. */
+export const PICKER_PLACES: PickerPlace[] = [
+	{ kind: "home", name: "dj", path: "/Users/dj" },
+	{ kind: "desktop", name: "Desktop", path: "/Users/dj/Desktop" },
+	{ kind: "documents", name: "Documents", path: "/Users/dj/Documents" },
+	{ kind: "downloads", name: "Downloads", path: DOWNLOADS_FOLDER },
+	{ kind: "music", name: "Music", path: "/Users/dj/Music" },
+	{ kind: "volume", name: "Macintosh HD", path: "/" },
+	{ kind: "volume", name: "DJ STICK", path: USB_MOUNT },
+];
+
+/** What the file picker finds outside the library, by folder. A folder not listed is empty. */
+export const PICKER_FOLDERS: Readonly<Record<string, FsEntry[]>> = {
+	"/": [pickerFolder("Users"), pickerFolder("Volumes")],
+	"/Users": [pickerFolder("dj")],
+	"/Users/dj": ["Desktop", "Documents", "Downloads", "Music", "Pictures"].map(pickerFolder),
+	"/Users/dj/Documents": [pickerFolder("Sets"), pickerFile("manplay-rekordbox.xml", 482_113)],
+	[DOWNLOADS_FOLDER]: [
+		pickerFolder("Bandcamp"),
+		pickerFolder("Promos 2026"),
+		pickerFile("Around the World (Edit).mp3", 9_402_113),
+		pickerFile("Promo pack.zip", 148_220_001),
+	],
+	"/Users/dj/Music": [pickerFolder("Library"), pickerFolder("New Arrivals")],
+	"/Users/dj/Pictures": [
+		pickerFolder("Covers"),
+		pickerFile("Homework.jpg", 412_776),
+		pickerFile("Discovery.PNG", 1_204_332),
+		pickerFile("Tracklist.txt", 2_114),
+	],
+	"/Volumes": [pickerFolder("DJ STICK")],
+	[USB_MOUNT]: [pickerFolder("Contents"), pickerFolder("PIONEER")],
+};

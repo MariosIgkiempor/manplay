@@ -36,7 +36,8 @@ export function AnalysisStatusPill() {
 		<div className="flex items-center gap-1.5">
 			<button
 				type="button"
-				title="Show analysis details"
+				data-hint="Show analysis details"
+				aria-label="Show analysis details"
 				className="rounded-md px-1.5 py-0.5 hover:bg-primary/10"
 				onClick={() => void navigate({ to: "/settings", search: { section: "analysis" } })}
 			>
@@ -50,7 +51,7 @@ export function AnalysisStatusPill() {
 				<button
 					type="button"
 					aria-label="Stop analysis"
-					title="Stop analysis (results so far are kept)"
+					data-hint="Stop analysis (results so far are kept)"
 					className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
 					disabled={stopping}
 					onClick={() => {

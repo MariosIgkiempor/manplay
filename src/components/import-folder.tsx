@@ -1,7 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
 import { Download, FolderOpen, Power, Trash2, Wand2, Zap } from "lucide-react";
-import { useState } from "react";
-import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { DestinationHeader, SettingLabel } from "#/components/destination-header.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { ImportView } from "#/components/import-view.tsx";
@@ -11,6 +9,7 @@ import { PlacePage } from "#/components/place-page.tsx";
 import { OffBadge, PlaceRow } from "#/components/place-row.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { type ImportFolder, type ImportFolderId, importActivitySource } from "#/lib/api.ts";
 import { activityEntries } from "#/lib/history.ts";
@@ -134,7 +133,6 @@ export function ImportFolderSettings({ folder }: { folder: ImportFolder }) {
 	const navigate = useNavigate();
 	const update = useUpdateImportFolder();
 	const remove = useRemoveImportFolder();
-	const [asking, setAsking] = useState(false);
 	const set = (change: Partial<ImportFolder>) => update.mutate({ ...folder, ...change });
 	return (
 		<div className="space-y-3">
@@ -183,36 +181,26 @@ export function ImportFolderSettings({ folder }: { folder: ImportFolder }) {
 						/>
 					}
 				>
-					<Button
+					<ConfirmButton
 						size="sm"
 						variant="outline"
 						className="text-destructive"
 						disabled={remove.isPending}
-						onClick={() => setAsking(true)}
+						destructive
+						confirmLabel={`Stop importing from ${folderName(folder.path)}`}
+						consequence="Nothing in the folder is touched, and the songs already imported stay in your library. Its history is kept."
+						onConfirm={() =>
+							remove.mutate(folder.id, {
+								onSuccess: () => void navigate({ to: "/import" }),
+							})
+						}
 					>
-						Remove…
-					</Button>
+						Remove
+					</ConfirmButton>
 				</SettingRow>
 			</SettingRows>
 			{update.isError && <ErrorLine>{String(update.error)}</ErrorLine>}
 			{remove.isError && <ErrorLine>{String(remove.error)}</ErrorLine>}
-			{asking && (
-				<ConfirmDialog
-					title={`Stop importing from ${folderName(folder.path)}?`}
-					confirmLabel="Remove"
-					destructive
-					onCancel={() => setAsking(false)}
-					onConfirm={() => {
-						setAsking(false);
-						remove.mutate(folder.id, {
-							onSuccess: () => void navigate({ to: "/import" }),
-						});
-					}}
-				>
-					Nothing in the folder is touched, and the songs already imported stay in your library. Its
-					history is kept.
-				</ConfirmDialog>
-			)}
 		</div>
 	);
 }

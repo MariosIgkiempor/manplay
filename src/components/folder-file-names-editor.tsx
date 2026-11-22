@@ -176,7 +176,7 @@ export function FolderFileNamesEditor({
 					>
 						<span
 							className="shrink-0 select-none border-r py-1 pr-2 pl-2.5 text-muted-foreground text-sm"
-							title="The song's place in the playlist always comes first, so players list the songs in order."
+							data-hint="The song's place in the playlist always comes first, so players list the songs in order."
 						>
 							01
 						</span>

@@ -1,8 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { z } from "zod";
-import { TRASH } from "#/lib/platform.ts";
+import { pickPath } from "#/lib/file-picker.ts";
 
 const int = z.number().int();
 
@@ -162,7 +161,12 @@ export function onAnalysisProgress(handler: (p: AnalysisProgress) => void): Prom
 
 /** Prompts for a folder and scans it. Returns the number of tracks found, or null if cancelled. */
 export async function pickAndScan(): Promise<number | null> {
-	const root = await open({ directory: true, multiple: false });
+	const root = await pickPath({
+		kind: "folder",
+		purpose: "library",
+		title: "Choose your library folder",
+		confirmLabel: "Use this folder",
+	});
 	if (root === null) {
 		return null;
 	}
@@ -1056,10 +1060,13 @@ export async function rekordboxStatus(): Promise<RekordboxStatus> {
 
 /** Asks where to save the rekordbox XML. Returns null if cancelled. */
 export function pickRekordboxFile(): Promise<string | null> {
-	return save({
+	return pickPath({
+		kind: "save",
+		purpose: "rekordbox",
 		title: "Where should manplay save the rekordbox library?",
-		defaultPath: "manplay-rekordbox.xml",
-		filters: [{ name: "rekordbox xml", extensions: ["xml"] }],
+		confirmLabel: "Save here",
+		defaultName: "manplay-rekordbox.xml",
+		extension: "xml",
 	});
 }
 
@@ -1498,6 +1505,65 @@ export async function fsList(path: string): Promise<FsEntry[]> {
 	return z.array(fsEntrySchema).parse(await invoke("fs_list", { path }));
 }
 
+/** The text on the system clipboard; empty when it holds none. */
+export async function clipboardReadText(): Promise<string> {
+	return z.string().parse(await invoke("clipboard_read_text"));
+}
+
+// ---- file picker ----------------------------------------------------------
+
+const pickerPlaceSchema = z.object({
+	kind: z.enum(["home", "desktop", "documents", "downloads", "music", "volume"]),
+	name: z.string(),
+	path: z.string().min(1),
+});
+
+/** A folder the file picker offers in its sidebar: one of the user's own, or a disk. */
+export type PickerPlace = z.infer<typeof pickerPlaceSchema>;
+
+export async function pickerPlaces(): Promise<PickerPlace[]> {
+	return z.array(pickerPlaceSchema).parse(await invoke("picker_places"));
+}
+
+const pickerListingSchema = z.object({
+	path: z.string().min(1),
+	/** From the disk's top folder down to the folder itself. */
+	crumbs: z.array(z.object({ name: z.string(), path: z.string().min(1) })).min(1),
+	entries: z.array(fsEntrySchema),
+});
+
+export type PickerListing = z.infer<typeof pickerListingSchema>;
+
+/** Lists any folder on this computer (folders first), for the file picker. */
+export async function pickerList(path: string): Promise<PickerListing> {
+	return pickerListingSchema.parse(await invoke("picker_list", { path }));
+}
+
+/** Makes an empty folder; returns its path. Fails when the name is taken. */
+export async function pickerMakeDir(parent: string, name: string): Promise<string> {
+	return z
+		.string()
+		.min(1)
+		.parse(await invoke("picker_make_dir", { parent, name }));
+}
+
+/** The bytes of a JPEG or PNG file, for a cover. */
+export async function pickerReadImage(path: string): Promise<Uint8Array<ArrayBuffer>> {
+	const bytes = z.instanceof(ArrayBuffer).parse(await invoke("picker_read_image", { path }));
+	return new Uint8Array(bytes);
+}
+
+/** Asks for a picture on this computer to use as a cover. Returns null if cancelled. */
+export function pickCoverFile(extensions: readonly string[]): Promise<string | null> {
+	return pickPath({
+		kind: "file",
+		purpose: "cover",
+		title: "Choose a picture for the cover",
+		confirmLabel: "Use this picture",
+		extensions,
+	});
+}
+
 const remoteEntrySchema = z.object({
 	name: z.string(),
 	isDir: z.boolean(),
@@ -1554,16 +1620,6 @@ export async function fsTrash(paths: string[]): Promise<void> {
 	await invoke("fs_trash", { paths });
 }
 
-/** Native yes/no prompt before deleting. */
-export function confirmTrash(names: string[]): Promise<boolean> {
-	const what = names.length === 1 ? `“${names[0]}”` : `${names.length} items`;
-	return ask(`Move ${what} to the ${TRASH}?`, {
-		title: "Delete",
-		kind: "warning",
-		okLabel: `Move to ${TRASH}`,
-	});
-}
-
 /** Moves files and folders into `dest`. Fails without changing anything on a name clash. */
 export async function fsMove(paths: string[], dest: string): Promise<void> {
 	await invoke("fs_move", { paths, dest });
@@ -1607,15 +1663,6 @@ export async function auditPlace(path: string, artist: string, album: string): P
 /** Fixes each file; one failing file never stops or undoes the others. */
 export async function auditFix(paths: string[]): Promise<FixReport> {
 	return fixReportSchema.parse(await invoke("audit_fix", { paths }));
-}
-
-/** Native yes/no prompt listing what a fix will do. */
-export function confirmFix(lines: string[]): Promise<boolean> {
-	return ask(lines.join("\n"), {
-		title: "Fix library issues",
-		kind: "info",
-		okLabel: "Fix",
-	});
 }
 
 // ---- tag editor --------------------------------------------------------------
@@ -2063,7 +2110,12 @@ export async function importTrash(folder: ImportFolderId, paths: string[]): Prom
 }
 
 export function pickImportFolder(): Promise<string | null> {
-	return open({ directory: true, multiple: false, title: "Choose a folder to import from" });
+	return pickPath({
+		kind: "folder",
+		purpose: "import",
+		title: "Choose a folder to import from",
+		confirmLabel: "Import from this folder",
+	});
 }
 
 /**

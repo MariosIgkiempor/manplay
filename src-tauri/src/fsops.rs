@@ -166,9 +166,14 @@ pub fn read_dir(dir: &Path) -> Result<std::fs::ReadDir, Error> {
 }
 
 pub fn list(root: &Path, dir: &Path) -> Result<Vec<FsEntry>, Error> {
-    let dir = inside(root, dir)?;
+    list_dir(&inside(root, dir)?)
+}
+
+/// What is in `dir`, folders first, without hidden entries. Not confined to the library: the
+/// file picker lists any folder the user walks to with it.
+pub fn list_dir(dir: &Path) -> Result<Vec<FsEntry>, Error> {
     let mut out = Vec::new();
-    for entry in read_dir(&dir)? {
+    for entry in read_dir(dir)? {
         let entry = entry?;
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             continue;

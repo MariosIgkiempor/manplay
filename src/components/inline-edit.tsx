@@ -1,4 +1,5 @@
-import { type KeyboardEvent, type SyntheticEvent, useEffect, useId, useRef, useState } from "react";
+import { type KeyboardEvent, type SyntheticEvent, useEffect, useRef, useState } from "react";
+import { SuggestInput } from "#/components/ui/suggest-input.tsx";
 import { cn } from "#/lib/utils.ts";
 
 const stop = (e: SyntheticEvent) => e.stopPropagation();
@@ -28,7 +29,6 @@ export function InlineInput({
 	className?: string | undefined;
 	inputMode?: "numeric" | "text" | undefined;
 }) {
-	const listId = useId();
 	const [text, setText] = useState(initial);
 	const [invalid, setInvalid] = useState(false);
 	const done = useRef(false);
@@ -64,40 +64,30 @@ export function InlineInput({
 		}
 	};
 	return (
-		<>
-			<input
-				ref={input}
-				// biome-ignore lint/a11y/noAutofocus: the field appears because the user asked to edit
-				autoFocus
-				value={text}
-				aria-label={label}
-				aria-invalid={invalid || undefined}
-				inputMode={inputMode}
-				list={suggestions ? listId : undefined}
-				onChange={(e) => {
-					setText(e.target.value);
-					setInvalid(false);
-				}}
-				onKeyDown={onKeyDown}
-				onBlur={commit}
-				onClick={stop}
-				onDoubleClick={stop}
-				onMouseDown={stop}
-				onContextMenu={stop}
-				className={cn(
-					"h-7 w-full min-w-0 rounded-md border border-ring bg-background px-1.5 text-sm outline-none ring-3 ring-ring/25",
-					"aria-invalid:border-destructive aria-invalid:ring-destructive/25",
-					className,
-				)}
-			/>
-			{suggestions && (
-				<datalist id={listId}>
-					{suggestions.map((s) => (
-						<option key={s} value={s} />
-					))}
-				</datalist>
+		<SuggestInput
+			ref={input}
+			autoFocus
+			value={text}
+			aria-label={label}
+			aria-invalid={invalid || undefined}
+			inputMode={inputMode}
+			suggestions={suggestions ?? []}
+			onValueChange={(next) => {
+				setText(next);
+				setInvalid(false);
+			}}
+			onKeyDown={onKeyDown}
+			onBlur={commit}
+			onClick={stop}
+			onDoubleClick={stop}
+			onMouseDown={stop}
+			onContextMenu={stop}
+			className={cn(
+				"h-7 w-full min-w-0 rounded-md border border-ring bg-background px-1.5 text-sm outline-none ring-3 ring-ring/25",
+				"aria-invalid:border-destructive aria-invalid:ring-destructive/25",
+				className,
 			)}
-		</>
+		/>
 	);
 }
 
@@ -148,7 +138,7 @@ export function InlineEdit({
 	return (
 		<button
 			type="button"
-			title={hint ?? `Edit ${label.toLowerCase()}`}
+			data-hint={hint ?? `Edit ${label.toLowerCase()}`}
 			aria-label={`${label}: ${value || "not set"}. Edit`}
 			onClick={(e) => {
 				e.stopPropagation();

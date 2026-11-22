@@ -64,7 +64,7 @@ export function ResizeHandle({
 			aria-valuenow={width}
 			aria-valuemin={min}
 			tabIndex={0}
-			title="Drag to resize, double-click to reset"
+			data-hint="Drag to resize, double-click to reset"
 			onPointerDown={onPointerDown}
 			onKeyDown={onKeyDown}
 			onDoubleClick={() => onWidth(initial)}

@@ -328,7 +328,7 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 				{report.backup && (
 					<>
 						<dt className="text-muted-foreground">Previous library</dt>
-						<dd className="min-w-0 truncate" title={report.backup}>
+						<dd className="min-w-0 truncate" data-hint={report.backup}>
 							<code className="text-xs">{report.backup}</code>
 						</dd>
 					</>
@@ -344,7 +344,7 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 					</p>
 					<ul className="space-y-1 text-xs">
 						{report.failed.map((f) => (
-							<li key={f.path} className="truncate" title={`${f.path}: ${f.error}`}>
+							<li key={f.path} className="truncate" data-hint={`${f.path}: ${f.error}`}>
 								{baseName(f.path)}: {f.error}
 							</li>
 						))}

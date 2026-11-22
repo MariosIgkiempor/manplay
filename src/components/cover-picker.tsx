@@ -5,6 +5,7 @@ import { CoverCard } from "#/components/cover-card.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { bumpArt } from "#/lib/art-version.ts";
 import { COVER_TYPES } from "#/lib/cover-choice.ts";
+import { isPickOpen } from "#/lib/file-picker.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { useTagsSetCover } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
@@ -85,10 +86,14 @@ export function CoverPicker({
 	return (
 		<>
 			<SaveState status={busy ? "saving" : error ? "error" : "saved"} error={error} />
-			<Popover.Root open={open} onOpenChange={setOpen}>
+			<Popover.Root
+				open={open}
+				// A click in the file picker is a click outside the card, and must not close it.
+				onOpenChange={(next) => (next || !isPickOpen()) && setOpen(next)}
+			>
 				<Popover.Trigger
 					aria-label={`Change the cover of ${name}`}
-					title={error ?? `Click to change the cover, or paste one (${keyLabel("⌘V")})`}
+					data-hint={error ?? `Click to change the cover, or paste one (${keyLabel("⌘V")})`}
 					disabled={busy}
 					className={cn(
 						"group/cover relative block size-full rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/60",

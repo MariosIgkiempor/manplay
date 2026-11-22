@@ -29,6 +29,7 @@ import { SortMenu } from "#/components/sort-menu.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TagCombobox } from "#/components/tag-combobox.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
@@ -251,7 +252,15 @@ export function TagDatabase() {
 							items={items}
 							busy={busy}
 							onClear={() => setSelected(new Set())}
-							onMigrate={(to) => setPending({ from: [...selected], to })}
+							onMigrate={(to) => run({ from: [...selected], to })}
+							describe={(to) =>
+								describeChange(
+									{ from: [...selected], to },
+									countOf([...selected]),
+									items,
+									!isLibrary,
+								)
+							}
 						/>
 					)
 				}
@@ -325,7 +334,13 @@ export function TagDatabase() {
 									onEdit={() => setEditing(item.value)}
 									onCancel={() => setEditing(null)}
 									onRename={(to) => rename(item, to)}
-									onDelete={() => setPending({ from: [item.value], to: null })}
+									onDelete={() => run({ from: [item.value], to: null })}
+									deletion={describeChange(
+										{ from: [item.value], to: null },
+										item.count,
+										items,
+										!isLibrary,
+									)}
 								/>
 							</RowMenu>
 						))}
@@ -532,17 +547,21 @@ function MigrateBar({
 	busy,
 	onClear,
 	onMigrate,
+	describe,
 }: {
 	selected: string[];
 	items: Item[];
 	busy: boolean;
 	onClear: () => void;
 	onMigrate: (to: string | null) => void;
+	describe: (to: string | null) => ChangeDescription;
 }) {
 	const id = useId();
 	const [target, setTarget] = useState("");
 	const to = target.trim();
 	const options = items.filter((i) => !selected.includes(i.value));
+	const merging = describe(to);
+	const deleting = describe(null);
 	return (
 		<div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-1.5 pl-2">
 			<span className="font-medium text-sm tabular-nums">{selected.length} selected</span>
@@ -550,7 +569,7 @@ function MigrateBar({
 				size="icon-xs"
 				variant="ghost"
 				aria-label="Clear selection"
-				title="Clear selection"
+				data-hint="Clear selection"
 				onClick={onClear}
 			>
 				<X />
@@ -568,17 +587,25 @@ function MigrateBar({
 						className="bg-background dark:bg-background"
 					/>
 				</div>
-				<Button onClick={() => onMigrate(to)} disabled={busy || to === ""}>
+				<ConfirmButton
+					confirmLabel={merging.action}
+					consequence={merging.consequence}
+					onConfirm={() => onMigrate(to)}
+					disabled={busy || to === ""}
+				>
 					<Merge /> Merge
-				</Button>
-				<Button
+				</ConfirmButton>
+				<ConfirmButton
 					variant="ghost"
 					className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-					onClick={() => onMigrate(null)}
+					destructive
+					confirmLabel={deleting.action}
+					consequence={deleting.consequence}
+					onConfirm={() => onMigrate(null)}
 					disabled={busy}
 				>
 					<Trash2 /> Delete
-				</Button>
+				</ConfirmButton>
 			</div>
 		</div>
 	);
@@ -609,6 +636,7 @@ function Row({
 	onCancel,
 	onRename,
 	onDelete,
+	deletion,
 }: {
 	item: Item;
 	unit: string;
@@ -627,6 +655,7 @@ function Row({
 	onCancel: () => void;
 	onRename: (to: string) => void;
 	onDelete: () => void;
+	deletion: ChangeDescription;
 }) {
 	return (
 		<div className={cn(ROW, rowTint(checked, open))}>
@@ -653,7 +682,7 @@ function Row({
 					type="button"
 					onClick={onOpen}
 					onDoubleClick={busy ? undefined : onEdit}
-					title={`Show songs with “${item.value}”. Double-click to rename.`}
+					data-hint={`Show songs with “${item.value}”. Double-click to rename.`}
 					className={cn(
 						"min-w-0 truncate rounded-sm text-left font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60",
 						item.count === 0 && "font-normal text-muted-foreground",
@@ -664,7 +693,7 @@ function Row({
 			)}
 			<span
 				className="flex w-36 items-center justify-end gap-2 text-muted-foreground text-xs tabular-nums"
-				title={`${item.count} ${unit}`}
+				data-hint={`${item.count} ${unit}`}
 			>
 				{item.count > 0 && (
 					<span aria-hidden="true" className="h-1 w-16 overflow-hidden rounded-full bg-muted">
@@ -683,26 +712,63 @@ function Row({
 					size="icon-xs"
 					variant="ghost"
 					aria-label={`Rename ${item.value}`}
-					title="Rename"
+					data-hint="Rename"
 					onClick={onEdit}
 					disabled={busy || editing}
 				>
 					<Pencil />
 				</Button>
-				<Button
+				<ConfirmButton
 					size="icon-xs"
 					variant="ghost"
 					aria-label={`Delete ${item.value}`}
-					title="Delete"
+					data-hint="Delete"
 					className="hover:text-destructive"
-					onClick={onDelete}
+					destructive
+					confirmLabel={deletion.action}
+					consequence={deletion.consequence}
+					onConfirm={onDelete}
 					disabled={busy}
 				>
 					<Trash2 />
-				</Button>
+				</ConfirmButton>
 			</div>
 		</div>
 	);
+}
+
+/** What a delete, rename or merge says and does, for the dialog and for the buttons that skip it. */
+type ChangeDescription = { verb: string; action: string; consequence: string };
+
+function describeChange(
+	pending: Pending,
+	affected: number,
+	items: Item[],
+	rewritesFiles: boolean,
+): ChangeDescription {
+	const merge =
+		pending.to !== null &&
+		items.some((i) => same(i.value, pending.to ?? "") && !pending.from.includes(i.value));
+	const names = pending.from.map((n) => `“${n}”`).join(", ");
+	let verb: string;
+	let action: string;
+	if (pending.to === null) {
+		verb = "Delete";
+		action = `Delete ${names}`;
+	} else if (merge || pending.from.length > 1) {
+		verb = "Merge";
+		action = `Merge ${names} into “${pending.to}”`;
+	} else {
+		verb = "Rename";
+		action = `Rename ${names} to “${pending.to}”`;
+	}
+	const consequence =
+		(affected === 0
+			? "No song uses this yet."
+			: `Changes up to ${plural(affected, "song", "songs")}.`) +
+		(rewritesFiles && affected > 0 ? " The tags inside the audio files are rewritten." : "") +
+		(pending.to === null && affected > 0 ? " The value is removed from each of them." : "");
+	return { verb, action, consequence };
 }
 
 function Confirm({
@@ -720,35 +786,16 @@ function Confirm({
 	onCancel: () => void;
 	onConfirm: () => void;
 }) {
-	const merge =
-		pending.to !== null &&
-		items.some((i) => same(i.value, pending.to ?? "") && !pending.from.includes(i.value));
-	const names = pending.from.map((n) => `“${n}”`).join(", ");
-	let title: string;
-	let label: string;
-	if (pending.to === null) {
-		title = `Delete ${names}?`;
-		label = "Delete";
-	} else if (merge || pending.from.length > 1) {
-		title = `Merge ${names} into “${pending.to}”?`;
-		label = "Merge";
-	} else {
-		title = `Rename ${names} to “${pending.to}”?`;
-		label = "Rename";
-	}
+	const { verb, action, consequence } = describeChange(pending, affected, items, rewritesFiles);
 	return (
 		<ConfirmDialog
-			title={title}
-			confirmLabel={label}
+			title={`${action}?`}
+			confirmLabel={verb}
 			destructive={pending.to === null}
 			onCancel={onCancel}
 			onConfirm={onConfirm}
 		>
-			{affected === 0
-				? "No song uses this yet."
-				: `Changes up to ${plural(affected, "song", "songs")}.`}
-			{rewritesFiles && affected > 0 && " The tags inside the audio files are rewritten."}
-			{pending.to === null && affected > 0 && " The value is removed from each of them."}
+			{consequence}
 		</ConfirmDialog>
 	);
 }

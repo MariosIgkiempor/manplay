@@ -20,6 +20,7 @@ import { PlaceFrame } from "#/components/place-page.tsx";
 import { SearchField } from "#/components/search-field.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Hint } from "#/components/ui/hint.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { UsbBrowser } from "#/components/usb-browser.tsx";
@@ -464,11 +465,9 @@ function BackupsRow({ drive }: { drive: UsbDrive }) {
 	const queryClient = useQueryClient();
 	const key = ["usb-backups", drive.mount];
 	const backups = useQuery({ queryKey: key, queryFn: () => usbBackups(drive.mount) });
-	const [asking, setAsking] = useState(false);
 	const prune = useMutation({
 		mutationFn: () => usbDeleteBackups(drive.mount, 1),
 		onSuccess: async (left) => {
-			setAsking(false);
 			queryClient.setQueryData(key, left);
 			await queryClient.invalidateQueries({ queryKey: ["usb-drives"] });
 		},
@@ -484,33 +483,21 @@ function BackupsRow({ drive }: { drive: UsbDrive }) {
 	const older = (b?.count ?? 0) - 1;
 	return (
 		<SettingRow label={<SettingLabel icon={<Archive />} title="Library backups" hint={hint} />}>
-			<Button
+			<ConfirmButton
 				size="sm"
 				variant="outline"
-				disabled={!drive.writable || older < 1}
-				onClick={() => {
+				disabled={!drive.writable || older < 1 || prune.isPending}
+				destructive
+				confirmLabel={`Delete ${plural(older, "older backup", "older backups")}`}
+				consequence="The newest backup stays. The others are deleted from the drive for good, so the space frees up now."
+				onConfirm={() => {
 					prune.reset();
-					setAsking(true);
+					prune.mutate();
 				}}
 			>
 				Delete older
-			</Button>
-			{asking && (
-				<ConfirmDialog
-					title={`Delete ${plural(older, "older backup", "older backups")}?`}
-					confirmLabel={prune.isPending ? "Deleting…" : "Delete"}
-					destructive
-					busy={prune.isPending}
-					onCancel={() => setAsking(false)}
-					onConfirm={() => prune.mutate()}
-				>
-					<p>
-						The newest backup stays. The others are deleted from the drive for good, so the space
-						frees up now.
-					</p>
-					{prune.isError && <ErrorLine>{String(prune.error)}</ErrorLine>}
-				</ConfirmDialog>
-			)}
+			</ConfirmButton>
+			{prune.isError && <ErrorLine>{String(prune.error)}</ErrorLine>}
 			{backups.isError && <ErrorLine>{String(backups.error)}</ErrorLine>}
 		</SettingRow>
 	);

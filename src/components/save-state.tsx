@@ -56,7 +56,7 @@ export function SaveState({
 	}
 	const out = (
 		<output
-			title={body.text}
+			data-hint={body.text}
 			className={cn(
 				"flex min-w-0 items-center gap-1.5 text-xs [&_svg]:size-3.5 [&_svg]:shrink-0",
 				body.error ? "text-destructive" : "text-muted-foreground",

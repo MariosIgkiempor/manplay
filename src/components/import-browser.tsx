@@ -25,7 +25,8 @@ import {
 } from "react";
 import { type MenuEntry, RowMenu } from "#/components/menu.tsx";
 import { Badge } from "#/components/ui/badge.tsx";
-import { Input } from "#/components/ui/input.tsx";
+import { inputClassName } from "#/components/ui/input.tsx";
+import { SuggestInput } from "#/components/ui/suggest-input.tsx";
 import { audioUrl, type ImportGroup, type ImportTrack } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
 import { groupFacts, type Quality, qualityOf } from "#/lib/import-meta.ts";
@@ -116,7 +117,7 @@ function Check({
 function QualityChip({ quality }: { quality: Quality }) {
 	return (
 		<span
-			title={quality.low ? "Low bitrate: may sound thin on a club system" : quality.label}
+			data-hint={quality.low ? "Low bitrate: may sound thin on a club system" : quality.label}
 			className={cn(
 				"inline-flex max-w-full truncate rounded px-1.5 py-px font-medium text-[11px] tabular-nums",
 				quality.low ? "bg-warning/15 text-warning" : "bg-muted text-muted-foreground",
@@ -131,7 +132,7 @@ function QualityChip({ quality }: { quality: Quality }) {
 function Cell({ value, title }: { value: string | null; title: string }) {
 	return (
 		<span
-			title={title}
+			data-hint={title}
 			className={cn(
 				"hidden text-right text-xs tabular-nums @2xl/import:block",
 				value ? "text-muted-foreground" : "text-muted-foreground/30",
@@ -198,28 +199,29 @@ function PlayCell({
 /** Text that looks like a label until hovered or focused, then edits in place. */
 function InlineField({
 	label,
-	list,
+	suggestions,
 	value,
 	onChange,
 	className,
 }: {
 	label: string;
-	list: string;
+	suggestions: readonly string[];
 	value: string;
 	onChange: (v: string) => void;
 	className?: string;
 }) {
 	return (
-		<Input
+		<SuggestInput
 			aria-label={label}
-			list={list}
+			suggestions={suggestions}
 			value={value}
 			placeholder={label}
-			onChange={(e) => onChange(e.target.value)}
+			onValueChange={onChange}
 			onClick={(e) => e.stopPropagation()}
 			onDoubleClick={(e) => e.stopPropagation()}
-			title={`${label}: click to edit`}
+			data-hint={`${label}: click to edit`}
 			className={cn(
+				inputClassName,
 				"h-6 min-w-0 border-transparent bg-transparent px-1 shadow-none hover:border-input focus-visible:bg-background dark:bg-transparent",
 				className,
 			)}
@@ -271,7 +273,7 @@ function ReleaseFacts({ group }: { group: ImportGroup }) {
 					value && (
 						<span
 							key={title}
-							title={title}
+							data-hint={title}
 							className="flex min-w-0 items-center gap-1 [&_svg]:size-3 [&_svg]:shrink-0 [&_svg]:opacity-60"
 						>
 							{icon}
@@ -280,7 +282,12 @@ function ReleaseFacts({ group }: { group: ImportGroup }) {
 					),
 			)}
 			{f.embeddedArt && (
-				<span title="Cover art inside the files" className="[&_svg]:size-3 [&_svg]:opacity-60">
+				<span
+					data-hint="Cover art inside the files"
+					role="img"
+					aria-label="Cover art inside the files"
+					className="[&_svg]:size-3 [&_svg]:opacity-60"
+				>
 					<ImageIcon />
 				</span>
 			)}
@@ -305,7 +312,7 @@ function StatusBadge({ track }: { track: ImportTrack }) {
 	const s = STATUS[track.status];
 	const hint = track.sameAs ? `${s.hint}: ${track.sameAs}` : s.hint;
 	return (
-		<Badge variant="secondary" title={hint} className="shrink-0">
+		<Badge variant="secondary" data-hint={hint} className="shrink-0">
 			{s.label}
 		</Badge>
 	);
@@ -324,8 +331,8 @@ export interface ReleaseProps {
 	onImport: (keys: readonly string[]) => void;
 	onTrash: (keys: readonly string[]) => void;
 	busy: boolean;
-	artistList: string;
-	albums: string[];
+	artists: readonly string[];
+	albums: readonly string[];
 	placement: Placement;
 	playback: Playback;
 }
@@ -390,7 +397,7 @@ function TrackRow({
 			>
 				<Check checked={picked} label={`Pick ${track.title}`} onChange={() => p.onToggle(key)} />
 				<PlayCell track={track} playback={p.playback} number={number} />
-				<span className="flex min-w-0 items-center gap-2 pl-10" title={track.file}>
+				<span className="flex min-w-0 items-center gap-2 pl-10" data-hint={track.file}>
 					<span className="truncate">{track.title}</span>
 					{track.artist !== "" && track.artist !== edit.artist && (
 						<span className="truncate text-muted-foreground text-xs">{track.artist}</span>
@@ -411,7 +418,7 @@ function ReleaseName({ p, single }: { p: ReleaseProps; single: boolean }) {
 			<div className="flex min-w-0 items-center">
 				<InlineField
 					label="Album"
-					list={`import-albums-${group.id}`}
+					suggestions={p.albums}
 					value={edit.album}
 					onChange={(v) => p.onEdit({ artist: edit.artist, album: v })}
 					className="max-w-[60%] font-medium text-sm md:text-sm"
@@ -419,7 +426,7 @@ function ReleaseName({ p, single }: { p: ReleaseProps; single: boolean }) {
 				<span className="shrink-0 px-1 text-muted-foreground/50 text-xs">by</span>
 				<InlineField
 					label="Artist"
-					list={p.artistList}
+					suggestions={p.artists}
 					value={edit.artist}
 					onChange={(v) => p.onEdit({ artist: v, album: edit.album })}
 					className="text-muted-foreground text-sm md:text-sm"
@@ -429,7 +436,7 @@ function ReleaseName({ p, single }: { p: ReleaseProps; single: boolean }) {
 				<span className="shrink-0">{PLACEMENT[p.placement]}</span>
 				{!single && <span className="shrink-0 tabular-nums">{group.tracks.length} tracks</span>}
 				{group.fromZip && (
-					<span title={group.origin} className="flex shrink-0 items-center gap-1">
+					<span data-hint={group.origin} className="flex shrink-0 items-center gap-1">
 						<FileArchive className="size-3" /> Zip
 					</span>
 				)}
@@ -449,7 +456,7 @@ function ImportReleaseButton({ keys, p }: { keys: readonly string[]; p: ReleaseP
 				e.stopPropagation();
 				p.onImport(keys);
 			}}
-			title={`Import the ${keys.length} new ${keys.length === 1 ? "track" : "tracks"} of this release`}
+			data-hint={`Import the ${keys.length} new ${keys.length === 1 ? "track" : "tracks"} of this release`}
 			className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-primary text-xs opacity-0 outline-none transition-opacity hover:bg-primary/10 focus-visible:opacity-100 disabled:hidden group-hover/row:opacity-100 [&_svg]:size-3.5"
 		>
 			<Plus /> Import
@@ -580,11 +587,6 @@ export function ReleaseRows(p: ReleaseProps) {
 					<ReleaseFigures group={group} single={single} />
 				</div>
 			</RowMenu>
-			<datalist id={`import-albums-${group.id}`}>
-				{p.albums.map((a) => (
-					<option key={a} value={a} />
-				))}
-			</datalist>
 			{open &&
 				!single &&
 				group.tracks.map((t, i) => (

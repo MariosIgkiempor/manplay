@@ -37,7 +37,10 @@ export function FrameHeader({
 		>
 			<div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2">
 				<div className="flex min-w-0 flex-1 basis-60 items-baseline gap-3">
-					<h1 className="truncate font-semibold text-lg tracking-tight" title={titleHint ?? title}>
+					<h1
+						className="truncate font-semibold text-lg tracking-tight"
+						data-hint={titleHint ?? title}
+					>
 						{title}
 					</h1>
 					{meta && (

@@ -174,7 +174,7 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 					</div>
 					{!hasAny && !open && (
 						<kbd
-							title="Search this page"
+							data-hint="Search this page"
 							className="shrink-0 rounded border px-1.5 font-sans text-[11px] text-muted-foreground/70"
 						>
 							{keyLabel("⌘F")}

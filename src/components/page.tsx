@@ -136,7 +136,7 @@ export function ErrorLine({
 	return (
 		<div
 			role="alert"
-			title={compact && raw !== null ? raw : undefined}
+			data-hint={compact && raw !== null ? raw : undefined}
 			className={cn("flex min-w-0 items-start gap-2 text-destructive", className)}
 		>
 			<TriangleAlert className="mt-0.5 size-4 shrink-0" />

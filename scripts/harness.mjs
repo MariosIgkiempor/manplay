@@ -19,6 +19,8 @@ const LOG_FILE = join(WORK_DIR, "daemon.log");
 const SHOTS_DIR = join(WORK_DIR, "shots");
 const SETTLE_MS = 2000;
 const ACTION_TIMEOUT_MS = 8000;
+/** The first page is built from cold, which in a fresh checkout takes longer than any later step. */
+const FIRST_LOAD_TIMEOUT_MS = 60_000;
 const WINDOWS_USER_AGENT =
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0";
 
@@ -282,7 +284,7 @@ async function runDaemon(options) {
 	context.setDefaultTimeout(ACTION_TIMEOUT_MS);
 	const page = await context.newPage();
 	const problems = collectProblems(page);
-	await page.goto(baseUrl, { waitUntil: "load" });
+	await page.goto(baseUrl, { waitUntil: "load", timeout: FIRST_LOAD_TIMEOUT_MS });
 	await settle(page);
 
 	const handlers = actions(page, baseUrl);

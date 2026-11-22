@@ -63,7 +63,7 @@ export function HeaderMenu({
 						variant="outline"
 						size={size === "sm" ? "icon-sm" : "icon"}
 						aria-label={label}
-						title={label}
+						data-hint={label}
 					/>
 				}
 			>
@@ -82,7 +82,7 @@ export function HeaderMenu({
 							) : row.checked === undefined ? (
 								<Menu.Item
 									key={row.label}
-									title={row.hint}
+									data-hint={row.hint}
 									disabled={row.disabled ?? false}
 									onClick={row.onSelect}
 									className={cn(menuItem, row.destructive && "text-destructive")}
@@ -93,7 +93,7 @@ export function HeaderMenu({
 							) : (
 								<Menu.CheckboxItem
 									key={row.label}
-									title={row.hint}
+									data-hint={row.hint}
 									disabled={row.disabled ?? false}
 									checked={row.checked}
 									onCheckedChange={row.onSelect}

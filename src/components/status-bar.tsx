@@ -56,7 +56,7 @@ function UndoPill() {
 		<button
 			type="button"
 			onClick={() => void undo()}
-			title={`Undo ${label} (${keyLabel("⌘Z")})`}
+			data-hint={`Undo ${label} (${keyLabel("⌘Z")})`}
 			className="flex min-w-0 shrink items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-foreground outline-none transition-colors hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5 [&_svg]:shrink-0"
 		>
 			<Undo2 />
@@ -81,7 +81,7 @@ function StatusErrors() {
 		(e): e is string => e !== null,
 	);
 	return errors.map((e) => (
-		<span key={e} className="flex min-w-0 items-center gap-1.5 text-destructive" title={e}>
+		<span key={e} className="flex min-w-0 items-center gap-1.5 text-destructive" data-hint={e}>
 			<CircleAlert className="size-3.5 shrink-0" />
 			<span className="truncate">{e}</span>
 		</span>
@@ -106,7 +106,7 @@ function PanelToggle() {
 			type="button"
 			aria-label={label}
 			aria-pressed={open}
-			title={label}
+			data-hint={label}
 			disabled={!open && next === null}
 			onClick={() => (open ? detail.close() : next && detail.open(next))}
 			className={cn(

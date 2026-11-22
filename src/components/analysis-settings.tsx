@@ -1,10 +1,10 @@
 import { AudioWaveform, FileAudio, RotateCcw, Square } from "lucide-react";
 import { useMemo, useState } from "react";
-import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { FrameSection } from "#/components/frame.tsx";
 import { ErrorLine, Section } from "#/components/page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import {
 	type AnalysisProgress,
@@ -184,7 +184,6 @@ function RunControls({
 	onRun: (all: boolean) => void;
 	onStop: () => void;
 }) {
-	const [confirmAll, setConfirmAll] = useState(false);
 	if (running) {
 		return (
 			<Button variant="outline" disabled={stopping || saving} onClick={onStop}>
@@ -199,35 +198,28 @@ function RunControls({
 				<AudioWaveform />
 				{counts.pending === 0 ? "All analyzed" : `Analyze ${counts.pending.toLocaleString()} new`}
 			</Button>
-			<Button
+			<ConfirmButton
 				variant="ghost"
 				disabled={counts.analyzed === 0}
-				title="Detect BPM and key again for every song, replacing earlier results"
-				onClick={() => setConfirmAll(true)}
+				data-hint="Detect BPM and key again for every song, replacing earlier results"
+				confirmLabel={`Re-analyze ${plural(counts.total, "song", "songs")}`}
+				consequence={
+					<>
+						{counts.edited === 0 || replaceEdits
+							? "Every BPM, key and beat grid is detected again"
+							: "Detected BPM, keys and beat grids are replaced"}
+						{counts.edited > 0 &&
+							(replaceEdits
+								? `, including the ${plural(counts.edited, "song", "songs")} you edited by hand.`
+								: `; the ${plural(counts.edited, "song", "songs")} you edited by hand keep your values.`)}
+						{counts.edited === 0 && "."} You can stop at any time and keep what is done.
+					</>
+				}
+				onConfirm={() => onRun(true)}
 			>
 				<RotateCcw />
 				Re-analyze all
-			</Button>
-			{confirmAll && (
-				<ConfirmDialog
-					title={`Re-analyze all ${plural(counts.total, "song", "songs")}?`}
-					confirmLabel="Re-analyze"
-					onCancel={() => setConfirmAll(false)}
-					onConfirm={() => {
-						setConfirmAll(false);
-						onRun(true);
-					}}
-				>
-					{counts.edited === 0 || replaceEdits
-						? "Every BPM, key and beat grid is detected again"
-						: "Detected BPM, keys and beat grids are replaced"}
-					{counts.edited > 0 &&
-						(replaceEdits
-							? `, including the ${plural(counts.edited, "song", "songs")} you edited by hand.`
-							: `; the ${plural(counts.edited, "song", "songs")} you edited by hand keep your values.`)}
-					{counts.edited === 0 && "."} You can stop at any time and keep what is done.
-				</ConfirmDialog>
-			)}
+			</ConfirmButton>
 		</div>
 	);
 }
@@ -254,7 +246,7 @@ function KeyFormatPicker({
 					key={o.id}
 					type="button"
 					aria-pressed={settings.keyFormat === o.id}
-					title={o.title}
+					data-hint={o.title}
 					onClick={() => onChange({ ...settings, keyFormat: o.id })}
 					className={cn(
 						"rounded px-2.5 py-0.5 text-xs tabular-nums",
@@ -282,7 +274,6 @@ function FileTags({
 	const settings = useAnalysisSettings();
 	const setSettings = useSetAnalysisSettings();
 	const save = useSaveAnalysisToFiles();
-	const [confirm, setConfirm] = useState(false);
 	const current = settings.data;
 	if (!current) {
 		return null;
@@ -292,16 +283,23 @@ function FileTags({
 		<Section
 			title="File tags"
 			action={
-				<Button
+				<ConfirmButton
 					variant="ghost"
 					size="sm"
 					disabled={running || withResults === 0}
-					title={`Write the saved BPM and key of ${plural(withResults, "song", "songs")} into their files, e.g. songs analysed before results were always written`}
-					onClick={() => setConfirm(true)}
+					data-hint={`Write the saved BPM and key of ${plural(withResults, "song", "songs")} into their files, e.g. songs analysed before results were always written`}
+					confirmLabel={`Write tags into ${plural(withResults, "song", "songs")}`}
+					consequence={`Their BPM and key tags are replaced, with keys in ${notation} notation. Files that already match are left alone.`}
+					onConfirm={() =>
+						save.mutate(undefined, {
+							onSuccess: (report) => onOutcome({ kind: "tags", report }),
+							onError: (e) => onOutcome({ kind: "error", message: String(e) }),
+						})
+					}
 				>
 					<FileAudio />
 					Write now
-				</Button>
+				</ConfirmButton>
 			}
 		>
 			<SettingRows>
@@ -309,23 +307,6 @@ function FileTags({
 					<KeyFormatPicker settings={current} onChange={(s) => setSettings.mutate(s)} />
 				</SettingRow>
 			</SettingRows>
-			{confirm && (
-				<ConfirmDialog
-					title={`Write BPM and key into ${plural(withResults, "song", "songs")}?`}
-					confirmLabel="Write tags"
-					onCancel={() => setConfirm(false)}
-					onConfirm={() => {
-						setConfirm(false);
-						save.mutate(undefined, {
-							onSuccess: (report) => onOutcome({ kind: "tags", report }),
-							onError: (e) => onOutcome({ kind: "error", message: String(e) }),
-						});
-					}}
-				>
-					Their BPM and key tags are replaced, with keys in {notation} notation. Files that already
-					match are left alone.
-				</ConfirmDialog>
-			)}
 		</Section>
 	);
 }
@@ -392,10 +373,10 @@ function Failures({
 					return (
 						<li key={f.path} className="flex items-center gap-3 px-3 py-2">
 							<div className="min-w-0 flex-1 text-xs">
-								<div className="truncate" title={f.path}>
+								<div className="truncate" data-hint={f.path}>
 									{relative(f.path, root)}
 								</div>
-								<div className="truncate text-destructive" title={f.error}>
+								<div className="truncate text-destructive" data-hint={f.error}>
 									{f.error}
 								</div>
 							</div>
@@ -403,7 +384,7 @@ function Failures({
 								variant="ghost"
 								size="icon-sm"
 								aria-label={`Retry ${relative(f.path, root)}`}
-								title="Retry"
+								data-hint="Retry"
 								disabled={running || id === undefined}
 								onClick={() => id !== undefined && onRetry([id])}
 							>

@@ -16,8 +16,9 @@ import type { TagTarget } from "#/components/tag-editor.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { useUndo } from "#/context/undo-context.ts";
-import { confirmFix, type FixReport } from "#/lib/api.ts";
+import type { FixReport } from "#/lib/api.ts";
 import { describeFixes, fixablePaths, indexIssues } from "#/lib/audit.ts";
+import { confirmFix } from "#/lib/confirm.ts";
 import { isInside } from "#/lib/fs-path.ts";
 import {
 	useAudit,

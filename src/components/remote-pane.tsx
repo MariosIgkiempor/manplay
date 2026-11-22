@@ -149,7 +149,9 @@ function RemoteRow({
 				)}
 				<span
 					className={cn("min-w-0 flex-1 truncate", playState && "font-medium text-primary")}
-					title={entry.name}
+					data-hint={entry.name}
+					role="img"
+					aria-label={entry.name}
 				>
 					<Name name={entry.name} query={query} />
 				</span>
@@ -292,7 +294,7 @@ export function RemotePane({
 					variant="ghost"
 					size="icon-sm"
 					aria-label="Up one folder"
-					title="Up one folder"
+					data-hint="Up one folder"
 					disabled={path === ROOT}
 					onClick={() => setPath(parentPath(path))}
 				>
@@ -318,7 +320,7 @@ export function RemotePane({
 					variant="outline"
 					size="sm"
 					disabled={picked.length === 0 || pull.isPending}
-					title="Download the selected files and folders into the library"
+					data-hint="Download the selected files and folders into the library"
 					onClick={() => startPull(picked)}
 				>
 					<Download />

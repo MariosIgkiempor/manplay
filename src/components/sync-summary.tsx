@@ -278,7 +278,7 @@ function ReviewToolbar({
 							size="sm"
 							variant="outline"
 							aria-pressed={chosen}
-							title={`${m.hint} Starts your ticks again.`}
+							data-hint={`${m.hint} Starts your ticks again.`}
 							onClick={() => onMode(m.mode)}
 							className={cn(chosen ? m.on : "text-muted-foreground", !chosen && m.tint)}
 						>

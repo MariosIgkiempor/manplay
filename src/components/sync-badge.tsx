@@ -22,7 +22,7 @@ export function SyncBadge({ state, showLabel = false, className }: Props) {
 	const { label, Icon, className: tone } = META[state];
 	return (
 		<span
-			title={label}
+			data-hint={label}
 			role="img"
 			aria-label={label}
 			className={cn("inline-flex items-center gap-1 text-xs", tone, className)}

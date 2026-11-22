@@ -100,7 +100,7 @@ function Figures({ stats, all = false }: { stats: readonly Stat[]; all?: boolean
 				return (
 					<span
 						key={s.label}
-						title={`${s.n.toLocaleString()} ${s.label}`}
+						data-hint={`${s.n.toLocaleString()} ${s.label}`}
 						className="inline-flex items-center gap-1"
 					>
 						{!all && Icon && <Icon aria-hidden="true" className={cn("size-3.5", toneOf(s))} />}
@@ -130,7 +130,7 @@ function PartDetail({ part, titled }: { part: Part; titled: boolean }) {
 			{part.items.length > 0 && (
 				<ul className="max-h-60 space-y-0.5 overflow-auto text-sm">
 					{part.items.map((item) => (
-						<li key={item} className="truncate" title={item}>
+						<li key={item} className="truncate" data-hint={item}>
 							{item}
 						</li>
 					))}
@@ -230,7 +230,7 @@ function Row({
 					)}
 					<span
 						className="min-w-0 flex-1"
-						title={new Date(entry.finishedAt * 1000).toLocaleString()}
+						data-hint={new Date(entry.finishedAt * 1000).toLocaleString()}
 					>
 						{titled ? (
 							<>

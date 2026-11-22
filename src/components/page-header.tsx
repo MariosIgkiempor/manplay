@@ -75,7 +75,7 @@ function Title({
 	}, [editing, initial]);
 	if (!editing) {
 		return (
-			<h1 className="truncate font-semibold text-lg tracking-tight" title={title}>
+			<h1 className="truncate font-semibold text-lg tracking-tight" data-hint={title}>
 				{title}
 			</h1>
 		);
@@ -126,7 +126,7 @@ function HeaderTitle({
 		return title;
 	}
 	return (
-		<h1 className={cn("truncate font-semibold tracking-tight", size)} title={hint ?? title}>
+		<h1 className={cn("truncate font-semibold tracking-tight", size)} data-hint={hint ?? title}>
 			{title}
 		</h1>
 	);

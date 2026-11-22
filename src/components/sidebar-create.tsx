@@ -19,7 +19,7 @@ export function AddButton({
 		<button
 			type="button"
 			aria-label={label}
-			title={label}
+			data-hint={label}
 			onClick={(e) => {
 				e.preventDefault();
 				e.stopPropagation();

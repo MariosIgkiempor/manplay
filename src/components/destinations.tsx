@@ -75,7 +75,7 @@ function TargetRow({
 						<span
 							role="img"
 							aria-label={online ? "Online" : "Offline"}
-							title={online ? "Online" : "Offline"}
+							data-hint={online ? "Online" : "Offline"}
 							className={cn(
 								"size-1.5 shrink-0 rounded-full",
 								online ? "bg-success" : "bg-muted-foreground/60",

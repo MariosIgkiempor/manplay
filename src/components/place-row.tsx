@@ -88,7 +88,7 @@ export function PlaceRow({
 						<span className="truncate font-medium text-sm">{name}</span>
 						{badge}
 					</span>
-					<span className="block truncate text-muted-foreground text-xs" title={whereTitle}>
+					<span className="block truncate text-muted-foreground text-xs" data-hint={whereTitle}>
 						{where}
 					</span>
 				</button>

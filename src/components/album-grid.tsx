@@ -39,7 +39,7 @@ function AlbumTile({
 						onClick={onOpen}
 						onDoubleClick={() => player.play(album.tracks, 0)}
 						aria-label={`Open ${album.album}`}
-						title="Click to open, double-click to play"
+						data-hint="Click to open, double-click to play"
 					>
 						<AlbumArt
 							trackId={album.coverTrackId}
@@ -60,7 +60,7 @@ function AlbumTile({
 						<button
 							type="button"
 							className="block max-w-full truncate text-left font-medium text-sm hover:underline"
-							title={album.album}
+							data-hint={album.album}
 							onClick={onOpen}
 						>
 							{album.album}

@@ -257,7 +257,7 @@ export function SidebarTagTree() {
 								<Link
 									to="/tags/$"
 									params={{ _splat: n.name }}
-									title={n.name}
+									data-hint={n.name}
 									className={rowBase}
 									style={{ paddingLeft: `${pad}px` }}
 								>

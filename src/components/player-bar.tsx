@@ -31,14 +31,14 @@ function TempoKey({ track }: { track: Track }) {
 	return (
 		<div className="mr-3 flex items-baseline gap-3 text-xs tabular-nums">
 			{bpm !== "" && (
-				<span title="Tempo">
+				<span data-hint="Tempo">
 					<span className="font-semibold text-foreground text-sm">{bpm}</span>{" "}
 					<span className="text-muted-foreground">BPM</span>
 				</span>
 			)}
 			{key !== "" && (
 				<span
-					title={keyName(track.key ?? "") ?? "Key"}
+					data-hint={keyName(track.key ?? "") ?? "Key"}
 					className="font-semibold text-primary text-sm"
 				>
 					{key}
@@ -67,7 +67,7 @@ function NowPlaying({ track, error }: { track: Track; error: string | null }) {
 						<Marquee>
 							<button
 								type="button"
-								title={`${track.title} · open song`}
+								data-hint={`${track.title} · open song`}
 								onClick={() =>
 									detail.open({
 										kind: "song",
@@ -122,7 +122,7 @@ function CueButton({ cue }: { cue: Cue }) {
 		<button
 			type="button"
 			aria-label="Back to the cue"
-			title="Back to the cue and pause"
+			data-hint="Back to the cue and pause"
 			// Round and orange like the CUE button on the deck above and on a CDJ.
 			className="mx-0.5 grid size-8 shrink-0 place-items-center rounded-full border-2 font-semibold text-[9px] tracking-wide outline-none transition-colors hover:bg-[color-mix(in_oklch,var(--cue)_15%,transparent)] focus-visible:ring-2 focus-visible:ring-ring/60"
 			style={
@@ -147,7 +147,7 @@ function TimeLeft() {
 	const duration = Number.isFinite(p.duration) && p.duration > 0 ? p.duration : 0;
 	const left = Math.max(0, duration - time);
 	return (
-		<span className="shrink-0 text-xs tabular-nums" title="Time left / length">
+		<span className="shrink-0 text-xs tabular-nums" data-hint="Time left / length">
 			<span className="text-muted-foreground">−{clock(left)}</span>
 			<span className="text-muted-foreground/60"> / </span>
 			<span className="text-foreground">{clock(duration)}</span>
@@ -185,7 +185,7 @@ function Transport({
 				size="icon"
 				aria-label="Show the waveform"
 				aria-pressed={waveform}
-				title={waveform ? "Hide the waveform" : "Show the waveform"}
+				data-hint={waveform ? "Hide the waveform" : "Show the waveform"}
 				className={waveform ? "text-primary" : "text-muted-foreground"}
 				onClick={() => onWaveform(!waveform)}
 			>

@@ -44,7 +44,7 @@ export function Segmented<T extends string>({
 					<TabsTab
 						key={item.value}
 						value={item.value}
-						title={item.label}
+						data-hint={item.label}
 						className={cn(
 							"flex min-w-0 items-center gap-2 px-3 py-2 font-medium text-muted-foreground text-sm outline-none transition-colors hover:text-foreground focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-ring/60 data-selected:text-foreground [&_svg]:size-4 [&_svg]:shrink-0",
 						)}

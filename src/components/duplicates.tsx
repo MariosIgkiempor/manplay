@@ -11,9 +11,11 @@ import {
 	ProblemText,
 } from "#/components/problem-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { PanelBarTitle } from "#/context/panel-bar.tsx";
 import { usePlayer } from "#/context/player-context.ts";
-import { type CarryCandidate, confirmTrash, type DuplicateGroup, fsReveal } from "#/lib/api.ts";
+import { type CarryCandidate, type DuplicateGroup, fsReveal } from "#/lib/api.ts";
+import { confirmTrash } from "#/lib/confirm.ts";
 import { extraCopies } from "#/lib/duplicates.ts";
 import { formatBytes } from "#/lib/format.ts";
 import { baseName, relSegments } from "#/lib/fs-path.ts";
@@ -40,7 +42,7 @@ export function DuplicatesIndicator({ onClick }: { onClick: () => void }) {
 			<button
 				type="button"
 				onClick={onClick}
-				title={`${carry.length} re-encoded ${carry.length === 1 ? "song" : "songs"}: they can take their tags and playlists along`}
+				data-hint={`${carry.length} re-encoded ${carry.length === 1 ? "song" : "songs"}: they can take their tags and playlists along`}
 				aria-label={`${carry.length} re-encoded ${carry.length === 1 ? "song" : "songs"}`}
 				className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-warning hover:bg-warning/15"
 			>
@@ -54,7 +56,7 @@ export function DuplicatesIndicator({ onClick }: { onClick: () => void }) {
 		<button
 			type="button"
 			onClick={onClick}
-			title={`${copies} duplicate ${copies === 1 ? "file" : "files"}: songs stored more than once. Show them.`}
+			data-hint={`${copies} duplicate ${copies === 1 ? "file" : "files"}: songs stored more than once. Show them.`}
 			aria-label={`${copies} duplicate ${copies === 1 ? "file" : "files"}`}
 			className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-warning hover:bg-warning/15"
 		>
@@ -133,7 +135,7 @@ function DuplicateList({ groups }: { groups: readonly DuplicateGroup[] }) {
 								variant="ghost"
 								size="icon-sm"
 								aria-label={`Show ${baseName(t.path)} in ${FILE_MANAGER}`}
-								title={`Show in ${FILE_MANAGER}`}
+								data-hint={`Show in ${FILE_MANAGER}`}
 								onClick={() => {
 									setError(null);
 									fsReveal(t.path).catch((e) => setError(String(e)));
@@ -141,19 +143,19 @@ function DuplicateList({ groups }: { groups: readonly DuplicateGroup[] }) {
 							>
 								<FolderOpen />
 							</Button>
-							<Button
+							<ConfirmButton
 								variant="outline"
 								size="sm"
+								destructive
 								disabled={trash.isPending}
-								onClick={async () => {
+								confirmLabel={`Move “${baseName(t.path)}” to the ${TRASH}`}
+								onConfirm={() => {
 									setError(null);
-									if (await confirmTrash([baseName(t.path)])) {
-										trash.mutate([t.path]);
-									}
+									trash.mutate([t.path]);
 								}}
 							>
 								Move to {TRASH}
-							</Button>
+							</ConfirmButton>
 						</RowMenu>
 					))}
 				</ProblemList>

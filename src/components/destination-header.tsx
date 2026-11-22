@@ -125,7 +125,7 @@ export function FolderFigure({ path }: { path: string | null }) {
 		return null;
 	}
 	return (
-		<span className="flex min-w-0 items-center gap-1" title={path}>
+		<span className="flex min-w-0 items-center gap-1" data-hint={path}>
 			<Folder className="size-3.5 shrink-0" />
 			<span className="truncate">{path}</span>
 		</span>

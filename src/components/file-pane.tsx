@@ -501,7 +501,7 @@ export function FilePane({
 					variant="ghost"
 					size="icon-sm"
 					aria-label="Up one folder (⌫)"
-					title="Up one folder (⌫)"
+					data-hint="Up one folder (⌫)"
 					disabled={atRoot}
 					onClick={() => onNavigate(parentPath(path))}
 				>
@@ -654,7 +654,7 @@ export function PaneFooter({
 				<button
 					type="button"
 					onClick={onShowShortcuts}
-					title="Keyboard shortcuts (?)"
+					data-hint="Keyboard shortcuts (?)"
 					className="-mr-1.5 flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground [&_svg]:size-3.5"
 				>
 					<Keyboard />
@@ -739,7 +739,7 @@ export function LocationBar({
 					<button
 						type="button"
 						aria-label="Clear filter"
-						title="Clear filter (Esc)"
+						data-hint="Clear filter (Esc)"
 						onClick={() => onDone(false)}
 						className="-mr-0.5 grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
 					>
@@ -777,7 +777,7 @@ export function ColumnHeader({ sort, onSort }: { sort: FileSort; onSort: (s: Fil
 					<button
 						key={c.key}
 						type="button"
-						title={`Sort by ${c.label.toLowerCase()}`}
+						data-hint={`Sort by ${c.label.toLowerCase()}`}
 						aria-pressed={on}
 						onClick={() =>
 							onSort(on ? { key: c.key, desc: !sort.desc } : { key: c.key, desc: c.desc })
@@ -881,7 +881,7 @@ function Tool({
 			variant="ghost"
 			size="icon-sm"
 			aria-label={label}
-			title={label}
+			data-hint={label}
 			disabled={disabled}
 			onClick={onClick}
 		>
@@ -1484,7 +1484,9 @@ function EntryRow({
 				)}
 				<span
 					className={cn("min-w-0 flex-1 truncate", playState && "font-medium text-primary")}
-					title={entry.name}
+					data-hint={entry.name}
+					role="img"
+					aria-label={entry.name}
 				>
 					<Name name={entry.name} query={query} />
 				</span>

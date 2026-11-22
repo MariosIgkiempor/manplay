@@ -42,7 +42,7 @@ function ArtistTile({ artist, onOpen }: { artist: Artist; onOpen: () => void }) 
 				<button
 					type="button"
 					className="mx-auto mt-2 block max-w-full truncate text-center font-medium text-sm hover:underline"
-					title={label}
+					data-hint={label}
 					onClick={onOpen}
 				>
 					{label}

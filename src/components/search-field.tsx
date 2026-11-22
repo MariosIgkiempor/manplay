@@ -51,7 +51,7 @@ export function SearchField({
 					<button
 						type="button"
 						aria-label="Clear search"
-						title="Clear search"
+						data-hint="Clear search"
 						className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
 						onClick={() => onChange("")}
 					>

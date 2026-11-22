@@ -1,7 +1,22 @@
 import type { CoverOption } from "#/lib/api.ts";
+import { extensionOf } from "#/lib/file-picker.ts";
 
 /** The picture formats a cover can be written from. */
 export const COVER_TYPES: readonly string[] = ["image/jpeg", "image/png"];
+
+/** The same formats by file extension, for choosing a picture file. */
+const COVER_TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
+	jpg: "image/jpeg",
+	jpeg: "image/jpeg",
+	png: "image/png",
+};
+
+export const COVER_EXTENSIONS: readonly string[] = Object.keys(COVER_TYPE_BY_EXTENSION);
+
+/** The picture format a file's name says it is; null when a cover cannot be written from it. */
+export function coverTypeOf(fileName: string): string | null {
+	return COVER_TYPE_BY_EXTENSION[extensionOf(fileName)] ?? null;
+}
 
 /** What tells one release of an album from another: its year, country and format. */
 export function optionCaption(option: CoverOption): string {

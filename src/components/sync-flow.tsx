@@ -35,7 +35,7 @@ export function SyncButton({
 			size={size}
 			variant={variant}
 			disabled={disabled === true || all.length === 0}
-			title="Shows what a sync would change; nothing changes until you confirm."
+			data-hint="Shows what a sync would change; nothing changes until you confirm."
 			onClick={() => start("sync", ids)}
 		>
 			<RefreshCw /> {label}

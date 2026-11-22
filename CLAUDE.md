@@ -31,6 +31,7 @@ Windows 10/11 x64.
 | rekordbox / USB export | `rekordbox.rs`, `usb*.rs`, `pdb/`, `onelib/` |
 | The formats a USB export writes (`usb_export::Outputs`): rekordbox, Serato crates, VirtualDJ library (`VirtualDJ/`), Gemini MDJ library (`GEMINI/`, the V-CASE format), playlists as folders (`Playlists/`); the drive's own song list when rekordbox is off (`.manplay/`) | `usb_export.rs`, `serato.rs`, `virtualdj.rs`, `gemini.rs`, `playlist_folders.rs`, `usb_files.rs`, `src/lib/usb-outputs.ts`, `docs/virtualdj.md`, `docs/gemini-vcase.md` |
 | Frontend API wrappers | `src/lib/api.ts`, `src/lib/queries.ts` |
+| The app's own file picker, confirm question, two-press confirm button and hover hints, in place of native UI | `file_picker.rs`, `src/lib/file-picker.ts`, `src/components/file-picker.tsx`, `src/lib/confirm.ts`, `src/components/ui/confirm-button.tsx`, `src/components/hint-layer.tsx`, `src/components/text-field-menu.tsx` |
 | Harness: the UI in a headless browser on a fake backend, for looking at and driving the app | `scripts/harness.mjs`, `src/harness/`, `docs/harness.md` |
 | Plans and research | `docs/plans/`, `docs/*.md` |
 
@@ -73,6 +74,13 @@ events, adding a command to the fake backend. The backend is fake, so anything i
   (`error.rs`). Don't add new clippy warnings. No `unsafe`.
 - **TypeScript:** Biome formats (tabs, double quotes, width 100). Import with `#/…` paths.
   Parse backend data with zod in `api.ts`; don't call `invoke` from components.
+- **No native UI.** The app draws everything itself: no system file pickers or message boxes, no
+  browser tooltips (`title`), `<select>`, `<datalist>` or date inputs. Use `pickPath`
+  (`src/lib/file-picker.ts`), `data-hint` or `Hint`, `Select`, `SuggestInput`, `DateField`
+  (`src/components/ui/`). An action worth a second thought that starts from a button uses
+  `ConfirmButton` (press twice), not a dialog; one that starts from a menu or shortcut uses
+  `askConfirm` (`src/lib/confirm.ts`). A right-click opens an app menu or, in a text field,
+  `TextFieldMenu`; never the webview's. `src/lib/no-native-ui.test.ts` enforces what it can.
 - **Comments:** doc comments say what something is or why, in plain words. No change logs.
 - **Times:** store Unix time in UTC; show local time.
 - **Windows parity:** paths, trash/Recycle Bin wording and USB handling differ per platform

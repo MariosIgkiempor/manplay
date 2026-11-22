@@ -83,7 +83,7 @@ function Chips({ items, controls }: { items: readonly ReviewItem[]; controls: Re
 		return (
 			<span
 				key={c.kind}
-				title={`${chipCount(c.ticked, c.count)} ${hint}${skipped ? " (skipped)" : ""}`}
+				data-hint={`${chipCount(c.ticked, c.count)} ${hint}${skipped ? " (skipped)" : ""}`}
 				className={cn(
 					"rounded-full bg-muted px-2 py-0.5 text-[11px] tabular-nums",
 					skipped && "text-muted-foreground line-through opacity-60",

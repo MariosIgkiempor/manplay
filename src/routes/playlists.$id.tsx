@@ -134,7 +134,7 @@ function PlaylistPage() {
 								variant="ghost"
 								size="icon-sm"
 								aria-label={`Remove ${t.title} from playlist`}
-								title="Remove from playlist"
+								data-hint="Remove from playlist"
 								className="text-muted-foreground opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
 								onClick={(e) => {
 									e.stopPropagation();

@@ -62,7 +62,7 @@ function QuickActions() {
 					key={a.kind}
 					type="button"
 					aria-label={a.label}
-					title={none ? `${a.label} (add a destination first)` : a.label}
+					data-hint={none ? `${a.label} (add a destination first)` : a.label}
 					disabled={busy || none}
 					onClick={() => start(a.kind)}
 					className={iconButton}
@@ -106,7 +106,7 @@ function ChildRow({
 		<div className={cn("group/row relative", rowClass(active))}>
 			<button
 				type="button"
-				title={title ?? label}
+				data-hint={title ?? label}
 				onClick={onOpen}
 				className={cn(rowBase, "text-left outline-none", dim && "opacity-60")}
 				style={{ paddingLeft: `${CHILD_PAD}px` }}
@@ -133,7 +133,7 @@ function SharedMark() {
 		<span
 			role="img"
 			aria-label="Shared library"
-			title="Shared library: tags, playlists and analysis sync through here"
+			data-hint="Shared library: tags, playlists and analysis sync through here"
 			className="-top-1 -left-1 absolute grid size-3 place-items-center rounded-full bg-primary text-primary-foreground ring-2 ring-canvas"
 		>
 			<Users className="size-2" strokeWidth={3} />
@@ -148,7 +148,7 @@ function BrowseButton({ target, label }: { target: number; label: string }) {
 			to="/files"
 			search={{ target }}
 			aria-label={`Browse files on ${label}`}
-			title="Browse files"
+			data-hint="Browse files"
 			className={cn(iconButton, "size-5", HOVER_END)}
 		>
 			<FolderOpen />
@@ -176,7 +176,7 @@ function EjectButton({ drive }: { drive: UsbDrive }) {
 		<button
 			type="button"
 			aria-label={failed ?? `Eject ${drive.name}`}
-			title={failed ?? "Eject"}
+			data-hint={failed ?? "Eject"}
 			disabled={eject.isPending}
 			onClick={() => eject.mutate()}
 			className={cn(
@@ -202,7 +202,7 @@ function PendingCount({ count, what }: { count: number | null; what: string }) {
 		return null;
 	}
 	return (
-		<span title={`${count.toLocaleString()} ${what}`} className="text-success">
+		<span data-hint={`${count.toLocaleString()} ${what}`} className="text-success">
 			↓{compact(count)}
 		</span>
 	);
@@ -261,14 +261,18 @@ function ScanIndicator({ status }: { status: DestinationStatus | null }) {
 	}
 	if (status.kind === "error") {
 		return (
-			<span role="img" aria-label={`${SCAN_TEXT.error}: ${status.message}`} title={status.message}>
+			<span
+				role="img"
+				aria-label={`${SCAN_TEXT.error}: ${status.message}`}
+				data-hint={status.message}
+			>
 				<TriangleAlert className="size-3.5 text-destructive" />
 			</span>
 		);
 	}
 	if (status.kind === "upToDate") {
 		return (
-			<span role="img" aria-label={SCAN_TEXT.upToDate} title={SCAN_TEXT.upToDate}>
+			<span role="img" aria-label={SCAN_TEXT.upToDate} data-hint={SCAN_TEXT.upToDate}>
 				<Check className="size-3.5 text-success" />
 			</span>
 		);
@@ -278,7 +282,7 @@ function ScanIndicator({ status }: { status: DestinationStatus | null }) {
 		status.toPush > 0 && `${status.toPush.toLocaleString()} to push`,
 	].filter(Boolean);
 	return (
-		<span title={parts.join(", ")} className="flex items-center gap-1.5">
+		<span data-hint={parts.join(", ")} className="flex items-center gap-1.5">
 			{status.toPull > 0 && <span className="text-success">↓{compact(status.toPull)}</span>}
 			{status.toPush > 0 && <span className="text-primary">↑{compact(status.toPush)}</span>}
 		</span>

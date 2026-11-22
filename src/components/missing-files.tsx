@@ -1,6 +1,4 @@
 import { FileX, Trash2 } from "lucide-react";
-import { useState } from "react";
-import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { fileMenuEntries } from "#/components/file-menu.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { ErrorLine, LoadingLine } from "#/components/page.tsx";
@@ -12,7 +10,7 @@ import {
 	ProblemsCleared,
 	ProblemText,
 } from "#/components/problem-panel.tsx";
-import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { PanelBarTitle } from "#/context/panel-bar.tsx";
 import { timeAgo } from "#/lib/format.ts";
@@ -29,7 +27,7 @@ export function MissingIndicator({ onClick }: { onClick: () => void }) {
 		<button
 			type="button"
 			onClick={onClick}
-			title={`${missing} ${missing === 1 ? "file" : "files"} missing from disk. Show them.`}
+			data-hint={`${missing} ${missing === 1 ? "file" : "files"} missing from disk. Show them.`}
 			aria-label={`${missing} missing ${missing === 1 ? "file" : "files"}`}
 			className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-warning hover:bg-warning/15"
 		>
@@ -81,7 +79,6 @@ function MissingList({ count }: { count: number }) {
 function MissingBody({ onEmpty }: { onEmpty: () => void }) {
 	const status = useLibraryStatus().data;
 	const remove = useRemoveMissing();
-	const [confirming, setConfirming] = useState(false);
 	if (!status || status.missing === 0) {
 		return (
 			<ProblemsCleared title="Nothing is missing">
@@ -96,32 +93,21 @@ function MissingBody({ onEmpty }: { onEmpty: () => void }) {
 				back, and removed from the library after {status.graceDays} days.
 			</PanelIntro>
 			<PanelActions>
-				<Button
+				<ConfirmButton
 					variant="outline"
 					size="sm"
 					disabled={remove.isPending}
-					onClick={() => setConfirming(true)}
+					destructive
+					confirmLabel={`Remove ${status.missing} missing ${status.missing === 1 ? "song" : "songs"}`}
+					consequence="They leave the library and their copies on your sync destinations are removed too."
+					onConfirm={() => remove.mutate(undefined, { onSuccess: onEmpty })}
 				>
 					<Trash2 />
-					Remove now…
-				</Button>
+					Remove now
+				</ConfirmButton>
 			</PanelActions>
 			{remove.isError && <ErrorLine>{String(remove.error)}</ErrorLine>}
 			<MissingList count={status.missing} />
-			{confirming && (
-				<ConfirmDialog
-					title={`Remove ${status.missing} missing ${status.missing === 1 ? "song" : "songs"} now?`}
-					confirmLabel="Remove now"
-					destructive
-					onCancel={() => setConfirming(false)}
-					onConfirm={() => {
-						setConfirming(false);
-						remove.mutate(undefined, { onSuccess: onEmpty });
-					}}
-				>
-					They leave the library and their copies on your sync destinations are removed too.
-				</ConfirmDialog>
-			)}
 		</div>
 	);
 }

@@ -48,7 +48,7 @@ function FailureRow({ path, raw }: { path: string; raw: string }) {
 	const hasExt = dot > slash;
 	return (
 		<li
-			title={path || raw}
+			data-hint={path || raw}
 			className="break-all px-[var(--diff-inset,0px)] py-1.5 font-mono text-[0.8rem] leading-snug"
 		>
 			{path ? (

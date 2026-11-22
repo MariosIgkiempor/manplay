@@ -1,5 +1,5 @@
 import type { UndoEntry } from "#/context/undo-context.ts";
-import { confirmTrash } from "#/lib/api.ts";
+import { confirmTrash } from "#/lib/confirm.ts";
 import { useFsCopy, useFsMakeDir, useFsMove, useFsRename, useFsTrash } from "#/lib/queries.ts";
 import { undoCopy, undoMove } from "#/lib/use-fs-undo.ts";
 

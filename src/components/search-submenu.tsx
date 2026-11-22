@@ -107,7 +107,7 @@ export function SearchSubmenu({ label, icon: Icon, items, placeholder, emptyHint
 									</span>
 									<span
 										className="flex-1 truncate"
-										title={t.name}
+										data-hint={t.name}
 										style={q === "" && t.depth ? { paddingLeft: `${t.depth * 12}px` } : undefined}
 									>
 										{q === "" ? (t.label ?? t.name) : t.name}

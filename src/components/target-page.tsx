@@ -18,11 +18,11 @@ import { HistoryList } from "#/components/history-list.tsx";
 import { JellyfinSection } from "#/components/jellyfin-section.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PlaceFrame } from "#/components/place-page.tsx";
-import { useRemoveDestination } from "#/components/remove-destination.tsx";
+import { removalConsequence, useRemoveDestination } from "#/components/remove-destination.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { SyncPanel } from "#/components/sync-summary.tsx";
-import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
 import { isR2, type SyncTarget, targetShortName, updateSyncTarget } from "#/lib/api.ts";
@@ -103,11 +103,14 @@ export function DestinationSettings({ target }: { target: SyncTarget }) {
 	return (
 		<div key={target.id} className="space-y-6">
 			<SettingsForm target={target}>
-				<RemoveRow onRemove={() => removal.ask(target)} busy={removal.busy} />
+				<RemoveRow
+					target={target}
+					onRemove={() => removal.remove(target)}
+					busy={removal.busy || removal.removing}
+				/>
 			</SettingsForm>
 			<JellyfinSection targetId={target.id} />
 			{removal.error && <ErrorLine>{String(removal.error)}</ErrorLine>}
-			{removal.dialog}
 		</div>
 	);
 }
@@ -204,7 +207,15 @@ function SettingsForm({ target, children }: { target: SyncTarget; children?: Rea
 }
 
 /** Removing the destination, as the last settings row. */
-function RemoveRow({ onRemove, busy }: { onRemove: () => void; busy: boolean }) {
+function RemoveRow({
+	target,
+	onRemove,
+	busy,
+}: {
+	target: SyncTarget;
+	onRemove: () => void;
+	busy: boolean;
+}) {
 	return (
 		<SettingRow
 			label={
@@ -215,16 +226,19 @@ function RemoveRow({ onRemove, busy }: { onRemove: () => void; busy: boolean }) 
 				/>
 			}
 		>
-			<Button
+			<ConfirmButton
 				type="button"
 				size="sm"
 				variant="outline"
 				className="border-destructive/40 text-destructive hover:bg-destructive/10"
-				onClick={onRemove}
 				disabled={busy}
+				destructive
+				confirmLabel={`Remove ${targetShortName(target)}`}
+				consequence={removalConsequence(target)}
+				onConfirm={onRemove}
 			>
-				Remove…
-			</Button>
+				Remove
+			</ConfirmButton>
 		</SettingRow>
 	);
 }
@@ -316,7 +330,11 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 				// Keyed as a whole: both forms start again for another destination.
 				<div key={id} className="space-y-6">
 					<SettingsForm target={target}>
-						<RemoveRow onRemove={() => removal.ask(target)} busy={removal.busy} />
+						<RemoveRow
+							target={target}
+							onRemove={() => removal.remove(target)}
+							busy={removal.busy || removal.removing}
+						/>
 					</SettingsForm>
 					<JellyfinSection targetId={id} />
 				</div>

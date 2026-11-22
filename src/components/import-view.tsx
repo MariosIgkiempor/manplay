@@ -7,19 +7,14 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-import { useId } from "react";
 import { Framed } from "#/components/frame.tsx";
 import { BrowserHeader, ReleaseRows } from "#/components/import-browser.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { ProgressPill } from "#/components/progress-pill.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import {
-	confirmTrash,
-	type ImportProgress,
-	type ImportReport,
-	type ImportScan,
-} from "#/lib/api.ts";
+import type { ImportProgress, ImportReport, ImportScan } from "#/lib/api.ts";
+import { confirmTrash } from "#/lib/confirm.ts";
 import {
 	countNew,
 	editOf,
@@ -145,7 +140,7 @@ function Toolbar(p: ToolbarProps) {
 					variant="ghost"
 					size="icon-sm"
 					aria-label="Full rescan"
-					title="Full rescan: read every file again, ignoring what was learned last time"
+					data-hint="Full rescan: read every file again, ignoring what was learned last time"
 					onClick={() => s.rescan(true)}
 					disabled={s.folder === null || scanning}
 				>
@@ -155,7 +150,7 @@ function Toolbar(p: ToolbarProps) {
 					variant="ghost"
 					size="icon-sm"
 					aria-label="Rescan"
-					title="Rescan (only files that changed)"
+					data-hint="Rescan (only files that changed)"
 					onClick={() => s.rescan(false)}
 					disabled={s.folder === null || scanning}
 				>
@@ -276,7 +271,6 @@ function Message({
 }
 
 export function ImportView({ s }: { s: ReturnType<typeof useImport> }) {
-	const artistList = useId();
 	const tracks = useTracks();
 	const { artists, albumsByArtist, existing } = useLibraryIndex(tracks.data);
 	const scanning = s.find.isPending;
@@ -321,11 +315,6 @@ export function ImportView({ s }: { s: ReturnType<typeof useImport> }) {
 						</div>
 					)}
 					{s.scan && <Summary scan={s.scan} report={s.report} />}
-					<datalist id={artistList}>
-						{artists.map((a) => (
-							<option key={a} value={a} />
-						))}
-					</datalist>
 					{groups.length === 0 ? (
 						<EmptyList s={s} />
 					) : (
@@ -351,7 +340,7 @@ export function ImportView({ s }: { s: ReturnType<typeof useImport> }) {
 										onImport={(keys) => s.add.mutate(new Set(keys))}
 										onTrash={(keys) => void trashKeys(new Set(keys))}
 										busy={s.add.isPending || !s.canAdd}
-										artistList={artistList}
+										artists={artists}
 										albums={[...(albumsByArtist.get(edit.artist.trim()) ?? [])].sort((x, y) =>
 											x.localeCompare(y),
 										)}

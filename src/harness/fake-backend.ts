@@ -34,6 +34,8 @@ import {
 	DOWNLOADS_FOLDER,
 	IMPORT_FOLDERS,
 	NAS_TARGET_ID,
+	PICKER_FOLDERS,
+	PICKER_PLACES,
 	R2_TARGET_ID,
 	RECENTLY_DELETED,
 	REKORDBOX_STATUS,
@@ -911,15 +913,43 @@ function importCommands(state: State): Record<string, Command> {
 	};
 }
 
-/** What the app's native dialogs and plugins answer. */
+/** The way from the top folder down to `path`, as the file picker's crumbs. */
+function pickerCrumbs(path: string): { name: string; path: string }[] {
+	const parts = path.split("/").filter((part) => part !== "");
+	return [
+		{ name: "/", path: "/" },
+		...parts.map((name, i) => ({ name, path: `/${parts.slice(0, i + 1).join("/")}` })),
+	];
+}
+
+/** The smallest PNG there is: one transparent pixel, for a picture picked as a cover. */
+const ONE_PIXEL_PNG =
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/** The file picker's view of this made-up computer; the library folder shows the library. */
+function pickerCommands(state: State): Record<string, Command> {
+	const entries = (path: string): FsEntry[] => {
+		const inLibrary = path === LIBRARY_ROOT || path.startsWith(`${LIBRARY_ROOT}/`);
+		return inLibrary ? listFolder(state.tracks, libraryFolder(path)) : (PICKER_FOLDERS[path] ?? []);
+	};
+	return {
+		clipboard_read_text: () => "Pasted text",
+		picker_places: () => PICKER_PLACES,
+		picker_list: (args) => {
+			const path = text(args.get("path")).replace(/(?<=.)\/+$/, "");
+			return { path, crumbs: pickerCrumbs(path), entries: entries(path) };
+		},
+		picker_make_dir: (args) => `${text(args.get("parent"))}/${text(args.get("name")).trim()}`,
+		picker_read_image: () =>
+			Uint8Array.from(atob(ONE_PIXEL_PNG), (character) => character.charCodeAt(0)).buffer,
+	};
+}
+
+/** What the app's plugins answer. */
 function pluginCommands(): Record<string, Command> {
 	return {
 		"plugin:app|version": () => "0.1.0",
 		"plugin:updater|check": () => null,
-		"plugin:dialog|open": () => "/Users/dj/Music/Picked Folder",
-		"plugin:dialog|save": () => "/Users/dj/Documents/manplay-rekordbox.xml",
-		"plugin:dialog|ask": () => true,
-		"plugin:dialog|confirm": () => true,
 	};
 }
 
@@ -976,6 +1006,7 @@ export function createFakeBackend(scenario: Scenario): FakeBackend {
 		...syncCommands(state),
 		...exportCommands(state),
 		...importCommands(state),
+		...pickerCommands(state),
 		...pluginCommands(),
 	};
 	return {

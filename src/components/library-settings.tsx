@@ -1,10 +1,9 @@
 import { useIsMutating, useMutationState } from "@tanstack/react-query";
 import { FolderOpen, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
-import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { FieldRow, FrameSection } from "#/components/frame.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { SCAN_KEY, useLibraryRoot, useResetLibrary, useScan, useTracks } from "#/lib/queries.ts";
 
 /** Where the library lives on disk, how to rescan it, and how to start its database over. */
@@ -13,7 +12,6 @@ export function LibrarySettings() {
 	const tracks = useTracks();
 	const scan = useScan();
 	const reset = useResetLibrary();
-	const [confirming, setConfirming] = useState(false);
 	// Also true while the automatic launch-time rescan is running.
 	const scanning = useIsMutating({ mutationKey: SCAN_KEY }) > 0;
 	const lastError = useMutationState({
@@ -66,31 +64,23 @@ export function LibrarySettings() {
 					description="Rebuilds the song list from the folder. Playlists, tag memberships and sync records are cleared; a backup is kept."
 					align="center"
 				>
-					<Button variant="destructive" disabled={scanning} onClick={() => setConfirming(true)}>
+					<ConfirmButton
+						variant="destructive"
+						disabled={scanning}
+						destructive
+						confirmLabel="Reset the library database"
+						consequence="Songs are rebuilt from the folder. Playlist and tag memberships and sync records are cleared. A backup of the database is kept, and your music files are not touched."
+						onConfirm={() => reset.mutate()}
+					>
 						<Trash2 />
-						Reset database…
-					</Button>
+						Reset database
+					</ConfirmButton>
 				</FieldRow>
 			)}
 			{reset.isError && !scanning && (
 				<div className="px-4 py-3">
 					<ErrorLine>{String(reset.error)}</ErrorLine>
 				</div>
-			)}
-			{confirming && (
-				<ConfirmDialog
-					title="Reset the library database?"
-					confirmLabel="Reset database"
-					destructive
-					onCancel={() => setConfirming(false)}
-					onConfirm={() => {
-						setConfirming(false);
-						reset.mutate();
-					}}
-				>
-					Songs are rebuilt from the folder. Playlist and tag memberships and sync records are
-					cleared. A backup of the database is kept, and your music files are not touched.
-				</ConfirmDialog>
 			)}
 		</FrameSection>
 	);

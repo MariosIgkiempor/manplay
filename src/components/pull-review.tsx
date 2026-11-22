@@ -181,7 +181,7 @@ function FilterBar({
 					size="sm"
 					disabled={disabled || shown === 0}
 					onClick={onOnly}
-					title="Tick only the files shown, untick everything else"
+					data-hint="Tick only the files shown, untick everything else"
 				>
 					Pull only these ({shown.toLocaleString()})
 				</Button>
@@ -352,7 +352,7 @@ function Picker({
 						size="sm"
 						disabled={busy || chosen.length === 0}
 						onClick={() => verify.mutate(chosen.map((f) => f.rel))}
-						title="Compares audio content with your library. Reads a few KB per file."
+						data-hint="Compares audio content with your library. Reads a few KB per file."
 					>
 						<ShieldCheck /> {verify.isPending ? "Checking…" : "Check for duplicates"}
 					</Button>

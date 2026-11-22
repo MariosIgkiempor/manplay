@@ -81,7 +81,7 @@ export function FilesTools(p: FilesToolsProps) {
 					size="icon-sm"
 					aria-pressed={p.tagsOpen}
 					aria-label="Metadata"
-					title="Metadata"
+					data-hint="Metadata"
 					onClick={p.onToggleTags}
 					disabled={!p.canOpenTags}
 				>
@@ -93,7 +93,7 @@ export function FilesTools(p: FilesToolsProps) {
 				size="icon-sm"
 				aria-pressed={p.split}
 				aria-label={splitLabel}
-				title={splitLabel}
+				data-hint={splitLabel}
 				onClick={p.onToggleSplit}
 			>
 				<Columns2 />

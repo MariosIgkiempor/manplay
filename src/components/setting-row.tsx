@@ -44,7 +44,7 @@ export function SettingRow({
 	return (
 		<div
 			className="flex min-h-12 flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2"
-			title={title}
+			data-hint={title}
 		>
 			<span className="text-sm">{label}</span>
 			<div className="flex flex-wrap items-center gap-1.5">{children}</div>

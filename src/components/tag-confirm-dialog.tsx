@@ -164,7 +164,7 @@ function PerFile({ files }: { files: FileChanges[] }) {
 				{files.slice(0, MAX_FILES).map((f) => (
 					<li key={f.path} className="px-3 py-2 text-xs">
 						<div className="flex items-baseline gap-2">
-							<span className="truncate font-medium" title={f.path}>
+							<span className="truncate font-medium" data-hint={f.path}>
 								{fileName(f.path)}
 							</span>
 							<span className="ml-auto shrink-0 truncate text-muted-foreground">

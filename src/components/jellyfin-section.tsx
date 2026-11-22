@@ -9,6 +9,7 @@ import { ErrorLine } from "#/components/page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
+import { Select, type SelectOption } from "#/components/ui/select.tsx";
 import {
 	checkJellyfinSongs,
 	forgetJellyfin,
@@ -51,8 +52,7 @@ function Row({
 	);
 }
 
-const SELECT =
-	"h-8 w-60 rounded-lg border bg-transparent px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50";
+const SELECT = "w-60";
 
 /** What is typed and chosen in the form. An empty `apiKey` means the saved one. */
 type Draft = {
@@ -214,6 +214,10 @@ const VISIBILITY_LABELS: Record<JellyfinVisibility["kind"], string> = {
 	users: "These users",
 };
 
+const VISIBILITY_OPTIONS: SelectOption[] = Object.entries(VISIBILITY_LABELS).map(
+	([value, label]) => ({ value, label }),
+);
+
 function visibilityOf(kind: string, current: JellyfinVisibility): JellyfinVisibility {
 	if (kind === "everyone") {
 		return { kind: "everyone" };
@@ -243,18 +247,13 @@ function VisibilityRows({
 				title="Visible to"
 				hint="Playlists already sent are made again when this changes, after a review."
 				control={(id) => (
-					<select
+					<Select
 						id={id}
 						className={SELECT}
 						value={draft.visibility.kind}
-						onChange={(e) => edit({ visibility: visibilityOf(e.target.value, draft.visibility) })}
-					>
-						{Object.entries(VISIBILITY_LABELS).map(([kind, label]) => (
-							<option key={kind} value={kind}>
-								{label}
-							</option>
-						))}
-					</select>
+						options={VISIBILITY_OPTIONS}
+						onChange={(kind) => edit({ visibility: visibilityOf(kind, draft.visibility) })}
+					/>
 				)}
 			/>
 			{draft.visibility.kind === "users" && (
@@ -296,20 +295,15 @@ function ChoiceRows({
 				title="Jellyfin user"
 				hint="Playlists are made for this user."
 				control={(id) => (
-					<select
+					<Select
 						id={id}
 						className={SELECT}
 						value={draft.userId ?? ""}
-						onChange={(e) =>
-							edit({ userId: server.users.find((u) => u.id === e.target.value)?.id ?? null })
+						options={server.users.map((u) => ({ value: u.id, label: u.name }))}
+						onChange={(userId) =>
+							edit({ userId: server.users.find((u) => u.id === userId)?.id ?? null })
 						}
-					>
-						{server.users.map((u) => (
-							<option key={u.id} value={u.id}>
-								{u.name}
-							</option>
-						))}
-					</select>
+					/>
 				)}
 			/>
 			<Row
@@ -320,22 +314,19 @@ function ChoiceRows({
 					server.libraries.length === 0 ? (
 						<span className="text-muted-foreground text-sm">No music libraries</span>
 					) : (
-						<select
+						<Select
 							id={id}
 							className={SELECT}
 							value={draft.libraryId ?? ""}
-							onChange={(e) =>
-								edit({
-									libraryId: server.libraries.find((l) => l.id === e.target.value)?.id ?? null,
-								})
+							options={server.libraries.map((l) => ({
+								value: l.id,
+								label: l.name,
+								hint: l.locations.join("\n"),
+							}))}
+							onChange={(libraryId) =>
+								edit({ libraryId: server.libraries.find((l) => l.id === libraryId)?.id ?? null })
 							}
-						>
-							{server.libraries.map((l) => (
-								<option key={l.id} value={l.id} title={l.locations.join("\n")}>
-									{l.name}
-								</option>
-							))}
-						</select>
+						/>
 					)
 				}
 			/>
@@ -457,7 +448,7 @@ function SongCheck({ targetId }: { targetId: number }) {
 			{check.data && check.data.examples.length > 0 && (
 				<ul className="space-y-0.5 py-2 font-mono text-muted-foreground text-xs">
 					{check.data.examples.map((rel) => (
-						<li key={rel} className="truncate" title={rel}>
+						<li key={rel} className="truncate" data-hint={rel}>
 							{rel}
 						</li>
 					))}
