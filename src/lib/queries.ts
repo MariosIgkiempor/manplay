@@ -591,7 +591,11 @@ export function usePanelTabs() {
 	const tabs = query.data ?? DEFAULT_PANEL_TABS;
 	const set = useMutation({
 		mutationFn: setPanelTabs,
-		onMutate: (next) => queryClient.setQueryData(["panel-tabs"], next),
+		// A first load still in flight would land after this and undo the pick: drop it first.
+		onMutate: async (next) => {
+			await queryClient.cancelQueries({ queryKey: ["panel-tabs"] });
+			queryClient.setQueryData(["panel-tabs"], next);
+		},
 		onError: () => queryClient.invalidateQueries({ queryKey: ["panel-tabs"] }),
 	});
 	const setTab = <K extends keyof PanelTabs>(which: K, value: PanelTabs[K]) => {

@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { type DetailApi, DetailContext, type DetailView } from "#/context/detail-context.ts";
 import { useUnsavedGuard } from "#/lib/unsaved.tsx";
 
@@ -29,9 +29,17 @@ function usePane<V extends DetailView>() {
 export function DetailProvider({ children }: { children: ReactNode }) {
 	const pane = usePane<DetailView>();
 	const { stack } = pane;
+	const [last, setLast] = useState<DetailView | null>(null);
+	const top = stack.at(-1);
+	useEffect(() => {
+		if (top !== undefined) {
+			setLast(top);
+		}
+	}, [top]);
 	const value = useMemo<DetailApi>(
 		() => ({
-			view: stack.at(-1) ?? null,
+			view: top ?? null,
+			last,
 			canGoBack: stack.length > 1,
 			back: pane.back,
 			close: pane.close,
@@ -40,7 +48,7 @@ export function DetailProvider({ children }: { children: ReactNode }) {
 			push: pane.push,
 			replace: pane.replace,
 		}),
-		[pane, stack],
+		[pane, stack, top, last],
 	);
 	return (
 		<DetailContext.Provider value={value}>

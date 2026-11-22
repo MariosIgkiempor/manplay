@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { FailureList } from "#/components/failure-list.tsx";
+import { FrameSection } from "#/components/frame.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { dismissActivity, dismissSyncRuns } from "#/lib/api.ts";
@@ -195,7 +196,7 @@ function Row({
 	const { Icon, tone, label } = STATUS[entry.status];
 	return (
 		<li className="group/row">
-			<div className="flex items-center gap-2 px-2 transition-colors hover:bg-muted/40">
+			<div className="flex items-center gap-2 px-3 transition-colors hover:bg-white/[0.03]">
 				<button
 					type="button"
 					aria-expanded={open}
@@ -243,7 +244,7 @@ function Row({
 				</Button>
 			</div>
 			{open && (
-				<div className="space-y-4 border-t bg-muted/20 py-3 [--diff-inset:1rem]">
+				<div className="space-y-4 border-hairline border-t bg-black/10 py-3 [--diff-inset:1rem]">
 					{entry.parts.map((p) => (
 						<PartDetail key={p.id} part={p} titled={entry.parts.length > 1} />
 					))}
@@ -292,11 +293,10 @@ export function HistoryList({
 	}
 	return (
 		<>
-			<div className="-mx-2 space-y-5">
+			<div className="space-y-4">
 				{days.map(([label, list]) => (
-					<section key={label}>
-						<h3 className="px-4 pb-1.5 font-medium text-muted-foreground text-xs">{label}</h3>
-						<ul className="divide-y border-y">
+					<FrameSection key={label} title={label}>
+						<ul className="divide-y divide-hairline">
 							{list.map((e) => (
 								<Row
 									key={e.key}
@@ -308,7 +308,7 @@ export function HistoryList({
 								/>
 							))}
 						</ul>
-					</section>
+					</FrameSection>
 				))}
 			</div>
 			{hidden > 0 && (

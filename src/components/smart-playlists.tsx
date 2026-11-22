@@ -39,6 +39,7 @@ import {
 } from "#/lib/api.ts";
 import { plural } from "#/lib/export-selection.ts";
 import { duration, formatBytes } from "#/lib/format.ts";
+import { WELL } from "#/lib/page-layout.ts";
 import { useRefreshItems } from "#/lib/queries.ts";
 import {
 	type AddedKind,
@@ -174,7 +175,7 @@ export function SmartPicker({
 			</div>
 			{list.isError && <ErrorLine>{String(list.error)}</ErrorLine>}
 			{all.length > 0 && (
-				<div className="max-h-72 space-y-0.5 overflow-y-auto rounded-lg border bg-background p-1">
+				<div className={`${WELL} max-h-72 space-y-0.5 overflow-y-auto p-1`}>
 					{all.map((p) => (
 						<PickRow
 							key={p.id}

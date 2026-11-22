@@ -27,13 +27,16 @@
 	--border: oklch(0.922 0 0);
 	--input: oklch(0.922 0 0);
 	--ring: oklch(0.708 0 0);
+	--canvas: oklch(0.96 0 0);
+	--well: oklch(0.985 0 0);
+	--hairline: oklch(0 0 0 / 8%);
 }
 
 /*
  * Dark is the app's only theme. Graphite with a faint blue cast (the colour of a booth in low
- * light), and one accent, "cue": the cyan of a player's jog display. Cue marks what is playing,
- * selected or focused, and the one main action on a screen. Nothing else is coloured, so it
- * always means something.
+ * light), and one accent, "cue": a deep azure, the blue of a player's screen at night. Cue marks
+ * what is playing, selected or focused, and the one main action on a screen. Nothing else is
+ * coloured, so it always means something.
  */
 .dark {
 	color-scheme: dark;
@@ -41,10 +44,10 @@
 	--foreground: oklch(0.96 0.004 255);
 	--card: oklch(0.2 0.007 255);
 	--card-foreground: oklch(0.96 0.004 255);
-	--popover: oklch(0.22 0.008 255);
+	--popover: oklch(0.215 0.008 255);
 	--popover-foreground: oklch(0.96 0.004 255);
-	--primary: oklch(0.8 0.115 205);
-	--primary-foreground: oklch(0.2 0.035 215);
+	--primary: oklch(0.72 0.135 238);
+	--primary-foreground: oklch(0.17 0.04 245);
 	--secondary: oklch(0.255 0.008 255);
 	--secondary-foreground: oklch(0.96 0.004 255);
 	--muted: oklch(0.255 0.008 255);
@@ -57,7 +60,15 @@
 	--move: oklch(0.76 0.11 295);
 	--border: oklch(1 0 0 / 8%);
 	--input: oklch(1 0 0 / 13%);
-	--ring: oklch(0.72 0.1 205);
+	--ring: oklch(0.66 0.12 238);
+	/*
+	 * The bezel: the window is the darkest layer (canvas), each page sits on it in a framed panel
+	 * (background), and groups of rows sit in a well inset into that frame, a step lighter.
+	 * Hairlines separate rows inside a well; the frame's own edge is a touch brighter.
+	 */
+	--canvas: oklch(0.135 0.006 255);
+	--well: oklch(0.198 0.007 255);
+	--hairline: oklch(1 0 0 / 6.5%);
 }
 
 @theme inline {
@@ -83,6 +94,9 @@
 	--color-border: var(--border);
 	--color-input: var(--input);
 	--color-ring: var(--ring);
+	--color-canvas: var(--canvas);
+	--color-well: var(--well);
+	--color-hairline: var(--hairline);
 	--radius-lg: var(--radius);
 	--radius-md: calc(var(--radius) - 2px);
 	--radius-sm: calc(var(--radius) - 4px);
@@ -125,6 +139,13 @@
 }
 ::-webkit-scrollbar-thumb:hover {
 	background-color: color-mix(in oklab, var(--muted-foreground) 60%, transparent);
+}
+/* The sidebar's list keeps its lane but shows the thumb only while the pointer is over it. */
+[data-sidebar-scroll]::-webkit-scrollbar-thumb {
+	background-color: transparent;
+}
+[data-sidebar-scroll]:hover::-webkit-scrollbar-thumb {
+	background-color: color-mix(in oklab, var(--muted-foreground) 30%, transparent);
 }
 /* Rows that scroll sideways without a bar, e.g. the search field's chips. */
 .no-scrollbar {
@@ -221,4 +242,25 @@ input[type="range"].slider {
 		[data-slot="button-group"] > :not(aside) > [data-slot="button"]
 	):not([data-variant="default"]):hover {
 	background-color: var(--color-muted);
+}
+
+/*
+ * Menus and popovers (Base UI popups) open from their trigger: a short fade and a slight grow
+ * from the side they are anchored to, and the same in reverse as they close.
+ */
+.bg-popover[data-side] {
+	transform-origin: var(--transform-origin);
+	transition:
+		opacity 120ms ease-out,
+		scale 120ms ease-out;
+}
+.bg-popover[data-side][data-starting-style],
+.bg-popover[data-side][data-ending-style] {
+	opacity: 0;
+	scale: 0.97;
+}
+@media (prefers-reduced-motion: reduce) {
+	.bg-popover[data-side] {
+		transition: none;
+	}
 }

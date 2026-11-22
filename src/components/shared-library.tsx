@@ -3,8 +3,10 @@ import { FileAudio, Users } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { ClashList } from "#/components/clashes.tsx";
 import { ConfirmDialog, Dialog } from "#/components/confirm-dialog.tsx";
+import { DeviceNameRow } from "#/components/device-settings.tsx";
+import { FieldRow, FrameSection } from "#/components/frame.tsx";
 import { ScopeSwitch } from "#/components/item-sharing.tsx";
-import { ErrorLine, LoadingLine, Panel, Section } from "#/components/page.tsx";
+import { ErrorLine, LoadingLine } from "#/components/page.tsx";
 import { StatusIcon } from "#/components/status-icon.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
@@ -471,19 +473,17 @@ function MemberList({ target }: { target: SyncTarget }) {
 function DefaultScope() {
 	const { scope, save } = useDefaultScope();
 	return (
-		<div className="flex items-center gap-4">
-			<div className="min-w-0 flex-1">
-				<p className="font-medium text-sm">New tags and playlists</p>
-				<p className="text-muted-foreground text-xs">
-					Where they start. Each one can be switched later from its page header.
-				</p>
-			</div>
+		<FieldRow
+			label="New tags and playlists"
+			description="Where they start. Each one can be switched later from its page header."
+			align="center"
+		>
 			<ScopeSwitch
 				value={scope.data ?? "shared"}
 				disabled={scope.data === undefined || save.isPending}
 				onChange={(next) => save.mutate(next)}
 			/>
-		</div>
+		</FieldRow>
 	);
 }
 
@@ -497,64 +497,65 @@ export function SharedLibrarySettings() {
 	const [joining, setJoining] = useState<SyncTarget | null>(null);
 	const [leaving, setLeaving] = useState(false);
 	return (
-		<Section title="Shared library">
-			{mine ? (
-				<>
-					<Panel className="divide-y p-0 [&>*]:px-4 [&>*]:py-3">
-						<div className="flex items-center gap-3">
-							<span className="grid size-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary [&_svg]:size-4">
-								<Users />
-							</span>
-							<div className="min-w-0 flex-1">
-								<p className="truncate font-medium">{libraryLabel(mine)}</p>
-								<p className="truncate text-muted-foreground text-xs">
-									Kept on {targetName(mine)}. Tags, playlists, smart playlists, BPM, key, beat grids
-									and waveforms sync there. Cues stay on this device.
-								</p>
-							</div>
+		<>
+			<FrameSection
+				title="Shared library"
+				description="Tags, playlists, smart playlists, BPM, key, beat grids and waveforms, shared with your other computers through a destination. The songs stay plain files."
+			>
+				{mine ? (
+					<>
+						<FieldRow
+							label={
+								<span className="flex items-center gap-2">
+									<Users className="size-4 text-primary" />
+									{libraryLabel(mine)}
+								</span>
+							}
+							description={<>Kept on {targetName(mine)}. Cues stay on this computer.</>}
+							align="center"
+						>
 							<Button variant="outline" onClick={() => setLeaving(true)}>
 								Leave…
 							</Button>
-						</div>
-						<div className="space-y-2">
-							<p className="font-medium text-sm">Members</p>
-							<MemberList target={mine} />
-						</div>
+						</FieldRow>
+						<FieldRow label="Members" description="Every computer that reads and writes it.">
+							<div className="w-full">
+								<MemberList target={mine} />
+							</div>
+						</FieldRow>
 						<DefaultScope />
-					</Panel>
-					<ClashPanel />
-				</>
-			) : (
-				<Panel className="space-y-3">
-					<p className="text-muted-foreground text-sm">
-						Share tags, playlists, smart playlists, BPM, key, beat grids and waveforms with your
-						other devices through one of your destinations. The songs stay plain files.
-					</p>
-					{targets.length === 0 ? (
-						<p className="text-muted-foreground text-sm">Add a destination under Export first.</p>
-					) : (
-						<ul className="divide-y rounded-md border">
-							{targets.map((t) => (
-								<li key={t.id} className="flex items-center gap-3 px-3 py-2">
-									<span className="min-w-0 flex-1 truncate text-sm">{targetName(t)}</span>
-									<Button size="sm" variant="outline" onClick={() => setJoining(t)}>
-										Start or join…
-									</Button>
-								</li>
-							))}
-						</ul>
-					)}
-				</Panel>
-			)}
-			{joining && <JoinLibraryDialog target={joining} onClose={() => setJoining(null)} />}
-			{leaving && mine && (
-				<LeaveLibraryDialog
-					target={mine}
-					onDone={() => setLeaving(false)}
-					onCancel={() => setLeaving(false)}
-				/>
-			)}
-		</Section>
+					</>
+				) : targets.length === 0 ? (
+					<FieldRow
+						label="No destination yet"
+						description="A shared library lives on one of your destinations. Add one under Export first."
+					/>
+				) : (
+					targets.map((t) => (
+						<FieldRow
+							key={t.id}
+							label={targetName(t)}
+							description="Start a library here, or join the one already on it."
+							align="center"
+						>
+							<Button variant="outline" onClick={() => setJoining(t)}>
+								Start or join…
+							</Button>
+						</FieldRow>
+					))
+				)}
+				<DeviceNameRow />
+				{joining && <JoinLibraryDialog target={joining} onClose={() => setJoining(null)} />}
+				{leaving && mine && (
+					<LeaveLibraryDialog
+						target={mine}
+						onDone={() => setLeaving(false)}
+						onCancel={() => setLeaving(false)}
+					/>
+				)}
+			</FrameSection>
+			<ClashPanel />
+		</>
 	);
 }
 
@@ -565,8 +566,13 @@ function ClashPanel() {
 		return null;
 	}
 	return (
-		<Panel className="overflow-hidden p-0 [--diff-inset:1rem] [&_section]:border-b-0">
-			<ClashList />
-		</Panel>
+		<FrameSection
+			title="Clashes"
+			description="Changes made on two computers at once. Pick which one to keep."
+		>
+			<div className="[--diff-inset:1rem] [&_section]:border-b-0">
+				<ClashList />
+			</div>
+		</FrameSection>
 	);
 }

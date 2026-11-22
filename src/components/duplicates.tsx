@@ -1,20 +1,32 @@
-import { Copy } from "lucide-react";
-import { useState } from "react";
-import { Drawer } from "#/components/drawer.tsx";
+import { Copy, FolderOpen, Play, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { fileMenuEntries } from "#/components/file-menu.tsx";
+import { RowMenu } from "#/components/menu.tsx";
 import { ErrorLine } from "#/components/page.tsx";
+import {
+	PanelIntro,
+	PROBLEM_ROW,
+	ProblemList,
+	ProblemsCleared,
+	ProblemText,
+} from "#/components/problem-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { PanelBarTitle } from "#/context/panel-bar.tsx";
+import { usePlayer } from "#/context/player-context.ts";
 import { type CarryCandidate, confirmTrash, type DuplicateGroup, fsReveal } from "#/lib/api.ts";
 import { extraCopies } from "#/lib/duplicates.ts";
 import { formatBytes } from "#/lib/format.ts";
 import { baseName, relSegments } from "#/lib/fs-path.ts";
-import { TRASH } from "#/lib/platform.ts";
+import { FILE_MANAGER, TRASH } from "#/lib/platform.ts";
 import {
 	useCarryCandidates,
 	useCarryDecision,
 	useDuplicates,
 	useFsTrash,
 	useLibraryRoot,
+	useTracks,
 } from "#/lib/queries.ts";
+import { cn } from "#/lib/utils.ts";
 
 /** Status bar notice: the same audio is stored in more than one file, or a song was re-encoded. */
 export function DuplicatesIndicator({ onClick }: { onClick: () => void }) {
@@ -52,66 +64,98 @@ export function DuplicatesIndicator({ onClick }: { onClick: () => void }) {
 
 function DuplicateList({ groups }: { groups: readonly DuplicateGroup[] }) {
 	const trash = useFsTrash();
+	const player = usePlayer();
+	// The library's own record of each copy, which the player needs.
+	const library = useTracks().data;
+	const songs = useMemo(() => new Map((library ?? []).map((t) => [t.id, t])), [library]);
 	const root = useLibraryRoot().data ?? "";
 	const [error, setError] = useState<string | null>(null);
 	return (
 		<div className="space-y-4">
-			<p className="text-muted-foreground text-sm">
-				Copies of one recording share their tags, beat grid and playlist entries, and playlists show
-				them once. Keep one and move the others to the {TRASH}.
-			</p>
+			<PanelIntro>
+				The same recording is stored in more than one file. The copies share their tags, beat grid
+				and playlist entries, and playlists show them once. Keep one and move the others to the{" "}
+				{TRASH}.
+			</PanelIntro>
 			{(error ?? (trash.isError ? String(trash.error) : null)) && (
 				<ErrorLine>{error ?? String(trash.error)}</ErrorLine>
 			)}
-			<ul className="space-y-4">
-				{groups.map((g) => (
-					<li key={g.audioFp} className="rounded-md border">
-						<div className="truncate border-b px-3 py-2 font-medium text-sm">
-							{g.tracks[0]?.title}
-							<span className="ml-2 font-normal text-muted-foreground text-xs">
-								{g.tracks[0]?.artist}
-							</span>
-						</div>
-						<ul className="divide-y">
-							{g.tracks.map((t) => (
-								<li key={t.id} className="flex items-center gap-2 px-3 py-2">
-									{/* File name, then the folder it is in below the library: the full path on hover. */}
-									<div className="min-w-0 flex-1" title={t.path}>
-										<div className="truncate text-sm">{baseName(t.path)}</div>
-										<div className="truncate text-muted-foreground text-xs">
-											{relSegments(root, t.path).slice(0, -1).join(" / ") || "Library folder"} ·{" "}
-											{formatBytes(t.size)}
-										</div>
-									</div>
-									<Button
-										variant="ghost"
-										size="sm"
-										onClick={() => {
-											setError(null);
-											fsReveal(t.path).catch((e) => setError(String(e)));
-										}}
-									>
-										Reveal
-									</Button>
-									<Button
-										variant="outline"
-										size="sm"
-										disabled={trash.isPending}
-										onClick={async () => {
-											setError(null);
-											if (await confirmTrash([baseName(t.path)])) {
-												trash.mutate([t.path]);
-											}
-										}}
-									>
-										Move to {TRASH}
-									</Button>
-								</li>
-							))}
-						</ul>
-					</li>
-				))}
-			</ul>
+			{groups.map((g) => (
+				<ProblemList
+					key={g.audioFp}
+					title={g.tracks[0]?.title ?? "Untitled"}
+					description={`${g.tracks[0]?.artist ?? ""}${g.tracks[0]?.artist ? ", " : ""}${g.tracks.length} copies`}
+				>
+					{g.tracks.map((t) => (
+						<RowMenu
+							key={t.id}
+							label={baseName(t.path)}
+							render={<li />}
+							className={cn(PROBLEM_ROW, "items-center")}
+							items={[
+								{
+									label: "Play this copy",
+									icon: <Play />,
+									disabled: !songs.has(t.id),
+									onSelect: () => {
+										const song = songs.get(t.id);
+										if (song) {
+											player.play([song], 0);
+										}
+									},
+								},
+								"separator",
+								...fileMenuEntries(t.path),
+								"separator",
+								{
+									label: `Move to ${TRASH}…`,
+									icon: <Trash2 />,
+									destructive: true,
+									disabled: trash.isPending,
+									onSelect: async () => {
+										setError(null);
+										if (await confirmTrash([baseName(t.path)])) {
+											trash.mutate([t.path]);
+										}
+									},
+								},
+							]}
+						>
+							{/* File name, then the folder it is in below the library: the full path on hover. */}
+							<ProblemText
+								name={baseName(t.path)}
+								where={`${relSegments(root, t.path).slice(0, -1).join(" / ") || "Library folder"}, ${formatBytes(t.size)}`}
+								hint={t.path}
+							/>
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								aria-label={`Show ${baseName(t.path)} in ${FILE_MANAGER}`}
+								title={`Show in ${FILE_MANAGER}`}
+								onClick={() => {
+									setError(null);
+									fsReveal(t.path).catch((e) => setError(String(e)));
+								}}
+							>
+								<FolderOpen />
+							</Button>
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={trash.isPending}
+								onClick={async () => {
+									setError(null);
+									if (await confirmTrash([baseName(t.path)])) {
+										trash.mutate([t.path]);
+									}
+								}}
+							>
+								Move to {TRASH}
+							</Button>
+						</RowMenu>
+					))}
+				</ProblemList>
+			))}
 		</div>
 	);
 }
@@ -120,32 +164,33 @@ function CarryList({ items }: { items: readonly CarryCandidate[] }) {
 	const decide = useCarryDecision();
 	return (
 		<div className="space-y-4">
-			<p className="text-muted-foreground text-sm">
+			<PanelIntro>
 				These songs have new audio (a re-encode, such as MP3 to FLAC), so the tags, playlists and
 				hand-set tempo of the old audio no longer point at them. Carry them over to keep them.
-			</p>
+			</PanelIntro>
 			{decide.isError && <ErrorLine>{String(decide.error)}</ErrorLine>}
-			<ul className="space-y-3">
+			<ProblemList title={`${items.length} re-encoded ${items.length === 1 ? "song" : "songs"}`}>
 				{items.map((c) => (
-					<li key={c.oldFp} className="rounded-md border px-3 py-2">
-						<div className="truncate font-medium text-sm">
-							{c.title}
-							<span className="ml-2 font-normal text-muted-foreground text-xs">{c.artist}</span>
-						</div>
-						<div className="break-all text-muted-foreground text-xs" title={c.path}>
-							{c.oldPath ? `${c.oldPath} → ` : ""}
-							{c.path}
-						</div>
-						<div className="mt-1 text-xs">
-							{[
-								c.tags > 0 && `${c.tags} ${c.tags === 1 ? "tag" : "tags"}`,
-								c.playlists > 0 && `${c.playlists} ${c.playlists === 1 ? "playlist" : "playlists"}`,
-								c.edits && "hand-set BPM, key or grid",
-							]
-								.filter(Boolean)
-								.join(", ")}
-						</div>
-						<div className="mt-2 flex gap-2">
+					<li key={c.oldFp} className={cn(PROBLEM_ROW, "flex-col items-stretch gap-2")}>
+						<ProblemText
+							name={c.title}
+							where={c.artist || baseName(c.path)}
+							hint={c.oldPath ? `${c.oldPath} → ${c.path}` : c.path}
+							notes={[
+								{
+									text: `Would keep ${[
+										c.tags > 0 && `${c.tags} ${c.tags === 1 ? "tag" : "tags"}`,
+										c.playlists > 0 &&
+											`${c.playlists} ${c.playlists === 1 ? "playlist" : "playlists"}`,
+										c.edits && "hand-set BPM, key or grid",
+									]
+										.filter(Boolean)
+										.join(", ")}`,
+									tone: "warning",
+								},
+							]}
+						/>
+						<div className="flex gap-2">
 							<Button
 								size="sm"
 								disabled={decide.isPending}
@@ -164,27 +209,30 @@ function CarryList({ items }: { items: readonly CarryCandidate[] }) {
 						</div>
 					</li>
 				))}
-			</ul>
+			</ProblemList>
 		</div>
 	);
 }
 
-/** Slide-over listing each group of songs with the same audio, and re-encoded songs. */
-export function DuplicatesDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** The side panel listing each group of songs with the same audio, and re-encoded songs. */
+export function DuplicatesPanel() {
 	const groups = useDuplicates().data ?? [];
 	const carry = useCarryCandidates().data ?? [];
 	return (
-		<Drawer open={open} onClose={onClose} title="Duplicates">
+		<>
+			<PanelBarTitle>Duplicates</PanelBarTitle>
 			<div className="space-y-8">
 				{carry.length > 0 && <CarryList items={carry} />}
 				{groups.length > 0 ? (
 					<DuplicateList groups={groups} />
 				) : (
 					carry.length === 0 && (
-						<p className="text-muted-foreground text-sm">No song is stored twice.</p>
+						<ProblemsCleared title="No duplicates">
+							Every recording in the library is stored once.
+						</ProblemsCleared>
 					)
 				)}
 			</div>
-		</Drawer>
+		</>
 	);
 }

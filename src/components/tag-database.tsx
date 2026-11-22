@@ -2,7 +2,6 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import {
 	AudioLines,
 	Building2,
-	Database,
 	Disc3,
 	Languages,
 	Layers,
@@ -21,10 +20,10 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { Framed, FrameHeader, TabsSearchBar } from "#/components/frame.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
-import { PageHeader, PageIcon } from "#/components/page-header.tsx";
 import { SearchField } from "#/components/search-field.tsx";
 import { SortMenu } from "#/components/sort-menu.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
@@ -34,7 +33,7 @@ import { Segmented } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import { type FixReport, listTags, tagValues } from "#/lib/api.ts";
-import { PAGE_BODY, PAGE_TOOLBAR } from "#/lib/page-layout.ts";
+import { PAGE_BODY, WELL_ROWS } from "#/lib/page-layout.ts";
 import { useTagDatabaseOps, useTracks } from "#/lib/queries.ts";
 import { type ListSort, VALUE_SORTS, type ValueSort } from "#/lib/sorting.ts";
 import { trackHasValue, VALUE_FIELDS, type ValueField } from "#/lib/track-fields.ts";
@@ -55,9 +54,9 @@ const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLow
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const byName = (a: Item, b: Item) => a.value.localeCompare(b.value);
 
-/** One value's row, laid out like a song row: a hover tint, no rules between rows. */
+/** One value's row, laid out like a song row, in the list's well. */
 const ROW =
-	"group grid min-h-12 grid-cols-[1.25rem_minmax(0,1fr)_auto_auto] items-center gap-3 rounded-md px-2 py-1.5 text-sm";
+	"group grid min-h-12 grid-cols-[1.25rem_minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-1.5 text-sm";
 
 const FIELD_IDS = VALUE_FIELDS.map((f) => f.id);
 const FILE_FIELDS = VALUE_FIELDS.filter((f) => f.id !== "library");
@@ -92,6 +91,22 @@ function useAllItems(): Lists {
 		}
 		return out;
 	}, [files, tags.data, tags.isPending]);
+}
+
+/** The values whose name holds `query` (already trimmed and lower-cased); all of them for none. */
+function matching(items: Item[], query: string): Item[] {
+	return query === "" ? items : items.filter((i) => i.value.toLowerCase().includes(query));
+}
+
+/**
+ * While searching, the field to show: the one open if anything in it matches, otherwise the first
+ * field that has a match, so a search finds values on every tab and not only the open one.
+ */
+function fieldWithMatches(all: Lists, open: ValueField, query: string): ValueField {
+	if (query === "" || matching(all[open].items, query).length > 0) {
+		return open;
+	}
+	return FIELD_IDS.find((id) => matching(all[id].items, query).length > 0) ?? open;
 }
 
 function sorted(items: Item[], sort: ListSort<ValueSort>): Item[] {
@@ -131,15 +146,16 @@ export function TagDatabase() {
 		setEditing(null);
 		setPending(null);
 		setCreating(false);
-		setSearch("");
 		setNotice(null);
 	}, [source]);
 
-	const shown = useMemo(() => {
-		const q = search.trim().toLowerCase();
-		const hits = q === "" ? items : items.filter((i) => i.value.toLowerCase().includes(q));
-		return sorted(hits, sort);
-	}, [items, search, sort]);
+	// The search covers every field: jump to one with matches when the open one has none.
+	const query = search.trim().toLowerCase();
+	useEffect(() => {
+		setSource((open) => fieldWithMatches(all, open, query));
+	}, [all, query]);
+
+	const shown = useMemo(() => sorted(matching(items, query), sort), [items, query, sort]);
 	const countOf = (names: string[]) =>
 		items.filter((i) => names.some((n) => same(n, i.value))).reduce((sum, i) => sum + i.count, 0);
 	const openValue = detail.view?.kind === "value" ? detail.view : null;
@@ -209,13 +225,9 @@ export function TagDatabase() {
 				search={search}
 				selected={selected.size}
 			/>
-			<PageHeader
-				art={
-					<PageIcon>
-						<Database />
-					</PageIcon>
-				}
+			<FrameHeader
 				title="Metadata"
+				continued
 				meta={
 					<>
 						<span>{plural(VALUE_FIELDS.length, "field", "fields")}</span>
@@ -227,27 +239,23 @@ export function TagDatabase() {
 						<Plus /> Create
 					</Button>
 				}
-				tabs={<FieldTabs all={all} source={source} onPick={setSource} />}
 			/>
-			{/* Search and any selection stay at hand while the list scrolls. */}
-			<div className={PAGE_TOOLBAR}>
-				<ValueSearch
-					label={label}
-					search={search}
-					onSearch={setSearch}
-					sort={sort}
-					onSort={setSort}
-				/>
-				{selected.size > 0 && (
-					<MigrateBar
-						selected={[...selected]}
-						items={items}
-						busy={busy}
-						onClear={() => setSelected(new Set())}
-						onMigrate={(to) => setPending({ from: [...selected], to })}
-					/>
-				)}
-			</div>
+			{/* The fields, the search across all of them, and any selection stay at hand. */}
+			<TabsSearchBar
+				tabs={<FieldTabs all={all} query={query} source={source} onPick={setSource} />}
+				search={<ValueSearch search={search} onSearch={setSearch} sort={sort} onSort={setSort} />}
+				below={
+					selected.size > 0 && (
+						<MigrateBar
+							selected={[...selected]}
+							items={items}
+							busy={busy}
+							onClear={() => setSelected(new Set())}
+							onMigrate={(to) => setPending({ from: [...selected], to })}
+						/>
+					)
+				}
+			/>
 
 			<div className={cn("space-y-3", PAGE_BODY)}>
 				<Notices notice={notice} error={ops.migrate.error ?? ops.create.error} />
@@ -260,66 +268,69 @@ export function TagDatabase() {
 				{!loading && shown.length === 0 && !creating && (
 					<NoValues label={label} isLibrary={isLibrary} searching={items.length > 0} />
 				)}
-				<div className="space-y-px">
-					{creating && (
-						<NewValueRow
-							existing={items}
-							label={label}
-							onCreate={create}
-							onCancel={() => setCreating(false)}
-						/>
-					)}
-					{shown.map((item) => (
-						<RowMenu
-							key={item.value}
-							label={item.value}
-							items={[
-								{
-									label: "Show songs",
-									icon: <ListMusic />,
-									onSelect: () => detail.open({ kind: "value", field: source, value: item.value }),
-								},
-								{
-									label: "Play",
-									icon: <Play />,
-									disabled: item.count === 0,
-									onSelect: () => player.play(songsWith(item.value), 0),
-								},
-								"separator",
-								{
-									label: "Rename",
-									icon: <Pencil />,
-									disabled: busy,
-									onSelect: () => setEditing(item.value),
-								},
-								{
-									label: "Delete…",
-									icon: <Trash2 />,
-									destructive: true,
-									disabled: busy,
-									onSelect: () => setPending({ from: [item.value], to: null }),
-								},
-							]}
-						>
-							<Row
-								item={item}
-								unit={unit}
-								checked={selected.has(item.value)}
-								selecting={selected.size > 0}
-								max={maxCount}
-								open={openValue?.field === source && same(openValue.value, item.value)}
-								editing={editing === item.value}
-								busy={busy}
-								onOpen={() => detail.open({ kind: "value", field: source, value: item.value })}
-								onToggle={() => toggle(item.value)}
-								onEdit={() => setEditing(item.value)}
-								onCancel={() => setEditing(null)}
-								onRename={(to) => rename(item, to)}
-								onDelete={() => setPending({ from: [item.value], to: null })}
+				<Framed className="has-[>div:empty]:hidden">
+					<div className={cn(WELL_ROWS, "empty:hidden")}>
+						{creating && (
+							<NewValueRow
+								existing={items}
+								label={label}
+								onCreate={create}
+								onCancel={() => setCreating(false)}
 							/>
-						</RowMenu>
-					))}
-				</div>
+						)}
+						{shown.map((item) => (
+							<RowMenu
+								key={item.value}
+								label={item.value}
+								items={[
+									{
+										label: "Show songs",
+										icon: <ListMusic />,
+										onSelect: () =>
+											detail.open({ kind: "value", field: source, value: item.value }),
+									},
+									{
+										label: "Play",
+										icon: <Play />,
+										disabled: item.count === 0,
+										onSelect: () => player.play(songsWith(item.value), 0),
+									},
+									"separator",
+									{
+										label: "Rename",
+										icon: <Pencil />,
+										disabled: busy,
+										onSelect: () => setEditing(item.value),
+									},
+									{
+										label: "Delete…",
+										icon: <Trash2 />,
+										destructive: true,
+										disabled: busy,
+										onSelect: () => setPending({ from: [item.value], to: null }),
+									},
+								]}
+							>
+								<Row
+									item={item}
+									unit={unit}
+									checked={selected.has(item.value)}
+									selecting={selected.size > 0}
+									max={maxCount}
+									open={openValue?.field === source && same(openValue.value, item.value)}
+									editing={editing === item.value}
+									busy={busy}
+									onOpen={() => detail.open({ kind: "value", field: source, value: item.value })}
+									onToggle={() => toggle(item.value)}
+									onEdit={() => setEditing(item.value)}
+									onCancel={() => setEditing(null)}
+									onRename={(to) => rename(item, to)}
+									onDelete={() => setPending({ from: [item.value], to: null })}
+								/>
+							</RowMenu>
+						))}
+					</div>
+				</Framed>
 			</div>
 
 			{pending && (
@@ -370,42 +381,42 @@ function noticeFor(report: FixReport | null): { ok: boolean; text: string } {
 }
 
 /** The fields as the page's header tabs, scrolling sideways when they do not all fit. */
+/** One tab per field, each counting its values; while searching, the fields with matches. */
 function FieldTabs({
 	all,
+	query,
 	source,
 	onPick,
 }: {
 	all: Lists;
+	query: string;
 	source: ValueField;
 	onPick: (f: ValueField) => void;
 }) {
 	return (
-		<div className="overflow-x-auto no-scrollbar">
-			<Segmented
-				className="w-max border-b-0"
-				value={source}
-				onChange={onPick}
-				label="Fields"
-				items={VALUE_FIELDS.map((f) => ({
-					value: f.id,
-					label: f.label,
-					icon: FIELD_ICONS[f.id],
-					count: all[f.id].loading ? 0 : all[f.id].items.length,
-				}))}
-			/>
-		</div>
+		<Segmented
+			className="w-max border-b-0"
+			value={source}
+			onChange={onPick}
+			label="Fields"
+			// While searching, only the fields with matches, so every hit is in view.
+			items={VALUE_FIELDS.map((f) => ({
+				value: f.id,
+				label: f.label,
+				icon: FIELD_ICONS[f.id],
+				count: all[f.id].loading ? 0 : matching(all[f.id].items, query).length,
+			})).filter((t) => query === "" || t.count > 0 || t.value === source)}
+		/>
 	);
 }
 
-/** Same search bar as the library: one outlined box, the sort menu as its right-hand segment. */
+/** Same search bar as the library: the field, then the sort menu at its right end. */
 function ValueSearch({
-	label,
 	search,
 	onSearch,
 	sort,
 	onSort,
 }: {
-	label: string;
 	search: string;
 	onSearch: (text: string) => void;
 	sort: ListSort<ValueSort>;
@@ -415,7 +426,7 @@ function ValueSearch({
 		<SearchField
 			value={search}
 			onChange={onSearch}
-			placeholder={`Search ${label.toLowerCase()}`}
+			placeholder="Search every field"
 			label="Search values"
 			trailing={
 				<SortMenu
@@ -574,10 +585,11 @@ function MigrateBar({
 }
 
 function rowTint(checked: boolean, open: boolean): string {
+	// The same marks as a song row: a cue tint for chosen rows, a cue rule for the one open.
 	if (checked) {
-		return "bg-primary/15";
+		return "bg-primary/[0.09] shadow-[inset_2px_0_0_0_var(--primary)]";
 	}
-	return open ? "bg-muted/80" : "hover:bg-muted/60";
+	return open ? "bg-white/[0.03] shadow-[inset_2px_0_0_0_var(--primary)]" : "hover:bg-white/[0.03]";
 }
 
 function Row({

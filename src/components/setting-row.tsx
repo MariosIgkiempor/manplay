@@ -1,9 +1,34 @@
 import type { ReactNode } from "react";
+import { FrameSection } from "#/components/frame.tsx";
 import { cn } from "#/lib/utils.ts";
 
-/** A bordered group of labelled rows, as used for settings across the app. */
-export function SettingRows({ children, className }: { children: ReactNode; className?: string }) {
-	return <div className={cn("divide-y rounded-lg border px-3", className)}>{children}</div>;
+/**
+ * A group of labelled rows, as used for settings across the app: the rows in a well, inside a
+ * frame that carries the group's name when it has one.
+ */
+export function SettingRows({
+	title,
+	icon,
+	description,
+	children,
+	className,
+}: {
+	title?: string | undefined;
+	icon?: ReactNode;
+	description?: ReactNode;
+	children: ReactNode;
+	className?: string;
+}) {
+	return (
+		<FrameSection
+			title={title}
+			icon={icon}
+			description={description}
+			wellClassName={cn("px-4", className)}
+		>
+			{children}
+		</FrameSection>
+	);
 }
 
 /** A labelled setting: name on the left, control on the right. */

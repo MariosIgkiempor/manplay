@@ -1,7 +1,9 @@
 import { X } from "lucide-react";
 import { useEffect } from "react";
 import { Button } from "#/components/ui/button.tsx";
+import { DIALOG_BACKDROP, DIALOG_FRAME } from "#/lib/page-layout.ts";
 import { keyLabel, TRASH } from "#/lib/platform.ts";
+import { cn } from "#/lib/utils.ts";
 
 type Group = { title: string; keys: [keys: string[], what: string][] };
 
@@ -80,15 +82,14 @@ export function FileShortcuts({ onClose }: { onClose: () => void }) {
 	}, [onClose]);
 	return (
 		<div className="fixed inset-0 z-50 flex items-center justify-center">
-			<div
-				aria-hidden="true"
-				onMouseDown={onClose}
-				className="absolute inset-0 bg-background/60 backdrop-blur-sm"
-			/>
+			<div aria-hidden="true" onMouseDown={onClose} className={DIALOG_BACKDROP} />
 			<div
 				role="dialog"
 				aria-label="Keyboard shortcuts"
-				className="relative max-h-[calc(100%-4rem)] w-[44rem] max-w-[calc(100%-2rem)] overflow-y-auto rounded-xl border bg-background p-5 shadow-2xl"
+				className={cn(
+					DIALOG_FRAME,
+					"max-h-[calc(100%-4rem)] w-[44rem] max-w-[calc(100%-2rem)] overflow-y-auto p-5",
+				)}
 			>
 				<div className="mb-4 flex items-center justify-between">
 					<h2 className="font-medium text-sm">Keyboard shortcuts</h2>

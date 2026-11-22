@@ -14,6 +14,7 @@ import { Segmented } from "#/components/view-toggle.tsx";
 import type { RekordboxStatus } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
 import { activityEntries } from "#/lib/history.ts";
+import { WELL } from "#/lib/page-layout.ts";
 import { useActivity } from "#/lib/queries.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 
@@ -25,7 +26,7 @@ const STEPS = [
 
 function Setup() {
 	return (
-		<details className="rounded-lg border p-3 text-sm">
+		<details className={`${WELL} p-3 text-sm`}>
 			<summary className="cursor-pointer font-medium">One-time setup in rekordbox</summary>
 			<ol className="mt-3 list-decimal space-y-2 pl-5">
 				{STEPS.map((step) => (
@@ -71,7 +72,7 @@ function RekordboxSettings({
 }) {
 	return (
 		<div className="space-y-3">
-			<SettingRows>
+			<SettingRows title="File">
 				<SettingRow
 					label={
 						<SettingLabel

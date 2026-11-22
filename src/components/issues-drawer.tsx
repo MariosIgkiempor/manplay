@@ -1,9 +1,19 @@
-import { RefreshCw, TriangleAlert, Wrench } from "lucide-react";
+import { RefreshCw, Square, SquareCheck, TriangleAlert, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Drawer } from "#/components/drawer.tsx";
+import { fileMenuEntries } from "#/components/file-menu.tsx";
 import type { FixNotice } from "#/components/library-health.tsx";
+import { RowMenu } from "#/components/menu.tsx";
 import { ErrorLine, LoadingLine } from "#/components/page.tsx";
+import {
+	PanelActions,
+	PanelIntro,
+	PROBLEM_ROW,
+	ProblemList,
+	ProblemsCleared,
+	ProblemText,
+} from "#/components/problem-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { PanelBarTitle } from "#/context/panel-bar.tsx";
 import { type AuditIssue, confirmFix } from "#/lib/api.ts";
 import { describeFixes } from "#/lib/audit.ts";
 import { useAudit, useAuditFix, useLibraryRoot } from "#/lib/queries.ts";
@@ -65,14 +75,24 @@ function FileRow({
 	const rel = file.path.startsWith(root)
 		? file.path.slice(root.length).replace(/^[\\/]/, "")
 		: file.path;
+	const name = file.path.split(/[\\/]/).pop() ?? file.path;
 	return (
-		<li>
-			<label
-				className={cn(
-					"flex gap-3 px-3 py-2",
-					file.fixable ? "cursor-pointer hover:bg-muted/50" : "opacity-80",
-				)}
-			>
+		<RowMenu
+			label={name}
+			render={<li />}
+			items={[
+				file.fixable && {
+					label: checked ? "Leave out of the fix" : "Include in the fix",
+					icon: checked ? <Square /> : <SquareCheck />,
+					disabled,
+					onSelect: onToggle,
+				},
+				"separator",
+				...fileMenuEntries(file.path),
+			]}
+		>
+			{/* The whole row ticks the file, as its checkbox does. */}
+			<label className={cn(PROBLEM_ROW, file.fixable ? "cursor-pointer" : "opacity-80")}>
 				<input
 					type="checkbox"
 					className="mt-0.5 size-4 shrink-0 accent-primary"
@@ -81,25 +101,17 @@ function FileRow({
 					onChange={onToggle}
 					aria-label={`Select ${file.path}`}
 				/>
-				<span className="min-w-0 flex-1 space-y-0.5">
-					<span className="block truncate font-medium text-sm" title={file.path}>
-						{file.path.split(/[\\/]/).pop()}
-					</span>
-					<span className="block truncate text-muted-foreground text-xs" title={file.path}>
-						{rel}
-					</span>
-					{file.issues.map((i) => (
-						<span
-							key={i.kind + i.message}
-							className={cn("block text-xs", i.fixable ? "text-warning" : "text-muted-foreground")}
-						>
-							{i.message}
-							{!i.fixable && " (fix it by hand in Files)"}
-						</span>
-					))}
-				</span>
+				<ProblemText
+					name={name}
+					where={rel.split(/[\\/]/).slice(0, -1).join(" / ") || "Library folder"}
+					hint={file.path}
+					notes={file.issues.map((i) => ({
+						text: i.fixable ? i.message : `${i.message} (fix it by hand in Files)`,
+						tone: i.fixable ? "warning" : "muted",
+					}))}
+				/>
 			</label>
-		</li>
+		</RowMenu>
 	);
 }
 
@@ -107,28 +119,48 @@ function FileList({
 	files,
 	root,
 	picked,
+	allPicked,
+	fixableCount,
 	disabled,
 	loading,
 	onToggle,
+	onPickAll,
 }: {
 	files: FileIssues[];
 	root: string;
 	picked: ReadonlySet<string>;
+	allPicked: boolean;
+	fixableCount: number;
 	disabled: boolean;
 	loading: boolean;
 	onToggle: (path: string) => void;
+	onPickAll: () => void;
 }) {
 	if (files.length === 0) {
 		return loading ? (
-			<LoadingLine>Checking library…</LoadingLine>
+			<LoadingLine>Checking the library…</LoadingLine>
 		) : (
-			<p className="text-muted-foreground text-sm">
-				No issues. The library follows its conventions.
-			</p>
+			<ProblemsCleared title="No file issues">
+				Every file follows the library's conventions.
+			</ProblemsCleared>
 		);
 	}
 	return (
-		<ul className="divide-y rounded-lg border">
+		<ProblemList title={plural(files.length, "file", "files")}>
+			<li>
+				<label className={cn(PROBLEM_ROW, "items-center py-2 text-muted-foreground text-xs")}>
+					<input
+						type="checkbox"
+						className="size-4 shrink-0 accent-primary"
+						checked={allPicked}
+						disabled={fixableCount === 0 || disabled}
+						onChange={onPickAll}
+					/>
+					{picked.size > 0
+						? `${picked.size} of ${fixableCount} fixable files ticked`
+						: `Tick all ${fixableCount} fixable files`}
+				</label>
+			</li>
 			{files.map((f) => (
 				<FileRow
 					key={f.path}
@@ -139,7 +171,7 @@ function FileList({
 					onToggle={() => onToggle(f.path)}
 				/>
 			))}
-		</ul>
+		</ProblemList>
 	);
 }
 
@@ -156,64 +188,48 @@ function usePicks(fixable: readonly FileIssues[]) {
 	return [picked, setPicked] as const;
 }
 
-function Toolbar({
+function Actions({
 	picked,
 	fixableCount,
-	allPicked,
 	fixing,
 	checking,
-	onPickAll,
 	onFixPicked,
 	onFixAll,
 	onRecheck,
 }: {
 	picked: number;
 	fixableCount: number;
-	allPicked: boolean;
 	fixing: boolean;
 	checking: boolean;
-	onPickAll: () => void;
 	onFixPicked: () => void;
 	onFixAll: () => void;
 	onRecheck: () => void;
 }) {
 	return (
-		<div className="flex flex-wrap items-center gap-2">
-			<label className="flex items-center gap-2 text-sm">
-				<input
-					type="checkbox"
-					className="size-4 accent-primary"
-					checked={allPicked}
-					disabled={fixableCount === 0 || fixing}
-					onChange={onPickAll}
-				/>
-				{picked > 0 ? `${picked} selected` : "Select all"}
-			</label>
-			<div className="ml-auto flex items-center gap-2">
-				<Button size="sm" disabled={picked === 0 || fixing} onClick={onFixPicked}>
-					<Wrench />
-					{fixing ? "Fixing…" : `Fix selected (${picked})`}
-				</Button>
-				<Button
-					size="sm"
-					variant="outline"
-					disabled={fixableCount === 0 || fixing}
-					onClick={onFixAll}
-				>
-					Fix all ({fixableCount})
-				</Button>
-				<Button
-					variant="ghost"
-					size="icon-sm"
-					aria-label="Check again"
-					title="Check again"
-					disabled={checking || fixing}
-					onClick={onRecheck}
-				>
-					<RefreshCw className={checking ? "animate-spin" : undefined} />
-				</Button>
-			</div>
-		</div>
+		<PanelActions>
+			<Button size="sm" disabled={picked === 0 || fixing} onClick={onFixPicked}>
+				<Wrench />
+				{fixing ? "Fixing…" : `Fix ticked (${picked})`}
+			</Button>
+			<Button
+				size="sm"
+				variant="outline"
+				disabled={fixableCount === 0 || fixing}
+				onClick={onFixAll}
+			>
+				Fix all ({fixableCount})
+			</Button>
+			<Button
+				variant="ghost"
+				size="sm"
+				className="ml-auto"
+				disabled={checking || fixing}
+				onClick={onRecheck}
+			>
+				<RefreshCw className={checking ? "animate-spin motion-reduce:animate-none" : undefined} />
+				Check again
+			</Button>
+		</PanelActions>
 	);
 }
 
@@ -256,31 +272,36 @@ function IssuesBody() {
 	}
 	return (
 		<div className="space-y-4">
-			<Toolbar
+			<PanelIntro>
+				These files break the library's conventions: where they sit, their file type or their tag
+				version. Tick the ones to fix, or fix them all.
+			</PanelIntro>
+			{noFfmpeg && (
+				<PanelIntro>
+					ffmpeg is missing from this copy of manplay, so non-MP3 files cannot be converted.
+					Reinstall the app.
+				</PanelIntro>
+			)}
+			<Actions
 				picked={picked.size}
 				fixableCount={fixable.length}
-				allPicked={allPicked}
 				fixing={fixer.isPending}
 				checking={audit.isFetching}
-				onPickAll={() => setPicked(allPicked ? new Set() : new Set(fixable.map((f) => f.path)))}
 				onFixPicked={() => void fix([...picked])}
 				onFixAll={() => void fix(fixable.map((f) => f.path))}
 				onRecheck={() => void audit.refetch()}
 			/>
-			{noFfmpeg && (
-				<p className="text-muted-foreground text-xs">
-					ffmpeg is missing from this copy of manplay, so non-MP3 files cannot be converted.
-					Reinstall the app.
-				</p>
-			)}
 			{notice && <ResultLine notice={notice} />}
 			<FileList
 				files={files}
 				root={root}
 				picked={picked}
+				allPicked={allPicked}
+				fixableCount={fixable.length}
 				disabled={fixer.isPending}
 				loading={audit.isPending}
 				onToggle={toggle}
+				onPickAll={() => setPicked(allPicked ? new Set() : new Set(fixable.map((f) => f.path)))}
 			/>
 		</div>
 	);
@@ -309,11 +330,12 @@ function ResultLine({ notice }: { notice: FixNotice }) {
 	);
 }
 
-/** Slide-over listing every file issue, with checkboxes to choose what to fix. */
-export function IssuesDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** The side panel listing every file issue, with checkboxes to choose what to fix. */
+export function IssuesPanel() {
 	return (
-		<Drawer open={open} onClose={onClose} title="File issues" width="w-[44rem]">
+		<>
+			<PanelBarTitle>File issues</PanelBarTitle>
 			<IssuesBody />
-		</Drawer>
+		</>
 	);
 }

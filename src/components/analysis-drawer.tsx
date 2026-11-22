@@ -16,6 +16,7 @@ import {
 	type TagWriteReport,
 	type Track,
 } from "#/lib/api.ts";
+import { WELL_ROWS } from "#/lib/page-layout.ts";
 import {
 	useAnalysisFailures,
 	useAnalysisSettings,
@@ -396,7 +397,7 @@ function Failures({
 				</Button>
 			}
 		>
-			<ul className="divide-y rounded-lg border">
+			<ul className={WELL_ROWS}>
 				{shown.map((f) => {
 					const id = idOf(f.path);
 					return (

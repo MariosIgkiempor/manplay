@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type PlayerApi, PlayerContext, PlayerTimeContext } from "#/context/player-context.ts";
 import { playableUrl, type Track } from "#/lib/api.ts";
+import { withAdded, withNext } from "#/lib/queue.ts";
 
 const RESTART_THRESHOLD_SECONDS = 3;
 
@@ -76,6 +77,28 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 		[currentPath, start],
 	);
 
+	const playNext = useCallback(
+		(songs: readonly Track[]) => {
+			if (current === null) {
+				play(songs, 0);
+			} else {
+				setQueue((q) => withNext(q, index, songs));
+			}
+		},
+		[current, index, play],
+	);
+
+	const addToQueue = useCallback(
+		(songs: readonly Track[]) => {
+			if (current === null) {
+				play(songs, 0);
+			} else {
+				setQueue((q) => withAdded(q, index, songs));
+			}
+		},
+		[current, index, play],
+	);
+
 	const toggle = useCallback(() => {
 		const audio = audioRef.current;
 		if (audio === null || currentPath === null) {
@@ -127,6 +150,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			volume,
 			error,
 			play,
+			playNext,
+			addToQueue,
 			toggle,
 			next,
 			prev,
@@ -143,6 +168,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			volume,
 			error,
 			play,
+			playNext,
+			addToQueue,
 			toggle,
 			next,
 			prev,

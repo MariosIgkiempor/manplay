@@ -3,10 +3,8 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { Shell } from "#/components/app-shell.tsx";
 import { AutoRefresh } from "#/components/auto-refresh.tsx";
-import { DuplicatesIndicator } from "#/components/duplicates.tsx";
-import { IssuesIndicator } from "#/components/issues-drawer.tsx";
-import { MissingIndicator } from "#/components/missing-files.tsx";
 import { StatusBarHost, StatusScopeProvider } from "#/components/status-bar.tsx";
+import { StatusNotices } from "#/components/status-notices.tsx";
 import { SyncScanEvents } from "#/components/sync-scan-events.tsx";
 import { StatusSlotContext } from "#/context/detail-context.ts";
 import { DetailProvider } from "#/context/detail-provider.tsx";
@@ -34,16 +32,13 @@ export const Route = createRootRoute({
 function RootDocument({ children }: { children: ReactNode }) {
 	const [statusSlot, setStatusSlot] = useState<HTMLElement | null>(null);
 	const [saveSlot, setSaveSlot] = useState<HTMLElement | null>(null);
-	const [missingOpen, setMissingOpen] = useState(false);
-	const [duplicatesOpen, setDuplicatesOpen] = useState(false);
-	const [issuesOpen, setIssuesOpen] = useState(false);
 	return (
 		// The page's colour before the stylesheet has loaded, so a launch does not flash white.
-		<html lang="en" className="dark" style={{ backgroundColor: "#0e1012" }}>
+		<html lang="en" className="dark" style={{ backgroundColor: "#0b0d10" }}>
 			<head>
 				<HeadContent />
 			</head>
-			<body className="flex h-screen flex-col overflow-hidden">
+			<body className="flex h-screen flex-col overflow-hidden bg-canvas">
 				<QueryClientProvider client={queryClient}>
 					<PlayerProvider>
 						<SyncProgressProvider>
@@ -55,26 +50,11 @@ function RootDocument({ children }: { children: ReactNode }) {
 												<SaveSlotContext.Provider value={saveSlot}>
 													<AutoRefresh />
 													<SyncScanEvents />
-													<Shell
-														missingOpen={missingOpen}
-														issuesOpen={issuesOpen}
-														duplicatesOpen={duplicatesOpen}
-														setMissingOpen={setMissingOpen}
-														setIssuesOpen={setIssuesOpen}
-														setDuplicatesOpen={setDuplicatesOpen}
-													>
-														{children}
-													</Shell>
+													<Shell>{children}</Shell>
 													<StatusBarHost
 														setSlot={setStatusSlot}
 														setSaveSlot={setSaveSlot}
-														notices={
-															<>
-																<IssuesIndicator onClick={() => setIssuesOpen(true)} />
-																<DuplicatesIndicator onClick={() => setDuplicatesOpen(true)} />
-																<MissingIndicator onClick={() => setMissingOpen(true)} />
-															</>
-														}
+														notices={<StatusNotices />}
 													/>
 												</SaveSlotContext.Provider>
 											</StatusSlotContext.Provider>

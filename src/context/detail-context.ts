@@ -13,11 +13,18 @@ export type DetailView =
 	/** Tag editor for several songs (a selection or a value's songs). */
 	| { kind: "edit"; target: TagTarget }
 	/** Songs holding one value of a tag field, e.g. every song in the genre "House". */
-	| { kind: "value"; field: string; value: string };
+	| { kind: "value"; field: string; value: string }
+	/** The library's problems, from the status bar: files gone from disk, files breaking the
+	 * library's conventions, and songs stored twice. */
+	| { kind: "missing" }
+	| { kind: "issues" }
+	| { kind: "duplicates" };
 
 /** The side panel's navigation: the view on show and the history behind it. */
 export interface DetailApi {
 	view: DetailView | null;
+	/** The view shown most recently, kept after the panel closes, so it can open there again. */
+	last: DetailView | null;
 	canGoBack: boolean;
 	back: () => void;
 	close: () => void;

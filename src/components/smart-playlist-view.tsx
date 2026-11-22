@@ -3,10 +3,15 @@ import { useNavigate } from "@tanstack/react-router";
 import { Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { FrameSection } from "#/components/frame.tsx";
 import { useJellyfinMenu } from "#/components/jellyfin-menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { CollectionHeader } from "#/components/page-header.tsx";
-import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
+import {
+	HeaderSongSort,
+	SelectableTrackList,
+	useSongSort,
+} from "#/components/selectable-track-list.tsx";
 import { SharingControl } from "#/components/sharing-control.tsx";
 import { SmartRulesEditor } from "#/components/smart-playlists.tsx";
 import { deleteSmartPlaylist, type SmartPlaylist, saveSmartPlaylist } from "#/lib/api.ts";
@@ -41,9 +46,11 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 		},
 	});
 
+	const sort = useSongSort(songs);
 	return (
 		<main>
 			<CollectionHeader
+				sort={<HeaderSongSort songs={songs.length} sort={sort} />}
 				kind={
 					<>
 						<Sparkles className="size-3.5" /> Smart playlist
@@ -58,7 +65,7 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 						{seconds >= 1 && <span>{duration(seconds)}</span>}
 					</>
 				}
-				tracks={songs}
+				tracks={sort.sorted}
 				fallbackIcon={<Sparkles className="size-10" />}
 				onRename={(name) => name.trim() && rename.mutate(name.trim())}
 				onDelete={() => setConfirming(true)}
@@ -78,10 +85,14 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 				{[rename, destroy].map(
 					(m) => m.isError && <ErrorLine key={m.submittedAt}>{String(m.error)}</ErrorLine>,
 				)}
-				<section className="space-y-3">
-					<h2 className={typeScale.sectionTitle}>Rules</h2>
-					<SmartRulesEditor playlist={playlist} />
-				</section>
+				<FrameSection
+					title="Rules"
+					description="Songs join and leave on their own as you tag and analyse them."
+				>
+					<div className="p-4">
+						<SmartRulesEditor playlist={playlist} />
+					</div>
+				</FrameSection>
 				<section className="space-y-3">
 					<h2 className={typeScale.sectionTitle}>Songs</h2>
 					{songs.length === 0 && !preview.isPending ? (
@@ -89,7 +100,12 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 							Take a tag or filter out to widen it. Songs join on their own as you tag them.
 						</EmptyState>
 					) : (
-						<SelectableTrackList tracks={songs} />
+						<SelectableTrackList
+							tracks={songs}
+							sort={sort.sort}
+							onSortChange={sort.setSort}
+							hideSortMenu
+						/>
 					)}
 				</section>
 			</div>

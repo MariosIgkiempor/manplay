@@ -3,6 +3,7 @@ import { Check, ChevronsUpDown, Music, RefreshCw, Search, X } from "lucide-react
 import { useState } from "react";
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { PanelBarActions, useHasPanelBar } from "#/context/panel-bar.tsx";
 import { type LookupCandidate, lookupCoverUrl, type ReleaseId } from "#/lib/api.ts";
 import {
 	type CoverSuggestion,
@@ -19,18 +20,24 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 /**
- * The lookup's place at the top of the tag editor. Before a lookup it is one button; after, it
+ * The lookup's place at the top of the tag editor. Before a lookup it is one button (in the side
+ * panel's top bar when there is one); after, it
  * says what was found and holds what has no tag row to sit beside: the cover, the tags that
  * differ from song to song, and the songs that were not found.
  */
 export function TagLookupStrip({ found }: { found: TagSuggestions }) {
+	const inBar = useHasPanelBar();
 	if (found.stage === "idle") {
-		return (
-			<div className="flex justify-end border-b px-3 py-1.5">
-				<Button variant="ghost" size="sm" onClick={found.start}>
-					<Search /> Look up tags
-				</Button>
-			</div>
+		const button = (
+			<Button variant="ghost" size="sm" onClick={found.start}>
+				<Search /> Look up tags
+			</Button>
+		);
+		// In the side panel the button sits in its top bar, so it costs no row of its own.
+		return inBar ? (
+			<PanelBarActions>{button}</PanelBarActions>
+		) : (
+			<div className="flex justify-end border-b px-3 py-1.5">{button}</div>
 		);
 	}
 	return (

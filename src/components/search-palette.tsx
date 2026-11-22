@@ -4,7 +4,6 @@ import {
 	type ComponentType,
 	type KeyboardEvent,
 	type ReactNode,
-	useEffect,
 	useId,
 	useMemo,
 	useRef,
@@ -22,7 +21,7 @@ import {
 	type SuggestionGroup,
 	suggest,
 } from "#/lib/search.ts";
-import { searchFieldClass } from "#/lib/search-field.ts";
+import { SEARCH_FIELD } from "#/lib/search-field.ts";
 import { cn } from "#/lib/utils.ts";
 
 const ICONS: Record<PillKind, ComponentType<{ className?: string | undefined }>> = {
@@ -79,18 +78,6 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 		[text, tracks.data, playlists.data, tags.data, pills],
 	);
 	const flat: Suggestion[] = groups.flatMap((g) => g.items);
-
-	// ⌘K / Ctrl+K jumps to the search bar from anywhere.
-	useEffect(() => {
-		const onKey = (e: globalThis.KeyboardEvent) => {
-			if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-				e.preventDefault();
-				input.current?.focus();
-			}
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-	}, []);
 
 	const pick = (s: Suggestion) => {
 		onPills([...pills, s.pill]);
@@ -155,7 +142,7 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 	return (
 		<div className="relative min-w-40 flex-1">
 			<div className="flex h-8 items-stretch gap-1">
-				<label className={cn(searchFieldClass(open || hasAny), "flex-1")}>
+				<label className={cn(SEARCH_FIELD, "flex-1")}>
 					<SearchGlyph active={hasAny} />
 					<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar">
 						{pills.map((p) => (
@@ -167,6 +154,7 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 						))}
 						<input
 							ref={input}
+							data-page-search
 							value={text}
 							onChange={(e) => {
 								onText(e.target.value);
@@ -186,10 +174,10 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 					</div>
 					{!hasAny && !open && (
 						<kbd
-							title="Jump to search from anywhere"
+							title="Search this page"
 							className="shrink-0 rounded border px-1.5 font-sans text-[11px] text-muted-foreground/70"
 						>
-							{keyLabel("⌘K")}
+							{keyLabel("⌘F")}
 						</kbd>
 					)}
 					{hasAny && (
@@ -237,7 +225,7 @@ function SuggestionList({
 		<div
 			id={id}
 			role="listbox"
-			className="absolute top-full right-0 left-0 z-30 mt-1 max-h-80 overflow-y-auto rounded-lg border bg-popover p-1 text-popover-foreground text-sm shadow-lg"
+			className="absolute top-full right-0 left-0 z-30 mt-1 max-h-80 origin-top animate-in overflow-y-auto rounded-lg border bg-popover p-1 fade-in-0 zoom-in-[0.98] duration-150 motion-reduce:animate-none text-popover-foreground text-sm shadow-lg"
 		>
 			{groups.map((g) => (
 				<div key={g.title}>

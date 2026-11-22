@@ -1,9 +1,10 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronRight, FolderOpen, Plus } from "lucide-react";
+import { ChevronRight, FolderOpen } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AddR2, AddTailscale } from "#/components/add-destination.tsx";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { Drawer } from "#/components/drawer.tsx";
+import { Framed } from "#/components/frame.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
 import { PlaceCrumb } from "#/components/place-crumb.tsx";
@@ -11,12 +12,11 @@ import { PlaceFrame } from "#/components/place-page.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
 import { JoinLibraryDialog } from "#/components/shared-library.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { PAGE_ART } from "#/lib/page-layout.ts";
+import { PAGE_ART, WELL_ROWS } from "#/lib/page-layout.ts";
 import type { DestinationService } from "#/lib/places.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { space, useUsbDrives } from "#/lib/use-usb.ts";
-import { cn } from "#/lib/utils.ts";
 
 const SERVICES: { id: DestinationService; brand: Brand; title: string; what: string }[] = [
 	{
@@ -39,20 +39,7 @@ function Heading({ brand, title }: { brand?: Brand | undefined; title: string })
 	const navigate = useNavigate();
 	return (
 		<PageHeader
-			art={
-				brand ? (
-					<BrandIcon brand={brand} className={PAGE_ART} />
-				) : (
-					<div
-						className={cn(
-							PAGE_ART,
-							"grid place-items-center bg-muted text-muted-foreground [&_svg]:size-10",
-						)}
-					>
-						<Plus />
-					</div>
-				)
-			}
+			art={brand ? <BrandIcon brand={brand} className={PAGE_ART} /> : null}
 			kind={
 				<>
 					<PlaceCrumb section="export" current="add" />
@@ -91,27 +78,29 @@ function Pick() {
 	};
 	return (
 		<PlaceFrame header={<Heading title="Where to?" />}>
-			<ul className="divide-y overflow-hidden rounded-lg border">
-				{SERVICES.map((s) => (
-					<li key={s.id}>
-						<button
-							type="button"
-							onClick={() => void navigate({ to: "/export/add", search: { service: s.id } })}
-							className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40"
-						>
-							<BrandIcon brand={s.brand} className="size-9" />
-							<span className="min-w-0 flex-1">
-								<span className="block font-medium text-sm">{s.title}</span>
-								<span className="block truncate text-muted-foreground text-xs">{s.what}</span>
-							</span>
-							{note(s.id) && (
-								<span className="shrink-0 text-muted-foreground text-xs">{note(s.id)}</span>
-							)}
-							<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-						</button>
-					</li>
-				))}
-			</ul>
+			<Framed>
+				<ul className={WELL_ROWS}>
+					{SERVICES.map((s) => (
+						<li key={s.id}>
+							<button
+								type="button"
+								onClick={() => void navigate({ to: "/export/add", search: { service: s.id } })}
+								className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40"
+							>
+								<BrandIcon brand={s.brand} className="size-9" />
+								<span className="min-w-0 flex-1">
+									<span className="block font-medium text-sm">{s.title}</span>
+									<span className="block truncate text-muted-foreground text-xs">{s.what}</span>
+								</span>
+								{note(s.id) && (
+									<span className="shrink-0 text-muted-foreground text-xs">{note(s.id)}</span>
+								)}
+								<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+							</button>
+						</li>
+					))}
+				</ul>
+			</Framed>
 		</PlaceFrame>
 	);
 }
@@ -176,7 +165,7 @@ function RekordboxStep() {
 	const path = status.data?.path ?? null;
 	return (
 		<PlaceFrame header={<Heading brand="rekordbox" title="rekordbox XML" />}>
-			<div className="space-y-3 rounded-lg border border-dashed p-5 text-center">
+			<div className="space-y-3 rounded-xl border border-hairline border-dashed p-5 text-center">
 				<p className="text-sm">
 					{path ? (
 						<>
@@ -212,32 +201,34 @@ function UsbStep() {
 	return (
 		<PlaceFrame header={<Heading brand="usb" title="CDJ USB drive" />}>
 			{drives.length === 0 ? (
-				<div className="rounded-lg border border-dashed">
+				<div className="rounded-xl border border-hairline border-dashed">
 					<EmptyState title="Plug in a USB drive">
 						It shows up here, and in your destinations, while it's plugged in.
 					</EmptyState>
 				</div>
 			) : (
-				<ul className="divide-y overflow-hidden rounded-lg border">
-					{drives.map((d) => (
-						<li key={d.mount}>
-							<button
-								type="button"
-								onClick={() => void navigate({ to: "/export/usb", search: { mount: d.mount } })}
-								className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40"
-							>
-								<span className="min-w-0 flex-1">
-									<span className="block truncate font-medium text-sm">{d.name}</span>
-									<span className="block truncate text-muted-foreground text-xs">
-										{space(d)}
-										{d.hasLibrary ? "" : ", no rekordbox library yet"}
+				<Framed>
+					<ul className={WELL_ROWS}>
+						{drives.map((d) => (
+							<li key={d.mount}>
+								<button
+									type="button"
+									onClick={() => void navigate({ to: "/export/usb", search: { mount: d.mount } })}
+									className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40"
+								>
+									<span className="min-w-0 flex-1">
+										<span className="block truncate font-medium text-sm">{d.name}</span>
+										<span className="block truncate text-muted-foreground text-xs">
+											{space(d)}
+											{d.hasLibrary ? "" : ", no rekordbox library yet"}
+										</span>
 									</span>
-								</span>
-								<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-							</button>
-						</li>
-					))}
-				</ul>
+									<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+								</button>
+							</li>
+						))}
+					</ul>
+				</Framed>
 			)}
 		</PlaceFrame>
 	);

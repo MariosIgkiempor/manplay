@@ -391,7 +391,7 @@ function AlbumCard({
 			<article
 				ref={cardRef}
 				className={cn(
-					"flex h-full min-w-0 overflow-hidden rounded-lg border bg-card",
+					"flex h-full min-w-0 overflow-hidden rounded-xl border border-hairline bg-well transition-colors",
 					floating && (open ? "z-20" : "z-10"),
 					floating &&
 						"h-auto border-primary/50 shadow-2xl shadow-black/25 transition-[clip-path] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none",

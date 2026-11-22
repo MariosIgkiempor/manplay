@@ -1,6 +1,6 @@
 import { Search, X } from "lucide-react";
 import type { ReactNode, Ref } from "react";
-import { searchFieldClass } from "#/lib/search-field.ts";
+import { SEARCH_FIELD } from "#/lib/search-field.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** The magnifier at the start of a search field, in the accent colour while a query is on. */
@@ -35,10 +35,11 @@ export function SearchField({
 	const active = value !== "";
 	return (
 		<div className={cn("flex h-8 min-w-0 items-center gap-1", className)}>
-			<label className={cn(searchFieldClass(active), "h-full flex-1")}>
+			<label className={cn(SEARCH_FIELD, "h-full flex-1")}>
 				<SearchGlyph active={active} />
 				<input
 					ref={inputRef}
+					data-page-search
 					value={value}
 					onChange={(e) => onChange(e.target.value)}
 					placeholder={placeholder}

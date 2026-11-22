@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { CloudUpload, Download, Upload } from "lucide-react";
+import { CloudUpload, Download } from "lucide-react";
 import { Destinations } from "#/components/destinations.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
 import { Page } from "#/components/page.tsx";
@@ -23,7 +23,6 @@ function ExportPage() {
 	return (
 		<Page
 			title="Export"
-			icon={<Upload />}
 			meta={
 				<>
 					<span>

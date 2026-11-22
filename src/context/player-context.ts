@@ -11,6 +11,10 @@ export interface PlayerApi {
 	error: string | null;
 	/** Replace the queue and start playing `queue[index]`. */
 	play: (queue: readonly Track[], index: number) => void;
+	/** Slot songs in right after the playing one; with nothing playing, play them. */
+	playNext: (songs: readonly Track[]) => void;
+	/** Add songs to the end of the queue; with nothing playing, play them. */
+	addToQueue: (songs: readonly Track[]) => void;
 	toggle: () => void;
 	next: () => void;
 	prev: () => void;

@@ -1,10 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Settings } from "lucide-react";
 import { AppUpdate } from "#/components/app-update.tsx";
-import { DeviceSettings } from "#/components/device-settings.tsx";
+import { FrameHeader } from "#/components/frame.tsx";
 import { LibrarySettings } from "#/components/library-settings.tsx";
 import { LookupSettings } from "#/components/lookup-settings.tsx";
-import { Page } from "#/components/page.tsx";
 import { SharedLibrarySettings } from "#/components/shared-library.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { useTracks } from "#/lib/queries.ts";
@@ -14,15 +12,17 @@ export const Route = createFileRoute("/settings")({ component: SettingsPage });
 function SettingsPage() {
 	const tracks = useTracks();
 	return (
-		<Page title="Settings" icon={<Settings />}>
-			<LibrarySettings />
-			<SharedLibrarySettings />
-			<DeviceSettings />
-			<LookupSettings />
-			<AppUpdate />
+		<main>
+			<FrameHeader title="Settings" />
+			<div className="w-full max-w-4xl space-y-6 px-6 pt-6 pb-12">
+				<LibrarySettings />
+				<SharedLibrarySettings />
+				<LookupSettings />
+				<AppUpdate />
+			</div>
 			<StatusBar>
 				<Stat label="Songs" value={tracks.data?.length ?? 0} />
 			</StatusBar>
-		</Page>
+		</main>
 	);
 }

@@ -1,4 +1,5 @@
 import { Check } from "lucide-react";
+import { BrandGlyph } from "#/components/brand-icon.tsx";
 import { Hint } from "#/components/ui/hint.tsx";
 import type { UsbOutputs } from "#/lib/api.ts";
 import { USB_OUTPUTS } from "#/lib/usb-outputs.ts";
@@ -35,8 +36,9 @@ export function UsbOutputsPicker({
 									: "text-muted-foreground hover:bg-muted",
 							)}
 						>
-							{on ? (
-								<Check className="size-3.5 text-primary" />
+							{on && <Check className="size-3.5 text-primary" />}
+							{option.brand ? (
+								<BrandGlyph brand={option.brand} className={cn("size-3.5", !on && "opacity-60")} />
 							) : (
 								<option.icon className="size-3.5" />
 							)}

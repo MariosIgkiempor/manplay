@@ -15,6 +15,8 @@ export type UsbOutput = keyof UsbOutputs;
 export interface UsbOutputOption {
 	key: UsbOutput;
 	icon: LucideIcon;
+	/** The software that reads it, whose mark stands for it; none for plain folders. */
+	brand: "rekordbox" | "serato" | "virtualdj" | "gemini" | null;
 	/** Short name, for lists of what is switched on. */
 	name: string;
 	title: string;
@@ -28,6 +30,7 @@ export interface UsbOutputOption {
 export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 	{
 		key: "rekordbox",
+		brand: "rekordbox",
 		icon: Usb,
 		name: "rekordbox",
 		title: "rekordbox library",
@@ -38,6 +41,7 @@ export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 	},
 	{
 		key: "serato",
+		brand: "serato",
 		icon: Disc3,
 		name: "Serato",
 		title: "Serato crates",
@@ -49,6 +53,7 @@ export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 	},
 	{
 		key: "virtualDj",
+		brand: "virtualdj",
 		icon: Laptop,
 		name: "VirtualDJ",
 		title: "VirtualDJ library",
@@ -61,6 +66,7 @@ export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 	},
 	{
 		key: "gemini",
+		brand: "gemini",
 		icon: Radio,
 		name: "Gemini",
 		title: "Gemini MDJ library",
@@ -70,6 +76,7 @@ export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 	},
 	{
 		key: "playlistFolders",
+		brand: null,
 		icon: FolderTree,
 		name: "Playlist folders",
 		title: "Playlists as folders",

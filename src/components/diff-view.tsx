@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { WELL } from "#/lib/page-layout.ts";
 
 /** The look of one kind of change in a diff: add, change, move or remove. */
 export type Tone = "add" | "change" | "move" | "remove";
@@ -263,7 +264,7 @@ export function DiffHunk({
 }) {
 	const shown = tallies.filter((t) => t.count > 0);
 	return (
-		<section className={flush ? "border-b last:border-b-0" : "overflow-clip rounded-lg border"}>
+		<section className={flush ? "border-b last:border-b-0" : `${WELL} overflow-clip`}>
 			<label
 				className={`${GRID} sticky top-[calc(var(--sync-top,-1rem)+var(--sync-head,0rem))] z-10 cursor-pointer border-b bg-card py-2 text-sm has-disabled:cursor-default`}
 			>

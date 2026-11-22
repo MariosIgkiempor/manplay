@@ -2,6 +2,7 @@ import { ArrowLeft, Play, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { PageHeader } from "#/components/page-header.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { PanelBarTitle, useHasPanelBar } from "#/context/panel-bar.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import type { Track } from "#/lib/api.ts";
 
@@ -67,32 +68,37 @@ export function PanelHeader({
 	plain = false,
 }: Props) {
 	const player = usePlayer();
+	// In the side panel the name goes in its top bar; elsewhere it heads the header as usual.
+	const inBar = useHasPanelBar() && !plain;
 	return (
-		<PageHeader
-			variant={plain ? "plain" : "panel"}
-			art={art && <div className="size-24 shrink-0 @lg/split:size-28">{art}</div>}
-			kind={kind}
-			badge={badge}
-			title={title}
-			subtitle={subtitle}
-			meta={
-				(meta !== undefined || (facts && facts.length > 0)) && (
+		<>
+			{inBar && <PanelBarTitle>{title}</PanelBarTitle>}
+			<PageHeader
+				variant={plain ? "plain" : "panel"}
+				art={art && <div className="size-24 shrink-0 @lg/split:size-28">{art}</div>}
+				kind={kind}
+				badge={badge}
+				title={inBar ? null : title}
+				subtitle={subtitle}
+				meta={
+					(meta !== undefined || (facts && facts.length > 0)) && (
+						<>
+							{meta}
+							{facts && facts.length > 0 && <Facts facts={facts} />}
+						</>
+					)
+				}
+				tabs={tabs}
+				actions={
 					<>
-						{meta}
-						{facts && facts.length > 0 && <Facts facts={facts} />}
+						<Button size="sm" disabled={tracks.length === 0} onClick={() => player.play(tracks, 0)}>
+							<Play /> Play
+						</Button>
+						{actions}
 					</>
-				)
-			}
-			tabs={tabs}
-			actions={
-				<>
-					<Button size="sm" disabled={tracks.length === 0} onClick={() => player.play(tracks, 0)}>
-						<Play /> Play
-					</Button>
-					{actions}
-				</>
-			}
-		/>
+				}
+			/>
+		</>
 	);
 }
 
@@ -102,24 +108,31 @@ export function PanelBar({
 	onBack,
 	onClose,
 	closeLabel,
+	onTitleSlot,
+	onActionsSlot,
 }: {
 	canGoBack: boolean;
 	onBack: () => void;
 	onClose: () => void;
 	closeLabel: string;
+	/** Where the content puts its title (`PanelBarTitle`). */
+	onTitleSlot?: (el: HTMLElement | null) => void;
+	/** Where the content puts its buttons (`PanelBarActions`). */
+	onActionsSlot?: (el: HTMLElement | null) => void;
 }) {
 	return (
-		<div className="flex h-12 shrink-0 items-center justify-between border-b px-3">
-			<Button
-				variant="ghost"
-				size="sm"
-				onClick={onBack}
-				disabled={!canGoBack}
-				className={canGoBack ? "" : "invisible"}
-			>
-				<ArrowLeft /> Back
-			</Button>
-			<Button variant="ghost" size="icon" aria-label={closeLabel} onClick={onClose}>
+		<div className="flex h-12 shrink-0 items-center gap-1 border-hairline border-b px-3">
+			{canGoBack && (
+				<Button variant="ghost" size="icon-sm" aria-label="Back" title="Back" onClick={onBack}>
+					<ArrowLeft />
+				</Button>
+			)}
+			<div
+				ref={onTitleSlot}
+				className="min-w-0 flex-1 truncate pl-1 font-semibold text-[0.9375rem] tracking-tight"
+			/>
+			<div ref={onActionsSlot} className="flex shrink-0 items-center gap-1 empty:hidden" />
+			<Button variant="ghost" size="icon-sm" aria-label={closeLabel} onClick={onClose}>
 				<X />
 			</Button>
 		</div>

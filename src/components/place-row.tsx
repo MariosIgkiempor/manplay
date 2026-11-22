@@ -28,7 +28,10 @@ export function PlaceFill({
 			<div className="truncate text-muted-foreground text-xs tabular-nums">{label}</div>
 			{/* The label above says the same in words. */}
 			<div aria-hidden="true" className="h-1 overflow-hidden rounded-full bg-muted">
-				<div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
+				<div
+					className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out motion-reduce:transition-none"
+					style={{ width: `${percent}%` }}
+				/>
 			</div>
 		</div>
 	);

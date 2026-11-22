@@ -9,6 +9,7 @@ import {
 	X,
 } from "lucide-react";
 import { useId } from "react";
+import { Framed } from "#/components/frame.tsx";
 import { BrowserHeader, ReleaseRows } from "#/components/import-browser.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { ProgressPill } from "#/components/progress-pill.tsx";
@@ -28,6 +29,7 @@ import {
 	trashTargets,
 	useLibraryIndex,
 } from "#/lib/import-state.ts";
+import { WELL } from "#/lib/page-layout.ts";
 import { TRASH } from "#/lib/platform.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { type useImport, useImportProgress } from "#/lib/use-import.ts";
@@ -115,13 +117,14 @@ function ToolbarText({ s, total, groups, progress }: ToolbarProps) {
 		);
 	}
 	if (total === 0) {
-		return <span className="text-muted-foreground">Nothing new</span>;
+		return <span>Nothing new</span>;
 	}
 	return (
-		<span className="text-muted-foreground">
-			<span className="font-medium text-foreground tabular-nums">{total.toLocaleString()}</span> new{" "}
-			{total === 1 ? "track" : "tracks"} in {groups.toLocaleString()}{" "}
-			{groups === 1 ? "release" : "releases"}
+		<span>
+			{total.toLocaleString()} new {total === 1 ? "track" : "tracks"}
+			<span className="ml-2 font-normal text-muted-foreground tabular-nums">
+				in {groups.toLocaleString()} {groups === 1 ? "release" : "releases"}
+			</span>
 		</span>
 	);
 }
@@ -132,56 +135,62 @@ function Toolbar(p: ToolbarProps) {
 	const picked = s.selected.size;
 	const ready = s.importable.size;
 	return (
-		<div className="relative flex h-12 items-center gap-1.5 border-b bg-card pr-2 pl-4">
-			<p className="min-w-0 flex-1 truncate text-sm">
-				<ToolbarText {...p} />
-			</p>
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				aria-label="Full rescan"
-				title="Full rescan: read every file again, ignoring what was learned last time"
-				onClick={() => s.rescan(true)}
-				disabled={s.folder === null || scanning}
-			>
-				<RotateCcw />
-			</Button>
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				aria-label="Rescan"
-				title="Rescan (only files that changed)"
-				onClick={() => s.rescan(false)}
-				disabled={s.folder === null || scanning}
-			>
-				<RefreshCw className={scanning ? "animate-spin" : undefined} />
-			</Button>
-			{picked > 0 ? (
+		// The frame's own header, as every card has: what it holds on the left, its buttons right.
+		// It stays in view (opaque, in the frame's shade) while the list scrolls.
+		<div className="sticky top-0 z-10 rounded-t-2xl bg-background">
+			<div className="relative flex h-14 items-center gap-1.5 rounded-t-2xl bg-white/[0.018] pr-2 pl-4">
+				<h2 className="min-w-0 flex-1 truncate font-medium text-[0.9375rem]">
+					<ToolbarText {...p} />
+				</h2>
 				<Button
 					variant="ghost"
-					size="sm"
-					className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-					onClick={p.onTrash}
-					disabled={s.trash.isPending}
+					size="icon-sm"
+					aria-label="Full rescan"
+					title="Full rescan: read every file again, ignoring what was learned last time"
+					onClick={() => s.rescan(true)}
+					disabled={s.folder === null || scanning}
 				>
-					<Trash2 /> Move to {TRASH}
+					<RotateCcw />
 				</Button>
-			) : (
-				p.total > 0 && (
-					<Button variant="ghost" size="sm" onClick={s.selectAll}>
-						Pick all
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					aria-label="Rescan"
+					title="Rescan (only files that changed)"
+					onClick={() => s.rescan(false)}
+					disabled={s.folder === null || scanning}
+				>
+					<RefreshCw className={scanning ? "animate-spin" : undefined} />
+				</Button>
+				{picked > 0 ? (
+					<Button
+						variant="ghost"
+						size="sm"
+						className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+						onClick={p.onTrash}
+						disabled={s.trash.isPending}
+					>
+						<Trash2 /> Move to {TRASH}
 					</Button>
-				)
-			)}
-			<Button
-				size="sm"
-				onClick={() => s.add.mutate(s.importable)}
-				disabled={s.add.isPending || ready === 0 || !s.canAdd}
-			>
-				{s.add.isPending ? <LoaderCircle className="animate-spin" /> : <ListPlus />}
-				{s.add.isPending ? "Importing…" : `Import${ready > 0 ? ` ${ready.toLocaleString()}` : ""}`}
-			</Button>
-			<ScanBar progress={p.progress} scanning={scanning} />
+				) : (
+					p.total > 0 && (
+						<Button variant="ghost" size="sm" onClick={s.selectAll}>
+							Pick all
+						</Button>
+					)
+				)}
+				<Button
+					size="sm"
+					onClick={() => s.add.mutate(s.importable)}
+					disabled={s.add.isPending || ready === 0 || !s.canAdd}
+				>
+					{s.add.isPending ? <LoaderCircle className="animate-spin" /> : <ListPlus />}
+					{s.add.isPending
+						? "Importing…"
+						: `Import${ready > 0 ? ` ${ready.toLocaleString()}` : ""}`}
+				</Button>
+				<ScanBar progress={p.progress} scanning={scanning} />
+			</div>
 		</div>
 	);
 }
@@ -309,66 +318,70 @@ export function ImportView({ s }: { s: ReturnType<typeof useImport> }) {
 			))}
 			{s.preview.error && <ErrorLine>{s.preview.error}</ErrorLine>}
 
-			{/* Clips to its rounded corners; the toolbar and column names stick together at the top. */}
-			<div className="overflow-clip rounded-xl border bg-card">
-				<div className="sticky top-0 z-10 bg-card">
-					<Toolbar
-						s={s}
-						total={total}
-						groups={groups.length}
-						progress={progress}
-						onTrash={() => void trashKeys(s.selected)}
-					/>
-					{groups.length > 0 && <BrowserHeader />}
+			{/* The header and the column names stick at the top while the releases scroll. */}
+			<Framed className="pt-0">
+				<Toolbar
+					s={s}
+					total={total}
+					groups={groups.length}
+					progress={progress}
+					onTrash={() => void trashKeys(s.selected)}
+				/>
+				<div className={WELL}>
+					{groups.length > 0 && (
+						<div className="sticky top-14 z-10 rounded-t-xl bg-well">
+							<BrowserHeader />
+						</div>
+					)}
+					{s.scan && <Summary scan={s.scan} report={s.report} />}
+					<datalist id={artistList}>
+						{artists.map((a) => (
+							<option key={a} value={a} />
+						))}
+					</datalist>
+					{groups.length === 0 ? (
+						<EmptyList s={s} />
+					) : (
+						<div
+							role="listbox"
+							aria-multiselectable
+							aria-label="New music"
+							className={cn("p-1", s.trash.isPending && "pointer-events-none opacity-60")}
+						>
+							{groups.map((g) => {
+								const key = groupKey(g);
+								const edit = editOf(s.edits, g);
+								return (
+									<ReleaseRows
+										key={key}
+										group={g}
+										edit={edit}
+										onEdit={(next) => s.edit(key, next)}
+										selected={s.selected}
+										onClick={s.click}
+										onToggle={s.toggle}
+										onSetMany={s.setMany}
+										onImport={(keys) => s.add.mutate(new Set(keys))}
+										onTrash={(keys) => void trashKeys(new Set(keys))}
+										busy={s.add.isPending || !s.canAdd}
+										artistList={artistList}
+										albums={[...(albumsByArtist.get(edit.artist.trim()) ?? [])].sort((x, y) =>
+											x.localeCompare(y),
+										)}
+										placement={placementOf(edit, artists, existing)}
+										playback={{
+											activeKey: s.preview.activeKey,
+											isPlaying: s.preview.isPlaying,
+											loading: s.preview.loading,
+											onToggle: (t) => void s.preview.toggle(key, t),
+										}}
+									/>
+								);
+							})}
+						</div>
+					)}
 				</div>
-				{s.scan && <Summary scan={s.scan} report={s.report} />}
-				<datalist id={artistList}>
-					{artists.map((a) => (
-						<option key={a} value={a} />
-					))}
-				</datalist>
-				{groups.length === 0 ? (
-					<EmptyList s={s} />
-				) : (
-					<div
-						role="listbox"
-						aria-multiselectable
-						aria-label="New music"
-						className={cn("p-1", s.trash.isPending && "pointer-events-none opacity-60")}
-					>
-						{groups.map((g) => {
-							const key = groupKey(g);
-							const edit = editOf(s.edits, g);
-							return (
-								<ReleaseRows
-									key={key}
-									group={g}
-									edit={edit}
-									onEdit={(next) => s.edit(key, next)}
-									selected={s.selected}
-									onClick={s.click}
-									onToggle={s.toggle}
-									onSetMany={s.setMany}
-									onImport={(keys) => s.add.mutate(new Set(keys))}
-									onTrash={(keys) => void trashKeys(new Set(keys))}
-									busy={s.add.isPending || !s.canAdd}
-									artistList={artistList}
-									albums={[...(albumsByArtist.get(edit.artist.trim()) ?? [])].sort((x, y) =>
-										x.localeCompare(y),
-									)}
-									placement={placementOf(edit, artists, existing)}
-									playback={{
-										activeKey: s.preview.activeKey,
-										isPlaying: s.preview.isPlaying,
-										loading: s.preview.loading,
-										onToggle: (t) => void s.preview.toggle(key, t),
-									}}
-								/>
-							);
-						})}
-					</div>
-				)}
-			</div>
+			</Framed>
 
 			<StatusBar leading={<ScanPill progress={progress} />}>
 				<Stat label="Releases" value={groups.length} />

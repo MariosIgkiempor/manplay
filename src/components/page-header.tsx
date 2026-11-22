@@ -22,10 +22,7 @@ export function Cover({
 	className?: string;
 }) {
 	const covers = useMemo(() => groupAlbums(tracks).map((a) => a.coverTrackId), [tracks]);
-	const frame = cn(
-		"shrink-0 overflow-hidden rounded-lg shadow-lg ring-1 ring-foreground/10",
-		className,
-	);
+	const frame = cn("shrink-0 overflow-hidden rounded-lg shadow-md ring-1 ring-white/10", className);
 	if (covers.length >= 4) {
 		return (
 			<div className={cn(frame, "grid grid-cols-2 grid-rows-2")}>
@@ -67,7 +64,7 @@ function Title({
 	}, [editing, initial]);
 	if (!editing) {
 		return (
-			<h1 className="truncate font-semibold text-3xl tracking-tight" title={title}>
+			<h1 className="truncate font-semibold text-xl tracking-tight" title={title}>
 				{title}
 			</h1>
 		);
@@ -86,7 +83,7 @@ function Title({
 				onChange={(e) => setText(e.target.value)}
 				onKeyDown={(e) => e.key === "Escape" && onCancel()}
 				aria-label="Name"
-				className="h-10 max-w-md font-semibold text-2xl"
+				className="h-9 max-w-md font-semibold text-lg"
 			/>
 			<Button type="submit" size="icon" aria-label="Save name">
 				<Check />
@@ -101,20 +98,6 @@ function Title({
 				<X />
 			</Button>
 		</form>
-	);
-}
-
-/** The square that heads a page without covers of its own: the page's icon on a tile. */
-export function PageIcon({ children }: { children: ReactNode }) {
-	return (
-		<div
-			className={cn(
-				PAGE_ART,
-				"grid place-items-center bg-muted text-muted-foreground shadow-lg ring-1 ring-foreground/10 [&_svg]:size-10 [@media(max-height:44rem)]:[&_svg]:size-6",
-			)}
-		>
-			{children}
-		</div>
 	);
 }
 
@@ -141,18 +124,18 @@ function HeaderTitle({
 const VARIANTS = {
 	/** A full page: the band runs edge to edge under the page's own padding. */
 	page: {
-		band: "border-b bg-card/40 px-6 pt-8",
-		bottom: "pb-6",
-		gap: "gap-6",
-		title: "text-3xl",
+		band: "border-hairline border-b px-6 pt-5",
+		bottom: "pb-4",
+		gap: "gap-4",
+		title: "text-xl",
 		small: "text-sm",
 	},
 	/** A drawer or the split: the band bleeds over the panel's 1.25rem padding to its edges. */
 	panel: {
-		band: "-mx-5 -mt-5 border-b bg-card/40 px-5 pt-6",
-		bottom: "pb-5",
-		gap: "gap-5",
-		title: "text-2xl",
+		band: "-mx-5 -mt-5 border-hairline border-b px-5 pt-5",
+		bottom: "pb-4",
+		gap: "gap-4",
+		title: "text-lg",
 		small: "text-xs",
 	},
 	/** Inside other content: no band, same layout. */
@@ -163,8 +146,58 @@ const VARIANTS = {
  * The one header every page and panel has: cover or icon, what kind of thing it is, its title,
  * figures, and its buttons. Tabs, when there are some, sit on the header's bottom edge.
  */
+/** Whether a slot was given something to show. */
+const shows = (node: ReactNode) => node !== undefined && node !== null && node !== false;
+
+/** What the page is (a crumb, an icon) on the left, a status or switch on the right. */
+function KindLine({ kind, badge, size }: { kind: ReactNode; badge: ReactNode; size: string }) {
+	return (
+		<div
+			className={cn(
+				"flex items-center justify-between gap-3 text-muted-foreground [&_svg]:size-3.5",
+				size,
+			)}
+		>
+			<div className="flex min-w-0 flex-wrap items-center gap-1.5">{kind}</div>
+			{badge}
+		</div>
+	);
+}
+
+/** The page's figures on their own line under the title. */
+function MetaLine({ meta, size }: { meta: ReactNode; size: string }) {
+	if (!shows(meta)) {
+		return null;
+	}
+	return (
+		<div
+			className={cn(
+				"flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pt-0.5 text-muted-foreground tabular-nums",
+				size,
+			)}
+		>
+			{meta}
+		</div>
+	);
+}
+
+/** The title, with the page's figures on the same baseline when they go there. */
+function TitleLine({ title, meta }: { title: ReactNode; meta: ReactNode }) {
+	if (!shows(meta)) {
+		return <div className="min-w-0 flex-1 basis-40">{title}</div>;
+	}
+	return (
+		<div className="flex min-w-0 flex-1 basis-40 items-baseline gap-3 [&>h1]:shrink-0">
+			{title}
+			<div className="flex min-w-0 items-baseline gap-3 truncate text-muted-foreground text-sm tabular-nums">
+				{meta}
+			</div>
+		</div>
+	);
+}
+
 export function PageHeader({
-	art,
+	art = null,
 	kind,
 	badge,
 	title,
@@ -176,7 +209,8 @@ export function PageHeader({
 	tabs,
 	variant = "page",
 }: {
-	art: ReactNode;
+	/** A cover or brand at the start; app pages have none. */
+	art?: ReactNode;
 	/** What this is, e.g. "Playlist" or a tag breadcrumb, with an icon. App pages have none. */
 	kind?: ReactNode;
 	/** A status or switch at the top right, e.g. "Synced" or a source's on/off switch. */
@@ -196,30 +230,23 @@ export function PageHeader({
 	variant?: keyof typeof VARIANTS;
 }) {
 	const v = VARIANTS[variant];
-	const hasTabs = tabs !== undefined && tabs !== null && tabs !== false;
+	const hasTabs = shows(tabs);
 	const hasTop = kind !== undefined || badge !== undefined;
+	// An app page with only a title and figures reads as one line: "Export  2 destinations".
+	const inlineMeta = !(hasTop || [art, subtitle, children].some(shows));
 	return (
 		<header className={cn("shrink-0", v.band, hasTabs ? "pb-0" : v.bottom)}>
 			{/* The title lines up with the top of the art; actions sit on the title's line, right. */}
 			<div className={cn("flex items-start", v.gap, hasTabs && v.bottom)}>
 				{art}
 				<div className="min-w-0 flex-1 space-y-1">
-					{hasTop && (
-						<div
-							className={cn(
-								"flex items-center justify-between gap-3 text-muted-foreground [&_svg]:size-3.5",
-								v.small,
-							)}
-						>
-							<div className="flex min-w-0 flex-wrap items-center gap-1.5">{kind}</div>
-							{badge}
-						</div>
-					)}
+					{hasTop && <KindLine kind={kind} badge={badge} size={v.small} />}
 					{/* The buttons drop under the title once the two no longer fit side by side. */}
 					<div className="flex flex-wrap items-start gap-x-3 gap-y-2">
-						<div className="min-w-0 flex-1 basis-40">
-							<HeaderTitle title={title} hint={titleHint} size={v.title} />
-						</div>
+						<TitleLine
+							title={<HeaderTitle title={title} hint={titleHint} size={v.title} />}
+							meta={inlineMeta ? meta : null}
+						/>
 						{actions && (
 							<ButtonGroup size={variant === "page" ? "default" : "sm"} className="mt-0.5">
 								{actions}
@@ -229,20 +256,11 @@ export function PageHeader({
 					{subtitle !== undefined && (
 						<div className="truncate text-muted-foreground text-sm">{subtitle}</div>
 					)}
-					{meta && (
-						<div
-							className={cn(
-								"flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 pt-0.5 text-muted-foreground tabular-nums",
-								v.small,
-							)}
-						>
-							{meta}
-						</div>
-					)}
+					{!inlineMeta && <MetaLine meta={meta} size={v.small} />}
 					{children && <div className="pt-2">{children}</div>}
 				</div>
 			</div>
-			{hasTabs && <div className="-mb-px">{tabs}</div>}
+			<div className={cn("-mb-px empty:hidden", inlineMeta && "mt-3")}>{tabs}</div>
 		</header>
 	);
 }
@@ -265,6 +283,8 @@ interface CollectionProps {
 	menuExtra?: readonly HeaderMenuEntry[];
 	/** Extra content under the buttons, such as subtags. */
 	children?: ReactNode;
+	/** How the songs are sorted (a `SortMenu` as a segment), before Play. */
+	sort?: ReactNode;
 }
 
 /** Header of a playlist or tag page: covers, name, figures, Play, and Rename / Delete under ⋯. */
@@ -280,6 +300,7 @@ export function CollectionHeader({
 	sharing,
 	menuExtra = [],
 	children,
+	sort,
 }: CollectionProps) {
 	const player = usePlayer();
 	const [editing, setEditing] = useState(false);
@@ -303,6 +324,7 @@ export function CollectionHeader({
 			meta={meta}
 			actions={
 				<>
+					{sort}
 					<Button disabled={tracks.length === 0} onClick={() => player.play(tracks, 0)}>
 						<Play /> Play
 					</Button>

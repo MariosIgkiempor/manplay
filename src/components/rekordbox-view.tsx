@@ -70,7 +70,7 @@ function FileTitle({
 
 function NoFile({ onChoose, pending }: { onChoose: () => void; pending: boolean }) {
 	return (
-		<div className="space-y-3 rounded-lg border border-dashed p-5 text-center">
+		<div className="space-y-3 rounded-xl border border-hairline border-dashed p-5 text-center">
 			<p className="text-sm">Choose where manplay should save the rekordbox file.</p>
 			<Button onClick={onChoose} disabled={pending}>
 				<FolderOpen /> Choose location…

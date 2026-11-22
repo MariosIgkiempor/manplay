@@ -5,9 +5,11 @@ import { ErrorLine } from "#/components/page.tsx";
 import { TagChanges, TagRow } from "#/components/tag-diff.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { tagsPreview } from "#/lib/api.ts";
+import { DIALOG_BACKDROP, DIALOG_FRAME, WELL_ROWS } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { type FieldSummary, type FileChanges, summarize } from "#/lib/tag-preview.ts";
 import type { TagConfirmRequest } from "#/lib/use-tag-confirm.tsx";
+import { cn } from "#/lib/utils.ts";
 
 const MAX_FILES = 60;
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
@@ -59,16 +61,15 @@ export function TagConfirmDialog({
 
 	return (
 		<div className="fixed inset-0 z-50 flex items-center justify-center">
-			<div
-				aria-hidden="true"
-				onMouseDown={() => onDone(false)}
-				className="absolute inset-0 animate-in bg-background/60 backdrop-blur-sm fade-in motion-reduce:animate-none"
-			/>
+			<div aria-hidden="true" onMouseDown={() => onDone(false)} className={DIALOG_BACKDROP} />
 			<div
 				role="dialog"
 				aria-modal="true"
 				aria-label={req.title}
-				className="relative flex max-h-[85vh] w-[38rem] max-w-[calc(100%-2rem)] animate-in flex-col overflow-hidden rounded-xl border bg-background shadow-2xl duration-150 fade-in zoom-in-95 motion-reduce:animate-none"
+				className={cn(
+					DIALOG_FRAME,
+					"flex max-h-[85vh] w-[38rem] max-w-[calc(100%-2rem)] flex-col overflow-hidden",
+				)}
 			>
 				<div className="flex items-start gap-3 border-b px-5 py-4">
 					<span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -159,7 +160,7 @@ function PerFile({ files }: { files: FileChanges[] }) {
 				<ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
 				Changes per song
 			</summary>
-			<ul className="mt-2 divide-y rounded-lg border">
+			<ul className={`${WELL_ROWS} mt-2`}>
 				{files.slice(0, MAX_FILES).map((f) => (
 					<li key={f.path} className="px-3 py-2 text-xs">
 						<div className="flex items-baseline gap-2">

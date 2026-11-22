@@ -1,12 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ListMusic, ListX } from "lucide-react";
+import { ListMusic, ListX, X } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { useJellyfinMenu } from "#/components/jellyfin-menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { CollectionHeader } from "#/components/page-header.tsx";
-import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
+import {
+	HeaderSongSort,
+	SelectableTrackList,
+	useSongSort,
+} from "#/components/selectable-track-list.tsx";
 import { SharingControl } from "#/components/sharing-control.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useUndo } from "#/context/undo-context.ts";
@@ -65,10 +69,12 @@ function PlaylistPage() {
 	const list = tracks.data ?? [];
 	const jellyfinMenu = useJellyfinMenu(playlist ? { kind: "playlist", id: playlist.id } : null);
 	const seconds = list.reduce((n, t) => n + (t.durationMs ?? 0), 0) / 1000;
+	const sort = useSongSort(list, "Playlist order");
 
 	return (
 		<main>
 			<CollectionHeader
+				sort={<HeaderSongSort songs={list.length} sort={sort} />}
 				kind={
 					<>
 						<ListMusic className="size-3.5" /> Playlist
@@ -83,7 +89,7 @@ function PlaylistPage() {
 						{seconds >= 1 && <span>{duration(seconds)}</span>}
 					</>
 				}
-				tracks={list}
+				tracks={sort.sorted}
 				fallbackIcon={<ListMusic className="size-10" />}
 				onRename={(name) => rename.mutate(name)}
 				onDelete={() => setConfirming(true)}
@@ -115,6 +121,9 @@ function PlaylistPage() {
 					<SelectableTrackList
 						tracks={list}
 						listOrder="Playlist order"
+						sort={sort.sort}
+						onSortChange={sort.setSort}
+						hideSortMenu
 						menuExtra={(ts) => [
 							{
 								label:
@@ -125,15 +134,19 @@ function PlaylistPage() {
 							},
 						]}
 						renderAction={(t) => (
+							// Shown on hover or focus, so a long playlist is not a column of "Remove".
 							<Button
 								variant="ghost"
-								size="sm"
+								size="icon-sm"
+								aria-label={`Remove ${t.title} from playlist`}
+								title="Remove from playlist"
+								className="text-muted-foreground opacity-0 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
 								onClick={(e) => {
 									e.stopPropagation();
 									remove.mutate([t.id]);
 								}}
 							>
-								Remove
+								<X />
 							</Button>
 						)}
 					/>

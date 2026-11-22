@@ -1,11 +1,10 @@
 import {
 	AudioWaveform,
-	Grid3x3,
+	PanelRight,
 	Pause,
 	Play,
 	SkipBack,
 	SkipForward,
-	TextCursorInput,
 	Volume2,
 } from "lucide-react";
 import { type CSSProperties, useState } from "react";
@@ -14,7 +13,7 @@ import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { WaveformDetail, WaveformSeek } from "#/components/waveform.tsx";
-import { useDetail } from "#/context/detail-context.ts";
+import { type DetailView, useDetail } from "#/context/detail-context.ts";
 import { usePlayer, usePlayerTime } from "#/context/player-context.ts";
 import { TrackOrderContext } from "#/context/track-order.ts";
 import type { Track, TrackAnalysis } from "#/lib/api.ts";
@@ -84,7 +83,7 @@ function NowPlaying({ track, error }: { track: Track; error: string | null }) {
 		<TrackOrderContext.Provider value={p.queue.map((t) => t.id)}>
 			<AddToPlaylistMenu tracks={[track]} label={track.title}>
 				<div className="flex min-w-0 items-center gap-3">
-					<AlbumArt trackId={track.id} className="size-12 shrink-0 rounded-md" />
+					<AlbumArt trackId={track.id} className="size-10 shrink-0 rounded-md" />
 					<div className="min-w-0">
 						<button
 							type="button"
@@ -112,45 +111,30 @@ function NowPlaying({ track, error }: { track: Track; error: string | null }) {
 	);
 }
 
-/** Open the playing song in the grid editor (stepping through the queue) or the tag editor. */
-function SongActions({ track }: { track: Track }) {
+/**
+ * The side panel's button. Opening shows the playing song's metadata, or when nothing is
+ * playing, whatever the panel showed last; pressed again, it closes the panel.
+ */
+function PanelToggle({ track }: { track: Track | null }) {
 	const detail = useDetail();
 	const p = usePlayer();
+	const open = detail.view !== null;
+	const next: DetailView | null = track
+		? { kind: "song", trackId: track.id, tab: "metadata", list: p.queue.map((t) => t.id) }
+		: detail.last;
 	return (
-		<>
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				aria-label="Edit grid and cues"
-				title="Edit grid and cues"
-				onClick={() =>
-					detail.open({
-						kind: "song",
-						trackId: track.id,
-						tab: "grid",
-						list: p.queue.map((t) => t.id),
-					})
-				}
-			>
-				<Grid3x3 />
-			</Button>
-			<Button
-				variant="ghost"
-				size="icon-sm"
-				aria-label="Edit metadata"
-				title="Edit metadata"
-				onClick={() =>
-					detail.open({
-						kind: "song",
-						trackId: track.id,
-						tab: "metadata",
-						list: p.queue.map((t) => t.id),
-					})
-				}
-			>
-				<TextCursorInput />
-			</Button>
-		</>
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			aria-label={open ? "Close the side panel" : "Open the side panel"}
+			aria-pressed={open}
+			title={open ? "Close the side panel" : "Open the side panel"}
+			disabled={!open && next === null}
+			className={open ? "text-primary" : "text-muted-foreground"}
+			onClick={() => (open ? detail.close() : next && detail.open(next))}
+		>
+			<PanelRight />
+		</Button>
 	);
 }
 
@@ -174,21 +158,18 @@ export function PlayerBar() {
 	const [waveform, setWaveform] = useWaveformShown();
 
 	return (
-		<footer className="shrink-0 border-t bg-card">
+		<footer className="shrink-0 bg-canvas">
 			{waveform && current && analysis && (
 				<WaveformDetail analysis={analysis} position={p.getTime} running={p.playing} />
 			)}
-			<div className="grid h-20 grid-cols-[1fr_2fr_1fr] items-center gap-4 px-4">
+			<div className="grid h-16 grid-cols-[minmax(0,1fr)_minmax(0,2.4fr)_auto] items-center gap-6 px-4">
 				<div className="flex min-w-0 items-center gap-3">
-					{current ? (
-						<NowPlaying track={current} error={p.error} />
-					) : (
-						<span className="text-muted-foreground text-sm">Nothing playing</span>
-					)}
+					{current && <NowPlaying track={current} error={p.error} />}
 				</div>
 
-				<div className="space-y-1">
-					<div className="flex items-center justify-center gap-2">
+				{/* The transport, then the song's timeline: its waveform once analysed. */}
+				<div className="flex min-w-0 items-center gap-3">
+					<div className="flex shrink-0 items-center gap-1">
 						<Button
 							variant="ghost"
 							size="icon"
@@ -216,16 +197,28 @@ export function PlayerBar() {
 							<SkipForward />
 						</Button>
 					</div>
-					<div className="flex items-center gap-2 text-muted-foreground text-xs tabular-nums">
-						<span className="w-10 text-right">{clock(time)}</span>
+					<div className="flex min-w-0 flex-1 items-center gap-2 text-muted-foreground text-xs tabular-nums">
+						<span className="w-10 shrink-0 text-right">{clock(time)}</span>
 						<SeekBar analysis={current ? analysis : null} disabled={current === null} />
-						<span className="w-10">{clock(p.duration)}</span>
+						<span className="w-10 shrink-0">{clock(p.duration)}</span>
 					</div>
 				</div>
 
 				<div className="flex items-center justify-end gap-2">
 					{current && <TempoKey track={current} />}
-					{current && <SongActions track={current} />}
+					<Volume2 className="size-4 text-muted-foreground" />
+					<input
+						type="range"
+						aria-label="Volume"
+						className="slider w-24"
+						style={{ "--fill": p.volume } as CSSProperties}
+						min={0}
+						max={1}
+						step={0.01}
+						value={p.volume}
+						onChange={(e) => p.setVolume(Number(e.target.value))}
+					/>
+					<span aria-hidden="true" className="mx-1 h-5 w-px bg-hairline" />
 					<Button
 						variant="ghost"
 						size="icon-sm"
@@ -237,18 +230,7 @@ export function PlayerBar() {
 					>
 						<AudioWaveform />
 					</Button>
-					<Volume2 className="size-4 text-muted-foreground" />
-					<input
-						type="range"
-						aria-label="Volume"
-						className="slider w-28"
-						style={{ "--fill": p.volume } as CSSProperties}
-						min={0}
-						max={1}
-						step={0.01}
-						value={p.volume}
-						onChange={(e) => p.setVolume(Number(e.target.value))}
-					/>
+					<PanelToggle track={current} />
 				</div>
 			</div>
 		</footer>
@@ -269,6 +251,8 @@ function SeekBar({ analysis, disabled }: { analysis: TrackAnalysis | null; disab
 				duration={duration}
 				disabled={disabled}
 				onSeek={p.seek}
+				quiet
+				className="h-7"
 			/>
 		);
 	}

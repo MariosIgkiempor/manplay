@@ -13,6 +13,7 @@ export function ResizeHandle({
 	initial,
 	label,
 	onWidth,
+	inGap = false,
 }: {
 	edge: "left" | "right";
 	width: number;
@@ -20,6 +21,8 @@ export function ResizeHandle({
 	initial: number;
 	label: string;
 	onWidth: (w: number) => void;
+	/** The pane is a card: the handle fills the gap outside its edge instead of straddling it. */
+	inGap?: boolean;
 }) {
 	const sign = edge === "left" ? -1 : 1;
 	const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
@@ -67,7 +70,7 @@ export function ResizeHandle({
 			onDoubleClick={() => onWidth(initial)}
 			className={cn(
 				"group absolute inset-y-0 z-20 w-2 cursor-col-resize outline-none",
-				edge === "left" ? "-left-1" : "-right-1",
+				edge === "left" ? (inGap ? "-left-2" : "-left-1") : inGap ? "-right-2" : "-right-1",
 			)}
 		>
 			<div className="mx-auto h-full w-px bg-transparent transition-colors group-hover:bg-primary/60 group-focus-visible:bg-primary group-active:bg-primary" />

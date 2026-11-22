@@ -25,12 +25,10 @@ export function LibrarySortMenu({
 }: {
 	view: View;
 	sorts: LibrarySorts;
-	/** Shown as the search bar's right-hand segment. */
+	/** Shown at the search bar's right end, as full-height as the field and rounded like it. */
 	segment?: boolean;
 }) {
-	const className = segment
-		? "h-full rounded-none rounded-r-[calc(var(--radius-lg)-1px)] px-2.5 text-sm"
-		: undefined;
+	const className = segment ? "h-full rounded-md px-2.5 text-sm" : undefined;
 	if (view === "albums") {
 		return (
 			<SortMenu

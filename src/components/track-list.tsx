@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Activity, Clock, Disc3, KeyRound, Pause, Play } from "lucide-react";
+import { Activity, ArrowRight, Clock, Disc3, KeyRound, Pause, Play, X } from "lucide-react";
 import { type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useState } from "react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
@@ -16,6 +16,8 @@ import { albumKey, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName, normalizeKey } from "#/lib/musical-key.ts";
+import { WELL_ROWS } from "#/lib/page-layout.ts";
+import { useTracks } from "#/lib/queries.ts";
 import { parseBpm } from "#/lib/track-fields.ts";
 import { useProgressive } from "#/lib/use-progressive.ts";
 import type { InlineField } from "#/lib/use-track-edit.ts";
@@ -57,13 +59,13 @@ interface Layout {
 }
 
 /**
- * Columns: play, the song (art and three lines), tags when there is room, then sync and actions.
- * Tags only show once the list is wide enough for them.
+ * Columns: the song (art and three lines), tags when there is room, then sync and actions. Play
+ * sits on the artwork, or without artwork, at the end of the playing song's row.
  */
 function rowColumns(l: Layout): string {
 	return cn(
-		"grid-cols-[2rem_minmax(0,1fr)_auto]",
-		l.tags && "@3xl/list:grid-cols-[2rem_minmax(0,1.6fr)_minmax(0,1fr)_auto]",
+		"grid-cols-[minmax(0,1fr)_auto]",
+		l.tags && "@3xl/list:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_auto]",
 	);
 }
 
@@ -86,7 +88,6 @@ function LinkButton({
 				e.stopPropagation();
 				onClick();
 			}}
-			onDoubleClick={stop}
 		>
 			{children}
 		</button>
@@ -102,39 +103,63 @@ function TagChips({
 }) {
 	const navigate = useNavigate();
 	const { close } = useDetail();
+	const player = usePlayer();
+	const library = useTracks().data ?? [];
+	const openTag = (tag: string) => {
+		close();
+		void navigate({ to: "/tags/$", params: { _splat: tag } });
+	};
+	// A tag also covers the tags under it, as the tag's page does.
+	const tagged = (tag: string) =>
+		library.filter((t) => t.tags.some((own) => own === tag || own.startsWith(`${tag}/`)));
+	const menuFor = (tag: string): MenuEntry[] => [
+		{ label: "Go to tag", icon: <ArrowRight />, onSelect: () => openTag(tag) },
+		{ label: "Play songs tagged", icon: <Play />, onSelect: () => player.play(tagged(tag), 0) },
+		"separator",
+		onRemoveTag && {
+			label: "Remove from this song",
+			icon: <X />,
+			destructive: true,
+			onSelect: () => onRemoveTag(track, tag),
+		},
+	];
 	return (
 		<div className="flex min-w-0 flex-wrap gap-1">
 			{track.tags.map((tag) => (
-				<span
-					key={tag}
-					className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
-				>
-					<button
-						type="button"
-						className="truncate hover:text-foreground hover:underline"
-						onClick={(e) => {
-							e.stopPropagation();
-							close();
-							void navigate({ to: "/tags/$", params: { _splat: tag } });
-						}}
-						onDoubleClick={stop}
+				// A right-click on a tag is about the tag, not the song's own menu.
+				// biome-ignore lint/a11y/noStaticElementInteractions: only keeps the song's menu shut
+				<span key={tag} className="contents" onContextMenu={(e) => e.stopPropagation()}>
+					<RowMenu
+						label={tag}
+						items={menuFor(tag)}
+						render={<span />}
+						className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
 					>
-						{tag}
-					</button>
-					{onRemoveTag && (
 						<button
 							type="button"
-							aria-label={`Remove tag ${tag}`}
-							className="hover:text-foreground"
+							className="truncate hover:text-foreground hover:underline"
 							onClick={(e) => {
 								e.stopPropagation();
-								onRemoveTag(track, tag);
+								openTag(tag);
 							}}
-							onDoubleClick={stop}
 						>
-							×
+							{tag}
 						</button>
-					)}
+						{onRemoveTag && (
+							<button
+								type="button"
+								aria-label={`Remove tag ${tag}`}
+								className="hover:text-foreground"
+								onClick={(e) => {
+									e.stopPropagation();
+									onRemoveTag(track, tag);
+								}}
+								onDoubleClick={stop}
+							>
+								×
+							</button>
+						)}
+					</RowMenu>
 				</span>
 			))}
 		</div>
@@ -157,6 +182,7 @@ function SongCell({
 	onRename,
 	onRenameEnd,
 	onEdit,
+	playButton,
 }: {
 	track: Track;
 	isCurrent: boolean;
@@ -171,6 +197,8 @@ function SongCell({
 	onRename: (title: string) => void;
 	onRenameEnd: () => void;
 	onEdit: Props["onEdit"];
+	/** Laid over the artwork. */
+	playButton: ReactNode;
 }) {
 	const go = useDetailNav();
 	const showArtist = !hideArtist && track.artist !== "";
@@ -206,7 +234,12 @@ function SongCell({
 	}
 	return (
 		<div className="flex min-w-0 items-center gap-3">
-			{!hideArt && <AlbumArt trackId={track.id} className="size-12 shrink-0 rounded-md" />}
+			{!hideArt && (
+				<div className="relative size-12 shrink-0">
+					<AlbumArt trackId={track.id} className="size-12 rounded-md" />
+					{playButton}
+				</div>
+			)}
 			<div className="min-w-0 flex-1 leading-tight">
 				<div
 					className={cn("truncate text-sm", (isCurrent || isOpen) && "font-medium text-primary")}
@@ -373,10 +406,16 @@ function PlayButton({
 	track,
 	isCurrent,
 	onPlay,
+	onArt = false,
 }: {
 	track: Track;
 	isCurrent: boolean;
 	onPlay: () => void;
+	/**
+	 * Laid over the song's artwork: hidden until the row is hovered or focused, and kept showing,
+	 * on a darkened cover, for the song that is playing.
+	 */
+	onArt?: boolean;
 }) {
 	const player = usePlayer();
 	const pausing = isCurrent && player.playing;
@@ -385,10 +424,21 @@ function PlayButton({
 		<button
 			type="button"
 			aria-label={pausing ? `Pause ${track.title}` : `Play ${track.title}`}
-			className={cn(
-				"flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground",
-				isCurrent ? "text-primary" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
-			)}
+			className={
+				onArt
+					? cn(
+							"absolute inset-0 grid place-items-center rounded-md bg-black/50 text-white outline-none transition-opacity focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring [&_svg]:fill-current",
+							isCurrent
+								? "text-primary"
+								: "opacity-0 hover:bg-black/60 group-hover:opacity-100 group-focus-visible:opacity-100",
+						)
+					: cn(
+							"flex size-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground",
+							isCurrent
+								? "text-primary"
+								: "opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
+						)
+			}
 			onClick={(e) => {
 				e.stopPropagation();
 				if (isCurrent) {
@@ -399,7 +449,7 @@ function PlayButton({
 			}}
 			onDoubleClick={stop}
 		>
-			<Icon className="size-4" />
+			<Icon className={onArt ? "size-5" : "size-4"} />
 		</button>
 	);
 }
@@ -465,16 +515,17 @@ function TrackRow({
 				aria-selected={isSelected}
 				tabIndex={0}
 				className={cn(
-					"group grid min-h-16 cursor-default items-center gap-3 rounded-md px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+					"group grid min-h-16 cursor-default items-center gap-3 px-3 py-1.5 text-sm outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-ring/70 focus-visible:ring-inset",
 					rowColumns(layout),
-					isSelected ? "bg-primary/15" : "hover:bg-muted/60",
-					isCurrent && !isSelected && "bg-muted/80",
+					// Like a highlighted line in a code listing: chosen rows take a cue tint, and the
+					// playing song a cue rule down its left edge.
+					isSelected ? "bg-primary/[0.09]" : "hover:bg-white/[0.03]",
+					(isCurrent || isSelected) && "shadow-[inset_2px_0_0_0_var(--primary)]",
 				)}
 				onClick={(e) => selection?.click(track.id, e)}
 				onDoubleClick={onPlay}
 				onKeyDown={onKeyDown}
 			>
-				<PlayButton track={track} isCurrent={isCurrent} onPlay={onPlay} />
 				<SongCell
 					track={track}
 					isCurrent={isCurrent}
@@ -491,6 +542,7 @@ function TrackRow({
 					onRename={(title) => onEdit?.(track, "title", title)}
 					onRenameEnd={rename.end}
 					onEdit={onEdit}
+					playButton={<PlayButton track={track} isCurrent={isCurrent} onPlay={onPlay} onArt />}
 				/>
 				{layout.tags && (
 					<div className="hidden min-w-0 @3xl/list:block">
@@ -499,6 +551,9 @@ function TrackRow({
 				)}
 				<div className="flex items-center gap-2">
 					<SyncBadge state={syncState([track], targetCount)} />
+					{hideArt && isCurrent && (
+						<PlayButton track={track} isCurrent={isCurrent} onPlay={onPlay} />
+					)}
 					{renderAction?.(track, index)}
 				</div>
 			</div>
@@ -534,7 +589,8 @@ export function TrackList({ tracks, selection, empty, rowKey, ...rest }: Props) 
 					aria-multiselectable
 					aria-label="Songs"
 					tabIndex={-1}
-					className="space-y-px outline-none"
+					// On a page the rows sit in a well; a side panel is already its own surface.
+					className={cn("divide-y divide-hairline outline-none", !inPanel && WELL_ROWS)}
 					onKeyDown={onKeyDown}
 				>
 					{page.shown.map((track, i) => (

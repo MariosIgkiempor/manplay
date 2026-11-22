@@ -7,7 +7,11 @@ import type { Shareable } from "#/components/item-sharing.tsx";
 import { useJellyfinMenu } from "#/components/jellyfin-menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { CollectionHeader } from "#/components/page-header.tsx";
-import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
+import {
+	HeaderSongSort,
+	SelectableTrackList,
+	useSongSort,
+} from "#/components/selectable-track-list.tsx";
 import { SharingControl } from "#/components/sharing-control.tsx";
 import { listTags, migrateLibraryTags, type Tag as TagItem } from "#/lib/api.ts";
 import { useTracks } from "#/lib/queries.ts";
@@ -96,9 +100,11 @@ function TagPage() {
 		}
 	};
 
+	const sort = useSongSort(tagged);
 	return (
 		<main>
 			<CollectionHeader
+				sort={<HeaderSongSort songs={tagged.length} sort={sort} />}
 				kind={
 					<>
 						<Tag className="size-3.5" /> Tag
@@ -118,7 +124,7 @@ function TagPage() {
 				}
 				title={tagLeaf(name)}
 				meta={<span>{songs(tagged.length)}</span>}
-				tracks={tagged}
+				tracks={sort.sorted}
 				fallbackIcon={<Tag className="size-10" />}
 				onRename={rename}
 				onDelete={() => setAsk({ kind: "delete" })}
@@ -148,7 +154,12 @@ function TagPage() {
 						Right-click songs in the library to tag them.
 					</EmptyState>
 				) : (
-					<SelectableTrackList tracks={tagged} />
+					<SelectableTrackList
+						tracks={tagged}
+						sort={sort.sort}
+						onSortChange={sort.setSort}
+						hideSortMenu
+					/>
 				)}
 			</div>
 			{ask?.kind === "delete" && (

@@ -52,7 +52,6 @@ export function RecentlyDeleted() {
 	return (
 		<Page
 			title="Recently deleted"
-			icon={<History />}
 			meta={
 				items.length > 0 && <span>{items.length === 1 ? "1 item" : `${items.length} items`}</span>
 			}

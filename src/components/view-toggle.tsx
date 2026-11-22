@@ -1,3 +1,4 @@
+import { Tabs, TabsIndicator, TabsList, TabsTab } from "@ui-sdk/react/tabs";
 import { Disc3, ListMusic, Mic2 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { LibraryView } from "#/lib/api.ts";
@@ -7,7 +8,8 @@ export type View = LibraryView;
 
 /**
  * The app's one tab style: labels on a rule, the chosen one underlined in the accent colour.
- * For switching a page, panel or drawer between views; `count` adds a badge.
+ * For switching a page, panel or drawer between views; `count` adds a badge. Arrow keys, Home and
+ * End move between tabs (UI SDK Tabs); the underline slides to the chosen tab.
  */
 export function Segmented<T extends string>({
 	value,
@@ -26,39 +28,42 @@ export function Segmented<T extends string>({
 	className?: string;
 }) {
 	return (
-		<div
-			role="tablist"
-			aria-label={label}
-			className={cn("flex shrink-0 gap-1 border-b", className)}
+		<Tabs<T>
+			value={value}
+			onValueChange={(next) => {
+				if (next !== null) {
+					onChange(next);
+				}
+			}}
 		>
-			{items.map((item) => (
-				<button
-					key={item.value}
-					type="button"
-					role="tab"
-					aria-selected={value === item.value}
-					title={item.label}
-					onClick={() => onChange(item.value)}
-					className={cn(
-						"-mb-px flex min-w-0 items-center gap-2 border-b-2 px-3 py-2 font-medium text-sm outline-none transition-colors focus-visible:rounded-t-md focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-4 [&_svg]:shrink-0",
-						value === item.value
-							? "border-primary text-foreground"
-							: "border-transparent text-muted-foreground hover:text-foreground",
-					)}
-				>
-					{item.icon}
-					{/* Icons only once the page is too narrow for the words (under 28rem). */}
-					<span className={cn("truncate", item.icon && compact && "@max-md/main:sr-only")}>
-						{item.label}
-					</span>
-					{item.count !== undefined && item.count > 0 && (
-						<span className="min-w-5 rounded-full bg-primary/15 px-1.5 text-primary text-xs tabular-nums">
-							{item.count}
+			<TabsList
+				aria-label={label}
+				className={cn("relative flex shrink-0 gap-1 border-b", className)}
+			>
+				{items.map((item) => (
+					<TabsTab
+						key={item.value}
+						value={item.value}
+						title={item.label}
+						className={cn(
+							"flex min-w-0 items-center gap-2 px-3 py-2 font-medium text-muted-foreground text-sm outline-none transition-colors hover:text-foreground focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-ring/60 data-selected:text-foreground [&_svg]:size-4 [&_svg]:shrink-0",
+						)}
+					>
+						{item.icon}
+						{/* Icons only once the page is too narrow for the words and a search beside them (42rem). */}
+						<span className={cn("truncate", item.icon && compact && "@max-2xl/main:sr-only")}>
+							{item.label}
 						</span>
-					)}
-				</button>
-			))}
-		</div>
+						{item.count !== undefined && item.count > 0 && (
+							<span className="min-w-5 rounded-full bg-primary/15 px-1.5 text-primary text-xs tabular-nums">
+								{item.count}
+							</span>
+						)}
+					</TabsTab>
+				))}
+				<TabsIndicator className="absolute bottom-[-1px] left-0 h-0.5 w-(--active-tab-width) translate-x-(--active-tab-left) rounded-full bg-primary transition-[translate,width] duration-200 ease-out motion-reduce:transition-none" />
+			</TabsList>
+		</Tabs>
 	);
 }
 

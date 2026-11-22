@@ -3,7 +3,13 @@ import type { TrackAnalysis } from "#/lib/api.ts";
 import type { Cue } from "#/lib/cues.ts";
 import { createSmoothClock, type SmoothClock, tick } from "#/lib/smooth-clock.ts";
 import { cn } from "#/lib/utils.ts";
-import { drawDetail, drawOverview, renderOverview } from "#/lib/waveform-draw.ts";
+import {
+	drawDetail,
+	drawOverview,
+	drawTimeline,
+	renderOverview,
+	renderTimeline,
+} from "#/lib/waveform-draw.ts";
 import { clampZoom, wheelZoom } from "#/lib/waveform-zoom.ts";
 
 /** Seconds shown either side of the playhead in the scrolling view, like a CDJ's zoom. */
@@ -98,6 +104,35 @@ function useFrames(frame: () => void, running: boolean) {
  * The whole track as a CDJ overview: played part bright, the rest dimmed. Click or drag to seek.
  * While `running` the playhead follows `position` every frame.
  */
+/** A seek bar's bars, drawn once per song and size: the deck's colours, or quiet dim and lit. */
+interface SeekBars {
+	detail: readonly number[];
+	canvas: HTMLCanvasElement;
+	lit: HTMLCanvasElement | null;
+}
+
+function renderBars(
+	analysis: TrackAnalysis,
+	size: { w: number; h: number; scale: number },
+	quiet: boolean,
+): SeekBars {
+	if (!quiet) {
+		return { detail: analysis.detail, canvas: renderOverview(analysis, size.w, size.h), lit: null };
+	}
+	return {
+		detail: analysis.detail,
+		canvas: renderTimeline(analysis, size.w, size.h, size.scale, "#ffffff"),
+		lit: renderTimeline(analysis, size.w, size.h, size.scale, accent()),
+	};
+}
+
+/** The app's accent colour as the canvas can use it. */
+function accent(): string {
+	return (
+		getComputedStyle(document.documentElement).getPropertyValue("--primary").trim() || "#3fa6f0"
+	);
+}
+
 export function WaveformSeek({
 	analysis,
 	position,
@@ -106,6 +141,7 @@ export function WaveformSeek({
 	disabled,
 	onSeek,
 	cues,
+	quiet = false,
 	className,
 }: {
 	analysis: TrackAnalysis;
@@ -116,13 +152,15 @@ export function WaveformSeek({
 	disabled: boolean;
 	onSeek: (seconds: number) => void;
 	cues?: readonly Cue[];
+	/** The player bar's look: slim mirrored bars in one colour instead of the deck's colours. */
+	quiet?: boolean;
 	className?: string;
 }) {
 	const length = duration > 0 ? duration : analysis.duration;
 	const { ref, paint } = useCanvas();
 	const clock = useRef<SmoothClock>(createSmoothClock(position(), performance.now()));
 	// The bars only change with the song or the size, so they are drawn once and copied.
-	const bars = useRef<{ detail: readonly number[]; canvas: HTMLCanvasElement } | null>(null);
+	const bars = useRef<SeekBars | null>(null);
 	useFrames(() => {
 		const now = tick(clock.current, position(), performance.now(), running);
 		paint((ctx, size) => {
@@ -132,9 +170,14 @@ export function WaveformSeek({
 				kept.canvas.width === size.w &&
 				kept.canvas.height === size.h
 					? kept
-					: { detail: analysis.detail, canvas: renderOverview(analysis, size.w, size.h) };
+					: renderBars(analysis, size, quiet);
 			bars.current = fresh;
-			drawOverview(ctx, size, fresh.canvas, length > 0 ? now / length : 0, length, cues);
+			const played = length > 0 ? now / length : 0;
+			if (fresh.lit) {
+				drawTimeline(ctx, size, fresh.canvas, fresh.lit, played);
+			} else {
+				drawOverview(ctx, size, fresh.canvas, played, length, cues);
+			}
 		});
 	}, running);
 	return (

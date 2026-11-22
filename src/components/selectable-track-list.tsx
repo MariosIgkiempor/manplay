@@ -26,6 +26,30 @@ type ListProps = Omit<
 	hideSortMenu?: boolean;
 };
 
+/** A song list's sort, kept by a page that shows the sort menu in its header, and the songs in it. */
+export function useSongSort(songs: readonly Track[], listOrder?: string) {
+	const [sort, setSort] = useState<ListSort<SongSort>>(
+		listOrder ? { key: "list", desc: false } : { key: "title", desc: false },
+	);
+	// The page's Play plays the songs in the order the list shows them.
+	const sorted = useMemo(() => sortSongs(songs, sort), [songs, sort]);
+	return { sort, setSort, options: songSortOptions(listOrder), sorted };
+}
+
+/** The sort menu for a page header's button group; nothing with fewer than two songs to sort. */
+export function HeaderSongSort({
+	songs,
+	sort,
+}: {
+	songs: number;
+	sort: ReturnType<typeof useSongSort>;
+}) {
+	if (songs < 2) {
+		return null;
+	}
+	return <SortMenu options={sort.options} value={sort.sort} onChange={sort.setSort} segment />;
+}
+
 /**
  * Track list with click / shift-click / cmd-click selection, a sort menu, and in-place editing of
  * title, BPM and key.
@@ -70,7 +94,7 @@ export function SelectableTrackList({
 			{untag.isError && <ErrorLine>{String(untag.error)}</ErrorLine>}
 			{editError && <ErrorLine>Could not save: {editError}</ErrorLine>}
 			{!hideSortMenu && tracks.length > 1 && (
-				<div className="-mb-2 flex justify-end">
+				<div className="flex justify-end">
 					<SortMenu options={songSortOptions(listOrder)} value={sort} onChange={setSort} />
 				</div>
 			)}

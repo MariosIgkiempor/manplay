@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Send } from "lucide-react";
+import { BrandGlyph } from "#/components/brand-icon.tsx";
 import type { HeaderMenuEntry } from "#/components/header-menu.tsx";
 import { setJellyfinSelection, targetShortName } from "#/lib/api.ts";
 import { type SelectionItem, selectionIncludes, toggleSelection } from "#/lib/export-selection.ts";
@@ -25,7 +25,7 @@ export function useJellyfinMenu(item: SelectionItem | null): HeaderMenuEntry[] {
 		const name = target ? targetShortName(target) : d.serverName;
 		return {
 			label: `Send to Jellyfin: ${name}`,
-			icon: <Send />,
+			icon: <BrandGlyph brand="jellyfin" />,
 			checked: selectionIncludes(d.selection, item),
 			disabled: save.isPending,
 			hint: `Jellyfin on ${d.serverName}`,

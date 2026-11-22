@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import type { TagTarget } from "#/components/tag-editor.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { DIALOG_BACKDROP, DIALOG_FRAME } from "#/lib/page-layout.ts";
 import { useTagsRead } from "#/lib/queries.ts";
 import type { TagClipboard } from "#/lib/tag-clipboard.ts";
 import { TAG_GROUPS } from "#/lib/tag-fields.ts";
+import { cn } from "#/lib/utils.ts";
 
 /** Pick which tags of a song or folder to copy. Tags that differ between its songs can't be copied. */
 export function TagCopyDialog({
@@ -50,15 +52,11 @@ export function TagCopyDialog({
 
 	return (
 		<div className="fixed inset-0 z-50 flex items-center justify-center">
-			<div
-				aria-hidden="true"
-				onMouseDown={onClose}
-				className="absolute inset-0 bg-background/60 backdrop-blur-sm"
-			/>
+			<div aria-hidden="true" onMouseDown={onClose} className={DIALOG_BACKDROP} />
 			<div
 				role="dialog"
 				aria-label="Copy metadata"
-				className="relative flex max-h-[80vh] w-[28rem] max-w-[calc(100%-2rem)] flex-col rounded-xl border bg-background shadow-2xl"
+				className={cn(DIALOG_FRAME, "flex max-h-[80vh] w-[28rem] max-w-[calc(100%-2rem)] flex-col")}
 			>
 				<div className="border-b px-4 py-3">
 					<div className="font-medium text-sm">Copy metadata</div>

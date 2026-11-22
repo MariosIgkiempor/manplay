@@ -11,6 +11,7 @@ import { type JellyfinPlanRow, jellyfinPlan, pushJellyfin } from "#/lib/api.ts";
 import { plural } from "#/lib/export-selection.ts";
 import { timeAgo } from "#/lib/format.ts";
 import { pushSummaryText } from "#/lib/jellyfin-text.ts";
+import { WELL_ROWS } from "#/lib/page-layout.ts";
 import { useJellyfinDestinations } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -63,7 +64,7 @@ function PlanList({ rows }: { rows: JellyfinPlanRow[] }) {
 		);
 	}
 	return (
-		<ul className="divide-y rounded-lg border px-3">
+		<ul className={`${WELL_ROWS} px-4`}>
 			{sorted.map((row) => (
 				<li key={row.key} className="flex items-center gap-3 py-2">
 					<div className="min-w-0 flex-1">

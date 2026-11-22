@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { FolderOpen, Plus, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
-import { EmptyState, ErrorLine, Section } from "#/components/page.tsx";
+import { FrameSection } from "#/components/frame.tsx";
+import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PlaceFill, PlaceRow } from "#/components/place-row.tsx";
 import { RekordboxExportButton } from "#/components/rekordbox-view.tsx";
 import { useRemoveDestination } from "#/components/remove-destination.tsx";
@@ -190,7 +191,7 @@ export function Destinations() {
 	const add = () => void navigate({ to: "/export/add", search: {} });
 
 	return (
-		<Section
+		<FrameSection
 			title="Destinations"
 			count={count}
 			action={
@@ -202,9 +203,13 @@ export function Destinations() {
 				)
 			}
 		>
-			{removal.error && <ErrorLine>{String(removal.error)}</ErrorLine>}
+			{removal.error && (
+				<div className="px-4 py-3">
+					<ErrorLine>{String(removal.error)}</ErrorLine>
+				</div>
+			)}
 			{count === 0 ? (
-				<div className="rounded-lg border border-dashed">
+				<div>
 					<EmptyState
 						title="No destinations yet"
 						action={
@@ -218,7 +223,7 @@ export function Destinations() {
 					</EmptyState>
 				</div>
 			) : (
-				<div className="divide-y overflow-hidden rounded-lg border bg-card">
+				<div className="divide-y divide-hairline">
 					{list.map((t) => (
 						<TargetRow
 							key={t.id}
@@ -234,6 +239,6 @@ export function Destinations() {
 				</div>
 			)}
 			{removal.dialog}
-		</Section>
+		</FrameSection>
 	);
 }

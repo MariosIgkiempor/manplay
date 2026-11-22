@@ -47,6 +47,7 @@ import {
 import { EMPTY_SELECTION, plural, tagPlaylistName } from "#/lib/export-selection.ts";
 import { formatBytes } from "#/lib/format.ts";
 import { baseName } from "#/lib/fs-path.ts";
+import { WELL } from "#/lib/page-layout.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { trackHasTag } from "#/lib/tag-tree.ts";
 import { typeScale } from "#/lib/type-scale.ts";
@@ -282,7 +283,7 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 					</p>
 				</div>
 			</div>
-			<dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-lg border bg-card p-4 text-sm">
+			<dl className={`${WELL} grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 p-4 text-sm`}>
 				<dt className="text-muted-foreground">Copied</dt>
 				<dd className="tabular-nums">
 					{plural(report.copied, "song")}, {formatBytes(report.bytesCopied)}

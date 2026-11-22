@@ -1,7 +1,8 @@
 import { useIsMutating, useQueries } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Library as LibraryIcon, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
+import { FrameHeader, TabsSearchBar } from "#/components/frame.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
 import {
 	AnalyzeButton,
@@ -9,14 +10,14 @@ import {
 	LibraryList,
 	LibrarySortMenu,
 } from "#/components/library-parts.tsx";
-import { PageHeader, PageIcon } from "#/components/page-header.tsx";
 import { SearchPalette } from "#/components/search-palette.tsx";
+import { ButtonGroup } from "#/components/ui/button-group.tsx";
 import { ViewToggle } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
 import { playlistTracks } from "#/lib/api.ts";
 import { useLibrarySorts } from "#/lib/library-sorts.ts";
-import { PAGE_BODY, PAGE_TOOLBAR } from "#/lib/page-layout.ts";
+import { PAGE_BODY } from "#/lib/page-layout.ts";
 import {
 	SCAN_KEY,
 	useLibraryRoot,
@@ -86,12 +87,7 @@ function Library() {
 
 	return (
 		<main>
-			<PageHeader
-				art={
-					<PageIcon>
-						<LibraryIcon />
-					</PageIcon>
-				}
+			<FrameHeader
 				title="Library"
 				titleHint={root.data ?? undefined}
 				meta={
@@ -104,7 +100,7 @@ function Library() {
 				}
 				actions={
 					hasRoot ? (
-						<>
+						<ButtonGroup>
 							<AnalyzeButton tracks={tracks.data ?? []} />
 							<HeaderMenu
 								entries={[
@@ -117,10 +113,10 @@ function Library() {
 									},
 								]}
 							/>
-						</>
+						</ButtonGroup>
 					) : null
 				}
-				tabs={libraryEmpty ? null : <ViewToggle view={view} onChange={setView} />}
+				continued={!libraryEmpty}
 			/>
 			{libraryEmpty ? (
 				<LibraryEmpty
@@ -131,16 +127,18 @@ function Library() {
 				/>
 			) : (
 				<>
-					{/* Search stays at hand while the list scrolls. */}
-					<div className={PAGE_TOOLBAR}>
-						<SearchPalette
-							pills={pills}
-							onPills={setPills}
-							text={search}
-							onText={setSearch}
-							trailing={<LibrarySortMenu view={view} sorts={sorts} segment />}
-						/>
-					</div>
+					<TabsSearchBar
+						tabs={<ViewToggle view={view} onChange={setView} />}
+						search={
+							<SearchPalette
+								pills={pills}
+								onPills={setPills}
+								text={search}
+								onText={setSearch}
+								trailing={<LibrarySortMenu view={view} sorts={sorts} segment />}
+							/>
+						}
+					/>
 
 					<div className={cn("space-y-5", PAGE_BODY)}>
 						<LibraryList

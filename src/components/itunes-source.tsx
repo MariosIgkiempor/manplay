@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { DestinationHeader, SettingLabel } from "#/components/destination-header.tsx";
+import { FrameSection } from "#/components/frame.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
@@ -30,7 +31,6 @@ import {
 	useLibraryRoot,
 	useServices,
 } from "#/lib/queries.ts";
-import { typeScale } from "#/lib/type-scale.ts";
 
 const EMPTY_HINT =
 	"Pick the folder that holds your purchased songs, usually “iTunes Media” or “Music” inside your iTunes/Music folder.";
@@ -241,7 +241,7 @@ function ItunesSettings({
 	stopping: boolean;
 }) {
 	return (
-		<SettingRows>
+		<SettingRows title="Source">
 			<SettingRow
 				label={<SettingLabel icon={<FolderOpen />} title="Folder" hint={path ?? EMPTY_HINT} />}
 			>
@@ -292,31 +292,34 @@ export function ItunesPending() {
 	return (
 		<div className="space-y-3">
 			{/* The header's Import now brings these in; the list only says what it will bring. */}
-			<h3 className={typeScale.label}>
-				Not in your library yet
-				{songs.length > 0 && <span className="ml-2 tabular-nums">{songs.length}</span>}
-			</h3>
-			{songs.length === 0 ? (
-				<div className="flex items-center gap-2 rounded-lg border border-dashed p-4 text-muted-foreground text-sm">
-					<CheckCircle2 className="size-4" />
-					{pending.isPending ? "Checking iTunes…" : "All caught up. Nothing new in iTunes."}
-				</div>
-			) : (
-				<ul className="divide-y rounded-lg border text-sm">
-					{songs.slice(0, 50).map((c) => (
-						<li key={c.dest} className="px-3 py-2">
-							<span className="font-medium">{c.title}</span>
-							<span className="text-muted-foreground">
-								{" "}
-								· {c.artist} · {c.album}
-							</span>
-						</li>
-					))}
-					{songs.length > 50 && (
-						<li className="px-3 py-2 text-muted-foreground">…and {songs.length - 50} more</li>
-					)}
-				</ul>
-			)}
+			<FrameSection
+				title="Not in your library yet"
+				count={songs.length > 0 ? songs.length : undefined}
+				description="Import now, in the header, brings these in."
+			>
+				{songs.length === 0 ? (
+					<div className="flex items-center gap-2 px-4 py-6 text-muted-foreground text-sm">
+						<CheckCircle2 className="size-4 text-success" />
+						{pending.isPending ? "Checking iTunes…" : "All caught up. Nothing new in iTunes."}
+					</div>
+				) : (
+					<ul className="divide-y divide-hairline text-sm">
+						{songs.slice(0, 50).map((c) => (
+							<li key={c.dest} className="min-w-0 px-4 py-2.5">
+								<div className="truncate font-medium">{c.title}</div>
+								<div className="truncate text-muted-foreground text-xs">
+									{[c.artist, c.album].filter((x) => x !== "").join(", ")}
+								</div>
+							</li>
+						))}
+						{songs.length > 50 && (
+							<li className="px-4 py-2.5 text-muted-foreground text-xs">
+								And {songs.length - 50} more
+							</li>
+						)}
+					</ul>
+				)}
+			</FrameSection>
 		</div>
 	);
 }

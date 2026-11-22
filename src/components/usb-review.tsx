@@ -16,6 +16,7 @@ import {
 import { type ReactNode, useState } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { LinkButton } from "#/components/check-list.tsx";
+import { Framed } from "#/components/frame.tsx";
 import { Hint } from "#/components/ui/hint.tsx";
 import {
 	pathArtUrl,
@@ -26,6 +27,7 @@ import {
 } from "#/lib/api.ts";
 import { plural } from "#/lib/export-selection.ts";
 import { clock, formatBytes } from "#/lib/format.ts";
+import { WELL_ROWS } from "#/lib/page-layout.ts";
 import { typeScale } from "#/lib/type-scale.ts";
 import { reviewNotes } from "#/lib/usb-outputs.ts";
 import { cn } from "#/lib/utils.ts";
@@ -305,7 +307,9 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 	return (
 		<section className="space-y-2">
 			<h3 className={typeScale.sectionTitle}>{title}</h3>
-			<div className="divide-y overflow-hidden rounded-lg border">{children}</div>
+			<Framed>
+				<div className={WELL_ROWS}>{children}</div>
+			</Framed>
 		</section>
 	);
 }

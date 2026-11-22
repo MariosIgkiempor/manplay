@@ -30,23 +30,26 @@ function AlbumTile({
 			tracks={album.tracks}
 			label={`${album.album} · ${album.tracks.length} songs`}
 		>
+			{/* Lifts a little under the pointer; the cover grows inside its frame and Play rises in. */}
 			<div className="group min-w-0">
-				<div className="relative">
+				<div className="relative transition-transform duration-200 ease-out group-hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:group-hover:translate-y-0">
 					<button
 						type="button"
-						className="block w-full overflow-hidden rounded-lg border"
+						className="block w-full overflow-hidden rounded-lg border border-hairline shadow-black/40 shadow-sm outline-none transition-[box-shadow,scale] duration-200 ease-out focus-visible:ring-2 focus-visible:ring-ring/60 active:scale-[0.98] group-hover:shadow-xl motion-reduce:transition-none"
 						onClick={onOpen}
+						onDoubleClick={() => player.play(album.tracks, 0)}
 						aria-label={`Open ${album.album}`}
+						title="Click to open, double-click to play"
 					>
 						<AlbumArt
 							trackId={album.coverTrackId}
-							className="w-full transition group-hover:scale-[1.03]"
+							className="w-full transition-[scale] duration-500 ease-out group-hover:scale-[1.04] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
 						/>
 					</button>
 					<button
 						type="button"
 						aria-label={`Play ${album.album}`}
-						className="absolute right-2 bottom-2 flex size-10 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 shadow-lg transition focus-visible:opacity-100 group-hover:opacity-100"
+						className="absolute right-2 bottom-2 flex size-10 translate-y-1.5 scale-90 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 shadow-lg transition duration-200 ease-out hover:scale-105 focus-visible:translate-y-0 focus-visible:scale-100 focus-visible:opacity-100 active:scale-95 group-hover:translate-y-0 group-hover:scale-100 group-hover:opacity-100 motion-reduce:translate-y-0 motion-reduce:transition-none"
 						onClick={() => player.play(album.tracks, 0)}
 					>
 						<Play className="size-5" />

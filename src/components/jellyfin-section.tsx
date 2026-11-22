@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, KeyRound, LibraryBig, ListMusic, Server, Unplug, UserRound } from "lucide-react";
 import { type ReactNode, useEffect, useId, useState } from "react";
+import { BrandGlyph } from "#/components/brand-icon.tsx";
 import { SettingLabel } from "#/components/destination-header.tsx";
 import { JellyfinPlaylistsRow } from "#/components/jellyfin-playlists.tsx";
 import { JellyfinPushRow } from "#/components/jellyfin-push.tsx";
@@ -23,7 +24,6 @@ import {
 } from "#/lib/api.ts";
 import { normaliseVisibility, sameVisibility, toggleViewer } from "#/lib/jellyfin-visibility.ts";
 import { useJellyfinSettings } from "#/lib/queries.ts";
-import { typeScale } from "#/lib/type-scale.ts";
 
 /** A labelled control as a settings row; the label points at the control. */
 function Row({
@@ -343,7 +343,16 @@ function ChoiceRows({
 	);
 }
 
-function JellyfinForm({ targetId, saved }: { targetId: number; saved: JellyfinSettings | null }) {
+function JellyfinForm({
+	targetId,
+	saved,
+	about,
+}: {
+	targetId: number;
+	saved: JellyfinSettings | null;
+	/** What is connected, or what connecting does; under the group's name. */
+	about: string;
+}) {
 	const form = useJellyfinForm(targetId, saved);
 	const { draft, read } = form;
 
@@ -355,7 +364,7 @@ function JellyfinForm({ targetId, saved }: { targetId: number; saved: JellyfinSe
 				form.submit();
 			}}
 		>
-			<SettingRows>
+			<SettingRows title="Jellyfin" icon={<BrandGlyph brand="jellyfin" />} description={about}>
 				<Row
 					icon={<Server />}
 					title="Server address"
@@ -419,7 +428,7 @@ function songCheckText(check: JellyfinSongCheck): string {
 function SongCheck({ targetId }: { targetId: number }) {
 	const check = useMutation({ mutationFn: checkJellyfinSongs });
 	return (
-		<SettingRows>
+		<SettingRows title="Playlists in Jellyfin" icon={<BrandGlyph brand="jellyfin" />}>
 			<JellyfinPlaylistsRow targetId={targetId} />
 			<JellyfinPushRow targetId={targetId} />
 			<SettingRow
@@ -480,16 +489,17 @@ export function JellyfinSection({ targetId }: { targetId: number }) {
 	}
 	const saved = settings.data ?? null;
 	return (
-		<section className="space-y-2">
-			<div>
-				<h3 className={typeScale.sectionTitle}>Jellyfin</h3>
-				<p className="text-muted-foreground text-xs">
-					{saved
+		<section aria-label="Jellyfin" className="space-y-3">
+			<JellyfinForm
+				key={saved ? "saved" : "new"}
+				targetId={targetId}
+				saved={saved}
+				about={
+					saved
 						? `Connected to ${saved.serverName} as ${saved.user.name}, library ${saved.library.name}.`
-						: "Connect the Jellyfin server that plays this destination, to send it playlists."}
-				</p>
-			</div>
-			<JellyfinForm key={saved ? "saved" : "new"} targetId={targetId} saved={saved} />
+						: "Connect the Jellyfin server that plays this destination, to send it playlists."
+				}
+			/>
 			{saved && <SongCheck targetId={targetId} />}
 		</section>
 	);

@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import {
 	Database,
 	Download,
@@ -10,15 +10,25 @@ import {
 	Settings,
 	Upload,
 } from "lucide-react";
-import { createContext, type ReactNode, useContext, useEffect } from "react";
+import {
+	createContext,
+	type ReactNode,
+	useContext,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+} from "react";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
 import { SidebarRecentlyDeleted } from "#/components/sidebar-deleted.tsx";
+import { SidebarHighlight } from "#/components/sidebar-highlight.tsx";
 import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
 import { SidebarPlaylists } from "#/components/sidebar-playlists.tsx";
+import { currentRow, rowActive } from "#/components/sidebar-row.ts";
 import { SidebarSmartPlaylists } from "#/components/sidebar-smart-playlists.tsx";
 import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
+import { directionTo, markDirection } from "#/lib/page-transition.ts";
 import { useKeyLabel } from "#/lib/platform.ts";
 import { useClashes, useTracks } from "#/lib/queries.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
@@ -36,10 +46,10 @@ const CollapsedContext = createContext(false);
 
 // The right padding matches a list row's trailing slot, so badges line up with the counts.
 const linkClass =
-	"relative flex items-center gap-2 truncate rounded-md py-1.5 pr-2 pl-5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground";
+	"relative flex items-center gap-2 truncate rounded-md py-1.5 pr-2 pl-5 text-sm text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground";
 const railLinkClass =
-	"relative grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground";
-const activeProps = { className: "bg-muted font-medium text-foreground" } as const;
+	"relative grid size-9 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground";
+const activeProps = { className: rowActive } as const;
 
 function NavLink({
 	label,
@@ -121,6 +131,53 @@ function useToggleKey(toggle: () => void) {
 	}, [toggle]);
 }
 
+/** The current row, scrolled into view whenever the page changes. */
+function useCurrentRowInView(aside: React.RefObject<HTMLElement | null>) {
+	const href = useRouterState({ select: (s) => s.location.href });
+	// biome-ignore lint/correctness/useExhaustiveDependencies: runs again each time the page changes
+	useEffect(() => {
+		const row = aside.current ? currentRow(aside.current) : null;
+		const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		row?.scrollIntoView({ block: "nearest", behavior: still ? "auto" : "smooth" });
+	}, [aside, href]);
+}
+
+/**
+ * Folding to the icon rail and back glides the sidebar's width, so the page beside it widens and
+ * narrows smoothly. Call the returned `arm` just before folding; launching folded, or dragging the
+ * edge, does not glide.
+ */
+function useFoldGlide(aside: React.RefObject<HTMLElement | null>): () => void {
+	const from = useRef<number | null>(null);
+	// Runs after every render, and acts only on the one that follows `arm`.
+	useLayoutEffect(() => {
+		const el = aside.current;
+		const start = from.current;
+		from.current = null;
+		if (!el || start === null || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+			return;
+		}
+		const end = el.getBoundingClientRect().width;
+		el.style.overflow = "hidden";
+		const motion = el.animate([{ width: `${start}px` }, { width: `${end}px` }], {
+			duration: 240,
+			easing: "cubic-bezier(0.3, 0, 0.2, 1)",
+		});
+		motion.onfinish = () => {
+			el.style.overflow = "";
+		};
+	});
+	return () => {
+		from.current = aside.current?.getBoundingClientRect().width ?? null;
+	};
+}
+
+/** Before a sidebar click navigates, notes which way the page should move for it. */
+function noteDirection(aside: HTMLElement, clickY: number) {
+	const current = currentRow(aside)?.getBoundingClientRect() ?? null;
+	markDirection(directionTo(clickY, current));
+}
+
 /**
  * The app's left column: pages, sync, playlists and tags. Drag its edge to resize it; fold it to
  * an icon rail with the button at the top, by dragging it narrow, or with ⌘\.
@@ -135,10 +192,17 @@ export function Sidebar() {
 		min: MIN,
 		max: () => MAX,
 	});
-	const [collapsed, setCollapsed] = useStoredFlag("manplay.sidebar-collapsed");
+	const [collapsed, setStoredCollapsed] = useStoredFlag("manplay.sidebar-collapsed");
+	const asideRef = useRef<HTMLElement>(null);
+	const armGlide = useFoldGlide(asideRef);
+	const setCollapsed = (next: boolean) => {
+		armGlide();
+		setStoredCollapsed(next);
+	};
 	const toggle = () => setCollapsed(!collapsed);
 	useToggleKey(toggle);
 	const shortcut = useKeyLabel("⌘\\");
+	useCurrentRowInView(asideRef);
 
 	const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
 	const toggleButton = (
@@ -156,12 +220,15 @@ export function Sidebar() {
 	return (
 		<CollapsedContext.Provider value={collapsed}>
 			<aside
+				ref={asideRef}
+				onClickCapture={(e) => noteDirection(e.currentTarget, e.clientY)}
 				style={collapsed ? undefined : { width }}
 				className={cn(
-					"relative flex shrink-0 flex-col gap-4 border-r bg-card/40 py-3",
+					"relative isolate flex shrink-0 flex-col gap-4 bg-canvas py-3",
 					collapsed ? "w-14 items-center px-2" : "px-3",
 				)}
 			>
+				<SidebarHighlight aside={asideRef} />
 				{collapsed ? (
 					toggleButton
 				) : (
@@ -180,7 +247,7 @@ export function Sidebar() {
 				{collapsed ? (
 					<div className="flex-1" />
 				) : (
-					<div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+					<div data-sidebar-scroll className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
 						<SidebarSync />
 						<section className="mt-4 space-y-0.5">
 							<SectionLabel>Organise</SectionLabel>
@@ -191,7 +258,9 @@ export function Sidebar() {
 						</section>
 					</div>
 				)}
-				<nav className={cn("border-t pt-2", collapsed && "flex w-full justify-center")}>
+				<nav
+					className={cn("border-hairline border-t pt-2", collapsed && "flex w-full justify-center")}
+				>
 					<NavLink
 						to="/settings"
 						label="Settings"

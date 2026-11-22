@@ -17,6 +17,7 @@ import {
 	type Tag,
 } from "#/lib/api.ts";
 import { EMPTY_SELECTION, plural } from "#/lib/export-selection.ts";
+import { WELL_ROWS } from "#/lib/page-layout.ts";
 import { useJellyfinDestinations } from "#/lib/queries.ts";
 import { useSmartPlaylists } from "#/lib/use-smart.ts";
 
@@ -52,7 +53,7 @@ function OnServer({ targetId }: { targetId: number }) {
 		return <p className="text-muted-foreground text-sm">No playlists in Jellyfin yet.</p>;
 	}
 	return (
-		<ul className="divide-y rounded-lg border px-3">
+		<ul className={`${WELL_ROWS} px-4`}>
 			{playlists.data.map((p) => (
 				<li key={p.name} className="flex justify-between gap-3 py-2 text-sm">
 					<span className="truncate">{p.name}</span>

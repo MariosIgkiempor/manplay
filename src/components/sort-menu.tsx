@@ -42,11 +42,14 @@ export function SortMenu<K extends string>({
 	options,
 	value,
 	onChange,
+	segment = false,
 	className,
 }: {
 	options: readonly SortOption<K>[];
 	value: ListSort<K>;
 	onChange: (sort: ListSort<K>) => void;
+	/** Shown as one segment of a page header's button group, sized and outlined like its buttons. */
+	segment?: boolean;
 	className?: string | undefined;
 }) {
 	const current = options.find((o) => o.key === value.key) ?? options[0];
@@ -58,6 +61,7 @@ export function SortMenu<K extends string>({
 	return (
 		<Menu.Root>
 			<Menu.Trigger
+				{...(segment ? { "data-slot": "button", "data-variant": "outline" } : {})}
 				title={`Sorted by ${current.label.toLowerCase()}, ${direction.toLowerCase()}`}
 				className={cn(
 					"flex h-7 items-center gap-1.5 rounded-md px-2 text-muted-foreground text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-muted data-[popup-open]:text-foreground [&_svg]:size-3.5",

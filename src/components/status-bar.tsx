@@ -100,7 +100,7 @@ export function StatusBarHost({
 	setSaveSlot: (el: HTMLElement | null) => void;
 }) {
 	return (
-		<footer className="grid h-9 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-4 overflow-hidden whitespace-nowrap border-t bg-card/40 px-4 text-muted-foreground text-xs">
+		<footer className="grid h-9 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-4 overflow-hidden whitespace-nowrap bg-canvas px-4 text-muted-foreground text-xs">
 			<div className="flex min-w-0 items-center gap-4">
 				<UndoPill />
 				<StatusErrors />

@@ -91,7 +91,7 @@ export function RowCount({ n, className }: { n: number; className?: string }) {
 export function SectionLabel({ children, action }: { children: string; action?: ReactNode }) {
 	return (
 		<div className="flex items-center justify-between pt-1 pr-1 pb-1 pl-5">
-			<span className="font-medium text-muted-foreground text-xs">{children}</span>
+			<span className="font-medium text-muted-foreground/70 text-xs">{children}</span>
 			{action}
 		</div>
 	);

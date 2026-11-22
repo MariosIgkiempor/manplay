@@ -109,16 +109,17 @@ export function CoverPicker({
 					</span>
 				</Popover.Trigger>
 				<Popover.Portal>
-					{/* Laid over the cover from its top left corner, so the cover itself seems to grow. */}
+					{/* Centred on the cover and grown out from its middle, so the cover itself seems to grow. */}
 					<Popover.Positioner
 						side="bottom"
-						align="start"
-						sideOffset={({ anchor }) => -anchor.height}
+						align="center"
+						sideOffset={({ anchor, positioner }) => -(anchor.height + positioner.height) / 2}
+						collisionPadding={12}
 						className="z-50"
 					>
 						<Popover.Popup
 							aria-label={`Change the cover of ${name}`}
-							className="size-80 max-w-[calc(100vw-2rem)] origin-top-left overflow-hidden rounded-xl bg-muted shadow-2xl outline-none ring-1 ring-foreground/15 transition-[transform,opacity] duration-150 data-[ending-style]:scale-[0.3] data-[starting-style]:scale-[0.3] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none"
+							className="size-60 max-w-[calc(100vw-2rem)] origin-center overflow-hidden rounded-xl bg-muted shadow-2xl outline-none ring-1 ring-foreground/15 transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.3,0,0.2,1)] data-[ending-style]:scale-[0.4] data-[starting-style]:scale-[0.4] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none"
 						>
 							<CoverCard paths={paths} name={name} onDone={() => setOpen(false)} />
 						</Popover.Popup>

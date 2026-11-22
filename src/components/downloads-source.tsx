@@ -177,7 +177,7 @@ export function DownloadsPage() {
 				/>
 			}
 			settings={
-				<SettingRows>
+				<SettingRows title="Source">
 					<SettingRow
 						label={
 							<SettingLabel

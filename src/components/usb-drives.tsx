@@ -5,12 +5,14 @@ import {
 	Eject,
 	Eraser,
 	FolderOpen,
+	FolderTree,
 	LibraryBig,
 	Settings2,
 	TriangleAlert,
 	Usb,
 } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
+import { BrandGlyph } from "#/components/brand-icon.tsx";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { DestinationHeader, SettingLabel, UsageBar } from "#/components/destination-header.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
@@ -183,6 +185,7 @@ function DriveHeader({
 const FORMATS = [
 	{
 		key: "deviceLibrary",
+		brand: "rekordbox",
 		name: "Device Library",
 		file: "export.pdb",
 		players:
@@ -190,12 +193,14 @@ const FORMATS = [
 	},
 	{
 		key: "oneLibrary",
+		brand: "rekordbox",
 		name: "OneLibrary",
 		file: "exportLibrary.db",
 		players: "CDJ-3000X, Opus Quad, XDJ-AZ, Omnis Duo",
 	},
 	{
 		key: "serato",
+		brand: "serato",
 		name: "Serato",
 		file: "_Serato_/database V2",
 		players: "Serato DJ, on a computer or a controller it drives",
@@ -203,6 +208,7 @@ const FORMATS = [
 	},
 	{
 		key: "virtualDj",
+		brand: "virtualdj",
 		name: "VirtualDJ",
 		file: "VirtualDJ/database.xml",
 		players: "VirtualDJ, on a computer or a controller it drives",
@@ -210,12 +216,14 @@ const FORMATS = [
 	},
 	{
 		key: "gemini",
+		brand: "gemini",
 		name: "Gemini",
 		file: "GEMINI/gemini_bd.sqlite",
 		players: "Gemini MDJ-500, MDJ-600, MDJ-900, MDJ-1000 (MP3 and WAV only)",
 	},
 	{
 		key: "playlistFolders",
+		brand: null,
 		name: "Folders",
 		file: "Playlists/",
 		players: "Any player that browses folders, such as the MDJ-500",
@@ -223,6 +231,8 @@ const FORMATS = [
 	},
 ] as const satisfies readonly {
 	key: string;
+	/** The software that reads it, whose mark stands for it; none for plain folders. */
+	brand: "rekordbox" | "serato" | "virtualdj" | "gemini" | null;
 	name: string;
 	file: string;
 	players: string;
@@ -320,6 +330,11 @@ function FormatPills({ mount }: { mount: string }) {
 							)}
 						>
 							<span aria-hidden="true" className={cn("size-1.5 rounded-full", DOT[tone])} />
+							{format.brand ? (
+								<BrandGlyph brand={format.brand} className="size-3.5" />
+							) : (
+								<FolderTree aria-hidden="true" className="size-3.5 text-muted-foreground" />
+							)}
 							{format.name}
 							<span className="text-muted-foreground tabular-nums">{status.short}</span>
 						</Popover.Trigger>
@@ -367,7 +382,7 @@ function DriveSettings({ drive }: { drive: UsbDrive }) {
 					The drive is read-only, so nothing here can change it.
 				</p>
 			)}
-			<SettingRows>
+			<SettingRows title="Drive">
 				<BackupsRow drive={drive} />
 				<ResetRow drive={drive} />
 			</SettingRows>

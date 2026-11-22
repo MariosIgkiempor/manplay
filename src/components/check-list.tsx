@@ -2,17 +2,14 @@ import { ChevronRight, Tag as TagIcon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { SearchField } from "#/components/search-field.tsx";
 import type { Tag } from "#/lib/api.ts";
+import { WELL } from "#/lib/page-layout.ts";
 import { setTagTree, type TagCheck, tagCheck } from "#/lib/rekordbox-selection.ts";
 import { buildTagTree, type TagNode } from "#/lib/tag-tree.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** The scrolling box a list of check rows sits in. */
 export function CheckList({ children }: { children: ReactNode }) {
-	return (
-		<div className="max-h-72 space-y-0.5 overflow-y-auto rounded-lg border bg-background p-1">
-			{children}
-		</div>
-	);
+	return <div className={`${WELL} max-h-72 space-y-0.5 overflow-y-auto p-1`}>{children}</div>;
 }
 
 const tracks = (n: number) => `${n.toLocaleString()} ${n === 1 ? "track" : "tracks"}`;

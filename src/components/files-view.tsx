@@ -5,6 +5,7 @@ import { FilePane } from "#/components/file-pane.tsx";
 import { FileShortcuts } from "#/components/file-shortcuts.tsx";
 import { FilesHeader } from "#/components/files-header.tsx";
 import { FilesSourcePicker } from "#/components/files-source-picker.tsx";
+import { FilesSplitCard } from "#/components/files-split-card.tsx";
 import { type FixNotice, HealthBar } from "#/components/library-health.tsx";
 import { NoticeBar } from "#/components/notice-bar.tsx";
 import { EmptyState, LoadingLine } from "#/components/page.tsx";
@@ -291,7 +292,6 @@ export function FilesView({
 	};
 	const go = (i: 0 | 1) => (p: string) =>
 		setPaths((prev) => (i === 0 ? [p, prev[1]] : [prev[0], p]));
-	const panes = panesShown;
 
 	/** Fixes the fixable files at or under `scopes` (the whole library when omitted). */
 	const fix = async (scopes?: string[]) => {
@@ -377,13 +377,8 @@ export function FilesView({
 						onDismiss={() => setNotice(null)}
 					/>
 					<NoticeBar notice={transfer.notice} onDismiss={transfer.dismiss} />
-					<div className="flex min-h-0 flex-1">
-						{panes.map((i) => (
-							<div key={i} className="flex min-h-0 min-w-0 flex-1 flex-col">
-								{pane(i)}
-							</div>
-						))}
-					</div>
+					<div className="flex min-h-0 flex-1 flex-col">{pane(0)}</div>
+					{split && <FilesSplitCard>{pane(1)}</FilesSplitCard>}
 					{copying && (
 						<TagCopyDialog target={copying} onCopy={setTagClip} onClose={() => setCopying(null)} />
 					)}

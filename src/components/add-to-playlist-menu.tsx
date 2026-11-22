@@ -2,8 +2,12 @@ import { ContextMenu } from "@base-ui/react/context-menu";
 import { useIsMutating } from "@tanstack/react-query";
 import {
 	AudioWaveform,
+	Copy,
 	Disc3,
+	FolderOpen,
 	Grid3x3,
+	ListEnd,
+	ListStart,
 	Music,
 	PencilLine,
 	Play,
@@ -19,8 +23,9 @@ import { useDetailNav } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import { TrackOrderContext } from "#/context/track-order.ts";
 import { albumKey } from "#/lib/albums.ts";
-import type { Track } from "#/lib/api.ts";
+import { fsReveal, type Track } from "#/lib/api.ts";
 import { popup } from "#/lib/menu-styles.ts";
+import { FILE_MANAGER } from "#/lib/platform.ts";
 import { ANALYSIS_KEY, useAnalyze, useRedetect } from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
 
@@ -58,6 +63,25 @@ function shared(tracks: readonly Track[]) {
  * Wraps `children` so a right-click offers what can be done to `tracks`: play, add to a playlist,
  * tag, rename, edit metadata, analyze, and go to their album or artist.
  */
+/** For one song: find its file, and copy its name to paste elsewhere (a set list, a search). */
+function fileEntries(song: Track): MenuEntry[] {
+	return [
+		{
+			label: `Show in ${FILE_MANAGER}`,
+			icon: <FolderOpen />,
+			onSelect: () => void fsReveal(song.path),
+		},
+		{
+			label: "Copy artist and title",
+			icon: <Copy />,
+			onSelect: () =>
+				void navigator.clipboard.writeText(
+					song.artist === "" ? song.title : `${song.artist} - ${song.title}`,
+				),
+		},
+	];
+}
+
 export function AddToPlaylistMenu({
 	tracks,
 	label,
@@ -127,6 +151,8 @@ export function AddToPlaylistMenu({
 			onSelect: () => go({ kind: "artist", name: artist }),
 		},
 		"separator",
+		...(song ? fileEntries(song) : []),
+		"separator",
 		...(extra ?? []),
 	];
 	return (
@@ -144,6 +170,18 @@ export function AddToPlaylistMenu({
 									icon: <Play />,
 									disabled: tracks.length === 0,
 									onSelect: onPlay ?? (() => player.play(tracks, 0)),
+								},
+								{
+									label: "Play next",
+									icon: <ListStart />,
+									disabled: tracks.length === 0,
+									onSelect: () => player.playNext(tracks),
+								},
+								{
+									label: "Add to queue",
+									icon: <ListEnd />,
+									disabled: tracks.length === 0,
+									onSelect: () => player.addToQueue(tracks),
 								},
 							]}
 						/>

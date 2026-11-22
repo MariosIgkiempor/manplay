@@ -73,7 +73,7 @@ export function Drawer({
 				aria-hidden="true"
 				onClick={onClose}
 				className={cn(
-					"absolute inset-0 z-30 bg-background/40 backdrop-blur-sm transition-opacity duration-200",
+					"absolute inset-0 z-30 bg-canvas/50 backdrop-blur-[2px] transition-opacity duration-200",
 					open ? "opacity-100" : "pointer-events-none opacity-0",
 				)}
 			/>
@@ -81,14 +81,14 @@ export function Drawer({
 				aria-label={title}
 				inert={!open}
 				className={cn(
-					"absolute inset-y-0 right-0 z-40 flex max-w-[calc(100%-2rem)] flex-col border-l bg-background transition-transform duration-200",
+					"absolute inset-y-0 right-0 z-40 flex max-w-[calc(100%-2rem)] flex-col border-hairline border-l bg-background transition-transform duration-250 ease-[cubic-bezier(0.2,0.7,0.2,1)] motion-reduce:transition-none",
 					width,
 					// A closed drawer waits just outside the edge: its shadow must not bleed back in.
 					open ? "translate-x-0 shadow-2xl" : "translate-x-full",
 				)}
 			>
 				{header !== undefined ? (
-					<div className="relative border-b bg-card/40 px-4 pt-4">
+					<div className="relative border-hairline border-b px-4 pt-4">
 						{header}
 						<Button
 							variant="ghost"
@@ -101,7 +101,7 @@ export function Drawer({
 						</Button>
 					</div>
 				) : (
-					<div className="flex items-center justify-between border-b px-3 py-2">
+					<div className="flex items-center justify-between border-hairline border-b px-3 py-2">
 						<span className="truncate pl-2 font-medium text-sm">{title}</span>
 						<Button variant="ghost" size="icon" aria-label="Close" onClick={onClose}>
 							<X />

@@ -1,14 +1,21 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { AlbumPanel } from "#/components/album-panel.tsx";
 import { ArtistPanel } from "#/components/artist-panel.tsx";
+import { DuplicatesPanel } from "#/components/duplicates.tsx";
 import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
+import { IssuesPanel } from "#/components/issues-drawer.tsx";
+import { MissingPanel } from "#/components/missing-files.tsx";
 import { PanelBar } from "#/components/panel-header.tsx";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
 import { SongPanel } from "#/components/song-panel.tsx";
 import { ValuePanel } from "#/components/value-panel.tsx";
 import { type DetailView, PanelScopeContext, useDetail } from "#/context/detail-context.ts";
+import { PanelBarContext } from "#/context/panel-bar.tsx";
 import { StatusScopeContext, useStatusScopeHandlers } from "#/context/status-context.ts";
+import { CARD } from "#/lib/page-layout.ts";
+import { usePanePresence } from "#/lib/use-pane-presence.ts";
 import { usePaneWidth } from "#/lib/use-pane-width.ts";
+import { cn } from "#/lib/utils.ts";
 
 function Content({ view }: { view: DetailView }) {
 	switch (view.kind) {
@@ -22,6 +29,12 @@ function Content({ view }: { view: DetailView }) {
 			return <ValuePanel field={view.field} value={view.value} />;
 		case "edit":
 			return <EditTagsPanel target={view.target} />;
+		case "missing":
+			return <MissingPanel />;
+		case "issues":
+			return <IssuesPanel />;
+		case "duplicates":
+			return <DuplicatesPanel />;
 	}
 }
 
@@ -52,7 +65,7 @@ const PAGE_ROOM = 480;
  */
 export function SplitPane(): ReactNode {
 	const detail = useDetail();
-	const { view, close } = detail;
+	const { close } = detail;
 	const scopeHandlers = useStatusScopeHandlers("panel");
 	const [width, setWidth] = usePaneWidth({
 		key: "manplay.split-width",
@@ -61,8 +74,17 @@ export function SplitPane(): ReactNode {
 		max: () => window.innerWidth - PAGE_ROOM,
 	});
 	const [scroller, setScroller] = useState<HTMLElement | null>(null);
+	// Slides open and shut; while shutting it keeps showing the last view.
+	const paneRef = useRef<HTMLElement>(null);
+	const view = usePanePresence(detail.view, paneRef, width);
+	const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
+	const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
+	const barSlots = useMemo(
+		() => ({ title: titleSlot, actions: actionsSlot }),
+		[titleSlot, actionsSlot],
+	);
 	const key = view ? viewKey(view) : null;
-	const closesOnEscape = view !== null && !BROWSED.has(view.kind);
+	const closesOnEscape = detail.view !== null && !BROWSED.has(detail.view.kind);
 
 	// A different thing starts at the top; switching a song's tab does not.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll when the shown thing changes
@@ -93,35 +115,56 @@ export function SplitPane(): ReactNode {
 	}
 	return (
 		<aside
+			ref={paneRef}
 			aria-label="Details"
 			data-detail-panel
 			tabIndex={-1}
 			{...scopeHandlers}
 			style={{ width }}
-			className="relative flex max-w-[70%] shrink-0 flex-col border-l bg-background outline-none"
+			className={cn(CARD, "relative flex max-w-[70%] shrink-0 flex-col outline-none")}
 		>
 			<ResizeHandle
 				edge="left"
+				inGap
 				width={width}
 				min={340}
 				initial={420}
 				label="Resize panel"
 				onWidth={setWidth}
 			/>
-			<PanelBar
-				canGoBack={detail.canGoBack}
-				onBack={detail.back}
-				onClose={close}
-				closeLabel="Close"
-			/>
-			<div ref={setScroller} className="@container/split min-h-0 flex-1 overflow-y-auto px-5 pt-5">
-				<PanelScopeContext.Provider value>
-					<StatusScopeContext.Provider value="panel">
-						<detail.UnsavedScope>
-							<Content view={view} />
-						</detail.UnsavedScope>
-					</StatusScopeContext.Provider>
-				</PanelScopeContext.Provider>
+			{/* Clips to the card's corners; the handle sits outside it, in the gap. The content keeps
+			    its width while the card opens and shuts, held to the right as if sliding in. */}
+			<div className="flex min-h-0 flex-1 justify-end overflow-hidden rounded-[inherit]">
+				<div style={{ width }} className="flex min-h-0 max-w-none shrink-0 flex-col">
+					<PanelBar
+						canGoBack={detail.canGoBack}
+						onBack={detail.back}
+						onClose={close}
+						closeLabel="Close"
+						onTitleSlot={setTitleSlot}
+						onActionsSlot={setActionsSlot}
+					/>
+					<div
+						ref={setScroller}
+						className="@container/split min-h-0 flex-1 overflow-y-auto px-5 pt-5"
+					>
+						<PanelBarContext.Provider value={barSlots}>
+							<PanelScopeContext.Provider value>
+								<StatusScopeContext.Provider value="panel">
+									<detail.UnsavedScope>
+										{/* Each new thing eases in; switching a song's tab does not. */}
+										<div
+											key={key}
+											className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200 motion-reduce:animate-none"
+										>
+											<Content view={view} />
+										</div>
+									</detail.UnsavedScope>
+								</StatusScopeContext.Provider>
+							</PanelScopeContext.Provider>
+						</PanelBarContext.Provider>
+					</div>
+				</div>
 			</div>
 		</aside>
 	);

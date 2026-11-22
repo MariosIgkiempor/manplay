@@ -48,7 +48,7 @@ import type { IssueIndex } from "#/lib/audit.ts";
 import { LIBRARY } from "#/lib/drag-session.ts";
 import { isAudioName, joinPath, parentPath, relSegments } from "#/lib/fs-path.ts";
 import { FILE_MANAGER, keyLabel, TRASH } from "#/lib/platform.ts";
-import { searchFieldClass } from "#/lib/search-field.ts";
+import { SEARCH_FIELD } from "#/lib/search-field.ts";
 import { applyClick, EMPTY_SELECTION, type Selection } from "#/lib/selection.ts";
 import { forTarget, type TagClipboard } from "#/lib/tag-clipboard.ts";
 import { labelOf } from "#/lib/tag-preview.ts";
@@ -681,7 +681,7 @@ export function LocationBar({
 		// biome-ignore lint/a11y/noStaticElementInteractions: a click beside the crumbs starts filtering, like the input it holds
 		<div
 			data-location-bar
-			className={cn(searchFieldClass(searching), "h-8 flex-1")}
+			className={cn(SEARCH_FIELD, "h-8 flex-1")}
 			onMouseDown={(ev) => {
 				// Crumbs navigate; everywhere else in the bar starts filtering.
 				// Clicks in a crumb's picker reach here through React's portal; they are not the bar's.
@@ -696,6 +696,7 @@ export function LocationBar({
 			{!searching && <div className="flex min-w-0 flex-1 items-center">{children}</div>}
 			<input
 				ref={inputRef}
+				data-page-search
 				value={value}
 				placeholder="Filter by name"
 				aria-label="Filter by name"

@@ -1,36 +1,40 @@
+import { Switch as SwitchPrimitive, SwitchThumb } from "@ui-sdk/react/switch";
 import { cn } from "#/lib/utils.ts";
 
-/** On/off toggle. */
+/** On/off toggle. Behaviour (keyboard, ARIA, form value) comes from UI SDK; the look is ours. */
 export function Switch({
 	checked,
 	onChange,
 	label,
-	disabled,
+	disabled = false,
+	id,
 }: {
 	checked: boolean;
 	onChange: (on: boolean) => void;
 	label: string;
 	disabled?: boolean;
+	id?: string;
 }) {
 	return (
-		<button
-			type="button"
-			role="switch"
-			aria-checked={checked}
+		<SwitchPrimitive
+			{...(id === undefined ? {} : { id })}
+			checked={checked}
+			onCheckedChange={(on) => onChange(on)}
 			aria-label={label}
 			disabled={disabled}
-			onClick={() => onChange(!checked)}
 			className={cn(
-				"relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50",
-				checked ? "bg-primary" : "bg-muted-foreground/30",
+				"relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-white/10 bg-white/10 transition-colors",
+				"outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+				"data-checked:border-primary/60 data-checked:bg-primary",
+				"data-disabled:cursor-default data-disabled:opacity-50",
 			)}
 		>
-			<span
+			<SwitchThumb
 				className={cn(
-					"size-4 rounded-full bg-background shadow-sm transition-transform",
-					checked ? "translate-x-[1.125rem]" : "translate-x-0.5",
+					"size-3.5 translate-x-0.5 rounded-full bg-foreground/85 shadow-sm transition-transform motion-reduce:transition-none",
+					"data-checked:translate-x-[1.125rem] data-checked:bg-primary-foreground",
 				)}
 			/>
-		</button>
+		</SwitchPrimitive>
 	);
 }

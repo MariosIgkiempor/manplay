@@ -1,8 +1,22 @@
-import { TriangleAlert } from "lucide-react";
-import { Drawer } from "#/components/drawer.tsx";
-import { ErrorLine } from "#/components/page.tsx";
+import { Trash2, TriangleAlert } from "lucide-react";
+import { useState } from "react";
+import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { fileMenuEntries } from "#/components/file-menu.tsx";
+import { RowMenu } from "#/components/menu.tsx";
+import { ErrorLine, LoadingLine } from "#/components/page.tsx";
+import {
+	PanelActions,
+	PanelIntro,
+	PROBLEM_ROW,
+	ProblemList,
+	ProblemsCleared,
+	ProblemText,
+} from "#/components/problem-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { useDetail } from "#/context/detail-context.ts";
+import { PanelBarTitle } from "#/context/panel-bar.tsx";
 import { timeAgo } from "#/lib/format.ts";
+import { baseName } from "#/lib/fs-path.ts";
 import { useLibraryStatus, useMissingTracks, useRemoveMissing } from "#/lib/queries.ts";
 
 /** Status bar notice: files vanished from disk. Hidden when nothing is missing. */
@@ -24,75 +38,100 @@ export function MissingIndicator({ onClick }: { onClick: () => void }) {
 	);
 }
 
-function MissingList() {
+function MissingList({ count }: { count: number }) {
 	const missing = useMissingTracks(true);
 	if (missing.isError) {
 		return <ErrorLine>{String(missing.error)}</ErrorLine>;
 	}
 	if (!missing.data) {
-		return <p className="text-muted-foreground text-sm">Loading…</p>;
+		return <LoadingLine>Reading missing files…</LoadingLine>;
 	}
 	const now = Date.now() / 1000;
 	return (
-		<ul className="divide-y">
+		<ProblemList title={`${count} missing ${count === 1 ? "file" : "files"}`}>
 			{missing.data.map((t) => (
-				<li key={t.id} className="space-y-0.5 py-2.5">
-					<div className="truncate font-medium text-sm" title={t.title}>
-						{t.title}
-					</div>
-					<div className="truncate text-muted-foreground text-xs">
-						{[t.artist, t.album].filter((x) => x !== "").join(", ")}
-					</div>
-					<div className="break-all text-muted-foreground text-xs" title={t.path}>
-						{t.path}
-					</div>
-					<div className="text-warning text-xs">
-						{t.removedAt <= now ? "Removed on the next sync" : `Removed ${timeAgo(t.removedAt)}`}
-					</div>
-				</li>
+				<RowMenu
+					key={t.id}
+					label={t.title}
+					render={<li />}
+					className={PROBLEM_ROW}
+					items={fileMenuEntries(t.path, { onDisk: false })}
+				>
+					<ProblemText
+						name={t.title}
+						where={[t.artist, t.album].filter((x) => x !== "").join(", ") || baseName(t.path)}
+						hint={t.path}
+						notes={[
+							{
+								text:
+									t.removedAt <= now
+										? "Removed on the next sync"
+										: `Removed ${timeAgo(t.removedAt)}`,
+								tone: "warning",
+							},
+						]}
+					/>
+				</RowMenu>
 			))}
-		</ul>
+		</ProblemList>
 	);
 }
 
 function MissingBody({ onEmpty }: { onEmpty: () => void }) {
 	const status = useLibraryStatus().data;
 	const remove = useRemoveMissing();
+	const [confirming, setConfirming] = useState(false);
 	if (!status || status.missing === 0) {
-		return <p className="text-muted-foreground text-sm">No files are missing.</p>;
+		return (
+			<ProblemsCleared title="Nothing is missing">
+				Every song in the library has its file on disk.
+			</ProblemsCleared>
+		);
 	}
 	return (
 		<div className="space-y-4">
-			<p className="text-muted-foreground text-sm">
-				Hidden until the files return. Removed after {status.graceDays} days.
-			</p>
-			<Button
-				variant="outline"
-				size="sm"
-				disabled={remove.isPending}
-				onClick={() => {
-					if (
-						window.confirm(
-							`Remove ${status.missing} missing tracks now, including their copies on sync destinations?`,
-						)
-					) {
-						remove.mutate(undefined, { onSuccess: onEmpty });
-					}
-				}}
-			>
-				Remove now
-			</Button>
+			<PanelIntro>
+				These songs' files are gone from the library folder. They are hidden until the files come
+				back, and removed from the library after {status.graceDays} days.
+			</PanelIntro>
+			<PanelActions>
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={remove.isPending}
+					onClick={() => setConfirming(true)}
+				>
+					<Trash2 />
+					Remove now…
+				</Button>
+			</PanelActions>
 			{remove.isError && <ErrorLine>{String(remove.error)}</ErrorLine>}
-			<MissingList />
+			<MissingList count={status.missing} />
+			{confirming && (
+				<ConfirmDialog
+					title={`Remove ${status.missing} missing ${status.missing === 1 ? "song" : "songs"} now?`}
+					confirmLabel="Remove now"
+					destructive
+					onCancel={() => setConfirming(false)}
+					onConfirm={() => {
+						setConfirming(false);
+						remove.mutate(undefined, { onSuccess: onEmpty });
+					}}
+				>
+					They leave the library and their copies on your sync destinations are removed too.
+				</ConfirmDialog>
+			)}
 		</div>
 	);
 }
 
-/** Slide-over listing the missing files, with when each goes. */
-export function MissingDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** The side panel listing the missing files, with when each goes. Closes once none are left. */
+export function MissingPanel() {
+	const { close } = useDetail();
 	return (
-		<Drawer open={open} onClose={onClose} title="Missing files">
-			<MissingBody onEmpty={onClose} />
-		</Drawer>
+		<>
+			<PanelBarTitle>Missing files</PanelBarTitle>
+			<MissingBody onEmpty={close} />
+		</>
 	);
 }

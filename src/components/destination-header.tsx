@@ -55,10 +55,7 @@ export function DestinationHeader({
 			}
 			badge={toggle}
 			title={
-				<h1
-					className={cn("truncate font-semibold text-3xl tracking-tight")}
-					title={titleHint ?? title}
-				>
+				<h1 className="truncate font-semibold text-xl tracking-tight" title={titleHint ?? title}>
 					{title}
 				</h1>
 			}
@@ -98,7 +95,13 @@ export function UsageBar({
 	return (
 		<span className="flex items-center gap-2">
 			<span aria-hidden="true" className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
-				<span className={cn("block h-full", fill)} style={{ width: `${share * 100}%` }} />
+				<span
+					className={cn(
+						"block h-full transition-[width] duration-500 ease-out motion-reduce:transition-none",
+						fill,
+					)}
+					style={{ width: `${share * 100}%` }}
+				/>
 			</span>
 			{children}
 		</span>

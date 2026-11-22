@@ -293,7 +293,8 @@ function ExportItems() {
 							brand={isR2(t) ? "cloudflare" : "tailscale"}
 							label={targetShortName(t)}
 							title={`${t.machine}: ${t.path.join(" / ") || "bucket root"}`}
-							active={Boolean(matchRoute({ to: "/export/$targetId", params: { targetId: t.id } }))}
+							// The URL holds the id as text; compare it as a number.
+							active={matchTarget !== false && Number(matchTarget.targetId) === t.id}
 							browse={t.id}
 							badge={t.libsync && <LibraryBadge target={t} focusable={false} />}
 							trailing={

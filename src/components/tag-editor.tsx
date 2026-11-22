@@ -18,6 +18,7 @@ import { type ComboOption, TagCombobox } from "#/components/tag-combobox.tsx";
 import { SuggestionPill, TagLookupStrip } from "#/components/tag-lookup-strip.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
+import { PanelBarTitle, useHasPanelBar } from "#/context/panel-bar.tsx";
 import { pathArtUrl, type TagValue, type TagView } from "#/lib/api.ts";
 import { useArtVersion } from "#/lib/art-version.ts";
 import { useTagsRead, useTagsWrite, useTagValues } from "#/lib/queries.ts";
@@ -203,6 +204,8 @@ function Header({
 }) {
 	const [artFailed, setArtFailed] = useState(false);
 	const artVersion = useArtVersion();
+	// In the side panel the name goes in its top bar.
+	const inBar = useHasPanelBar();
 	const Icon = target.isDir ? Folder : FileIcon;
 	let what = target.isDir ? "Folder" : "Song";
 	if (target.paths) {
@@ -211,7 +214,8 @@ function Header({
 		what = `Folder, ${plural(count, "song", "songs")}, subfolders included`;
 	}
 	return (
-		<div className="border-b bg-card/40 px-5 pt-6 pb-5">
+		<div className="border-hairline border-b px-5 pt-5 pb-5">
+			{inBar && <PanelBarTitle>{target.name}</PanelBarTitle>}
 			<PageHeader
 				variant="plain"
 				art={
@@ -250,9 +254,11 @@ function Header({
 					)
 				}
 				title={
-					<h1 className="truncate font-semibold text-2xl tracking-tight" title={target.name}>
-						{target.name}
-					</h1>
+					inBar ? null : (
+						<h1 className="truncate font-semibold text-lg tracking-tight" title={target.name}>
+							{target.name}
+						</h1>
+					)
 				}
 				meta={<span>{what}</span>}
 			/>

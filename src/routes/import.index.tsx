@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Download } from "lucide-react";
 import { DownloadsRow, useDownloadsEnabled } from "#/components/downloads-source.tsx";
+import { FrameSection } from "#/components/frame.tsx";
 import { ItunesRow, useItunesOn } from "#/components/itunes-source.tsx";
-import { Page, Section } from "#/components/page.tsx";
+import { Page } from "#/components/page.tsx";
 import { countNew } from "#/lib/import-state.ts";
 import { useItunesPending } from "#/lib/queries.ts";
 import { useImport } from "#/lib/use-import.ts";
@@ -21,7 +21,6 @@ function ImportPage() {
 	return (
 		<Page
 			title="Import"
-			icon={<Download />}
 			meta={
 				<>
 					<span>{on} of 2 sources on</span>
@@ -31,12 +30,10 @@ function ImportPage() {
 				</>
 			}
 		>
-			<Section title="Sources" count={2}>
-				<div className="divide-y overflow-hidden rounded-lg border bg-card">
-					<DownloadsRow s={s} />
-					<ItunesRow />
-				</div>
-			</Section>
+			<FrameSection title="Sources" count={2}>
+				<DownloadsRow s={s} />
+				<ItunesRow />
+			</FrameSection>
 		</Page>
 	);
 }

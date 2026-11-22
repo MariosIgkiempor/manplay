@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, ListMusic, Sparkles, Tag as TagIcon } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { CheckList, CheckRow, Filter, LinkButton, TagTree } from "#/components/check-list.tsx";
+import { FrameSection } from "#/components/frame.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { SmartPicker } from "#/components/smart-playlists.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
@@ -160,12 +161,14 @@ export function HeldPlaylists({
 	return (
 		<div className="space-y-4">
 			{[...groups].map(([folder, lists]) => (
-				<div key={folder} className="space-y-1">
-					<p className="px-1 text-muted-foreground text-xs">{folder}</p>
-					<div className="rounded-lg border">
+				<FrameSection key={folder} title={folder} count={lists.length}>
+					<div>
 						{lists.map((p, i) => (
-							// biome-ignore lint/suspicious/noArrayIndexKey: names can repeat in a folder
-							<details key={`${p.name}-${i}`} className="group border-b last:border-b-0">
+							<details
+								// biome-ignore lint/suspicious/noArrayIndexKey: names can repeat in a folder
+								key={`${p.name}-${i}`}
+								className="group border-hairline border-b last:border-b-0"
+							>
 								<summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm">
 									<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
 									<span
@@ -195,7 +198,7 @@ export function HeldPlaylists({
 							</details>
 						))}
 					</div>
-				</div>
+				</FrameSection>
 			))}
 		</div>
 	);

@@ -1,20 +1,19 @@
 import { LoaderCircle, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
-import { PageHeader, PageIcon } from "#/components/page-header.tsx";
+import { PageHeader } from "#/components/page-header.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { openPrivacySettings } from "#/lib/api.ts";
 import { describeError } from "#/lib/errors.ts";
-import { PAGE_BODY } from "#/lib/page-layout.ts";
+import { PAGE_BODY, WELL } from "#/lib/page-layout.ts";
 import { typeScale } from "#/lib/type-scale.ts";
 import { cn } from "#/lib/utils.ts";
 
 /**
- * A page with the shared header (icon, title, figures, buttons, optional tabs) and its sections
+ * A page with the shared header (title, figures, buttons, optional tabs) and its sections
  * below. No intro prose: what a control does belongs on the control.
  */
 export function Page({
 	title,
-	icon,
 	meta,
 	actions,
 	tabs,
@@ -22,8 +21,6 @@ export function Page({
 	wide = false,
 }: {
 	title: string;
-	/** The page's icon, as in the sidebar. */
-	icon: ReactNode;
 	meta?: ReactNode;
 	actions?: ReactNode;
 	tabs?: ReactNode;
@@ -33,13 +30,7 @@ export function Page({
 }) {
 	return (
 		<main>
-			<PageHeader
-				art={<PageIcon>{icon}</PageIcon>}
-				title={title}
-				meta={meta}
-				actions={actions}
-				tabs={tabs}
-			/>
+			<PageHeader title={title} meta={meta} actions={actions} tabs={tabs} />
 			<div className={cn("w-full space-y-8", PAGE_BODY, !wide && "max-w-5xl")}>{children}</div>
 		</main>
 	);
@@ -91,7 +82,7 @@ export function SectionHeading({
 
 /** A bordered surface for a group of settings or a summary. */
 export function Panel({ children, className }: { children: ReactNode; className?: string }) {
-	return <div className={cn("rounded-lg border bg-card p-4", className)}>{children}</div>;
+	return <div className={cn(WELL, "p-4", className)}>{children}</div>;
 }
 
 /** What to show where a list has nothing: what is missing and, when there is one, the way forward. */

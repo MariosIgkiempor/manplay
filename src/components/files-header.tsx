@@ -1,5 +1,5 @@
 import { useIsMutating } from "@tanstack/react-query";
-import { Columns2, FolderOpen, RefreshCw, Square, Tags, Undo2 } from "lucide-react";
+import { Columns2, FolderOpen, RefreshCw, Tags, Undo2 } from "lucide-react";
 import { BrandIcon } from "#/components/brand-icon.tsx";
 import { brandOf } from "#/components/files-source-picker.tsx";
 import { HeaderMenu, type HeaderMenuEntry } from "#/components/header-menu.tsx";
@@ -9,7 +9,6 @@ import { type SyncTarget, targetShortName } from "#/lib/api.ts";
 import { PAGE_ART } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { SCAN_KEY, useLibraryRoot, useScan } from "#/lib/queries.ts";
-import { cn } from "#/lib/utils.ts";
 
 export interface FilesHeaderProps {
 	/** The destination shown in the first pane, if any. */
@@ -37,7 +36,7 @@ function HeaderMeta({ target }: { target: SyncTarget | undefined }) {
 	);
 }
 
-/** The Files header's `⋯` menu: split view, undo, metadata's option, and rescan. */
+/** The Files header's `⋯` menu: undo, metadata's option, and rescan. */
 function filesMenu(
 	p: FilesHeaderProps,
 	root: string | null | undefined,
@@ -75,16 +74,7 @@ function filesMenu(
 				onSelect: () => onScan("pick"),
 				disabled: scanning,
 			};
-	return [
-		{
-			label: p.split ? "One pane" : "Split into two panes",
-			icon: p.split ? <Square /> : <Columns2 />,
-			onSelect: p.onToggleSplit,
-		},
-		...local,
-		"separator",
-		p.target ? null : library,
-	];
+	return [...local, "separator", p.target ? null : library];
 }
 
 /**
@@ -98,12 +88,8 @@ export function FilesHeader(p: FilesHeaderProps) {
 	const { target } = p;
 	return (
 		<PageHeader
-			art={
-				<BrandIcon
-					brand={target ? brandOf(target) : "library"}
-					className={cn(PAGE_ART, "shadow-lg")}
-				/>
-			}
+			// A destination shows its brand; the library is the app's own page and needs none.
+			art={target ? <BrandIcon brand={brandOf(target)} className={PAGE_ART} /> : null}
 			title={target ? targetShortName(target) : "Files"}
 			titleHint={target ? [target.machine, ...target.path].join(" / ") : (root.data ?? undefined)}
 			meta={(target ?? !root.data) && <HeaderMeta target={target} />}
@@ -119,6 +105,16 @@ export function FilesHeader(p: FilesHeaderProps) {
 							Metadata
 						</Button>
 					)}
+					<Button
+						variant={p.split ? "secondary" : "outline"}
+						size="icon"
+						aria-pressed={p.split}
+						aria-label={p.split ? "Close the second pane" : "Open a second pane"}
+						title={p.split ? "Close the second pane" : "Open a second pane"}
+						onClick={p.onToggleSplit}
+					>
+						<Columns2 />
+					</Button>
 					<HeaderMenu entries={filesMenu(p, root.data, scanning, scan.mutate)} />
 				</>
 			}

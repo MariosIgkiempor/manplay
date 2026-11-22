@@ -154,7 +154,7 @@ function SettingsForm({ target, children }: { target: SyncTarget; children?: Rea
 				void autosave.flush();
 			}}
 		>
-			<SettingRows>
+			<SettingRows title="Destination">
 				<Field
 					icon={<Folder />}
 					label={r2 ? "Folder in bucket" : "Shared folder"}

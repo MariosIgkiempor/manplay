@@ -51,6 +51,61 @@ export function renderOverview(analysis: TrackAnalysis, w: number, h: number): H
 	return canvas;
 }
 
+/**
+ * The player bar's quiet timeline: thin bars mirrored about the middle in one colour, `tint`,
+ * on a canvas of its own. Drawn twice, dim and lit, so the played part can light up.
+ */
+export function renderTimeline(
+	analysis: TrackAnalysis,
+	w: number,
+	h: number,
+	scale: number,
+	tint: string,
+): HTMLCanvasElement {
+	const canvas = document.createElement("canvas");
+	canvas.width = w;
+	canvas.height = h;
+	const ctx = canvas.getContext("2d");
+	if (!ctx) {
+		return canvas;
+	}
+	const bar = Math.max(1, Math.round(2 * scale));
+	const step = bar + Math.max(1, Math.round(scale));
+	const cols = overview(analysis.detail, Math.floor(w / step));
+	const top = Math.max(1e-6, ...cols.map((c) => c.height));
+	ctx.fillStyle = tint;
+	cols.forEach((c, i) => {
+		const height = Math.max(bar, (c.height / top) * h * 0.9);
+		ctx.fillRect(i * step, (h - height) / 2, bar, height);
+	});
+	return canvas;
+}
+
+/** How bright the part still to play is on the quiet timeline. */
+const TIMELINE_UNPLAYED = 0.28;
+
+/** The quiet timeline: dim bars, the played part in the accent colour, a slim playhead. */
+export function drawTimeline(
+	ctx: CanvasRenderingContext2D,
+	size: { w: number; h: number; scale: number },
+	dim: CanvasImageSource,
+	lit: CanvasImageSource,
+	played: number,
+) {
+	const { w, h, scale } = size;
+	const at = Math.round(Math.max(0, Math.min(1, played)) * w);
+	ctx.globalAlpha = TIMELINE_UNPLAYED;
+	ctx.drawImage(dim, 0, 0);
+	ctx.globalAlpha = 1;
+	if (at > 0) {
+		ctx.clearRect(0, 0, at, h);
+		ctx.drawImage(lit, 0, 0, at, h, 0, 0, at, h);
+	}
+	const line = Math.max(1, Math.round(1.5 * scale));
+	ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+	ctx.fillRect(at - line / 2, h * 0.1, line, h * 0.8);
+}
+
 /** The overview with the part before `played` (0–1) bright, cue pins and the playhead. */
 export function drawOverview(
 	ctx: CanvasRenderingContext2D,
