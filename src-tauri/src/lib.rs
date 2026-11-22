@@ -2,15 +2,16 @@
 
 mod analysis;
 mod anlz;
+mod apple_art;
 mod art;
 mod audioprint;
 mod audit;
+mod convert;
 mod db;
 mod error;
 mod fsops;
 mod gemini;
 mod import;
-mod itunes;
 mod jellyfin;
 mod libsync;
 mod lookup;
@@ -31,6 +32,7 @@ mod tag_region;
 mod tags;
 mod tailscale;
 mod usb;
+mod usb_browse;
 mod usb_edit;
 mod usb_export;
 mod usb_files;
@@ -69,6 +71,10 @@ struct AppState {
     scans: Mutex<sync_scans::ScanStore>,
     /// Wakes the background reader when something was queued.
     scan_wake: tokio::sync::Notify,
+    /// Wakes the background analysis when songs may have come into the library.
+    analysis_wake: tokio::sync::Notify,
+    /// Wakes the automatic import when an import folder was added or changed.
+    import_wake: tokio::sync::Notify,
     /// Held while a destination is read or written, so they are handled one job at a time.
     destination_io: tokio::sync::Mutex<()>,
     /// Next id for a planned action, unique across every plan of this run of the app.
@@ -152,6 +158,7 @@ fn library_changed(state: &AppState) {
         *changed = Some(std::time::Instant::now());
     }
     state.scan_wake.notify_one();
+    state.analysis_wake.notify_one();
 }
 
 /// Fingerprints the audio of present tracks that have no `audio_fp` yet (libraries from before
@@ -534,12 +541,11 @@ struct AnalysisProgress {
 
 const SETTING_ANALYSIS: &str = "analysis";
 
-/// How analysis results are kept, beyond manplay's own database.
+/// How analysis results are written. Detected BPM and key always go into the files' tags too,
+/// so other apps and players see them; settings saved before that (`writeTags`) are ignored.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase", default)]
 struct AnalysisSettings {
-    /// Write detected BPM and key into the files' tags after each analysis.
-    write_tags: bool,
     /// Key notation in the tags: `musical` (`Am`) or `camelot` (`8A`).
     key_format: KeyFormat,
     /// Re-analysing replaces BPM, key and beat grids set by hand. Off: they are kept.
@@ -907,20 +913,46 @@ async fn drop_analysed_elsewhere(
 #[tauri::command]
 async fn analyze_tracks(
     app: AppHandle,
-    state: State<'_, AppState>,
     track_ids: Option<Vec<i64>>,
     force: bool,
     replace_edits: Option<bool>,
 ) -> Result<AnalysisReport, Error> {
+    analyze(&app, track_ids.as_deref(), force, replace_edits).await
+}
+
+/// One analysis run, from the page or the background: detects, stores, then writes the results
+/// into the files' tags. Emits `analysis-finished` when it ends, however it ends, so every window
+/// shows the new values.
+async fn analyze(
+    app: &AppHandle,
+    track_ids: Option<&[i64]>,
+    force: bool,
+    replace_edits: Option<bool>,
+) -> Result<AnalysisReport, Error> {
+    let state = app.state::<AppState>();
     if state.analyzing.swap(true, Ordering::SeqCst) {
         return Err(Error::Msg("an analysis is already running".to_owned()));
     }
-    let _guard = SyncGuard(&state.analyzing);
+    let result = {
+        let _guard = SyncGuard(&state.analyzing);
+        analyze_locked(app, &state, track_ids, force, replace_edits).await
+    };
+    let _ = app.emit("analysis-finished", ());
+    result
+}
+
+async fn analyze_locked(
+    app: &AppHandle,
+    state: &AppState,
+    track_ids: Option<&[i64]>,
+    force: bool,
+    replace_edits: Option<bool>,
+) -> Result<AnalysisReport, Error> {
     state.cancel_analysis.store(false, Ordering::SeqCst);
     let (jobs, ids, replace_edits) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let replace_edits = replace_edits.unwrap_or(analysis_settings_of(&conn)?.replace_edits);
-        let jobs = db::analysis_jobs(&conn, track_ids.as_deref(), force)?;
+        let jobs = db::analysis_jobs(&conn, track_ids, force)?;
         let ids = db::track_ids_with_audio_fps(
             &conn,
             &jobs.iter().map(|j| j.audio_fp.as_str()).collect::<Vec<_>>(),
@@ -930,13 +962,13 @@ async fn analyze_tracks(
     let jobs = if force {
         jobs
     } else {
-        drop_analysed_elsewhere(&state, jobs).await
+        drop_analysed_elsewhere(state, jobs).await
     };
     if jobs.is_empty() {
         return Ok(AnalysisReport::default());
     }
     let handle = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let mut result = tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<AppState>();
         let report = |p: AnalysisProgress| {
             let _ = handle.emit("analysis-progress", p);
@@ -945,16 +977,53 @@ async fn analyze_tracks(
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))??;
-    let mut result = result;
-    let write = {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        analysis_settings_of(&conn)?.write_tags
-    };
-    if write && !state.cancel_analysis.load(Ordering::SeqCst) {
-        // Only the songs this run looked at; older results are saved from the drawer.
-        result.tags = Some(save_analysis_tags(&app, &state, Some(&ids)).await?);
+    if !state.cancel_analysis.load(Ordering::SeqCst) {
+        // Only the songs this run looked at; older results are written from Settings. Waits for
+        // a tag edit in progress rather than leave the files without their results.
+        wait_for_metadata_changes(state).await;
+        result.tags = Some(save_analysis_tags(app, state, Some(&ids)).await?);
     }
     Ok(result)
+}
+
+/// Waits (up to a few minutes) for another metadata change to finish writing files.
+async fn wait_for_metadata_changes(state: &AppState) {
+    for _ in 0..360 {
+        if !state.fixing.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
+/// How long the library has to stay still before new songs are analysed, so a big import or
+/// copy is analysed once it is all in rather than a few songs at a time.
+const ANALYSIS_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Analyses every song that came into the library, however it came (a scan, an import, a pull
+/// from a destination, a file copied in), once the library has stopped changing; and at launch,
+/// whatever was left from before. Audio analysed before is not done again, and a BPM or key set
+/// by hand is never replaced. Waits while a sync or another analysis runs.
+async fn analysis_worker(app: AppHandle) {
+    let state = app.state::<AppState>();
+    // Lets the launch's own scan and fingerprinting go first.
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    loop {
+        while state.syncing.load(Ordering::SeqCst) || state.analyzing.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        if library_root(&state).is_ok()
+            && let Err(e) = analyze(&app, None, false, Some(false)).await
+        {
+            log::warn!("background analysis failed: {e}");
+        }
+        state.analysis_wake.notified().await;
+        // More may be on the way: wait until nothing has changed for a moment.
+        while tokio::time::timeout(ANALYSIS_SETTLE, state.analysis_wake.notified())
+            .await
+            .is_ok()
+        {}
+    }
 }
 
 /// Stops the running analysis once the files being read now are done.
@@ -2078,12 +2147,19 @@ async fn usb_formats(mount: PathBuf) -> Result<usb::Formats, Error> {
     .map_err(Error::Msg)
 }
 
-/// The rekordbox library on a plugged-in drive; empty if it has none.
+/// One of the libraries on a plugged-in drive (its main one, rekordbox's or manplay's own list,
+/// when `format` is not given); empty if it has none.
 #[tauri::command]
-async fn usb_library(mount: PathBuf) -> Result<pdb::Library, Error> {
+async fn usb_library(
+    mount: PathBuf,
+    format: Option<usb_browse::Format>,
+) -> Result<pdb::Library, Error> {
     tauri::async_runtime::spawn_blocking(move || {
         usb::check_mount(&mount)?;
-        usb::library(&mount)
+        match format {
+            None => usb::library(&mount),
+            Some(format) => usb_browse::library(&mount, format),
+        }
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))?
@@ -2321,6 +2397,7 @@ async fn export_to_usb(
             camelot,
             mode: selection.usb_mode,
             outputs: selection.usb_outputs,
+            folder_file_names: &selection.usb_folder_file_names,
         };
         let report = usb_export::export(&mount, &sources, &playlists, &opts, |p| {
             let _ = app.emit("usb-export-progress", p);
@@ -4095,7 +4172,7 @@ async fn lookup_cover_response(app: &AppHandle, uri_path: &str) -> tauri::http::
 #[tauri::command]
 async fn audit_library(state: State<'_, AppState>) -> Result<Vec<audit::Issue>, Error> {
     let root = library_root(&state)?;
-    let ffmpeg = itunes::find_ffmpeg().is_some();
+    let ffmpeg = convert::find_ffmpeg().is_some();
     tauri::async_runtime::spawn_blocking(move || audit::audit(&root, ffmpeg))
         .await
         .map_err(|e| Error::Msg(e.to_string()))?
@@ -4131,7 +4208,7 @@ async fn audit_fix(
     let _guard = SyncGuard(&state.fixing);
     let r = root.clone();
     let report = tauri::async_runtime::spawn_blocking(move || {
-        audit::fix_all(&r, &paths, itunes::find_ffmpeg().as_deref())
+        audit::fix_all(&r, &paths, convert::find_ffmpeg().as_deref())
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))?;
@@ -4139,42 +4216,96 @@ async fn audit_fix(
     Ok(report)
 }
 
-// ---- import from downloads ---------------------------------------------------
+// ---- import folders ----------------------------------------------------------
 
-const SETTING_IMPORT_FOLDER: &str = "import_folder";
-
-/// The folder to import from: the last one used, else the system Downloads folder.
+/// Every import folder. The first time, the Downloads and iTunes sources from before are moved
+/// into the list (see [`db::move_to_import_folders`]).
 #[tauri::command]
-fn import_get_folder(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, Error> {
-    let saved = {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        db::get_setting(&conn, SETTING_IMPORT_FOLDER)?
-    };
-    Ok(saved.or_else(|| {
-        app.path()
-            .download_dir()
-            .ok()
-            .and_then(|p| p.to_str().map(str::to_owned))
-    }))
+fn import_folders(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<db::ImportFolder>, Error> {
+    let downloads = app
+        .path()
+        .download_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_owned));
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::move_to_import_folders(&conn, downloads.as_deref())?;
+    db::import_folders(&conn)
 }
 
-/// Looks through `folder` (and inside zips) for music that is not in the library. Files that
+/// Adds a folder to import from.
+#[tauri::command]
+fn import_add_folder(
+    state: State<'_, AppState>,
+    path: PathBuf,
+    convert_aac: bool,
+    auto_import: bool,
+) -> Result<db::ImportFolder, Error> {
+    if !path.is_dir() {
+        return Err(Error::Msg(format!("not a folder: {}", path.display())));
+    }
+    let text = path
+        .to_str()
+        .ok_or_else(|| Error::Msg("path is not valid text".to_owned()))?;
+    let folder = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::add_import_folder(&conn, text, convert_aac, auto_import)?
+    };
+    state.import_wake.notify_one();
+    Ok(folder)
+}
+
+/// Saves a folder's switch and options.
+#[tauri::command]
+fn import_update_folder(state: State<'_, AppState>, folder: db::ImportFolder) -> Result<(), Error> {
+    {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::update_import_folder(&conn, &folder)?;
+    }
+    state.import_wake.notify_one();
+    Ok(())
+}
+
+/// Stops importing from a folder. Its files are never touched.
+#[tauri::command]
+fn import_remove_folder(state: State<'_, AppState>, id: db::ImportFolderId) -> Result<(), Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::remove_import_folder(&conn, id)
+}
+
+fn import_folder_of(state: &AppState, id: db::ImportFolderId) -> Result<db::ImportFolder, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    db::import_folder(&conn, id)
+}
+
+/// Looks through a folder (and inside zips) for music that is not in the library. Files that
 /// have not changed since the last scan of this folder come from the cache unless `fresh`.
 /// Emits `import-progress` events while it works.
 #[tauri::command]
 async fn import_scan(
     app: AppHandle,
     state: State<'_, AppState>,
-    folder: PathBuf,
+    folder: db::ImportFolderId,
+    fresh: bool,
+) -> Result<import::ImportScan, Error> {
+    let folder = import_folder_of(&state, folder)?;
+    scan_import_folder(&app, &state, Path::new(&folder.path), fresh).await
+}
+
+async fn scan_import_folder(
+    app: &AppHandle,
+    state: &AppState,
+    folder: &Path,
     fresh: bool,
 ) -> Result<import::ImportScan, Error> {
     if !folder.is_dir() {
         return Err(Error::Msg(format!("not a folder: {}", folder.display())));
     }
     let key = folder.to_string_lossy().into_owned();
-    let (known, cache, mut audio, unprinted) = {
+    let (known, cache, mut audio, unprinted, converted) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        db::set_setting(&conn, SETTING_IMPORT_FOLDER, folder.to_str())?;
         let saved = if fresh {
             None
         } else {
@@ -4187,8 +4318,11 @@ async fn import_scan(
                 .unwrap_or_default(),
             db::audio_index(&conn)?,
             db::tracks_without_audio_fp(&conn)?,
+            db::converted_sources(&conn)?,
         )
     };
+    let app = app.clone();
+    let folder = folder.to_path_buf();
     let (found, json, printed) = tauri::async_runtime::spawn_blocking(move || {
         let report = |p: &import::Progress| {
             let _ = app.emit("import-progress", p);
@@ -4214,6 +4348,7 @@ async fn import_scan(
             cached_only: false,
             report: &report,
             same_audio: &audio,
+            converted: &converted,
         };
         let (found, next) = import::scan(&folder, &known, &cache, &opts);
         (found, next.to_json(), printed)
@@ -4226,34 +4361,36 @@ async fn import_scan(
     Ok(found)
 }
 
-/// Moves files, zips or folders from the Downloads folder to the Trash. Only paths inside the
-/// saved Downloads folder are accepted, and never the folder itself.
+/// Moves files, zips or folders from an import folder to the Trash. Only paths inside that
+/// folder are accepted, and never the folder itself.
 #[tauri::command]
-async fn import_trash(state: State<'_, AppState>, paths: Vec<PathBuf>) -> Result<(), Error> {
-    let folder = {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        db::get_setting(&conn, SETTING_IMPORT_FOLDER)?
-    }
-    .ok_or_else(|| Error::Msg("no Downloads folder chosen".to_owned()))?;
-    tauri::async_runtime::spawn_blocking(move || fsops::trash(Path::new(&folder), &paths))
+async fn import_trash(
+    state: State<'_, AppState>,
+    folder: db::ImportFolderId,
+    paths: Vec<PathBuf>,
+) -> Result<(), Error> {
+    let folder = import_folder_of(&state, folder)?;
+    tauri::async_runtime::spawn_blocking(move || fsops::trash(Path::new(&folder.path), &paths))
         .await
         .map_err(|e| Error::Msg(e.to_string()))?
 }
 
-/// What the last scan of `folder` found, rebuilt from the cache without reading any file.
+/// What the last scan of a folder found, rebuilt from the cache without reading any file.
 /// `None` when the folder was never scanned.
 #[tauri::command]
 async fn import_cached(
     state: State<'_, AppState>,
-    folder: PathBuf,
+    folder: db::ImportFolderId,
 ) -> Result<Option<import::ImportScan>, Error> {
+    let folder = PathBuf::from(import_folder_of(&state, folder)?.path);
     let key = folder.to_string_lossy().into_owned();
-    let (known, saved, audio) = {
+    let (known, saved, audio, converted) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         (
             db::content_index(&conn)?,
             db::get_import_cache(&conn, &key)?,
             db::audio_index(&conn)?,
+            db::converted_sources(&conn)?,
         )
     };
     let Some(json) = saved else {
@@ -4264,6 +4401,7 @@ async fn import_cached(
             cached_only: true,
             report: &|_| {},
             same_audio: &audio,
+            converted: &converted,
         };
         let cache = import::Cache::from_json(&json);
         Some(import::scan(&folder, &known, &cache, &opts).0)
@@ -4277,9 +4415,11 @@ async fn import_cached(
 #[tauri::command]
 async fn import_preview(
     app: AppHandle,
-    folder: PathBuf,
+    state: State<'_, AppState>,
+    folder: db::ImportFolderId,
     src: import::SourceRef,
 ) -> Result<String, Error> {
+    let folder = PathBuf::from(import_folder_of(&state, folder)?.path);
     let dir = app.path().app_cache_dir()?.join("import-preview");
     let path = tauri::async_runtime::spawn_blocking(move || import::preview(&folder, &src, &dir))
         .await
@@ -4293,29 +4433,115 @@ async fn import_preview(
 #[tauri::command]
 async fn import_run(
     state: State<'_, AppState>,
-    folder: PathBuf,
+    folder: db::ImportFolderId,
     groups: Vec<import::ImportRequest>,
 ) -> Result<import::ImportReport, Error> {
-    let library = library_root(&state)?;
-    let lib = library.clone();
+    let folder = import_folder_of(&state, folder)?;
+    import_into_library(&state, &folder, groups).await
+}
+
+/// Covers from Apple for the bought songs among `groups` that come without one, when asking
+/// Apple is switched on. Keyed by [`import::SourceRef::key`]. Songs in zips are left as they are.
+async fn apple_covers_for(
+    state: &AppState,
+    groups: &[import::ImportRequest],
+) -> HashMap<String, Vec<u8>> {
+    let on = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|c| db::service_on(&c, apple_art::SERVICE).ok())
+        .unwrap_or(false);
+    if !on {
+        return HashMap::new();
+    }
+    let files: Vec<import::SourceRef> = groups
+        .iter()
+        .flat_map(|g| g.tracks.iter())
+        .filter(|t| t.entry.is_none() && t.path.to_ascii_lowercase().ends_with(".m4a"))
+        .cloned()
+        .collect();
+    let albums: Vec<(String, apple_art::AlbumId)> =
+        tauri::async_runtime::spawn_blocking(move || {
+            files
+                .iter()
+                .filter_map(|f| {
+                    let bytes = std::fs::read(&f.path).ok()?;
+                    if apple_art::has_cover(&bytes) {
+                        return None;
+                    }
+                    apple_art::album_id(&bytes).map(|id| (f.key(), id))
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
+    if albums.is_empty() {
+        return HashMap::new();
+    }
+    let ids = albums.iter().map(|(_, id)| *id).collect();
+    let found = match apple_art::covers(&state.http, &ids).await {
+        Ok(found) => found,
+        Err(e) => {
+            log::warn!("could not fetch covers from Apple: {e}");
+            return HashMap::new();
+        }
+    };
+    albums
+        .into_iter()
+        .filter_map(|(key, id)| found.get(&id).map(|bytes| (key, bytes.clone())))
+        .collect()
+}
+
+/// Brings the chosen songs of `folder` into the library as the folder says (converting AAC,
+/// with covers from Apple when allowed), remembers converted songs, rescans the library and
+/// records the run in the folder's history.
+async fn import_into_library(
+    state: &AppState,
+    folder: &db::ImportFolder,
+    groups: Vec<import::ImportRequest>,
+) -> Result<import::ImportReport, Error> {
+    let library = library_root(state)?;
+    let ffmpeg = if folder.convert_aac {
+        Some(convert::find_ffmpeg().ok_or_else(|| {
+            Error::Msg("ffmpeg was not found, so AAC songs cannot be converted".to_owned())
+        })?)
+    } else {
+        None
+    };
     let started_at = unix_now();
     let items: Vec<String> = groups
         .iter()
         .filter(|g| !g.tracks.is_empty())
         .map(|g| format!("{} — {} ({} tracks)", g.artist, g.album, g.tracks.len()))
         .collect();
-    let report = tauri::async_runtime::spawn_blocking(move || import::run(&folder, &lib, &groups))
-        .await
-        .map_err(|e| Error::Msg(e.to_string()))?;
+    let covers = apple_covers_for(state, &groups).await;
+    let lib = library.clone();
+    let source = PathBuf::from(&folder.path);
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        let opts = import::RunOptions {
+            convert_with: ffmpeg.as_deref(),
+            covers,
+        };
+        import::run(&source, &lib, &groups, &opts)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?;
+    {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        for c in &report.converted {
+            db::record_converted(&conn, &c.source, c.size, &c.dest, started_at)?;
+        }
+    }
     if report.imported > 0 {
-        refresh_after_fs_change(&state, library).await;
+        refresh_after_fs_change(state, library).await;
     }
     if report.imported > 0 || !report.failed.is_empty() {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         db::record_activity(
             &conn,
             &db::Activity {
-                source: "downloads".to_owned(),
+                source: folder.id.activity_source(),
                 started_at,
                 finished_at: unix_now(),
                 ok: i64::try_from(report.imported).unwrap_or(0),
@@ -4331,6 +4557,58 @@ async fn import_run(
         )?;
     }
     Ok(report)
+}
+
+/// How often folders that import everything are looked at, besides when they are added or
+/// changed and at launch.
+const AUTO_IMPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Imports every new song from the folders set to import everything: at launch, whenever a
+/// folder is added or changed, and every [`AUTO_IMPORT_EVERY`]. Songs come in as their folder
+/// says, and new songs are then analysed like any other.
+async fn auto_import_worker(app: AppHandle) {
+    let state = app.state::<AppState>();
+    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+    loop {
+        if let Err(e) = auto_import_once(&app, &state).await {
+            log::warn!("automatic import failed: {e}");
+        }
+        let _ = tokio::time::timeout(AUTO_IMPORT_EVERY, state.import_wake.notified()).await;
+    }
+}
+
+async fn auto_import_once(app: &AppHandle, state: &AppState) -> Result<(), Error> {
+    if library_root(state).is_err() {
+        return Ok(());
+    }
+    let folders = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::import_folders(&conn)?
+    };
+    for folder in folders.iter().filter(|f| f.enabled && f.auto_import) {
+        let found = scan_import_folder(app, state, Path::new(&folder.path), false).await?;
+        let groups: Vec<import::ImportRequest> = found
+            .groups
+            .into_iter()
+            .map(|g| import::ImportRequest {
+                tracks: g
+                    .tracks
+                    .into_iter()
+                    .filter(|t| t.status == import::Status::New)
+                    .map(|t| t.src)
+                    .collect(),
+                artist: g.artist,
+                album: g.album,
+                images: g.images,
+            })
+            .filter(|g| !g.tracks.is_empty())
+            .collect();
+        if !groups.is_empty() {
+            import_into_library(state, folder, groups).await?;
+            let _ = app.emit("import-folder-changed", folder.id);
+        }
+    }
+    Ok(())
 }
 
 // ---- rekordbox ---------------------------------------------------------------
@@ -4552,146 +4830,6 @@ fn rekordbox_set_selection(
     Ok(selection)
 }
 
-// ---- iTunes import -----------------------------------------------------------
-
-const SETTING_ITUNES_PATH: &str = "itunes_path";
-const SETTING_ITUNES_LAST: &str = "itunes_last_import";
-const ITUNES_KEEP: usize = 50;
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ItunesStatus {
-    path: Option<String>,
-    last: Option<itunes::ImportReport>,
-}
-
-fn itunes_status_of(conn: &Connection) -> Result<ItunesStatus, Error> {
-    Ok(ItunesStatus {
-        path: db::get_setting(conn, SETTING_ITUNES_PATH)?,
-        last: db::get_setting(conn, SETTING_ITUNES_LAST)?
-            .and_then(|raw| serde_json::from_str(&raw).ok()),
-    })
-}
-
-#[tauri::command]
-fn itunes_status(state: State<'_, AppState>) -> Result<ItunesStatus, Error> {
-    let conn = state.db.lock().map_err(|_| Error::Lock)?;
-    itunes_status_of(&conn)
-}
-
-/// Chooses (or clears, with `None`) the iTunes folder to import from.
-#[tauri::command]
-fn itunes_set_path(
-    state: State<'_, AppState>,
-    path: Option<String>,
-) -> Result<ItunesStatus, Error> {
-    let conn = state.db.lock().map_err(|_| Error::Lock)?;
-    db::set_setting(&conn, SETTING_ITUNES_PATH, path.as_deref())?;
-    if path.is_none() {
-        db::set_setting(&conn, SETTING_ITUNES_LAST, None)?;
-    }
-    itunes_status_of(&conn)
-}
-
-/// Songs in the iTunes folder that an import would add. Empty when iTunes is off or unset.
-#[tauri::command]
-async fn itunes_pending(state: State<'_, AppState>) -> Result<Vec<itunes::Converted>, Error> {
-    let (source, known) = {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        if db::service_off(&conn, "itunes")? {
-            return Ok(Vec::new());
-        }
-        let Some(source) = db::get_setting(&conn, SETTING_ITUNES_PATH)? else {
-            return Ok(Vec::new());
-        };
-        (PathBuf::from(source), itunes::Known::load(&conn)?)
-    };
-    tauri::async_runtime::spawn_blocking(move || itunes::pending(&source, known))
-        .await
-        .map_err(|e| Error::Msg(e.to_string()))
-}
-
-/// Converts new iTunes songs into the library, then rescans so they show up.
-/// `Ok(None)` when no iTunes folder or library folder is configured.
-#[tauri::command]
-async fn itunes_import(state: State<'_, AppState>) -> Result<Option<ItunesStatus>, Error> {
-    let (source, library, known) = {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        if db::service_off(&conn, "itunes")? {
-            return Ok(None);
-        }
-        let source = db::get_setting(&conn, SETTING_ITUNES_PATH)?;
-        let library = db::get_setting(&conn, SETTING_ROOT)?;
-        let (Some(source), Some(library)) = (source, library) else {
-            return Ok(None);
-        };
-        (
-            PathBuf::from(source),
-            PathBuf::from(library),
-            itunes::Known::load(&conn)?,
-        )
-    };
-    let now = unix_now();
-    let lib = library.clone();
-    let (mut report, imported) = tauri::async_runtime::spawn_blocking(move || {
-        let mut imported = Vec::new();
-        let report = itunes::import(&source, &lib, known, now, |c, dest| {
-            imported.push((c.clone(), dest.to_path_buf()));
-            Ok(())
-        });
-        (report, imported)
-    })
-    .await
-    .map_err(|e| Error::Msg(e.to_string()))?;
-
-    {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        for (c, dest) in &imported {
-            itunes::record_imported(&conn, c, dest, now)?;
-        }
-    }
-    if !report.converted.is_empty() {
-        scan_and_store(&state, library, ScanDepth::Changed).await?;
-    }
-    let conn = state.db.lock().map_err(|_| Error::Lock)?;
-    if !report.converted.is_empty() || !report.failed.is_empty() || report.error.is_some() {
-        db::record_activity(
-            &conn,
-            &db::Activity {
-                source: "itunes".to_owned(),
-                started_at: now,
-                finished_at: unix_now(),
-                ok: i64::try_from(report.converted.len()).unwrap_or(0),
-                skipped: i64::try_from(report.skipped).unwrap_or(0),
-                failed: i64::try_from(report.failed.len()).unwrap_or(0)
-                    + i64::from(report.error.is_some()),
-                items: report
-                    .converted
-                    .iter()
-                    .map(|c| format!("{} — {} · {}", c.artist, c.title, c.album))
-                    .collect(),
-                errors: report
-                    .error
-                    .iter()
-                    .cloned()
-                    .chain(
-                        report
-                            .failed
-                            .iter()
-                            .map(|f| format!("{}: {}", f.file, f.error)),
-                    )
-                    .collect(),
-                ..db::Activity::default()
-            },
-        )?;
-    }
-    report.converted.truncate(ITUNES_KEEP);
-    report.failed.truncate(ITUNES_KEEP);
-    let raw = serde_json::to_string(&report).map_err(|e| Error::Msg(e.to_string()))?;
-    db::set_setting(&conn, SETTING_ITUNES_LAST, Some(&raw))?;
-    itunes_status_of(&conn).map(Some)
-}
-
 /// What an `art://` request asks for: a track id, or a path in the library (file browser).
 enum ArtTarget {
     None,
@@ -4849,6 +4987,8 @@ pub fn run() {
                 lookup: lookup::Session::default(),
                 scans: Mutex::new(sync_scans::ScanStore::default()),
                 scan_wake: tokio::sync::Notify::new(),
+                analysis_wake: tokio::sync::Notify::new(),
+                import_wake: tokio::sync::Notify::new(),
                 destination_io: tokio::sync::Mutex::new(()),
                 next_action_id: AtomicU32::new(0),
                 library_changed: Mutex::new(None),
@@ -4861,6 +5001,8 @@ pub fn run() {
             tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(reprint_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(scan_worker(app.handle().clone()));
+            tauri::async_runtime::spawn(analysis_worker(app.handle().clone()));
+            tauri::async_runtime::spawn(auto_import_worker(app.handle().clone()));
             launch_mark("the backend is set up");
             Ok(())
         })
@@ -4981,10 +5123,6 @@ pub fn run() {
             smart_playlist_preview,
             usb_export_preview,
             rekordbox_set_selection,
-            itunes_status,
-            itunes_set_path,
-            itunes_import,
-            itunes_pending,
             fs_list,
             fs_dir_sizes,
             fs_reveal,
@@ -5022,7 +5160,10 @@ pub fn run() {
             tags_set_cover,
             audit_fix,
             audit_place,
-            import_get_folder,
+            import_folders,
+            import_add_folder,
+            import_update_folder,
+            import_remove_folder,
             import_scan,
             import_cached,
             import_preview,
@@ -5058,14 +5199,25 @@ mod tests {
     }
 
     #[test]
-    fn analysis_settings_default_to_not_writing_files() {
-        let parsed: AnalysisSettings = serde_json::from_str("{}").expect("json");
-        assert!(!parsed.write_tags);
-        assert_eq!(parsed.key_format, KeyFormat::Musical);
-        let parsed: AnalysisSettings =
-            serde_json::from_str(r#"{"writeTags":true,"keyFormat":"camelot"}"#).expect("json");
-        assert!(parsed.write_tags);
-        assert_eq!(parsed.key_format, KeyFormat::Camelot);
+    fn analysis_settings_read_old_and_new_shapes() {
+        for (json, format, replace) in [
+            ("{}", KeyFormat::Musical, false),
+            // Saved before tags were always written: the old switch is ignored.
+            (
+                r#"{"writeTags":false,"keyFormat":"camelot"}"#,
+                KeyFormat::Camelot,
+                false,
+            ),
+            (
+                r#"{"keyFormat":"musical","replaceEdits":true}"#,
+                KeyFormat::Musical,
+                true,
+            ),
+        ] {
+            let parsed: AnalysisSettings = serde_json::from_str(json).expect("json");
+            assert_eq!(parsed.key_format, format, "{json}");
+            assert_eq!(parsed.replace_edits, replace, "{json}");
+        }
     }
     use crate::db::NewTrack;
     use crate::scan::ScanResult;
@@ -5567,6 +5719,8 @@ mod tests {
             lookup: lookup::Session::default(),
             scans: Mutex::new(sync_scans::ScanStore::default()),
             scan_wake: tokio::sync::Notify::new(),
+            analysis_wake: tokio::sync::Notify::new(),
+            import_wake: tokio::sync::Notify::new(),
             destination_io: tokio::sync::Mutex::new(()),
             next_action_id: AtomicU32::new(0),
             library_changed: Mutex::new(None),
@@ -5669,6 +5823,8 @@ mod tests {
             lookup: lookup::Session::default(),
             scans: Mutex::new(sync_scans::ScanStore::default()),
             scan_wake: tokio::sync::Notify::new(),
+            analysis_wake: tokio::sync::Notify::new(),
+            import_wake: tokio::sync::Notify::new(),
             destination_io: tokio::sync::Mutex::new(()),
             next_action_id: AtomicU32::new(0),
             library_changed: Mutex::new(None),
@@ -5718,6 +5874,8 @@ mod tests {
             lookup: lookup::Session::default(),
             scans: Mutex::new(sync_scans::ScanStore::default()),
             scan_wake: tokio::sync::Notify::new(),
+            analysis_wake: tokio::sync::Notify::new(),
+            import_wake: tokio::sync::Notify::new(),
             destination_io: tokio::sync::Mutex::new(()),
             next_action_id: AtomicU32::new(0),
             library_changed: Mutex::new(None),

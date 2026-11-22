@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-	Cloud,
 	Folder,
 	FolderOpen,
 	History,
@@ -95,6 +94,21 @@ function CredentialFields(p: {
 				}
 			/>
 		</>
+	);
+}
+
+/** A destination's settings on their own, for the Export page's Settings of every destination. */
+export function DestinationSettings({ target }: { target: SyncTarget }) {
+	const removal = useRemoveDestination();
+	return (
+		<div key={target.id} className="space-y-6">
+			<SettingsForm target={target}>
+				<RemoveRow onRemove={() => removal.ask(target)} busy={removal.busy} />
+			</SettingsForm>
+			<JellyfinSection targetId={target.id} />
+			{removal.error && <ErrorLine>{String(removal.error)}</ErrorLine>}
+			{removal.dialog}
+		</div>
 	);
 }
 
@@ -241,23 +255,12 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 	const where = target.path.join(" / ") || "Bucket root";
 	return (
 		<PlaceFrame
-			scrollAll={tab === "sync"}
+			flush={tab === "sync"}
 			header={
 				<DestinationHeader
 					section="export"
 					place={`target:${id}`}
 					brand={r2 ? "cloudflare" : "tailscale"}
-					kind={
-						r2 ? (
-							<>
-								<Cloud /> R2 bucket
-							</>
-						) : (
-							<>
-								<Network /> Tailscale folder on {target.machine}
-							</>
-						)
-					}
 					title={targetShortName(target)}
 					actions={
 						<HeaderMenu

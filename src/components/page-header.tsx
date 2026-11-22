@@ -1,5 +1,13 @@
-import { Check, Pencil, Play, Trash2, X } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { Check, ChevronRight, Pencil, Play, Trash2, X } from "lucide-react";
+import {
+	type FormEvent,
+	type ReactNode,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { HeaderMenu, type HeaderMenuEntry } from "#/components/header-menu.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -67,7 +75,7 @@ function Title({
 	}, [editing, initial]);
 	if (!editing) {
 		return (
-			<h1 className="truncate font-semibold text-xl tracking-tight" title={title}>
+			<h1 className="truncate font-semibold text-lg tracking-tight" title={title}>
 				{title}
 			</h1>
 		);
@@ -214,29 +222,46 @@ export function PageHeader({
 }: {
 	/** A cover or brand at the start; app pages have none. */
 	art?: ReactNode;
-	/** What this is, e.g. "Playlist" or a tag breadcrumb, with an icon. App pages have none. */
+	/**
+	 * Where this is, before the title: a crumb that moves between siblings, or a tag's parents.
+	 * Words that only say what kind of page it is belong nowhere: the sidebar already says it.
+	 */
 	kind?: ReactNode;
-	/** A status or switch at the top right, e.g. "Synced" or a source's on/off switch. */
+	/** A status or switch at the top right, e.g. a source's on/off switch. */
 	badge?: ReactNode;
 	/** The title, or a field while it is being renamed. */
 	title: ReactNode;
 	/** Hover text for a plain title, e.g. where it is on disk. */
 	titleHint?: string | undefined;
-	/** A line under the title, e.g. the artist. */
+	/** A line under the title, e.g. the artist (panels only). */
 	subtitle?: ReactNode;
+	/** Figures beside the title: counts, sizes, how far along. */
 	meta?: ReactNode;
 	actions?: ReactNode;
-	/** Extra content under the buttons, such as subtags. */
+	/** Extra content under the title line, such as subtags. */
 	children?: ReactNode;
 	/** Tabs along the bottom edge. */
 	tabs?: ReactNode;
 	variant?: keyof typeof VARIANTS;
 }) {
+	if (variant === "page") {
+		return (
+			<CompactHeader
+				art={art}
+				kind={kind}
+				badge={badge}
+				title={<HeaderTitle title={title} hint={titleHint} size="text-lg" />}
+				meta={meta}
+				actions={actions}
+				tabs={tabs}
+			>
+				{children}
+			</CompactHeader>
+		);
+	}
 	const v = VARIANTS[variant];
 	const hasTabs = shows(tabs);
 	const hasTop = kind !== undefined || badge !== undefined;
-	// An app page with only a title and figures reads as one line: "Export  2 destinations".
-	const inlineMeta = !(hasTop || [art, subtitle, children].some(shows));
 	return (
 		<header className={cn("shrink-0", v.band, hasTabs ? "pb-0" : v.bottom)}>
 			{/* The title lines up with the top of the art; actions sit on the title's line, right. */}
@@ -248,10 +273,10 @@ export function PageHeader({
 					<div className="flex flex-wrap items-start gap-x-3 gap-y-2">
 						<TitleLine
 							title={<HeaderTitle title={title} hint={titleHint} size={v.title} />}
-							meta={inlineMeta ? meta : null}
+							meta={null}
 						/>
 						{actions && (
-							<ButtonGroup size={variant === "page" ? "default" : "sm"} className="mt-0.5">
+							<ButtonGroup size="sm" className="mt-0.5">
 								{actions}
 							</ButtonGroup>
 						)}
@@ -259,18 +284,111 @@ export function PageHeader({
 					{subtitle !== undefined && (
 						<div className="truncate text-muted-foreground text-sm">{subtitle}</div>
 					)}
-					{!inlineMeta && <MetaLine meta={meta} size={v.small} />}
+					<MetaLine meta={meta} size={v.small} />
 					{children && <div className="pt-2">{children}</div>}
 				</div>
 			</div>
-			<div className={cn("-mb-px empty:hidden", inlineMeta && "mt-3")}>{tabs}</div>
+			<div className="-mb-px empty:hidden">{tabs}</div>
+		</header>
+	);
+}
+
+/**
+ * A full page's header, the same on every page (the Library's): one line with a small mark, the
+ * title and its figures, and the buttons at the right; tabs under it. Scrolling the page takes the
+ * title line away and keeps the tabs at the top, as the Library keeps its tabs and search.
+ */
+function CompactHeader({
+	art,
+	kind,
+	badge,
+	title,
+	meta,
+	actions,
+	tabs,
+	children,
+}: {
+	art: ReactNode;
+	kind: ReactNode;
+	badge: ReactNode;
+	title: ReactNode;
+	meta: ReactNode;
+	actions: ReactNode;
+	tabs: ReactNode;
+	children: ReactNode;
+}) {
+	const ref = useRef<HTMLElement>(null);
+	const tabsRef = useRef<HTMLDivElement>(null);
+	const [top, setTop] = useState(0);
+	const hasTabs = shows(tabs);
+	useLayoutEffect(() => {
+		const header = ref.current;
+		const page = header?.parentElement;
+		if (!(header && page)) {
+			return;
+		}
+		// Sticks with only its tabs showing: everything above them scrolls out of sight. What else
+		// the page pins goes under the tabs (`--pinned-header`), within what is left of the page's
+		// height (`--page-height`).
+		const measure = () => {
+			const pinned = hasTabs ? (tabsRef.current?.offsetHeight ?? 0) : 0;
+			setTop(pinned - header.offsetHeight);
+			page.style.setProperty("--pinned-header", `${pinned}px`);
+			page.style.setProperty("--page-height", `${page.clientHeight}px`);
+		};
+		measure();
+		const watch = new ResizeObserver(measure);
+		watch.observe(header);
+		watch.observe(page);
+		return () => watch.disconnect();
+	}, [hasTabs]);
+	return (
+		<header
+			ref={ref}
+			style={hasTabs ? { top } : undefined}
+			className={cn(
+				"z-10 shrink-0 border-hairline border-b bg-background px-6 pt-5",
+				hasTabs ? "sticky pb-0" : "pb-4",
+			)}
+		>
+			<div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2">
+				<div className="flex min-w-0 flex-1 basis-60 items-center gap-3">
+					{art}
+					{shows(kind) && (
+						<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground text-sm [&_svg]:size-3.5">
+							{kind}
+							<ChevronRight aria-hidden="true" />
+						</span>
+					)}
+					<div className="flex min-w-0 items-baseline gap-3 [&>h1]:shrink-0 [&>h1]:truncate">
+						{title}
+						{shows(meta) && (
+							<div className="flex min-w-0 items-center gap-3 truncate text-muted-foreground text-sm tabular-nums">
+								{meta}
+							</div>
+						)}
+					</div>
+				</div>
+				{(shows(badge) || shows(actions)) && (
+					<div className="flex shrink-0 items-center gap-2">
+						{badge}
+						{shows(actions) && <ButtonGroup>{actions}</ButtonGroup>}
+					</div>
+				)}
+			</div>
+			{shows(children) && <div className="pt-3">{children}</div>}
+			{hasTabs && (
+				<div ref={tabsRef} className="-mb-px mt-3">
+					{tabs}
+				</div>
+			)}
 		</header>
 	);
 }
 
 interface CollectionProps {
-	/** What this page is, e.g. "Playlist" or a tag breadcrumb. */
-	kind: ReactNode;
+	/** Where this is, e.g. a tag's parents; none for a playlist. */
+	kind?: ReactNode;
 	title: string;
 	/** Text the rename field starts with; defaults to the title. */
 	renameFrom?: string;

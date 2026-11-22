@@ -4,6 +4,7 @@ import { parseSettingsSection } from "#/lib/settings-sections.ts";
 describe("parseSettingsSection", () => {
 	it.each([
 		["library", "library"],
+		["analysis", "analysis"],
 		["lookup", "lookup"],
 		["appearance", "appearance"],
 		["shortcuts", "shortcuts"],

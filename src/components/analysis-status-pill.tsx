@@ -1,17 +1,18 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ProgressPill } from "#/components/progress-pill.tsx";
-import { openAnalysisDrawer } from "#/lib/analysis-drawer.ts";
 import { cancelAnalysis } from "#/lib/api.ts";
 import { progressLabel, useAnalysisProgress } from "#/lib/use-analysis-progress.ts";
 
 /** Show new results in the lists every this many files. */
 const REFRESH_EVERY = 10;
 
-/** BPM and key analysis progress for the status bar. Click to open the analysis drawer. */
+/** BPM and key analysis progress for the status bar. Click for the analysis in Settings. */
 export function AnalysisStatusPill() {
 	const queryClient = useQueryClient();
+	const navigate = useNavigate();
 	const { running, progress } = useAnalysisProgress();
 	const [stopping, setStopping] = useState(false);
 
@@ -37,7 +38,7 @@ export function AnalysisStatusPill() {
 				type="button"
 				title="Show analysis details"
 				className="rounded-md px-1.5 py-0.5 hover:bg-primary/10"
-				onClick={openAnalysisDrawer}
+				onClick={() => void navigate({ to: "/settings", search: { section: "analysis" } })}
 			>
 				<ProgressPill
 					label={progressLabel(progress, stopping)}

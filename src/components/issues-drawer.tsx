@@ -46,15 +46,17 @@ export function IssuesIndicator({ onClick }: { onClick: () => void }) {
 		return null;
 	}
 	const files = new Set(issues.map((i) => i.path)).size;
+	const full = `${plural(issues.length, "file issue", "file issues")} in ${plural(files, "file", "files")}`;
 	return (
 		<button
 			type="button"
 			onClick={onClick}
-			title="Review and fix file issues"
+			title={`${full}. Review and fix them.`}
+			aria-label={full}
 			className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-warning hover:bg-warning/15"
 		>
 			<TriangleAlert className="size-3.5" />
-			{plural(issues.length, "file issue", "file issues")} in {plural(files, "file", "files")}
+			{plural(issues.length, "issue", "issues")}
 		</button>
 	);
 }

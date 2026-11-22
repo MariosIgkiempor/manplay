@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Copy, FileCode, FolderOpen, History, Settings2, Trash2 } from "lucide-react";
+import { Copy, FolderOpen, History, Settings2, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { DestinationHeader, SettingLabel } from "#/components/destination-header.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
@@ -55,6 +55,32 @@ function FileFigures({ status }: { status: RekordboxStatus | undefined }) {
 			<span>
 				{status.exportedAt ? `Exported ${timeAgo(status.exportedAt)}` : "Not exported yet"}
 			</span>
+		</>
+	);
+}
+
+/** The rekordbox file's settings on their own, for the Export page's Settings of every destination. */
+export function RekordboxSourceSettings() {
+	const { status, choose, stop } = useRekordbox();
+	const path = status.data?.path ?? null;
+	return (
+		<>
+			<RekordboxSettings
+				path={path}
+				chooseButton={
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={() => choose.mutate()}
+						disabled={choose.isPending}
+					>
+						<FolderOpen /> {path === null ? "Choose location…" : "Change…"}
+					</Button>
+				}
+				onStop={() => stop.mutate()}
+				stopping={stop.isPending}
+			/>
+			<MutationErrors mutations={[choose, stop]} />
 		</>
 	);
 }
@@ -155,11 +181,6 @@ export function RekordboxPage() {
 					section="export"
 					place="rekordbox"
 					brand="rekordbox"
-					kind={
-						<>
-							<FileCode /> rekordbox XML
-						</>
-					}
 					title={path === null ? "rekordbox" : fileName(path)}
 					titleHint={path ?? undefined}
 					meta={<FileFigures status={data} />}

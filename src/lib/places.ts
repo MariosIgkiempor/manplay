@@ -1,7 +1,9 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { Brand } from "#/components/brand-icon.tsx";
 import { isR2, targetShortName } from "#/lib/api.ts";
+import { folderBrand, folderName } from "#/lib/import-folders.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
+import { useImportFolders } from "#/lib/use-import.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
 
@@ -14,8 +16,7 @@ export type PlaceKey =
 	| `target:${number}`
 	| "rekordbox"
 	| `usb:${string}`
-	| "downloads"
-	| "itunes"
+	| `import:${number}`
 	| "add";
 
 export type PlaceSection = "import" | "export";
@@ -63,21 +64,16 @@ export function useExportPlaces(): PlaceOption[] {
 	];
 }
 
-/** Both import sources. */
+/** Every import folder, in sidebar order. */
 export function useImportPlaces(): PlaceOption[] {
 	const navigate = useNavigate();
-	return [
-		{
-			key: "downloads",
-			label: "Downloads",
-			brand: "downloads",
-			go: () => void navigate({ to: "/import/downloads" }),
-		},
-		{
-			key: "itunes",
-			label: "iTunes",
-			brand: "itunes",
-			go: () => void navigate({ to: "/import/itunes" }),
-		},
-	];
+	const folders = useImportFolders().data ?? [];
+	return folders.map(
+		(f): PlaceOption => ({
+			key: `import:${f.id}`,
+			label: folderName(f.path),
+			brand: folderBrand(f.path),
+			go: () => void navigate({ to: "/import/$folderId", params: { folderId: f.id } }),
+		}),
+	);
 }

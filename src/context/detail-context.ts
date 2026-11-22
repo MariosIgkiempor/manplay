@@ -15,7 +15,9 @@ export type DetailView =
 	 * library's conventions, and songs stored twice. */
 	| { kind: "missing" }
 	| { kind: "issues" }
-	| { kind: "duplicates" };
+	| { kind: "duplicates" }
+	/** Exporting playlists and tags to the USB drive at `mount`. */
+	| { kind: "usbExport"; mount: string };
 
 /** The side panel's navigation: the view on show and the history behind it. */
 export interface DetailApi {

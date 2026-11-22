@@ -106,6 +106,61 @@ pub fn present(mount: &Path) -> bool {
     mount.join(DIR).join(DATABASE).is_file()
 }
 
+/// The drive's Gemini library as paths from the drive root: its songs (a song's further copies in
+/// the playlist folders included), and each playlist with its songs in order. The database is
+/// read from a temporary copy, so nothing is written to the drive. `None` when it has none.
+pub fn contents(mount: &Path) -> Option<Result<crate::usb_browse::Contents, String>> {
+    let gemini = mount.join(DIR);
+    let bytes = match fs::read(gemini.join(DATABASE)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
+        Err(e) => return Some(Err(e.to_string())),
+    };
+    let dir = std::env::temp_dir().join(format!(
+        "manplay-gemini-browse-{}-{}",
+        std::process::id(),
+        uuid::Uuid::now_v7()
+    ));
+    let read = || -> Result<crate::usb_browse::Contents, String> {
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let copy = dir.join(DATABASE);
+        fs::write(&copy, &bytes).map_err(|e| e.to_string())?;
+        let conn = Connection::open(&copy).map_err(|e| e.to_string())?;
+        let mut rows = conn
+            .prepare("SELECT absolute_path FROM outer_table ORDER BY id")
+            .map_err(|e| e.to_string())?;
+        let songs = rows
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let mut names: Vec<String> = file_names(&gemini.join(PLAYLISTS))
+            .into_iter()
+            .filter(|n| is_playlist_file(n) && !n.starts_with("._"))
+            .collect();
+        names.sort();
+        let mut playlists = Vec::new();
+        for name in names {
+            let text = fs::read_to_string(gemini.join(PLAYLISTS).join(&name))
+                .map_err(|e| format!("{name}: {e}"))?;
+            let stem = Path::new(&name)
+                .file_stem()
+                .map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
+            let paths = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(str::to_owned)
+                .collect();
+            playlists.push((stem, paths));
+        }
+        Ok(crate::usb_browse::Contents { songs, playlists })
+    };
+    let out = read();
+    let _ = fs::remove_dir_all(&dir);
+    Some(out)
+}
+
 /// How many songs and playlists the drive's Gemini library holds; `None` when it has none. The
 /// database is read from a temporary copy, so nothing is written to the drive.
 pub fn held(mount: &Path) -> Option<Result<(usize, usize), String>> {

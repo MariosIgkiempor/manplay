@@ -16,9 +16,9 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
+use crate::convert::sanitize;
 use crate::error::Error;
 use crate::fsops;
-use crate::itunes::sanitize;
 use crate::scan::{fingerprint, fingerprint_reader, is_audio};
 
 /// File size → fingerprints of every present library track of that size.
@@ -40,6 +40,26 @@ pub fn no_audio() -> &'static AudioIndex {
 pub struct SourceRef {
     pub path: String,
     pub entry: Option<String>,
+}
+
+impl SourceRef {
+    /// How songs converted on import are remembered: the path, and the zip entry after a `#`.
+    pub fn key(&self) -> String {
+        match &self.entry {
+            None => self.path.clone(),
+            Some(entry) => format!("{}#{entry}", self.path),
+        }
+    }
+}
+
+/// Songs converted on import, by [`SourceRef::key`] and size.
+pub type Converted = HashSet<(String, u64)>;
+
+/// No songs converted, for scans that do not need to know.
+#[cfg(test)]
+pub fn none_converted() -> &'static Converted {
+    static NONE: std::sync::OnceLock<Converted> = std::sync::OnceLock::new();
+    NONE.get_or_init(Converted::new)
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -883,6 +903,9 @@ pub struct Options<'a> {
     pub report: &'a dyn Fn(&Progress),
     /// Library audio to compare new files with, so retagged or renamed copies are recognised.
     pub same_audio: &'a AudioIndex,
+    /// Songs converted on import before: their audio is not the library's any more, so they are
+    /// known by where they came from.
+    pub converted: &'a Converted,
 }
 
 /// Whether each music file is new, already in the library, or a repeat within this scan.
@@ -920,6 +943,11 @@ fn statuses(
             });
         }
         checked += 1;
+        if opts.converted.contains(&(e.src.key(), e.size)) {
+            already += 1;
+            status.insert(i, Status::InLibrary);
+            continue;
+        }
         let contested = known.contains_key(&e.size) || sizes.get(&e.size).is_some_and(|n| *n > 1);
         let mut record = old.file_for(e).cloned().unwrap_or_else(|| CachedFile {
             path: e.src.path.clone(),
@@ -1121,12 +1149,34 @@ pub struct Failure {
     pub error: String,
 }
 
+/// A song converted on its way in, for remembering where it came from.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertedSong {
+    pub source: String,
+    pub size: u64,
+    pub dest: String,
+}
+
 #[derive(Serialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportReport {
     pub imported: usize,
     pub images: usize,
+    /// Of the songs imported, those converted to MP3.
+    pub converted: Vec<ConvertedSong>,
+    /// Songs given a cover fetched for them.
+    pub covers: usize,
     pub failed: Vec<Failure>,
+}
+
+/// How songs come in, beyond being copied.
+#[derive(Default)]
+pub struct RunOptions<'a> {
+    /// ffmpeg, to convert AAC (`.m4a`) songs to MP3; `None` copies them as they are.
+    pub convert_with: Option<&'a Path>,
+    /// Covers to put into songs that come without one, by [`SourceRef::key`].
+    pub covers: HashMap<String, Vec<u8>>,
 }
 
 /// Last path segment of a file name or zip entry name, split into stem and extension.
@@ -1177,16 +1227,28 @@ fn confine(folder: &Path, src: &SourceRef) -> Result<SourceRef, Error> {
     })
 }
 
+/// Where a song went, and whether it was converted on the way.
+struct Imported {
+    dest: PathBuf,
+    converted: Option<ConvertedSong>,
+}
+
 fn import_track(
     opener: &mut Opener,
     folder: &Path,
     dir: &Path,
     src: &SourceRef,
-) -> Result<(), Error> {
+    convert_with: Option<&Path>,
+) -> Result<Imported, Error> {
+    // Remembered as the scan names it, not as resolved, so the next scan recognises it.
+    let key = src.key();
     let src = confine(folder, src)?;
     let (stem, ext) = split_name(&src);
     if !is_audio(Path::new(&format!("x.{ext}"))) {
         return Err(Error::Msg("not a supported audio file".to_owned()));
+    }
+    if let Some(ffmpeg) = convert_with.filter(|_| ext == "m4a") {
+        return convert_track(opener, &src, key, dir, &stem, ffmpeg);
     }
     let (mut file, path) = create_unique(dir, &stem, &ext)?;
     if let Err(e) = opener.copy_to(&src, &mut file) {
@@ -1194,7 +1256,47 @@ fn import_track(
         let _ = fs::remove_file(&path);
         return Err(e.into());
     }
-    Ok(())
+    Ok(Imported {
+        dest: path,
+        converted: None,
+    })
+}
+
+/// Converts an AAC song to MP3 in `dir`. A song inside a zip is taken out first, since ffmpeg
+/// reads files.
+fn convert_track(
+    opener: &mut Opener,
+    src: &SourceRef,
+    key: String,
+    dir: &Path,
+    stem: &str,
+    ffmpeg: &Path,
+) -> Result<Imported, Error> {
+    let taken_out = dir.join(format!(".manplay-in-{}.m4a", std::process::id()));
+    let input = if src.entry.is_some() {
+        let mut out = File::create(&taken_out)?;
+        opener.copy_to(src, &mut out)?;
+        taken_out.clone()
+    } else {
+        PathBuf::from(&src.path)
+    };
+    let size = fs::metadata(&input).map(|m| m.len());
+    let (file, dest) = create_unique(dir, stem, "mp3")?;
+    drop(file);
+    let converted = crate::convert::to_mp3(ffmpeg, &input, &dest);
+    let _ = fs::remove_file(&taken_out);
+    if let Err(e) = converted {
+        let _ = fs::remove_file(&dest);
+        return Err(Error::Msg(e));
+    }
+    Ok(Imported {
+        converted: Some(ConvertedSong {
+            source: key,
+            size: size?,
+            dest: dest.to_string_lossy().into_owned(),
+        }),
+        dest,
+    })
 }
 
 /// Copies an image next to the tracks unless that name is already there.
@@ -1223,8 +1325,14 @@ fn import_image(
     Ok(true)
 }
 
-/// Copies the chosen files into `library/Artist/Album/`, extracting from zips as needed.
-pub fn run(folder: &Path, library: &Path, groups: &[ImportRequest]) -> ImportReport {
+/// Copies the chosen files into `library/Artist/Album/`, extracting from zips as needed,
+/// converting and giving covers as `opts` says.
+pub fn run(
+    folder: &Path,
+    library: &Path,
+    groups: &[ImportRequest],
+    opts: &RunOptions<'_>,
+) -> ImportReport {
     let mut report = ImportReport::default();
     let mut opener = Opener::default();
     for g in groups {
@@ -1240,8 +1348,17 @@ pub fn run(folder: &Path, library: &Path, groups: &[ImportRequest]) -> ImportRep
         }
         let mut copied = 0;
         for t in &g.tracks {
-            match import_track(&mut opener, folder, &dir, t) {
-                Ok(()) => copied += 1,
+            match import_track(&mut opener, folder, &dir, t, opts.convert_with) {
+                Ok(done) => {
+                    copied += 1;
+                    // A song that cannot take its cover is still imported, just without it.
+                    if let Some(cover) = opts.covers.get(&t.key())
+                        && crate::tags::embed_cover(&done.dest, cover).is_ok()
+                    {
+                        report.covers += 1;
+                    }
+                    report.converted.extend(done.converted);
+                }
                 Err(e) => report.failed.push(Failure {
                     file: t.entry.clone().unwrap_or_else(|| t.path.clone()),
                     error: e.to_string(),
@@ -1329,6 +1446,7 @@ mod tests {
             cached_only: false,
             report: &|_| {},
             same_audio: no_audio(),
+            converted: none_converted(),
         }
     }
 
@@ -1463,7 +1581,7 @@ mod tests {
             tracks: g.tracks.iter().map(|t| t.src.clone()).collect(),
             images: g.images.clone(),
         };
-        let report = run(&root, &lib, &[req]);
+        let report = run(&root, &lib, &[req], &RunOptions::default());
         assert!(report.failed.is_empty(), "{:?}", report.failed);
         assert_eq!((report.imported, report.images), (2, 1));
         assert_eq!(
@@ -1471,6 +1589,67 @@ mod tests {
             b"zip-one"
         );
         assert!(lib.join("Artist/Album/cover.jpg").is_file());
+    }
+
+    #[test]
+    fn songs_converted_before_count_as_imported() {
+        let root = temp("converted");
+        put(&root, "Artist/Album/01 one.m4a", b"aac-bytes");
+        let src = root.join("Artist/Album/01 one.m4a");
+        for (name, size, expected_new) in [("same file", 9, false), ("changed since", 10, true)] {
+            let converted: Converted = [(src.to_string_lossy().into_owned(), size)].into();
+            let opts = Options {
+                converted: &converted,
+                ..quiet()
+            };
+            let found = super::scan(&root, &ContentIndex::new(), &Cache::default(), &opts).0;
+            assert_eq!(!found.groups.is_empty(), expected_new, "{name}");
+        }
+    }
+
+    #[test]
+    fn aac_songs_are_converted_to_mp3_on_the_way_in() {
+        let Some(ffmpeg) = crate::convert::find_ffmpeg() else {
+            return;
+        };
+        let root = temp("aac");
+        let src = root.join("Artist/Album/01 one.m4a");
+        fs::create_dir_all(src.parent().expect("parent")).expect("dirs");
+        let made = crate::process::command(&ffmpeg)
+            .args([
+                "-nostdin", "-v", "error", "-f", "lavfi", "-i", "sine=d=1", "-c:a", "aac",
+            ])
+            .arg(&src)
+            .status()
+            .expect("ffmpeg");
+        assert!(made.success());
+        let lib = temp("aac-lib");
+        let req = ImportRequest {
+            artist: "Artist".into(),
+            album: "Album".into(),
+            tracks: vec![SourceRef {
+                path: src.to_string_lossy().into_owned(),
+                entry: None,
+            }],
+            images: Vec::new(),
+        };
+        let opts = RunOptions {
+            convert_with: Some(&ffmpeg),
+            ..RunOptions::default()
+        };
+        let report = run(&root, &lib, &[req], &opts);
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        let dest = lib.join("Artist/Album/01 one.mp3");
+        assert!(dest.is_file());
+        assert_eq!(
+            report.converted,
+            [ConvertedSong {
+                source: src.to_string_lossy().into_owned(),
+                size: fs::metadata(&src).expect("source").len(),
+                dest: dest.to_string_lossy().into_owned(),
+            }]
+        );
+        assert!(src.is_file(), "the source is left alone");
     }
 
     #[test]
@@ -1498,7 +1677,7 @@ mod tests {
             tracks: vec![t("A/01.mp3"), t("B/01.mp3")],
             images: vec![],
         };
-        let report = run(&root, &lib, &[req]);
+        let report = run(&root, &lib, &[req], &RunOptions::default());
         assert_eq!(report.imported, 2);
         assert!(lib.join("X_Y/Unknown/01.mp3").is_file());
         assert!(lib.join("X_Y/Unknown/01 (2).mp3").is_file());
@@ -1523,7 +1702,7 @@ mod tests {
             }],
             images: vec![],
         };
-        let report = run(&root, &lib, &[req]);
+        let report = run(&root, &lib, &[req], &RunOptions::default());
         assert_eq!(report.imported, 0);
         assert_eq!(report.failed.len(), 1);
         assert!(!lib.join("A").exists());
@@ -1595,6 +1774,7 @@ mod tests {
             cached_only: true,
             report: &|_| {},
             same_audio: no_audio(),
+            converted: none_converted(),
         };
         let (quick, _) = super::scan(&root, &known, &cache, &opts);
         assert_eq!(names(&quick), vec![(GroupKind::Album, "Old".to_owned(), 1)]);
@@ -1613,6 +1793,7 @@ mod tests {
             cached_only: false,
             report: &report,
             same_audio: no_audio(),
+            converted: none_converted(),
         };
         super::scan(&root, &ContentIndex::new(), &Cache::default(), &opts);
         let seen = seen.into_inner();

@@ -11,7 +11,6 @@ import {
 	Trash2,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { Drawer } from "#/components/drawer.tsx";
 import {
 	type ChooserTab,
 	ExportChooser,
@@ -19,11 +18,13 @@ import {
 	type HeldPlaylist,
 	HeldPlaylists,
 } from "#/components/export-chooser.tsx";
-import { ErrorLine } from "#/components/page.tsx";
+import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ButtonGroup } from "#/components/ui/button-group.tsx";
-import { UsbOutputsPicker } from "#/components/usb-outputs.tsx";
+import { UsbOutputsSettings } from "#/components/usb-outputs.tsx";
 import { type PlaylistSource, Review, ReviewCounts } from "#/components/usb-review.tsx";
+import { useDetail } from "#/context/detail-context.ts";
+import { PanelBarTitle } from "#/context/panel-bar.tsx";
 import {
 	type ExportSelection,
 	exportToUsb,
@@ -50,9 +51,9 @@ import { baseName } from "#/lib/fs-path.ts";
 import { WELL } from "#/lib/page-layout.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { trackHasTag } from "#/lib/tag-tree.ts";
-import { typeScale } from "#/lib/type-scale.ts";
 import { exportSteps, outputProblems, outputResults } from "#/lib/usb-outputs.ts";
 import { useSmartPlaylists } from "#/lib/use-smart.ts";
+import { useUsbDrives, useUsbLibrary } from "#/lib/use-usb.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** Room the export keeps free for the databases and analysis files (as the backend does). */
@@ -398,6 +399,7 @@ function startingSelection(
 		smart: [],
 		usbMode: "add",
 		usbOutputs: EMPTY_SELECTION.usbOutputs,
+		usbFolderFileNames: EMPTY_SELECTION.usbFolderFileNames,
 	};
 }
 
@@ -681,7 +683,7 @@ function ReviewSplitButton({ x }: { x: ExportState }) {
 function Footer({ x, onClose }: { x: ExportState; onClose: () => void }) {
 	const line = status(x);
 	return (
-		<ExportFooter text={line.text} warn={line.warn}>
+		<ExportFooter text={line.text} warn={line.warn} inPanel>
 			{x.run.isSuccess ? (
 				<Button onClick={onClose}>Done</Button>
 			) : (
@@ -712,55 +714,65 @@ function Footer({ x, onClose }: { x: ExportState; onClose: () => void }) {
 	);
 }
 
-/** Picks library playlists and tags and copies them onto the drive as playlists. */
-export function UsbExportButton({
-	drive,
-	library,
-}: {
-	drive: UsbDrive;
-	library: UsbLibrary | undefined;
-}) {
-	const [open, setOpen] = useState(false);
-	const x = useUsbExport(drive, library, open);
+/** Opens the export to a drive in the side panel. */
+export function UsbExportButton({ drive }: { drive: UsbDrive }) {
+	const detail = useDetail();
+	const open = detail.view?.kind === "usbExport" && detail.view.mount === drive.mount;
+	return (
+		<Button
+			size="sm"
+			variant={open ? "secondary" : "default"}
+			onClick={() =>
+				open ? detail.close() : detail.open({ kind: "usbExport", mount: drive.mount })
+			}
+			disabled={!drive.writable}
+		>
+			<HardDriveUpload /> Export to drive…
+		</Button>
+	);
+}
+
+/**
+ * The export to a drive, in the side panel: playlists and tags to choose, the formats, a review of
+ * every change, then the run. It starts afresh each time it opens.
+ */
+export function UsbExportPanel({ mount }: { mount: string }) {
+	const drive = useUsbDrives().data?.find((d) => d.mount === mount);
+	const library = useUsbLibrary(drive?.hasLibrary ? mount : null);
+	if (!drive) {
+		return <EmptyState title="The drive is no longer connected" />;
+	}
+	return <UsbExportBody drive={drive} library={library.data} />;
+}
+
+function UsbExportBody({ drive, library }: { drive: UsbDrive; library: UsbLibrary | undefined }) {
+	const detail = useDetail();
+	const x = useUsbExport(drive, library, true);
 	const close = () => {
 		if (!x.run.isPending) {
-			setOpen(false);
-			x.run.reset();
-			x.review.reset();
-			x.setDraft(null);
-			x.setTab("playlists");
+			detail.close();
 		}
 	};
 	return (
-		<>
-			<Button size="sm" onClick={() => setOpen(true)} disabled={!drive.writable}>
-				<HardDriveUpload /> Export to drive…
-			</Button>
-			<Drawer
-				open={open}
-				onClose={close}
-				title={`Export to ${drive.name}`}
-				width={x.review.isSuccess ? "w-[40rem]" : "w-[32rem]"}
-			>
-				<div className="flex min-h-full flex-col">
-					<div className="flex-1 space-y-5 pb-6">
-						<div className="space-y-3">
-							<h2 className={cn("truncate", typeScale.panelTitle)}>{drive.name}</h2>
-							<SpaceMeter drive={drive} adding={x.run.isSuccess ? 0 : x.estimate.bytes} />
-						</div>
-						{!x.review.isSuccess && !x.run.isPending && !x.run.isSuccess && (
-							<UsbOutputsPicker
-								outputs={x.selection.usbOutputs}
-								onChange={(usbOutputs) => x.setDraft({ ...x.selection, usbOutputs })}
-							/>
-						)}
-						<Body x={x} onLeave={close} />
-						{x.review.isError && <ErrorLine>{String(x.review.error)}</ErrorLine>}
-						{x.run.isError && <ErrorLine>{String(x.run.error)}</ErrorLine>}
-					</div>
-					<Footer x={x} onClose={close} />
-				</div>
-			</Drawer>
-		</>
+		<div className="flex min-h-full flex-col">
+			<PanelBarTitle>
+				<span className="truncate font-medium text-sm">Export to {drive.name}</span>
+			</PanelBarTitle>
+			<div className="flex-1 space-y-5 pb-6">
+				<SpaceMeter drive={drive} adding={x.run.isSuccess ? 0 : x.estimate.bytes} />
+				{!x.review.isSuccess && !x.run.isPending && !x.run.isSuccess && (
+					<UsbOutputsSettings
+						outputs={x.selection.usbOutputs}
+						onChange={(usbOutputs) => x.setDraft({ ...x.selection, usbOutputs })}
+						fileNames={x.selection.usbFolderFileNames}
+						onFileNames={(usbFolderFileNames) => x.setDraft({ ...x.selection, usbFolderFileNames })}
+					/>
+				)}
+				<Body x={x} onLeave={close} />
+				{x.review.isError && <ErrorLine>{String(x.review.error)}</ErrorLine>}
+				{x.run.isError && <ErrorLine>{String(x.run.error)}</ErrorLine>}
+			</div>
+			<Footer x={x} onClose={close} />
+		</div>
 	);
 }

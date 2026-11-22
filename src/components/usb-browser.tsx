@@ -1,3 +1,4 @@
+import { Menu } from "@base-ui/react/menu";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
 	Folder,
@@ -8,17 +9,25 @@ import {
 	ListX,
 	Music,
 	PencilLine,
+	Plus,
 	Trash2,
 	X,
 } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
+import {
+	type CSSProperties,
+	type ReactNode,
+	type RefObject,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { type MenuEntry, RowMenu } from "#/components/menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { Cover } from "#/components/page-header.tsx";
 import { PanelHeader } from "#/components/panel-header.tsx";
-import { SearchField } from "#/components/search-field.tsx";
 import { TrackList } from "#/components/track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
@@ -40,14 +49,34 @@ const plural = (n: number, one: string, many: string) =>
 	`${n.toLocaleString()} ${n === 1 ? one : many}`;
 const nonBlank = (v: string) => (v.trim() === "" ? null : v.trim());
 
+/** The height of an element, kept up to date as it wraps or changes; 0 while it is not there. */
+function useHeight(ref: RefObject<HTMLElement | null>): number {
+	const [height, setHeight] = useState(0);
+	useLayoutEffect(() => {
+		const el = ref.current;
+		if (!el) {
+			setHeight(0);
+			return;
+		}
+		const measure = () => setHeight(el.offsetHeight);
+		measure();
+		const watch = new ResizeObserver(measure);
+		watch.observe(el);
+		return () => watch.disconnect();
+	});
+	return height;
+}
+
 /** Sends one edit to the drive and shows the library it returns straight away. */
 function useUsbEdit(mount: string) {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: (edit: UsbEdit) => usbEditPlaylists(mount, edit),
-		onSuccess: (out) => {
-			queryClient.setQueryData(["usb-library", mount], out.library);
-			void queryClient.invalidateQueries({ queryKey: ["usb-drives"] });
+		onSuccess: async () => {
+			// Every library on the drive follows the edit, so all of them are read again.
+			for (const key of ["usb-library", "usb-formats", "usb-drives"]) {
+				await queryClient.invalidateQueries({ queryKey: [key] });
+			}
 		},
 	});
 }
@@ -61,15 +90,23 @@ export function UsbBrowser({
 	mount,
 	library,
 	editable,
+	query,
+	filter,
 }: {
 	mount: string;
 	library: UsbLibrary;
 	editable: boolean;
+	/** Filters the songs shown by title, artist or album; typed in the page's tab row. */
+	query: string;
+	/** Which of the drive's libraries is shown, as a row above the columns. */
+	filter?: ReactNode;
 }) {
 	const [view, setView] = useState<View>({ kind: "all" });
 	const [renaming, setRenaming] = useState<number | null>(null);
 	const [deleting, setDeleting] = useState<UsbPlaylist | null>(null);
 	const edit = useUsbEdit(mount);
+	const filterRef = useRef<HTMLDivElement>(null);
+	const filterHeight = useHeight(filterRef);
 	const byId = useMemo(() => new Map(library.tracks.map((t) => [t.id, t])), [library.tracks]);
 	const playlist =
 		view.kind === "playlist" ? library.playlists.find((p) => p.id === view.id) : undefined;
@@ -101,32 +138,33 @@ export function UsbBrowser({
 	};
 
 	return (
-		<div className="flex h-full min-h-0 flex-col gap-3">
-			{edit.isError && <ErrorLine>{String(edit.error)}</ErrorLine>}
-			{/* Each column scrolls on its own, so the playlists stay in view beside a long list. */}
-			<div className="grid min-h-0 flex-1 grid-cols-[15rem_minmax(0,1fr)] gap-4">
-				<div className="flex min-h-0 flex-col gap-3">
-					{editable && (
-						<div className="grid shrink-0 grid-cols-2 gap-2">
-							<Button
-								size="sm"
-								variant="outline"
-								disabled={edit.isPending}
-								onClick={() => create(0, false)}
-							>
-								<ListPlus /> Playlist
-							</Button>
-							<Button
-								size="sm"
-								variant="outline"
-								disabled={edit.isPending}
-								onClick={() => create(0, true)}
-							>
-								<FolderPlus /> Folder
-							</Button>
-						</div>
-					)}
-					<div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1 pb-6">
+		<div
+			className="flex flex-col"
+			style={{ "--filter-height": `${filterHeight}px` } as CSSProperties}
+		>
+			{edit.isError && (
+				<div className="shrink-0 px-6 pt-3">
+					<ErrorLine>{String(edit.error)}</ErrorLine>
+				</div>
+			)}
+			{filter && (
+				// Pinned under the tabs too; the playlists pin under it (`--filter-height`).
+				<div
+					ref={filterRef}
+					className="sticky top-[var(--pinned-header,0px)] z-10 border-hairline border-b bg-background px-6 py-2.5"
+				>
+					{filter}
+				</div>
+			)}
+			{/* The songs scroll with the page; the playlists stay pinned beside them, under the tabs,
+			    and scroll on their own when there are many. */}
+			<div className="flex items-start">
+				<div className="sticky top-[calc(var(--pinned-header,0px)+var(--filter-height,0px))] flex h-[calc(var(--page-height,100vh)-var(--pinned-header,0px)-var(--filter-height,0px))] w-60 shrink-0 flex-col border-hairline border-r">
+					<div className="flex shrink-0 items-center justify-between pt-3 pr-3 pb-1 pl-5">
+						<span className="font-medium text-muted-foreground/70 text-xs">Playlists</span>
+						{editable && <NewMenu disabled={edit.isPending} onCreate={(f) => create(0, f)} />}
+					</div>
+					<div className="min-h-0 flex-1 overflow-y-auto px-2 pb-6">
 						<PlaylistNav
 							library={library}
 							view={view}
@@ -142,12 +180,13 @@ export function UsbBrowser({
 						/>
 					</div>
 				</div>
-				<div className="-mx-1 min-h-0 overflow-y-auto px-1 pb-6">
+				<div className="min-w-0 flex-1 px-6 pt-5 pb-6">
 					<SongsView
 						mount={mount}
 						songs={tracks}
 						title={playlist?.name ?? "All tracks"}
 						isPlaylist={playlist !== undefined}
+						query={query}
 						onRemove={
 							playlist && editable
 								? (positions) =>
@@ -174,6 +213,42 @@ export function UsbBrowser({
 				/>
 			)}
 		</div>
+	);
+}
+
+/** New playlist or folder at the top level, from the + by the column's heading. */
+function NewMenu({
+	disabled,
+	onCreate,
+}: {
+	disabled: boolean;
+	onCreate: (folder: boolean) => void;
+}) {
+	const item =
+		"flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-muted [&_svg]:size-4 [&_svg]:text-muted-foreground";
+	return (
+		<Menu.Root>
+			<Menu.Trigger
+				disabled={disabled}
+				aria-label="New playlist or folder"
+				title="New playlist or folder"
+				className="grid size-5 place-items-center rounded text-muted-foreground outline-none transition-colors hover:bg-foreground/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40 data-[popup-open]:bg-foreground/[0.06] [&_svg]:size-3.5"
+			>
+				<Plus />
+			</Menu.Trigger>
+			<Menu.Portal>
+				<Menu.Positioner sideOffset={4} align="end" className="z-50">
+					<Menu.Popup className="w-44 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
+						<Menu.Item className={item} onClick={() => onCreate(false)}>
+							<ListPlus /> New playlist
+						</Menu.Item>
+						<Menu.Item className={item} onClick={() => onCreate(true)}>
+							<FolderPlus /> New folder
+						</Menu.Item>
+					</Menu.Popup>
+				</Menu.Positioner>
+			</Menu.Portal>
+		</Menu.Root>
 	);
 }
 
@@ -292,7 +367,7 @@ function NavEntry({
 			{renaming ? (
 				<div
 					className="flex items-center gap-2 py-0.5 pr-1"
-					style={{ paddingLeft: `${0.5 + depth * 0.75}rem` }}
+					style={{ paddingLeft: `${0.75 + depth * 1}rem` }}
 				>
 					<span className="shrink-0 text-muted-foreground [&_svg]:size-4">{icon}</span>
 					<InlineInput
@@ -342,18 +417,18 @@ function NavRow({
 			onClick={onClick}
 			onDoubleClick={onDoubleClick}
 			aria-current={active ? "true" : undefined}
+			// The app sidebar's rows: quiet until hovered, the open one on a raised chip.
 			className={cn(
-				"flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-				onClick ? "hover:bg-muted/60" : "cursor-default text-muted-foreground",
-				active && "bg-muted font-medium",
+				"flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left text-muted-foreground text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
+				onClick ? "hover:bg-foreground/[0.04] hover:text-foreground" : "cursor-default",
+				active &&
+					"bg-foreground/[0.07] font-medium text-foreground shadow-[inset_0_0_0_1px_oklch(1_0_0/5%)] hover:bg-foreground/[0.07]",
 			)}
-			style={{ paddingLeft: `${0.5 + depth * 0.75}rem` }}
+			style={{ paddingLeft: `${0.75 + depth * 1}rem` }}
 		>
-			<span className="shrink-0 text-muted-foreground [&_svg]:size-4">{icon}</span>
+			<span className="shrink-0 [&_svg]:size-4">{icon}</span>
 			<span className="min-w-0 flex-1 truncate">{label}</span>
-			{count !== undefined && (
-				<span className="shrink-0 text-muted-foreground text-xs tabular-nums">{count}</span>
-			)}
+			{count !== undefined && <span className="shrink-0 text-xs tabular-nums">{count}</span>}
 		</button>
 	);
 }
@@ -402,17 +477,18 @@ function SongsView({
 	songs,
 	title,
 	isPlaylist,
+	query,
 	onRemove,
 }: {
 	mount: string;
 	songs: readonly UsbTrack[];
 	title: string;
 	isPlaylist: boolean;
+	query: string;
 	/** Takes entries out of the shown playlist, by their 0-based place in it. */
 	onRemove?: ((positions: number[]) => void) | undefined;
 }) {
 	const library = useTracks();
-	const [query, setQuery] = useState("");
 	const all = useMemo(
 		() => usbAsTracks(songs, mount, library.data ?? []),
 		[songs, mount, library.data],
@@ -450,14 +526,6 @@ function SongsView({
 				}
 				tracks={all}
 			/>
-			{all.length > 8 && (
-				<SearchField
-					value={query}
-					onChange={setQuery}
-					placeholder="Filter by title, artist or album"
-					label="Filter songs"
-				/>
-			)}
 			<TrackList
 				tracks={shown.map((r) => r.track)}
 				targetCount={0}

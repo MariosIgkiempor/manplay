@@ -1,26 +1,38 @@
 import { useIsMutating } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { type AnalysisProgress, onAnalysisProgress } from "#/lib/api.ts";
+import {
+	type AnalysisProgress,
+	isAnalyzing,
+	onAnalysisFinished,
+	onAnalysisProgress,
+} from "#/lib/api.ts";
 import { ANALYSIS_KEY } from "#/lib/queries.ts";
 
-/** Live progress of the running analysis or tag save; `null` while idle or before it reports. */
+/**
+ * Live progress of the running analysis or tag save, whoever started it (this page or the
+ * background analysis of new songs); `null` while idle or before it reports.
+ */
 export function useAnalysisProgress(): { running: boolean; progress: AnalysisProgress | null } {
-	const running = useIsMutating({ mutationKey: ANALYSIS_KEY }) > 0;
+	const started = useIsMutating({ mutationKey: ANALYSIS_KEY }) > 0;
+	const [backend, setBackend] = useState(false);
 	const [progress, setProgress] = useState<AnalysisProgress | null>(null);
+	const running = started || backend;
 
 	useEffect(() => {
 		let cancelled = false;
-		let unlisten: (() => void) | undefined;
-		void onAnalysisProgress(setProgress).then((fn) => {
-			if (cancelled) {
-				fn();
-			} else {
-				unlisten = fn;
-			}
-		});
+		const unlisten: (() => void)[] = [];
+		const keep = (fn: () => void) => (cancelled ? fn() : unlisten.push(fn));
+		void isAnalyzing().then((on) => !cancelled && setBackend(on));
+		void onAnalysisProgress((p) => {
+			setBackend(true);
+			setProgress(p);
+		}).then(keep);
+		void onAnalysisFinished(() => setBackend(false)).then(keep);
 		return () => {
 			cancelled = true;
-			unlisten?.();
+			for (const fn of unlisten) {
+				fn();
+			}
 		};
 	}, []);
 

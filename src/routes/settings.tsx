@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Globe, Info, Keyboard, Library, Palette } from "lucide-react";
+import { AudioWaveform, Globe, Info, Keyboard, Library, Palette } from "lucide-react";
+import { AnalysisSettings } from "#/components/analysis-settings.tsx";
 import { AppUpdate } from "#/components/app-update.tsx";
 import { AppearanceSettings } from "#/components/appearance-settings.tsx";
 import { FrameHeader } from "#/components/frame.tsx";
@@ -23,6 +24,7 @@ export const Route = createFileRoute("/settings")({
 
 const TABS = [
 	{ value: "library", label: "Library", icon: <Library /> },
+	{ value: "analysis", label: "BPM & key", icon: <AudioWaveform /> },
 	{ value: "lookup", label: "Tag lookup", icon: <Globe /> },
 	{ value: "appearance", label: "Appearance", icon: <Palette /> },
 	{ value: "shortcuts", label: "Shortcuts", icon: <Keyboard /> },
@@ -55,6 +57,7 @@ function SettingsPage() {
 						<SharedLibrarySettings />
 					</>
 				)}
+				{section === "analysis" && <AnalysisSettings />}
 				{section === "lookup" && <LookupSettings />}
 				{section === "appearance" && <AppearanceSettings />}
 				{section === "shortcuts" && <ShortcutSettings />}

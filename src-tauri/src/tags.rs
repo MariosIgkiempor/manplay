@@ -682,6 +682,12 @@ fn prune_cover_backups(backups: &Path) {
     }
 }
 
+/// Puts `bytes` (a JPEG or PNG) in as a song's front cover, for a song just imported.
+pub fn embed_cover(file: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let mime = cover_mime(bytes)?;
+    set_front_cover(file, Some((bytes, &mime)))
+}
+
 /// Puts `cover` in as the song's front cover, or takes the front cover out when `None`.
 fn set_front_cover(file: &Path, cover: Option<(&[u8], &MimeType)>) -> Result<(), Error> {
     let change = |tag: &mut Tag| {

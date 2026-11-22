@@ -31,7 +31,6 @@ import { AlbumArt } from "#/components/album-art.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
-import { openAnalysisDrawer } from "#/lib/analysis-drawer.ts";
 import { listPlaylists, listTags, type Track, targetName } from "#/lib/api.ts";
 import { groupArtists } from "#/lib/artists.ts";
 import { type PaletteItem, rankMatches } from "#/lib/command-palette.ts";
@@ -118,9 +117,12 @@ function usePaletteGroups(query: string): Group[] {
 			},
 			{
 				id: "action:analyse",
-				label: "Analyse BPM and key",
-				detail: "Songs not analysed yet",
-				value: go(openAnalysisDrawer, <AudioWaveform />),
+				label: "BPM and key analysis",
+				detail: "In Settings: progress, notation and failures",
+				value: go(
+					() => void navigate({ to: "/settings", search: { section: "analysis" } }),
+					<AudioWaveform />,
+				),
 			},
 			{
 				id: "action:add-destination",

@@ -5,10 +5,11 @@ import type {
 	DeletedItem,
 	DuplicateGroup,
 	ExportSelection,
+	ImportFolder,
+	ImportFolderId,
 	ImportGroup,
 	ImportScan,
 	ImportTrack,
-	ItunesStatus,
 	MissingTrack,
 	RekordboxStatus,
 	SyncAction,
@@ -224,15 +225,15 @@ export function buildActivity(source: string): Activity[] {
 	}
 	return [
 		{
-			id: source === "downloads" ? 1 : 2,
+			id: source === "import:1" ? 1 : 2,
 			source,
 			startedAt: NOW - 3 * DAY - 40,
 			finishedAt: NOW - 3 * DAY,
 			ok: 7,
 			skipped: 1,
-			failed: source === "itunes" ? 1 : 0,
+			failed: source === "import:2" ? 1 : 0,
 			items: ["Odessa Vale — Paper Lanterns", "Halden — Fjordlight"],
-			errors: source === "itunes" ? ["Purchased/Old Song.m4p: protected file"] : [],
+			errors: source === "import:2" ? ["Purchased/Old Song.m4p: protected file"] : [],
 		},
 	];
 }
@@ -256,38 +257,27 @@ export const DEFAULT_SELECTION: ExportSelection = {
 		virtualDj: false,
 		gemini: false,
 		playlistFolders: false,
+		rekordboxFormats: { deviceLibrary: true, oneLibrary: true },
 	},
+	usbFolderFileNames: [{ tag: "fileName" }],
 };
 
-export const ITUNES_STATUS: ItunesStatus = {
-	path: "/Users/dj/Music/iTunes/iTunes Media",
-	last: {
-		ranAt: NOW - 3 * DAY,
-		converted: [
-			{
-				artist: "Odessa Vale",
-				album: "Paper Lanterns",
-				title: "Golden Hours",
-				dest: `${LIBRARY_ROOT}/Odessa Vale/Paper Lanterns/01 Golden Hours.mp3`,
-			},
-		],
-		skipped: 212,
-		failed: [{ file: "Purchased/Old Song.m4p", error: "protected file" }],
-		error: null,
+/** The Downloads folder you pick from, and an iTunes folder that converts AAC and imports all. */
+export const IMPORT_FOLDERS: ImportFolder[] = [
+	{
+		id: 1 as ImportFolderId,
+		path: DOWNLOADS_FOLDER,
+		enabled: true,
+		convertAac: false,
+		autoImport: false,
 	},
-};
-
-const pendingSong = (artist: string, album: string, title: string) => ({
-	artist,
-	album,
-	title,
-	dest: `${LIBRARY_ROOT}/${artist}/${album}/${title}.mp3`,
-});
-
-export const ITUNES_PENDING = [
-	pendingSong("Atlas Motel", "Vacancy", "Neon Arcade"),
-	pendingSong("Atlas Motel", "Vacancy", "Second Avenue"),
-	pendingSong("Wren Okafor", "Soft Machines", "Quiet Weather"),
+	{
+		id: 2 as ImportFolderId,
+		path: "/Users/dj/Music/iTunes/iTunes Media",
+		enabled: true,
+		convertAac: true,
+		autoImport: true,
+	},
 ];
 
 export const USB_DRIVES: UsbDrive[] = [

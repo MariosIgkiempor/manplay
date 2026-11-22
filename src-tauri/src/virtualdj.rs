@@ -515,8 +515,7 @@ pub fn encode_list(
     out
 }
 
-/// The full paths of the songs a list holds, in order. Only tests read them back.
-#[cfg(test)]
+/// The full paths of the songs a list holds, in order.
 pub fn decode_list(text: &str) -> Result<Vec<String>, String> {
     let document = roxmltree::Document::parse(text).map_err(|e| e.to_string())?;
     Ok(document
@@ -535,6 +534,47 @@ fn read_database(mount: &Path) -> io::Result<Option<String>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// The drive's `VirtualDJ` library as paths from the drive root (`/Contents/…`): its songs, and
+/// each list with its songs in order. Paths written while the drive was elsewhere (another letter,
+/// another computer) count as this drive's. `None` when the drive has none.
+pub fn contents(mount: &Path) -> Option<Result<crate::usb_browse::Contents, String>> {
+    let text = match read_database(mount) {
+        Ok(Some(text)) => text,
+        Ok(None) => return None,
+        Err(e) => return Some(Err(e.to_string())),
+    };
+    let root = DriveRoot::of_mount(mount);
+    let on_drive = |paths: Vec<String>| -> Vec<String> {
+        paths
+            .iter()
+            .filter_map(|p| VirtualDjPath::from_file_path(p, &root))
+            .map(|p| format!("/{}", p.0))
+            .collect()
+    };
+    let read = || -> Result<crate::usb_browse::Contents, String> {
+        let songs = on_drive(database_songs(&text)?);
+        let mut names = file_names(&mount.join(LISTS_DIR));
+        names.retain(|n| {
+            !n.starts_with("._")
+                && Path::new(n)
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case(LIST_EXTENSION))
+        });
+        names.sort();
+        let mut playlists = Vec::new();
+        for name in names {
+            let list = fs::read_to_string(mount.join(LISTS_DIR).join(&name))
+                .map_err(|e| format!("{name}: {e}"))?;
+            let stem = Path::new(&name)
+                .file_stem()
+                .map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
+            playlists.push((stem, on_drive(decode_list(&list)?)));
+        }
+        Ok(crate::usb_browse::Contents { songs, playlists })
+    };
+    Some(read())
 }
 
 /// How many songs and lists the drive's `VirtualDJ` library holds; `None` when it has none.

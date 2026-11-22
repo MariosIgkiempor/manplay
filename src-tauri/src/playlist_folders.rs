@@ -1,6 +1,7 @@
 //! Playlists as folders on a USB drive, for players that only browse folders (the Gemini
-//! MDJ-500): `Playlists/<playlist>/<position> <file name>`, the songs numbered so a player that
-//! sorts by name lists them in playlist order.
+//! MDJ-500): `Playlists/<playlist>/<position> <name>`, the songs numbered so a player that sorts
+//! by name lists them in playlist order. The name is the song's file name, or what the user's
+//! [`FileNameTemplate`] makes of its tags.
 //!
 //! A song is stored once where it can be: the file in its first playlist's folder is the song
 //! itself, the one the drive's libraries point at. Only a song in several playlists has copies,
@@ -10,6 +11,10 @@
 //! Songs are moved before the libraries are written and copied after ([`move_homes`], then
 //! [`Arrangement::fill`]), so the libraries never name a file that is not there for longer than
 //! the renames take.
+
+mod file_name;
+
+pub use file_name::FileNameTemplate;
 
 use crate::anlz;
 use crate::pdb::{self, Library};
@@ -28,6 +33,12 @@ pub const DIR: &str = "Playlists";
 /// The copies manplay made, one `<track id>\t<path>` a line, so only those are ever replaced or
 /// removed. The file being there is what says a drive has playlist folders.
 const LIST: &str = ".manplay/playlist-folders.txt";
+/// The file name each song in the folders had before it was named from its tags, one
+/// `<track id>\t<file name>` a line, so it gets that name back in `Contents` and is still known
+/// by it. A song not listed is called what it was: its name in the folder without the position.
+const NAMES: &str = ".manplay/playlist-folders-names.txt";
+/// The [`FileNameTemplate`] the folders were named with, so edits on the drive name songs alike.
+const TEMPLATE: &str = ".manplay/playlist-folders-template.json";
 /// What a song is called for a moment while it and another swap places.
 const SET_ASIDE: &str = "manplay-move";
 /// The longest path, in bytes, the players this is for read.
@@ -89,6 +100,117 @@ pub fn held(mount: &Path) -> Option<(usize, usize)> {
     Some((songs, folders.len()))
 }
 
+/// How the drive's playlist folders name their songs; `None` when the drive has none of
+/// manplay's. A drive whose folders were made before names could be chosen uses the file names.
+pub fn template(mount: &Path) -> Option<FileNameTemplate> {
+    if !is_on(mount) {
+        return None;
+    }
+    Some(
+        fs::read_to_string(mount.join(TEMPLATE))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default(),
+    )
+}
+
+/// Each song's own file name: what it was called before it went into a playlist folder.
+pub fn original_names(mount: &Path, lib: &Library) -> HashMap<TrackId, String> {
+    let recorded: HashMap<TrackId, String> = fs::read_to_string(mount.join(NAMES))
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| {
+                    let (id, name) = line.split_once('\t')?;
+                    Some((id.parse().ok()?, name.to_owned()))
+                })
+                .filter(|(_, name): &(TrackId, String)| !name.is_empty() && !name.contains('/'))
+                .collect()
+        })
+        .unwrap_or_default();
+    lib.tracks
+        .iter()
+        .map(|t| {
+            // A song outside the folders is called what its path says, whatever was recorded.
+            let name = recorded
+                .get(&t.id)
+                .filter(|_| in_folders(&t.path))
+                .map_or_else(|| base_name(&t.path).to_owned(), Clone::clone);
+            (t.id, name)
+        })
+        .collect()
+}
+
+/// `track`'s own file name from `originals`, or what its path says when it has none there.
+pub fn own_name<'a>(originals: &'a HashMap<TrackId, String>, track: &'a pdb::Track) -> &'a str {
+    originals
+        .get(&track.id)
+        .map_or_else(|| base_name(&track.path), String::as_str)
+}
+
+/// Records the own file names of the songs that are or will be in the folders, before any is
+/// renamed, so a run that stops half way loses none.
+fn write_names(
+    mount: &Path,
+    lib: &Library,
+    homes: &HashMap<TrackId, String>,
+    originals: &HashMap<TrackId, String>,
+) -> std::io::Result<()> {
+    let text: String = lib
+        .tracks
+        .iter()
+        .filter(|t| in_folders(&t.path) || homes.get(&t.id).is_some_and(|h| in_folders(h)))
+        .filter_map(|t| {
+            originals
+                .get(&t.id)
+                .map(|name| format!("{}\t{name}\n", t.id))
+        })
+        .collect();
+    if text.is_empty() {
+        remove_if_there(&mount.join(NAMES))
+    } else {
+        write_atomic(&mount.join(NAMES), text.as_bytes())
+    }
+}
+
+/// The further copies manplay made of songs in several playlists, each with its song.
+pub fn copies(mount: &Path) -> Vec<Copy> {
+    listed(mount)
+}
+
+/// The drive's playlist folders as paths from the drive root: every song file in them, and each
+/// folder with its songs in order (their names start with their place). `None` when the drive
+/// has none of manplay's.
+pub fn contents(mount: &Path) -> Option<crate::usb_browse::Contents> {
+    if !is_on(mount) {
+        return None;
+    }
+    let mut folders: Vec<String> = fs::read_dir(mount.join(DIR))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|n| !n.starts_with('.'))
+                .collect()
+        })
+        .unwrap_or_default();
+    folders.sort();
+    let mut songs = Vec::new();
+    let mut playlists = Vec::new();
+    for folder in folders {
+        let mut files = file_names(&mount.join(DIR).join(&folder));
+        files.retain(|n| !n.starts_with('.'));
+        files.sort();
+        let paths: Vec<String> = files
+            .iter()
+            .map(|f| format!("/{DIR}/{folder}/{f}"))
+            .collect();
+        songs.extend(paths.iter().cloned());
+        playlists.push((folder, paths));
+    }
+    Some(crate::usb_browse::Contents { songs, playlists })
+}
+
 /// The paths, in lower case, of the further copies manplay made of songs in several playlists.
 pub fn copy_paths(mount: &Path) -> HashSet<String> {
     listed(mount)
@@ -126,11 +248,16 @@ struct Layout {
 }
 
 /// Works out the folders from the drive's playlists: each playlist's songs in order, a song
-/// twice in a playlist once. With `enabled` off there are no folders, so every song in one goes
-/// back to `Contents`.
-fn layout(lib: &Library, enabled: bool) -> Layout {
+/// twice in a playlist once, named by `template`. With no template there are no folders, so
+/// every song in one goes back to `Contents` under its own file name from `originals`.
+fn layout(
+    lib: &Library,
+    template: Option<&FileNameTemplate>,
+    originals: &HashMap<TrackId, String>,
+) -> Layout {
+    let original = |t: &pdb::Track| own_name(originals, t).to_owned();
     let mut out = Layout::default();
-    if enabled {
+    if let Some(template) = template {
         let tracks: HashMap<TrackId, &pdb::Track> = lib.tracks.iter().map(|t| (t.id, t)).collect();
         let playlists = flattened(lib);
         let names = playlist_file_names(playlists.iter().map(|(name, _)| name.as_str()));
@@ -147,7 +274,7 @@ fn layout(lib: &Library, enabled: bool) -> Layout {
                 let path = format!(
                     "/{DIR}/{name}/{:0width$} {}",
                     position + 1,
-                    base_name(&track.path)
+                    template.render(track, &original(track))
                 );
                 if path.len() > MAX_PATH {
                     out.too_long += 1;
@@ -168,7 +295,7 @@ fn layout(lib: &Library, enabled: bool) -> Layout {
         if out.homes.contains_key(&track.id) || !in_folders(&track.path) {
             continue;
         }
-        let wanted = content_path_of(&track.artist, &track.album, base_name(&track.path));
+        let wanted = content_path_of(&track.artist, &track.album, &original(track));
         let mut chosen = wanted.clone();
         let mut n = 1;
         while !taken.insert(chosen.to_lowercase()) {
@@ -239,7 +366,8 @@ fn follow_analysis(mount: &Path, track: &mut pdb::Track, old_path: &str) {
 /// What [`move_homes`] did and what is left for [`Arrangement::fill`].
 #[derive(Debug, Default)]
 pub struct Arrangement {
-    enabled: bool,
+    /// How the folders name their songs; `None` when there are to be no folders.
+    template: Option<FileNameTemplate>,
     /// The copies the layout asks for.
     copies: Vec<Copy>,
     /// Files in the folders that are manplay's: the copies listed before, and songs a copy took
@@ -379,17 +507,28 @@ impl<'a> Moves<'a> {
     }
 }
 
-/// Moves each song to where the playlists now put it (see the module notes) and points `lib` at
-/// it. Renames only, so it is quick; a song that cannot be moved stays where it was.
-pub fn move_homes(mount: &Path, lib: &mut Library, enabled: bool) -> Arrangement {
-    let plan = layout(lib, enabled);
+/// Moves each song to where the playlists now put it (see the module notes), named by
+/// `template`, and points `lib` at it; with no template, every song goes back to `Contents`.
+/// Renames only, so it is quick; a song that cannot be moved stays where it was.
+pub fn move_homes(
+    mount: &Path,
+    lib: &mut Library,
+    template: Option<&FileNameTemplate>,
+) -> Arrangement {
+    let originals = original_names(mount, lib);
+    let plan = layout(lib, template, &originals);
     let mut out = Arrangement {
-        enabled,
+        template: template.cloned(),
         owned: listed(mount),
         too_long: plan.too_long,
         copies: plan.copies,
         ..Arrangement::default()
     };
+    if let Err(e) = write_names(mount, lib, &plan.homes, &originals) {
+        // Without the record a song renamed from its tags would lose its own name, so none moves.
+        out.failed.push((NAMES.to_owned(), e.to_string()));
+        return out;
+    }
     let mut moves = Moves::new(mount, lib, &plan.homes, &out.owned);
 
     for track in &mut lib.tracks {
@@ -579,10 +718,20 @@ impl Arrangement {
             placed.push(copy.clone());
         }
 
-        if self.enabled {
+        if let Some(template) = &self.template {
             write_list(mount, placed.iter()).map_err(|e| e.to_string())?;
+            let json = serde_json::to_vec(template).map_err(|e| e.to_string())?;
+            write_atomic(&mount.join(TEMPLATE), &json).map_err(|e| e.to_string())?;
         } else {
-            remove_if_there(&mount.join(LIST)).map_err(|e| e.to_string())?;
+            let none_left = !lib.tracks.iter().any(|t| in_folders(&t.path));
+            let gone = if none_left {
+                &[LIST, TEMPLATE, NAMES][..]
+            } else {
+                &[LIST, TEMPLATE]
+            };
+            for file in gone {
+                remove_if_there(&mount.join(file)).map_err(|e| e.to_string())?;
+            }
         }
         let folders = mount.join(DIR);
         remove_mac_files(&folders);
@@ -642,7 +791,16 @@ mod tests {
 
     /// Arranges the drive as an export would, returning the summary and the copies.
     fn arrange(mount: &Path, lib: &mut Library, enabled: bool) -> (Summary, Vec<Copy>) {
-        let arrangement = move_homes(mount, lib, enabled);
+        let template = FileNameTemplate::default();
+        arrange_named(mount, lib, enabled.then_some(&template))
+    }
+
+    fn arrange_named(
+        mount: &Path,
+        lib: &mut Library,
+        template: Option<&FileNameTemplate>,
+    ) -> (Summary, Vec<Copy>) {
+        let arrangement = move_homes(mount, lib, template);
         assert_eq!(arrangement.failed, []);
         arrangement.fill(mount, lib, |_, _, _| {}).expect("fill")
     }
@@ -680,7 +838,8 @@ mod tests {
             ],
             artwork: Vec::new(),
         };
-        let plan = layout(&lib, true);
+        let template = FileNameTemplate::default();
+        let plan = layout(&lib, Some(&template), &HashMap::new());
         assert_eq!(
             plan.homes,
             HashMap::from([
@@ -696,7 +855,7 @@ mod tests {
                 path: "/Playlists/Late/01 One.mp3".into()
             }]
         );
-        assert_eq!(layout(&lib, false), Layout::default());
+        assert_eq!(layout(&lib, None, &HashMap::new()), Layout::default());
     }
 
     #[test]
@@ -788,6 +947,43 @@ mod tests {
         );
         assert!(!mount.join("Playlists/Friday").exists());
         assert!(!is_on(&mount));
+        let _ = fs::remove_dir_all(&mount);
+    }
+
+    #[test]
+    fn songs_named_from_their_tags_get_their_own_names_back() {
+        let mount = temp_mount("named");
+        song(&mount, "/Contents/Artist/Album/01 one.mp3", b"one");
+        let mut lib = Library {
+            tracks: vec![track(1, "/Contents/Artist/Album/01 one.mp3")],
+            playlists: vec![playlist(1, "Friday", &[1])],
+            artwork: Vec::new(),
+        };
+        let named: FileNameTemplate =
+            serde_json::from_str(r#"[{"tag":"artist"},{"text":" - "},{"tag":"title"}]"#)
+                .expect("template");
+        arrange_named(&mount, &mut lib, Some(&named));
+        assert_eq!(paths(&lib), ["/Playlists/Friday/01 Artist - Song 1.mp3"]);
+        assert_eq!(template(&mount), Some(named.clone()));
+        assert_eq!(
+            original_names(&mount, &lib),
+            HashMap::from([(1, "01 one.mp3".to_owned())]),
+            "known by its own file name, not the one made from its tags"
+        );
+
+        // Edits on the drive name songs the same way.
+        let again = move_homes(&mount, &mut lib, template(&mount).as_ref());
+        assert_eq!(again.moved_from.len(), 0);
+
+        // Back to the file name in the folder, then out of the folders altogether.
+        arrange(&mount, &mut lib, true);
+        assert_eq!(paths(&lib), ["/Playlists/Friday/01 01 one.mp3"]);
+        arrange_named(&mount, &mut lib, Some(&named));
+        arrange(&mount, &mut lib, false);
+        assert_eq!(paths(&lib), ["/Contents/Artist/Album/01 one.mp3"]);
+        assert_eq!(read(&mount, "/Contents/Artist/Album/01 one.mp3"), "one");
+        assert!(!mount.join(NAMES).exists() && !mount.join(TEMPLATE).exists());
+        assert_eq!(template(&mount), None);
         let _ = fs::remove_dir_all(&mount);
     }
 

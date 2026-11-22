@@ -20,8 +20,7 @@ import { Route as ExportAddRouteImport } from './routes/export.add'
 import { Route as ExportRekordboxRouteImport } from './routes/export.rekordbox'
 import { Route as ExportUsbRouteImport } from './routes/export.usb'
 import { Route as ImportIndexRouteImport } from './routes/import.index'
-import { Route as ImportDownloadsRouteImport } from './routes/import.downloads'
-import { Route as ImportItunesRouteImport } from './routes/import.itunes'
+import { Route as ImportFolderIdRouteImport } from './routes/import.$folderId'
 import { Route as PlaylistsIdRouteImport } from './routes/playlists.$id'
 import { Route as SmartIdRouteImport } from './routes/smart.$id'
 import { Route as TagsSplatRouteImport } from './routes/tags.$'
@@ -81,14 +80,9 @@ const ImportIndexRoute = ImportIndexRouteImport.update({
   path: '/import/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ImportDownloadsRoute = ImportDownloadsRouteImport.update({
-  id: '/import/downloads',
-  path: '/import/downloads',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ImportItunesRoute = ImportItunesRouteImport.update({
-  id: '/import/itunes',
-  path: '/import/itunes',
+const ImportFolderIdRoute = ImportFolderIdRouteImport.update({
+  id: '/import/$folderId',
+  path: '/import/$folderId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PlaylistsIdRoute = PlaylistsIdRouteImport.update({
@@ -117,8 +111,7 @@ export interface FileRoutesByFullPath {
   '/export/add': typeof ExportAddRoute
   '/export/rekordbox': typeof ExportRekordboxRoute
   '/export/usb': typeof ExportUsbRoute
-  '/import/downloads': typeof ImportDownloadsRoute
-  '/import/itunes': typeof ImportItunesRoute
+  '/import/$folderId': typeof ImportFolderIdRoute
   '/playlists/$id': typeof PlaylistsIdRoute
   '/smart/$id': typeof SmartIdRoute
   '/tags/$': typeof TagsSplatRoute
@@ -135,8 +128,7 @@ export interface FileRoutesByTo {
   '/export/add': typeof ExportAddRoute
   '/export/rekordbox': typeof ExportRekordboxRoute
   '/export/usb': typeof ExportUsbRoute
-  '/import/downloads': typeof ImportDownloadsRoute
-  '/import/itunes': typeof ImportItunesRoute
+  '/import/$folderId': typeof ImportFolderIdRoute
   '/playlists/$id': typeof PlaylistsIdRoute
   '/smart/$id': typeof SmartIdRoute
   '/tags/$': typeof TagsSplatRoute
@@ -154,8 +146,7 @@ export interface FileRoutesById {
   '/export/add': typeof ExportAddRoute
   '/export/rekordbox': typeof ExportRekordboxRoute
   '/export/usb': typeof ExportUsbRoute
-  '/import/downloads': typeof ImportDownloadsRoute
-  '/import/itunes': typeof ImportItunesRoute
+  '/import/$folderId': typeof ImportFolderIdRoute
   '/playlists/$id': typeof PlaylistsIdRoute
   '/smart/$id': typeof SmartIdRoute
   '/tags/$': typeof TagsSplatRoute
@@ -174,8 +165,7 @@ export interface FileRouteTypes {
     | '/export/add'
     | '/export/rekordbox'
     | '/export/usb'
-    | '/import/downloads'
-    | '/import/itunes'
+    | '/import/$folderId'
     | '/playlists/$id'
     | '/smart/$id'
     | '/tags/$'
@@ -192,8 +182,7 @@ export interface FileRouteTypes {
     | '/export/add'
     | '/export/rekordbox'
     | '/export/usb'
-    | '/import/downloads'
-    | '/import/itunes'
+    | '/import/$folderId'
     | '/playlists/$id'
     | '/smart/$id'
     | '/tags/$'
@@ -210,8 +199,7 @@ export interface FileRouteTypes {
     | '/export/add'
     | '/export/rekordbox'
     | '/export/usb'
-    | '/import/downloads'
-    | '/import/itunes'
+    | '/import/$folderId'
     | '/playlists/$id'
     | '/smart/$id'
     | '/tags/$'
@@ -229,8 +217,7 @@ export interface RootRouteChildren {
   ExportAddRoute: typeof ExportAddRoute
   ExportRekordboxRoute: typeof ExportRekordboxRoute
   ExportUsbRoute: typeof ExportUsbRoute
-  ImportDownloadsRoute: typeof ImportDownloadsRoute
-  ImportItunesRoute: typeof ImportItunesRoute
+  ImportFolderIdRoute: typeof ImportFolderIdRoute
   PlaylistsIdRoute: typeof PlaylistsIdRoute
   SmartIdRoute: typeof SmartIdRoute
   TagsSplatRoute: typeof TagsSplatRoute
@@ -317,18 +304,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ImportIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/import/downloads': {
-      id: '/import/downloads'
-      path: '/import/downloads'
-      fullPath: '/import/downloads'
-      preLoaderRoute: typeof ImportDownloadsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/import/itunes': {
-      id: '/import/itunes'
-      path: '/import/itunes'
-      fullPath: '/import/itunes'
-      preLoaderRoute: typeof ImportItunesRouteImport
+    '/import/$folderId': {
+      id: '/import/$folderId'
+      path: '/import/$folderId'
+      fullPath: '/import/$folderId'
+      preLoaderRoute: typeof ImportFolderIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/playlists/$id': {
@@ -365,8 +345,7 @@ const rootRouteChildren: RootRouteChildren = {
   ExportAddRoute: ExportAddRoute,
   ExportRekordboxRoute: ExportRekordboxRoute,
   ExportUsbRoute: ExportUsbRoute,
-  ImportDownloadsRoute: ImportDownloadsRoute,
-  ImportItunesRoute: ImportItunesRoute,
+  ImportFolderIdRoute: ImportFolderIdRoute,
   PlaylistsIdRoute: PlaylistsIdRoute,
   SmartIdRoute: SmartIdRoute,
   TagsSplatRoute: TagsSplatRoute,

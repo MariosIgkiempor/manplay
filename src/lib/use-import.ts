@@ -2,16 +2,22 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePlayer } from "#/context/player-context.ts";
 import {
+	type ImportFolder,
+	type ImportFolderId,
 	type ImportProgress,
 	type ImportReport,
 	type ImportScan,
 	type ImportTrack,
+	importAddFolder,
 	importCached,
-	importGetFolder,
+	importFolders,
 	importPreview,
+	importRemoveFolder,
 	importRun,
 	importScan,
 	importTrash,
+	importUpdateFolder,
+	onImportFolderChanged,
 	onImportProgress,
 	pickImportFolder,
 } from "#/lib/api.ts";
@@ -54,7 +60,7 @@ export function useImportProgress(active: boolean): ImportProgress | null {
 }
 
 /** Plays import candidates through the app player (zip entries are extracted first). */
-function usePreview(folder: string | null, editFor: (key: string) => Edit | undefined) {
+function usePreview(folder: ImportFolderId | null, editFor: (key: string) => Edit | undefined) {
 	const player = usePlayer();
 	const [loaded, setLoaded] = useState<{ key: string; path: string } | null>(null);
 	const [loading, setLoading] = useState<string | null>(null);
@@ -90,35 +96,70 @@ function usePreview(folder: string | null, editFor: (key: string) => Edit | unde
 	return { activeKey, isPlaying: player.playing, loading, error, toggle };
 }
 
-/** Asks for the Downloads folder and shares the choice with every view of it. */
-export function useChooseImportFolder() {
+const FOLDERS = ["import-folders"];
+
+/** Every import folder. */
+export function useImportFolders() {
+	return useQuery({ queryKey: FOLDERS, queryFn: importFolders });
+}
+
+/** One import folder by id; undefined while loading or once removed. */
+export function useImportFolder(id: ImportFolderId): ImportFolder | undefined {
+	return useImportFolders().data?.find((f) => f.id === id);
+}
+
+/** Asks for a folder and adds it to import from; resolves to it, or null when cancelled. */
+export function useAddImportFolder() {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: pickImportFolder,
-		onSuccess: (dir) => {
-			if (dir !== null) {
-				queryClient.setQueryData(["import-folder"], dir);
-			}
+		mutationFn: async (): Promise<ImportFolder | null> => {
+			const path = await pickImportFolder();
+			return path === null ? null : importAddFolder(path, { convertAac: false, autoImport: false });
 		},
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: FOLDERS }),
 	});
 }
 
-/** New songs the last scan of the import folder found, from its cache; null when off or unknown. */
-export function useDownloadsNewCount(enabled: boolean): number | null {
-	const folder = useQuery({ queryKey: ["import-folder"], queryFn: importGetFolder }).data ?? null;
+/** Saves a folder's switch and options. */
+export function useUpdateImportFolder() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: importUpdateFolder,
+		onMutate: (folder) => {
+			queryClient.setQueryData<ImportFolder[]>(FOLDERS, (all) =>
+				all?.map((f) => (f.id === folder.id ? folder : f)),
+			);
+		},
+		onSettled: () => queryClient.invalidateQueries({ queryKey: FOLDERS }),
+	});
+}
+
+/** Stops importing from a folder; its files stay where they are. */
+export function useRemoveImportFolder() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: importRemoveFolder,
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: FOLDERS }),
+	});
+}
+
+/** New songs the last scan of a folder found, from its cache; null when off or unknown. */
+export function useImportNewCount(folder: ImportFolder): number | null {
 	const cached = useQuery({
-		queryKey: ["import-cached", folder],
-		queryFn: () => (folder === null ? null : importCached(folder)),
-		enabled: enabled && folder !== null,
+		queryKey: ["import-cached", folder.id],
+		queryFn: () => importCached(folder.id),
+		enabled: folder.enabled,
 	});
 	return cached.data ? countNew(cached.data) : null;
 }
 
-export function useImport(enabled = true) {
+/** Scanning one import folder, picking from what it found, and bringing it into the library. */
+export function useImport(source: ImportFolder | undefined) {
 	const queryClient = useQueryClient();
-	const savedFolder = useQuery({ queryKey: ["import-folder"], queryFn: importGetFolder });
 	const root = useLibraryRoot();
-	const folder = savedFolder.data ?? null;
+	const enabled = source?.enabled ?? false;
+	const folder = source?.id ?? null;
+	const folderPath = source?.path ?? null;
 
 	const [scan, setScan] = useState<ImportScan | null>(null);
 	const [fromCache, setFromCache] = useState(false);
@@ -134,7 +175,7 @@ export function useImport(enabled = true) {
 	}, []);
 
 	const find = useMutation({
-		mutationFn: ({ dir, fresh }: { dir: string; fresh: boolean }) => importScan(dir, fresh),
+		mutationFn: ({ dir, fresh }: { dir: ImportFolderId; fresh: boolean }) => importScan(dir, fresh),
 		onSuccess: (next) => {
 			show(next, false);
 			void queryClient.invalidateQueries({ queryKey: ["import-cached"] });
@@ -143,7 +184,7 @@ export function useImport(enabled = true) {
 	const { mutate: startScan } = find;
 
 	// Show what the last scan found right away, then bring it up to date.
-	const booted = useRef<string | null>(null);
+	const booted = useRef<ImportFolderId | null>(null);
 	useEffect(() => {
 		if (!enabled || folder === null || booted.current === folder) {
 			return;
@@ -166,7 +207,26 @@ export function useImport(enabled = true) {
 		startScan({ dir: folder, fresh: false });
 	}, [enabled, folder, show, startScan]);
 
-	const choose = useChooseImportFolder();
+	// A folder that imports everything brought songs in by itself: show what is left.
+	useEffect(() => {
+		let cancelled = false;
+		let unlisten: (() => void) | undefined;
+		void onImportFolderChanged(() => {
+			if (enabled && folder !== null) {
+				startScan({ dir: folder, fresh: false });
+			}
+		}).then((fn) => {
+			if (cancelled) {
+				fn();
+			} else {
+				unlisten = fn;
+			}
+		});
+		return () => {
+			cancelled = true;
+			unlisten?.();
+		};
+	}, [enabled, folder, startScan]);
 
 	/** Imports the given tracks (by key). Imported tracks flip to "in library" and leave the selection. */
 	const add = useMutation({
@@ -220,11 +280,11 @@ export function useImport(enabled = true) {
 	/** Moves the given tracks' files (or whole folders and zips) to the Trash, then rescans. */
 	const trash = useMutation({
 		mutationFn: async (keys: ReadonlySet<string>) => {
-			const { paths, kept } = trashTargets(scan, keys, folder);
-			if (paths.length === 0) {
+			const { paths, kept } = trashTargets(scan, keys, folderPath);
+			if (paths.length === 0 || folder === null) {
 				return { moved: 0, kept };
 			}
-			await importTrash(paths);
+			await importTrash(folder, paths);
 			return { moved: paths.length, kept };
 		},
 		onSuccess: ({ moved }) => {
@@ -236,7 +296,7 @@ export function useImport(enabled = true) {
 	});
 
 	return {
-		folder,
+		folder: source,
 		scan,
 		fromCache,
 		edits,
@@ -246,7 +306,6 @@ export function useImport(enabled = true) {
 		trash,
 		report,
 		find,
-		choose,
 		add,
 		preview,
 		canAdd: root.data !== null,

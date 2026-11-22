@@ -297,17 +297,26 @@ function chosenCount(selection: ExportSelection, lists: readonly { id: number }[
 export function ExportFooter({
 	text,
 	warn = false,
+	inPanel = false,
 	children,
 }: {
 	/** A line of words, or figures such as the review's counts. */
 	text: ReactNode;
 	warn?: boolean;
+	/** In the side panel rather than a drawer, whose scrolling area is padded differently. */
+	inPanel?: boolean;
 	children: ReactNode;
 }) {
 	// The drawer pads its scrolling area, and a sticky bar stops at that padding: the negative
-	// offset takes it down to the drawer's edge, so no list shows underneath it.
+	// offset takes it down to the drawer's edge, so no list shows underneath it. The side panel
+	// pads only its sides.
 	return (
-		<div className="-mx-4 -mb-4 -bottom-4 sticky z-10 mt-auto flex items-center gap-3 border-t bg-background/85 px-4 py-3 backdrop-blur-md">
+		<div
+			className={cn(
+				"sticky z-10 mt-auto flex items-center gap-3 border-t bg-background/85 py-3 backdrop-blur-md",
+				inPanel ? "-mx-5 bottom-0 px-5" : "-mx-4 -mb-4 -bottom-4 px-4",
+			)}
+		>
 			<div
 				className={cn(
 					"min-w-0 flex-1 truncate text-sm tabular-nums",

@@ -181,6 +181,7 @@ export function RemotePane({
 	label,
 	sourcePicker,
 	onActivate,
+	toolbarEnd,
 }: {
 	pane: 0 | 1;
 	targetId: number;
@@ -188,6 +189,8 @@ export function RemotePane({
 	/** The first crumb, what this pane shows, given a way back to the top folder. */
 	sourcePicker: (goTop: () => void) => ReactNode;
 	onActivate: () => void;
+	/** The page's own controls, at the end of the toolbar (the first pane's only). */
+	toolbarEnd?: ReactNode;
 }) {
 	const [path, setPath] = useState(ROOT);
 	const [sort, setSort] = useState<FileSort>(DEFAULT_FILE_SORT);
@@ -321,6 +324,7 @@ export function RemotePane({
 					<Download />
 					{pull.isPending ? "Pulling…" : "Pull to library"}
 				</Button>
+				{toolbarEnd}
 			</div>
 			<NoticeBar notice={notice} />
 			<Banners error={null} listError={listing?.isError ? String(listing.error) : null} />

@@ -1,4 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { useUndo } from "#/context/undo-context.ts";
 import {
 	type ActivitySource,
@@ -31,8 +32,6 @@ import {
 	getTagClipboard,
 	getUiSetting,
 	type ItemKind,
-	itunesImport,
-	itunesPending,
 	type JoinChoice,
 	jellyfinDestinations,
 	jellyfinSettings,
@@ -48,6 +47,7 @@ import {
 	listSyncTargets,
 	listTracks,
 	migrateLibraryTags,
+	onAnalysisFinished,
 	type PanelTabs,
 	type PlanId,
 	pickAndScan,
@@ -110,6 +110,16 @@ const HISTORY_LIMIT = 200;
 
 export function useSyncHistory() {
 	return useQuery({ queryKey: ["sync-history"], queryFn: () => syncHistory(HISTORY_LIMIT) });
+}
+
+/** Several sources' past runs at once, in the order of `sources`. */
+export function useActivities(sources: readonly ActivitySource[]) {
+	return useQueries({
+		queries: sources.map((source) => ({
+			queryKey: ["activity", source],
+			queryFn: () => activityHistory(source, HISTORY_LIMIT),
+		})),
+	});
 }
 
 export function useActivity(source: ActivitySource) {
@@ -381,6 +391,26 @@ export function useRedetect() {
 	});
 }
 
+/** Shows the results of every analysis run as it ends, background runs included. Mounted once. */
+export function useAnalysisResults() {
+	const queryClient = useQueryClient();
+	useEffect(() => {
+		let cancelled = false;
+		let unlisten: (() => void) | undefined;
+		void onAnalysisFinished(() => void refreshAfterAnalysis(queryClient)).then((fn) => {
+			if (cancelled) {
+				fn();
+			} else {
+				unlisten = fn;
+			}
+		});
+		return () => {
+			cancelled = true;
+			unlisten?.();
+		};
+	}, [queryClient]);
+}
+
 async function refreshAfterAnalysis(queryClient: ReturnType<typeof useQueryClient>) {
 	for (const key of [
 		"tracks",
@@ -445,31 +475,6 @@ export function useScan() {
 			if (count === null) {
 				return;
 			}
-		},
-	});
-}
-
-/** Songs waiting in the iTunes folder (empty while iTunes is off or unset). */
-export function useItunesPending(enabled: boolean) {
-	return useQuery({ queryKey: ["itunes-pending"], queryFn: itunesPending, enabled });
-}
-
-export function useItunesImport() {
-	const queryClient = useQueryClient();
-	return useMutation({
-		mutationKey: ["itunes-import"],
-		mutationFn: itunesImport,
-		onSuccess: async (status) => {
-			if (status === null) {
-				return;
-			}
-			queryClient.setQueryData(["itunes"], status);
-			await queryClient.invalidateQueries({ queryKey: ["itunes-pending"] });
-			if ((status.last?.converted.length ?? 0) === 0) {
-				return;
-			}
-			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
-			await queryClient.invalidateQueries({ queryKey: ["library-status"] });
 		},
 	});
 }

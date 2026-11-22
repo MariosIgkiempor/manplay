@@ -1,16 +1,27 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { CloudUpload, Download } from "lucide-react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { CloudUpload, Download, Rows3 } from "lucide-react";
+import { useState } from "react";
 import { Destinations } from "#/components/destinations.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
+import { HistoryList } from "#/components/history-list.tsx";
 import { Page } from "#/components/page.tsx";
+import { type OverviewTab, OverviewTabs, PlaceSettingsGroup } from "#/components/place-page.tsx";
+import { RekordboxSourceSettings } from "#/components/rekordbox-source.tsx";
 import { SyncButton } from "#/components/sync-flow.tsx";
+import { DestinationSettings } from "#/components/target-page.tsx";
+import { DriveSettings } from "#/components/usb-drives.tsx";
 import { useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
-import { useSyncTargets, useTracks } from "#/lib/queries.ts";
+import { isR2, targetShortName } from "#/lib/api.ts";
+import { activityEntries, mergedHistory, syncEntries } from "#/lib/history.ts";
+import { useActivity, useSyncHistory, useSyncTargets, useTracks } from "#/lib/queries.ts";
+import { useRekordbox } from "#/lib/use-rekordbox.ts";
+import { useUsbDrives } from "#/lib/use-usb.ts";
 
 export const Route = createFileRoute("/export/")({ component: ExportPage });
 
 function ExportPage() {
+	const [tab, setTab] = useState<OverviewTab>("list");
 	const progress = useSyncProgress();
 	const { start } = useSyncActions();
 	const targets = useSyncTargets();
@@ -56,8 +67,77 @@ function ExportPage() {
 					/>
 				</>
 			}
+			tabs={
+				<OverviewTabs
+					tab={tab}
+					onChange={setTab}
+					list={{ label: "Destinations", icon: <Rows3 /> }}
+				/>
+			}
 		>
-			<Destinations />
+			{tab === "list" && <Destinations />}
+			{tab === "history" && <ExportHistory />}
+			{tab === "settings" && <ExportSettings />}
 		</Page>
+	);
+}
+
+/** Every sync and rekordbox export, newest first, each run marked with where it went. */
+function ExportHistory() {
+	const syncs = useSyncHistory();
+	const rekordbox = useActivity("rekordbox");
+	return (
+		<HistoryList
+			marked
+			entries={mergedHistory(
+				syncEntries(syncs.data ?? []),
+				activityEntries(rekordbox.data ?? [], "rekordbox"),
+			)}
+			empty="Nothing exported yet."
+		/>
+	);
+}
+
+/** Every destination's settings, one after the other: synced folders, the rekordbox file, drives. */
+function ExportSettings() {
+	const navigate = useNavigate();
+	const targets = useSyncTargets().data ?? [];
+	const rekordbox = useRekordbox().status.data;
+	const drives = useUsbDrives().data ?? [];
+	return (
+		<div className="space-y-10">
+			{targets.map((t) => (
+				<PlaceSettingsGroup
+					key={t.id}
+					brand={isR2(t) ? "cloudflare" : "tailscale"}
+					title={targetShortName(t)}
+					detail={`${t.machine}: ${t.path.join(" / ") || "bucket root"}`}
+					onOpen={() => void navigate({ to: "/export/$targetId", params: { targetId: t.id } })}
+				>
+					<DestinationSettings target={t} />
+				</PlaceSettingsGroup>
+			))}
+			{rekordbox?.path && (
+				<PlaceSettingsGroup
+					brand="rekordbox"
+					title="rekordbox XML"
+					detail={rekordbox.path}
+					onOpen={() => void navigate({ to: "/export/rekordbox" })}
+				>
+					<RekordboxSourceSettings />
+				</PlaceSettingsGroup>
+			)}
+			{drives.map((d) => (
+				<PlaceSettingsGroup
+					key={d.mount}
+					brand="usb"
+					title={d.name}
+					detail={d.mount}
+					onOpen={() => void navigate({ to: "/export/usb", search: { mount: d.mount } })}
+				>
+					<DriveSettings drive={d} />
+				</PlaceSettingsGroup>
+			))}
+		</div>
 	);
 }

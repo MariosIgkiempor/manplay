@@ -1,4 +1,3 @@
-import { Popover } from "@base-ui/react/popover";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Archive,
@@ -18,8 +17,10 @@ import { DestinationHeader, SettingLabel, UsageBar } from "#/components/destinat
 import { HeaderMenu } from "#/components/header-menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PlaceFrame } from "#/components/place-page.tsx";
+import { SearchField } from "#/components/search-field.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Hint } from "#/components/ui/hint.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { UsbBrowser } from "#/components/usb-browser.tsx";
 import { UsbExportButton } from "#/components/usb-export.tsx";
@@ -37,7 +38,6 @@ import {
 } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
 import { FILE_MANAGER, isMac } from "#/lib/platform.ts";
-import { typeScale } from "#/lib/type-scale.ts";
 import { useUsbDrives, useUsbLibrary } from "#/lib/use-usb.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -61,52 +61,116 @@ export function UsbDrivePage({ mount }: { mount: string }) {
 type Tab = "contents" | "settings";
 
 function DriveDetail({ drive }: { drive: UsbDrive }) {
-	const library = useUsbLibrary(drive.hasLibrary ? drive.mount : null);
+	const formats = useQuery({
+		queryKey: ["usb-formats", drive.mount],
+		queryFn: () => usbFormats(drive.mount),
+	});
+	const present = formats.data ? presentFormats(formats.data) : [];
+	const [picked, setPicked] = useState<FormatKey | null>(null);
+	// The one picked while it is still there, else the first the drive holds.
+	const format = present.find((f) => f === picked) ?? present[0];
+	const library = useUsbLibrary(drive.hasLibrary ? drive.mount : null, format);
 	const [tab, setTab] = useState<Tab>("contents");
+	const [query, setQuery] = useState("");
 	// Fills the page: header and tabs stay put, and what is below scrolls (the browser's two
 	// columns each on their own).
 	const browsing = tab === "contents" && library.data !== undefined && drive.hasLibrary;
 	return (
 		<PlaceFrame
-			fill={browsing}
+			flush={browsing}
 			header={
 				<DriveHeader
 					drive={drive}
-					actions={<UsbExportButton drive={drive} library={library.data} />}
+					actions={<UsbExportButton drive={drive} />}
 					tabs={
-						<Segmented
-							className="border-b-0"
-							value={tab}
-							onChange={setTab}
-							label="Drive view"
-							items={[
-								{ value: "contents", label: "Contents", icon: <LibraryBig /> },
-								{ value: "settings", label: "Settings", icon: <Settings2 /> },
-							]}
-						/>
+						// The search sits at the tab row's end, as on the Library's page.
+						<div className="flex items-end gap-4">
+							<Segmented
+								className="border-b-0"
+								value={tab}
+								onChange={setTab}
+								label="Drive view"
+								items={[
+									{ value: "contents", label: "Contents", icon: <LibraryBig /> },
+									{ value: "settings", label: "Settings", icon: <Settings2 /> },
+								]}
+							/>
+							{browsing && (
+								<SearchField
+									className="mb-1.5 ml-auto w-full max-w-xs"
+									value={query}
+									onChange={setQuery}
+									placeholder="Search the drive's songs"
+								/>
+							)}
+						</div>
 					}
 				/>
 			}
 		>
-			<div className={cn(browsing && "h-full px-6 pt-5")}>
+			<div>
 				{tab === "contents" ? (
-					<>
-						{library.isError && <ErrorLine>{String(library.error)}</ErrorLine>}
-						{!drive.hasLibrary && (
-							<EmptyState icon={<LibraryBig />} title="No rekordbox library yet">
-								Export playlists or tags to create one.
-							</EmptyState>
-						)}
-						{library.isPending && drive.hasLibrary && <EmptyState title="Reading library…" />}
-						{library.data && drive.hasLibrary && (
-							<UsbBrowser mount={drive.mount} library={library.data} editable={drive.writable} />
-						)}
-					</>
+					<DriveContents
+						drive={drive}
+						library={library}
+						query={query}
+						filter={
+							formats.data &&
+							present.length > 0 && (
+								<FormatFilter
+									formats={formats.data}
+									present={present}
+									value={format}
+									onChange={setPicked}
+								/>
+							)
+						}
+						// Playlists are edited in rekordbox's library, which the others follow.
+						editable={drive.writable && (format === undefined || isRekordbox(format))}
+					/>
 				) : (
 					<DriveSettings drive={drive} />
 				)}
 			</div>
 		</PlaceFrame>
+	);
+}
+
+/** The Contents tab: the library picked, read and browsable, or why there is none. */
+function DriveContents({
+	drive,
+	library,
+	query,
+	filter,
+	editable,
+}: {
+	drive: UsbDrive;
+	library: ReturnType<typeof useUsbLibrary>;
+	query: string;
+	filter: ReactNode;
+	editable: boolean;
+}) {
+	if (!drive.hasLibrary) {
+		return (
+			<EmptyState icon={<LibraryBig />} title="No library yet">
+				Export playlists or tags to create one.
+			</EmptyState>
+		);
+	}
+	if (library.isError) {
+		return <ErrorLine>{String(library.error)}</ErrorLine>;
+	}
+	if (!library.data) {
+		return <EmptyState title="Reading library…" />;
+	}
+	return (
+		<UsbBrowser
+			mount={drive.mount}
+			library={library.data}
+			editable={editable}
+			query={query}
+			filter={filter}
+		/>
 	);
 }
 
@@ -133,17 +197,13 @@ function DriveHeader({
 		mutationFn: () => usbEject(drive.mount),
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["usb-drives"] }),
 	});
+	// No wrapper: the header pins to the page's top only as a direct child of the page.
 	return (
-		<div className="shrink-0 space-y-2">
+		<>
 			<DestinationHeader
 				section="export"
 				place={`usb:${drive.mount}`}
 				brand="usb"
-				kind={
-					<>
-						<Usb /> CDJ USB
-					</>
-				}
 				title={drive.name}
 				titleHint={[drive.mount, drive.filesystem?.toUpperCase()].filter(Boolean).join(" · ")}
 				meta={
@@ -152,7 +212,6 @@ function DriveHeader({
 						{!drive.writable && <span className="text-warning">Read-only</span>}
 					</>
 				}
-				extra={(drive.hasLibrary || drive.hasOneLibrary) && <FormatPills mount={drive.mount} />}
 				actions={
 					<>
 						{actions}
@@ -178,7 +237,7 @@ function DriveHeader({
 			/>
 			{reveal.isError && <ErrorLine>{String(reveal.error)}</ErrorLine>}
 			{eject.isError && <ErrorLine>{String(eject.error)}</ErrorLine>}
-		</div>
+		</>
 	);
 }
 
@@ -299,81 +358,91 @@ function formatStatus(
 	};
 }
 
-const DOT: Record<Tone, string> = {
-	ok: "bg-success",
-	off: "bg-muted-foreground/50",
-	warn: "bg-warning",
-	error: "bg-destructive",
-};
+/** The formats the drive holds a library in, or could not read, in the filter's order. */
+function presentFormats(f: UsbFormats): FormatKey[] {
+	return FORMATS.filter((format) => {
+		const error = format.key === "playlistFolders" ? null : f[`${format.key}Error`];
+		return f[format.key] !== null || error !== null;
+	}).map((format) => format.key);
+}
 
-const popup =
-	"z-50 w-80 rounded-lg border bg-popover p-3 text-popover-foreground text-sm shadow-lg outline-none";
+const isRekordbox = (key: FormatKey) => key === "deviceLibrary" || key === "oneLibrary";
 
-/** The drive's library formats as pills; each opens the detail and which players read it. */
-function FormatPills({ mount }: { mount: string }) {
-	const formats = useQuery({ queryKey: ["usb-formats", mount], queryFn: () => usbFormats(mount) });
-	const rekordboxAdvice = formats.data ? formatsAdvice(formats.data) : null;
+/**
+ * Which of the drive's libraries the page shows: one chip for each it holds, with its song count;
+ * hovering says which players read it. A library that could not be read cannot be picked.
+ */
+function FormatFilter({
+	formats,
+	present,
+	value,
+	onChange,
+}: {
+	formats: UsbFormats;
+	present: readonly FormatKey[];
+	value: FormatKey | undefined;
+	onChange: (key: FormatKey) => void;
+}) {
+	const advice = formatsAdvice(formats);
 	return (
-		<div className="flex flex-wrap gap-1.5 pt-1">
-			{FORMATS.map((format) => {
-				const status = formatStatus(formats.data, formats.isError, format);
-				// The advice is about rekordbox's two libraries disagreeing; the others are not part of it.
-				const advice =
-					format.key === "deviceLibrary" || format.key === "oneLibrary" ? rekordboxAdvice : null;
-				const tone: Tone = advice && status.tone === "ok" ? "warn" : status.tone;
+		// One line that scrolls sideways when the chips do not fit, so the bar keeps its height.
+		<div className="no-scrollbar flex items-center gap-1.5 overflow-x-auto">
+			<span className="mr-1 shrink-0 text-muted-foreground text-xs">Library</span>
+			{FORMATS.filter((f) => present.includes(f.key)).map((format) => {
+				const status = formatStatus(formats, false, format);
+				const warn = advice !== null && isRekordbox(format.key);
+				const on = value === format.key;
 				return (
-					<Popover.Root key={format.key}>
-						<Popover.Trigger
+					<Hint
+						key={format.key}
+						side="bottom"
+						label={
+							<span className="block max-w-72 space-y-1">
+								<span className="block">
+									{status.text}. Read by {format.players}.
+								</span>
+								{status.error && <span className="block opacity-80">{status.error}</span>}
+								{warn && <span className="block">{advice}</span>}
+							</span>
+						}
+					>
+						<button
+							type="button"
+							aria-pressed={on}
+							disabled={status.tone === "error"}
+							onClick={() => onChange(format.key)}
 							className={cn(
-								"flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors hover:bg-muted focus-visible:outline-2 data-[popup-open]:bg-muted",
-								status.tone === "off" && "text-muted-foreground",
+								"flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50",
+								on
+									? "border-primary/40 bg-primary/15 text-foreground"
+									: "text-muted-foreground hover:bg-muted hover:text-foreground",
 							)}
 						>
-							<span aria-hidden="true" className={cn("size-1.5 rounded-full", DOT[tone])} />
+							{(warn || status.tone === "error") && (
+								<TriangleAlert
+									aria-hidden="true"
+									className={cn(
+										"size-3.5",
+										status.tone === "error" ? "text-destructive" : "text-warning",
+									)}
+								/>
+							)}
 							{format.brand ? (
-								<BrandGlyph brand={format.brand} className="size-3.5" />
+								<BrandGlyph brand={format.brand} className="size-4" />
 							) : (
-								<FolderTree aria-hidden="true" className="size-3.5 text-muted-foreground" />
+								<FolderTree aria-hidden="true" className="size-4" />
 							)}
 							{format.name}
-							<span className="text-muted-foreground tabular-nums">{status.short}</span>
-						</Popover.Trigger>
-						<Popover.Portal>
-							<Popover.Positioner sideOffset={6} align="start" className="z-50">
-								<Popover.Popup className={popup}>
-									<div className="space-y-2.5">
-										<div>
-											<Popover.Title className="font-medium">{format.name}</Popover.Title>
-											<code className="text-muted-foreground text-xs">{format.file}</code>
-										</div>
-										<p className={cn(status.tone === "error" && "text-destructive")}>
-											{status.text}
-										</p>
-										{status.error && (
-											<p className="break-words text-muted-foreground text-xs">{status.error}</p>
-										)}
-										<div className="space-y-0.5">
-											<p className={typeScale.label}>Read by</p>
-											<p className="text-xs">{format.players}</p>
-										</div>
-										{advice && (
-											<p className="flex gap-2 rounded-md bg-warning/10 p-2 text-xs">
-												<TriangleAlert className="size-4 shrink-0 text-warning" />
-												{advice}
-											</p>
-										)}
-									</div>
-								</Popover.Popup>
-							</Popover.Positioner>
-						</Popover.Portal>
-					</Popover.Root>
+							<span className="tabular-nums opacity-70">{status.short}</span>
+						</button>
+					</Hint>
 				);
 			})}
 		</div>
 	);
 }
 
-function DriveSettings({ drive }: { drive: UsbDrive }) {
+export function DriveSettings({ drive }: { drive: UsbDrive }) {
 	return (
 		<div className="space-y-3">
 			{!drive.writable && (

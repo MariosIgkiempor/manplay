@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ImportFolderId } from "#/lib/api.ts";
 import { createFakeBackend, type FakeBackend, SCENARIOS } from "./fake-backend.ts";
 import { DOWNLOADS_FOLDER, NAS_TARGET_ID, USB_MOUNT } from "./fake-places.ts";
 
@@ -18,6 +19,9 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), open: vi.fn(), save: vi.fn() }));
 
 const api = await import("#/lib/api.ts");
+
+const FOLDER_ID = 1 as ImportFolderId;
+const ADD_OPTIONS = { convertAac: false, autoImport: false };
 
 const NO_RULES = {
 	allTags: [],
@@ -54,7 +58,7 @@ const READS: [name: string, read: () => Promise<unknown>][] = [
 	["jellyfinPlan", () => api.jellyfinPlan(NAS_TARGET_ID)],
 	["jellyfinServerPlaylists", () => api.jellyfinServerPlaylists(NAS_TARGET_ID)],
 	["syncHistory", () => api.syncHistory(50)],
-	["activityHistory", () => api.activityHistory("downloads", 50)],
+	["activityHistory", () => api.activityHistory("import:1", 50)],
 	["syncScans", () => api.syncScans()],
 	["syncScan", () => api.syncScan(NAS_TARGET_ID)],
 	["serviceFlags", () => api.serviceFlags()],
@@ -69,8 +73,6 @@ const READS: [name: string, read: () => Promise<unknown>][] = [
 	["listClashes", () => api.listClashes()],
 	["clashCombinePreview", () => api.clashCombinePreview(1)],
 	["listRecentlyDeleted", () => api.listRecentlyDeleted()],
-	["itunesStatus", () => api.itunesStatus()],
-	["itunesPending", () => api.itunesPending()],
 	["fsList", () => api.fsList("/Users/dj/Music/Library")],
 	["fsDirSizes", () => api.fsDirSizes("/Users/dj/Music/Library")],
 	["remoteList", () => api.remoteList(NAS_TARGET_ID, [])],
@@ -83,9 +85,10 @@ const READS: [name: string, read: () => Promise<unknown>][] = [
 	["getPanelTabs", () => api.getPanelTabs()],
 	["getUiSetting", () => api.getUiSetting("sort")],
 	["getTagClipboard", () => api.getTagClipboard()],
-	["importGetFolder", () => api.importGetFolder()],
-	["importScan", () => api.importScan(DOWNLOADS_FOLDER)],
-	["importCached", () => api.importCached(DOWNLOADS_FOLDER)],
+	["importFolders", () => api.importFolders()],
+	["importAddFolder", () => api.importAddFolder(DOWNLOADS_FOLDER, ADD_OPTIONS)],
+	["importScan", () => api.importScan(FOLDER_ID)],
+	["importCached", () => api.importCached(FOLDER_ID)],
 	["usbDrives", () => api.usbDrives()],
 	["usbLibrary", () => api.usbLibrary(USB_MOUNT)],
 	["usbFormats", () => api.usbFormats(USB_MOUNT)],

@@ -13,13 +13,14 @@ import {
 	X,
 } from "lucide-react";
 import { useState } from "react";
+import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { FailureList } from "#/components/failure-list.tsx";
 import { FrameSection } from "#/components/frame.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { dismissActivity, dismissSyncRuns } from "#/lib/api.ts";
 import { duration, timeAgo } from "#/lib/format.ts";
-import type { HistoryEntry, Part, Stat, Status } from "#/lib/history.ts";
+import type { HistoryEntry, HistorySource, Part, Stat, Status } from "#/lib/history.ts";
 import { isMac } from "#/lib/platform.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -179,9 +180,18 @@ function dayLabel(unixSeconds: number): string {
 	});
 }
 
+/** The mark each source's runs carry in a history of several. */
+const SOURCE_BRAND: Record<HistorySource, Brand> = {
+	import: "folder",
+	rekordbox: "rekordbox",
+	tailscale: "tailscale",
+	r2: "cloudflare",
+};
+
 function Row({
 	entry,
 	titled,
+	marked,
 	open,
 	onToggle,
 	onDismiss,
@@ -189,6 +199,8 @@ function Row({
 	entry: HistoryEntry;
 	/** Show the run's own title; without it the time is the heading. */
 	titled: boolean;
+	/** Show which source the run is of, in a history of several. */
+	marked: boolean;
 	open: boolean;
 	onToggle: () => void;
 	onDismiss: () => void;
@@ -210,6 +222,12 @@ function Row({
 						)}
 					/>
 					<Icon role="img" aria-label={label} className={cn("size-[18px] shrink-0", tone)} />
+					{marked && (
+						<BrandIcon
+							brand={SOURCE_BRAND[entry.source]}
+							className="size-5 shrink-0 rounded-[5px]"
+						/>
+					)}
 					<span
 						className="min-w-0 flex-1"
 						title={new Date(entry.finishedAt * 1000).toLocaleString()}
@@ -259,11 +277,14 @@ export function HistoryList({
 	entries,
 	empty,
 	titled = true,
+	marked = false,
 }: {
 	entries: readonly HistoryEntry[];
 	empty: string;
 	/** Name each run. Turn off where every run is of the page's own destination. */
 	titled?: boolean;
+	/** Mark each run with its source's icon, where runs of several sources are listed together. */
+	marked?: boolean;
 }) {
 	const queryClient = useQueryClient();
 	const [expanded, setExpanded] = useState(false);
@@ -302,6 +323,7 @@ export function HistoryList({
 									key={e.key}
 									entry={e}
 									titled={titled}
+									marked={marked}
 									open={openKey === e.key}
 									onToggle={() => setOpenKey(openKey === e.key ? null : e.key)}
 									onDismiss={() => dismiss.mutate(e)}

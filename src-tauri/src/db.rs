@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -105,6 +105,8 @@ pub struct ExportSelection {
     pub usb_mode: crate::usb_export::Mode,
     /// USB drives: the formats written onto the drive.
     pub usb_outputs: crate::usb_export::Outputs,
+    /// USB drives: how songs in playlist folders are named.
+    pub usb_folder_file_names: crate::playlist_folders::FileNameTemplate,
 }
 
 fn mode_text(mode: crate::usb_export::Mode) -> String {
@@ -164,6 +166,8 @@ fn create_export_selections(conn: &Connection) -> Result<(), Error> {
         ("usb_gemini", 0),
         ("usb_virtualdj", 0),
         ("usb_playlist_folders", 0),
+        ("usb_rekordbox_device_library", 1),
+        ("usb_rekordbox_one_library", 1),
     ] {
         add_column(
             conn,
@@ -172,6 +176,13 @@ fn create_export_selections(conn: &Connection) -> Result<(), Error> {
             &format!("INTEGER NOT NULL DEFAULT {default}"),
         )?;
     }
+    // Empty means the songs keep their file names, as they did before names could be chosen.
+    add_column(
+        conn,
+        "export_selections",
+        "usb_folder_file_names",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
     migrate_rekordbox_selection(conn)
 }
 
@@ -220,10 +231,19 @@ pub fn export_selection(
     conn: &Connection,
     destination: &str,
 ) -> Result<Option<ExportSelection>, Error> {
-    let row: Option<(String, String, String, String, crate::usb_export::Outputs)> = conn
+    type Row = (
+        String,
+        String,
+        String,
+        String,
+        crate::usb_export::Outputs,
+        String,
+    );
+    let row: Option<Row> = conn
         .query_row(
             "SELECT playlists, tags, smart, usb_mode, usb_serato, usb_gemini,
-                    usb_playlist_folders, usb_rekordbox, usb_virtualdj
+                    usb_playlist_folders, usb_rekordbox, usb_virtualdj, usb_folder_file_names,
+                    usb_rekordbox_device_library, usb_rekordbox_one_library
              FROM export_selections WHERE destination = ?1",
             params![destination],
             |r| {
@@ -233,12 +253,23 @@ pub fn export_selection(
                     virtual_dj: r.get(8)?,
                     gemini: r.get(5)?,
                     playlist_folders: r.get(6)?,
+                    rekordbox_formats: crate::usb_export::RekordboxFormats {
+                        device_library: r.get(10)?,
+                        one_library: r.get(11)?,
+                    },
                 };
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, extras))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    extras,
+                    r.get(9)?,
+                ))
             },
         )
         .optional()?;
-    let Some((playlists, tags, smart, usb_mode, usb_outputs)) = row else {
+    let Some((playlists, tags, smart, usb_mode, usb_outputs, file_names)) = row else {
         return Ok(None);
     };
     Ok(Some(ExportSelection {
@@ -247,6 +278,8 @@ pub fn export_selection(
         smart: ids_from_stored(conn, "smart_playlists", &smart)?,
         usb_mode: mode_from(&usb_mode),
         usb_outputs,
+        // A template that no longer reads (or none yet) falls back to the file names.
+        usb_folder_file_names: serde_json::from_str(&file_names).unwrap_or_default(),
     }))
 }
 
@@ -341,18 +374,24 @@ pub fn set_export_selection(
     let tags = serde_json::to_string(&selection.tags).map_err(|e| Error::Msg(e.to_string()))?;
     let smart = serde_json::to_string(&uids_for(conn, "smart_playlists", &selection.smart)?)
         .map_err(|e| Error::Msg(e.to_string()))?;
+    let file_names = serde_json::to_string(&selection.usb_folder_file_names)
+        .map_err(|e| Error::Msg(e.to_string()))?;
     conn.execute(
         "INSERT INTO export_selections
              (destination, playlists, tags, smart, usb_mode, usb_serato, usb_gemini,
-              usb_playlist_folders, usb_rekordbox, usb_virtualdj)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+              usb_playlist_folders, usb_rekordbox, usb_virtualdj, usb_folder_file_names,
+              usb_rekordbox_device_library, usb_rekordbox_one_library)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(destination) DO UPDATE SET
              playlists = excluded.playlists, tags = excluded.tags, smart = excluded.smart,
              usb_mode = excluded.usb_mode, usb_serato = excluded.usb_serato,
              usb_gemini = excluded.usb_gemini,
              usb_playlist_folders = excluded.usb_playlist_folders,
              usb_rekordbox = excluded.usb_rekordbox,
-             usb_virtualdj = excluded.usb_virtualdj",
+             usb_virtualdj = excluded.usb_virtualdj,
+             usb_folder_file_names = excluded.usb_folder_file_names,
+             usb_rekordbox_device_library = excluded.usb_rekordbox_device_library,
+             usb_rekordbox_one_library = excluded.usb_rekordbox_one_library",
         params![
             destination,
             playlists,
@@ -363,7 +402,10 @@ pub fn set_export_selection(
             selection.usb_outputs.gemini,
             selection.usb_outputs.playlist_folders,
             selection.usb_outputs.rekordbox,
-            selection.usb_outputs.virtual_dj
+            selection.usb_outputs.virtual_dj,
+            file_names,
+            selection.usb_outputs.rekordbox_formats.device_library,
+            selection.usb_outputs.rekordbox_formats.one_library
         ],
     )?;
     Ok(())
@@ -781,6 +823,16 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
              fetched_at INTEGER NOT NULL,
              PRIMARY KEY (source, key)
          );
+         -- Folders music is imported from, each with how its songs come in.
+         CREATE TABLE IF NOT EXISTS import_folders (
+             id          INTEGER PRIMARY KEY,
+             path        TEXT NOT NULL UNIQUE,
+             enabled     INTEGER NOT NULL DEFAULT 1,
+             convert_aac INTEGER NOT NULL DEFAULT 0,
+             auto_import INTEGER NOT NULL DEFAULT 0
+         );
+         -- Songs converted on import (source file and size), which the library cannot recognise
+         -- by content any more. Named for the iTunes import that started it.
          CREATE TABLE IF NOT EXISTS itunes_imported (
              source      TEXT NOT NULL,
              size        INTEGER NOT NULL,
@@ -2748,9 +2800,11 @@ pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
 }
 
 /// The services a user can switch on or off.
-pub const SERVICES: [&str; 7] = [
+pub const SERVICES: [&str; 8] = [
+    // Before import folders: kept so their old switches still read during the move to them.
     "downloads",
     "itunes",
+    crate::apple_art::SERVICE,
     "tailscale",
     "r2",
     "rekordbox",
@@ -3524,6 +3578,167 @@ pub fn set_audio_fps(conn: &mut Connection, fps: &[(i64, String)]) -> Result<(),
     Ok(())
 }
 
+// ---- import folders ---------------------------------------------------------------
+
+/// An import folder's row id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct ImportFolderId(pub i64);
+
+impl ImportFolderId {
+    /// Its runs' source in the activity history.
+    pub fn activity_source(self) -> String {
+        format!("import:{}", self.0)
+    }
+}
+
+/// A folder music is imported from, and how its songs come in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFolder {
+    pub id: ImportFolderId,
+    pub path: String,
+    /// Switched off: kept with its settings and history, but not read.
+    pub enabled: bool,
+    /// AAC (`.m4a`) songs are converted to 320 kbps MP3 as they come in.
+    pub convert_aac: bool,
+    /// Every new song is imported without asking, whenever the folder is looked at.
+    pub auto_import: bool,
+}
+
+fn import_folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ImportFolder> {
+    Ok(ImportFolder {
+        id: ImportFolderId(r.get(0)?),
+        path: r.get(1)?,
+        enabled: r.get(2)?,
+        convert_aac: r.get(3)?,
+        auto_import: r.get(4)?,
+    })
+}
+
+pub fn import_folders(conn: &Connection) -> Result<Vec<ImportFolder>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, enabled, convert_aac, auto_import FROM import_folders ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map([], import_folder_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn import_folder(conn: &Connection, id: ImportFolderId) -> Result<ImportFolder, Error> {
+    conn.query_row(
+        "SELECT id, path, enabled, convert_aac, auto_import FROM import_folders WHERE id = ?1",
+        [id.0],
+        import_folder_row,
+    )
+    .optional()?
+    .ok_or_else(|| Error::Msg("that import folder was removed".to_owned()))
+}
+
+/// Adds `path` as an import folder, or returns the one that already has it.
+pub fn add_import_folder(
+    conn: &Connection,
+    path: &str,
+    convert_aac: bool,
+    auto_import: bool,
+) -> Result<ImportFolder, Error> {
+    conn.execute(
+        "INSERT OR IGNORE INTO import_folders (path, enabled, convert_aac, auto_import)
+         VALUES (?1, 1, ?2, ?3)",
+        params![path, convert_aac, auto_import],
+    )?;
+    let id: i64 = conn.query_row(
+        "SELECT id FROM import_folders WHERE path = ?1",
+        [path],
+        |r| r.get(0),
+    )?;
+    import_folder(conn, ImportFolderId(id))
+}
+
+/// Saves a folder's switch and options; its path stays.
+pub fn update_import_folder(conn: &Connection, folder: &ImportFolder) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE import_folders SET enabled = ?2, convert_aac = ?3, auto_import = ?4 WHERE id = ?1",
+        params![
+            folder.id.0,
+            folder.enabled,
+            folder.convert_aac,
+            folder.auto_import
+        ],
+    )?;
+    Ok(())
+}
+
+/// Forgets a folder and its scan cache. Its history stays; the files are never touched.
+pub fn remove_import_folder(conn: &Connection, id: ImportFolderId) -> Result<(), Error> {
+    let folder = import_folder(conn, id)?;
+    conn.execute("DELETE FROM import_cache WHERE folder = ?1", [&folder.path])?;
+    conn.execute("DELETE FROM import_folders WHERE id = ?1", [id.0])?;
+    Ok(())
+}
+
+const IMPORT_FOLDERS_MOVED: &str = "import_folders_moved";
+
+/// Moves the two import sources from before import folders into the list, once: the Downloads
+/// folder (`downloads`, the system Downloads folder when none was chosen) and the iTunes folder,
+/// which converts AAC as it did. Both start as folders you pick from: the old iTunes import also
+/// skipped songs whose artist and title the library had, which import folders do not, so
+/// importing everything unseen could bring those in twice. Each keeps its on/off switch, and
+/// their history moves with them.
+pub fn move_to_import_folders(conn: &Connection, downloads: Option<&str>) -> Result<(), Error> {
+    if get_setting(conn, IMPORT_FOLDERS_MOVED)?.is_some() {
+        return Ok(());
+    }
+    let chosen = get_setting(conn, "import_folder")?;
+    let sources = [
+        ("downloads", chosen.as_deref().or(downloads), false),
+        ("itunes", get_setting(conn, "itunes_path")?.as_deref(), true),
+    ]
+    .map(|(service, path, itunes)| (service, path.map(str::to_owned), itunes));
+    for (service, path, itunes) in sources {
+        let Some(path) = path else { continue };
+        let mut folder = add_import_folder(conn, &path, itunes, false)?;
+        folder.enabled = !service_off(conn, service)?;
+        update_import_folder(conn, &folder)?;
+        conn.execute(
+            "UPDATE activity SET source = ?2 WHERE source = ?1",
+            params![service, folder.id.activity_source()],
+        )?;
+    }
+    set_setting(conn, IMPORT_FOLDERS_MOVED, Some("1"))
+}
+
+/// Songs converted on import, by source path and size: the scan counts them as imported.
+pub fn converted_sources(conn: &Connection) -> Result<HashSet<(String, u64)>, Error> {
+    let mut stmt = conn.prepare("SELECT source, size FROM itunes_imported")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0),
+            ))
+        })?
+        .collect::<Result<HashSet<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Records a song converted on import, so later scans know it came in.
+pub fn record_converted(
+    conn: &Connection,
+    source: &str,
+    size: u64,
+    dest: &str,
+    now: i64,
+) -> Result<(), Error> {
+    conn.execute(
+        "INSERT OR REPLACE INTO itunes_imported (source, size, dest, imported_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![source, i64::try_from(size).unwrap_or(i64::MAX), dest, now],
+    )?;
+    Ok(())
+}
+
 /// The saved import-scan cache for `folder`, as written by `put_import_cache`.
 pub fn get_import_cache(conn: &Connection, folder: &str) -> Result<Option<String>, Error> {
     Ok(conn
@@ -4262,6 +4477,79 @@ mod tests {
     }
 
     #[test]
+    fn downloads_and_itunes_become_import_folders_once() {
+        // Name, settings saved before, the system Downloads folder, then each folder as
+        // (path, on, converts AAC, imports everything).
+        type Case<'a> = (
+            &'a str,
+            Vec<(&'a str, &'a str)>,
+            Option<&'a str>,
+            Vec<(String, bool, bool, bool)>,
+        );
+        let folders_after = |settings: &[(&str, &str)], downloads: Option<&str>| {
+            let conn = open(Path::new(":memory:")).expect("db");
+            for (key, value) in settings {
+                set_setting(&conn, key, Some(value)).expect("setting");
+            }
+            move_to_import_folders(&conn, downloads).expect("move");
+            move_to_import_folders(&conn, Some("/again")).expect("second time does nothing");
+            import_folders(&conn)
+                .expect("folders")
+                .into_iter()
+                .map(|f| (f.path, f.enabled, f.convert_aac, f.auto_import))
+                .collect::<Vec<_>>()
+        };
+        let cases: [Case<'_>; 4] = [
+            ("nothing chosen", vec![], None, vec![]),
+            (
+                "the system Downloads folder",
+                vec![],
+                Some("/Users/dj/Downloads"),
+                vec![("/Users/dj/Downloads".into(), true, false, false)],
+            ),
+            (
+                "a chosen folder, and iTunes switched off",
+                vec![
+                    ("import_folder", "/music/in"),
+                    ("itunes_path", "/music/iTunes"),
+                    ("service.itunes", "off"),
+                ],
+                Some("/Users/dj/Downloads"),
+                vec![
+                    ("/music/in".into(), true, false, false),
+                    ("/music/iTunes".into(), false, true, false),
+                ],
+            ),
+            (
+                "Downloads switched off",
+                vec![("service.downloads", "off")],
+                Some("/Users/dj/Downloads"),
+                vec![("/Users/dj/Downloads".into(), false, false, false)],
+            ),
+        ];
+        for (name, settings, downloads, expected) in cases {
+            assert_eq!(folders_after(&settings, downloads), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn import_history_moves_with_its_folder() {
+        let conn = open(Path::new(":memory:")).expect("db");
+        set_setting(&conn, "itunes_path", Some("/music/iTunes")).expect("setting");
+        let run = Activity {
+            source: "itunes".into(),
+            ok: 3,
+            ..Activity::default()
+        };
+        record_activity(&conn, &run).expect("activity");
+        move_to_import_folders(&conn, None).expect("move");
+        let folder = import_folders(&conn).expect("folders").remove(0);
+        let moved = activity_history(&conn, &folder.id.activity_source(), 10).expect("history");
+        assert_eq!(moved.len(), 1);
+        assert_eq!(activity_history(&conn, "itunes", 10).expect("old").len(), 0);
+    }
+
+    #[test]
     fn old_rekordbox_choice_becomes_the_list_of_exported_playlists() {
         let conn = open(Path::new(":memory:")).expect("db");
         let a = create_playlist(&conn, "A", None).expect("a");
@@ -4308,7 +4596,15 @@ mod tests {
                 virtual_dj: true,
                 gemini: false,
                 playlist_folders: true,
+                rekordbox_formats: crate::usb_export::RekordboxFormats {
+                    device_library: false,
+                    one_library: true,
+                },
             },
+            usb_folder_file_names: serde_json::from_str(
+                r#"[{"tag":"artist"},{"text":" - "},{"tag":"title"}]"#,
+            )
+            .expect("template"),
         };
         set_export_selection(&conn, "usb:1234", &usb).expect("save");
         set_export_selection(&conn, "usb:1234", &usb).expect("overwrite");

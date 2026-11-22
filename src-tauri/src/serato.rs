@@ -177,8 +177,7 @@ fn track_path(record: &[u8], tag: [u8; 4]) -> Result<Option<SeratoPath>, String>
     Ok(None)
 }
 
-/// The songs a crate holds, in order. Only tests read them back.
-#[cfg(test)]
+/// The songs a crate holds, in order.
 pub fn decode_crate(bytes: &[u8]) -> Result<Vec<SeratoPath>, String> {
     let mut tracks = Vec::new();
     for (tag, payload) in fields(bytes)? {
@@ -273,6 +272,41 @@ pub fn database_songs(bytes: &[u8]) -> Result<Vec<SeratoPath>, String> {
         }
     }
     Ok(paths)
+}
+
+/// The drive's Serato library as paths from the drive root (`/Contents/…`): its songs, and each
+/// crate with its songs in order (a subcrate named with ` › ` between levels). `None` when the
+/// drive has none.
+pub fn contents(mount: &Path) -> Option<Result<crate::usb_browse::Contents, String>> {
+    let bytes = match fs::read(mount.join(DATABASE_PATH)) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
+        Err(e) => return Some(Err(e.to_string())),
+    };
+    let drive_path = |p: &SeratoPath| format!("/{}", p.as_str());
+    let read = || -> Result<crate::usb_browse::Contents, String> {
+        let songs = database_songs(&bytes)?.iter().map(drive_path).collect();
+        let mut names = crate::usb_files::file_names(&mount.join(SUBCRATES_DIR));
+        names.retain(|n| {
+            !n.starts_with("._")
+                && Path::new(n)
+                    .extension()
+                    .is_some_and(|x| x == CRATE_EXTENSION)
+        });
+        names.sort();
+        let mut playlists = Vec::new();
+        for name in names {
+            let crate_bytes = fs::read(mount.join(SUBCRATES_DIR).join(&name))
+                .map_err(|e| format!("{name}: {e}"))?;
+            let stem = name.trim_end_matches(&format!(".{CRATE_EXTENSION}"));
+            playlists.push((
+                stem.replace(SUBCRATE_SEPARATOR, " › "),
+                decode_crate(&crate_bytes)?.iter().map(drive_path).collect(),
+            ));
+        }
+        Ok(crate::usb_browse::Contents { songs, playlists })
+    };
+    Some(read())
 }
 
 /// How many songs and crates the drive's Serato library holds; `None` when it has none.

@@ -146,6 +146,8 @@ interface PaneProps {
 	otherPath: string | null;
 	/** The first crumb, what this pane shows, given a way back to the top folder. */
 	sourcePicker: (goTop: () => void) => React.ReactNode;
+	/** The page's own controls, at the end of the toolbar (the first pane's only). */
+	toolbarEnd?: React.ReactNode;
 	/** Library health findings, for the warning icons. */
 	health: IssueIndex;
 	fixing: boolean;
@@ -180,6 +182,7 @@ export function FilePane({
 	onActivate,
 	otherPath,
 	sourcePicker,
+	toolbarEnd,
 	health,
 	fixing,
 	onFix,
@@ -534,6 +537,7 @@ export function FilePane({
 					onTrash={() => actions.remove(selectedPaths)}
 					onMove={() => otherPath !== null && runMove(selectedPaths, otherPath)}
 				/>
+				<ToolbarEnd>{toolbarEnd}</ToolbarEnd>
 			</div>
 
 			<Banners error={error} listError={listing?.isError ? String(listing.error) : null} />
@@ -887,6 +891,16 @@ function Tool({
 }
 
 const Divider = () => <span aria-hidden="true" className="mx-0.5 h-4 w-px shrink-0 bg-border" />;
+
+/** The page's controls after the pane's own, set off by a rule; nothing when there are none. */
+function ToolbarEnd({ children }: { children: React.ReactNode }) {
+	return children ? (
+		<>
+			<Divider />
+			{children}
+		</>
+	) : null;
+}
 
 function PaneActions({
 	busy,

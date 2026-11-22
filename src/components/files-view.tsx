@@ -3,9 +3,9 @@ import { FolderOpen } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FilePane } from "#/components/file-pane.tsx";
 import { FileShortcuts } from "#/components/file-shortcuts.tsx";
-import { FilesHeader } from "#/components/files-header.tsx";
 import { FilesSourcePicker } from "#/components/files-source-picker.tsx";
 import { FilesSplitCard } from "#/components/files-split-card.tsx";
+import { FilesTools } from "#/components/files-tools.tsx";
 import { type FixNotice, HealthBar } from "#/components/library-health.tsx";
 import { NoticeBar } from "#/components/notice-bar.tsx";
 import { EmptyState, LoadingLine } from "#/components/page.tsx";
@@ -19,7 +19,6 @@ import { useUndo } from "#/context/undo-context.ts";
 import { confirmFix, type FixReport } from "#/lib/api.ts";
 import { describeFixes, fixablePaths, indexIssues } from "#/lib/audit.ts";
 import { isInside } from "#/lib/fs-path.ts";
-import { headerOffsetAfter } from "#/lib/header-scroll.ts";
 import {
 	useAudit,
 	useAuditFix,
@@ -250,10 +249,8 @@ export function FilesView({
 		}
 		setSplit(!split);
 	};
-	const headerRef = useRef<HTMLDivElement>(null);
-	useHeaderScroll(rootRef, headerRef);
-	const header = (
-		<FilesHeader
+	const tools = (
+		<FilesTools
 			target={
 				sources[0].kind === "remote"
 					? destinations.data?.find((t) => t.id === (sources[0] as { id: number }).id)
@@ -279,7 +276,7 @@ export function FilesView({
 	if (hasLocal && (root.data === undefined || root.data === null)) {
 		return (
 			<main className="flex h-full flex-col">
-				{header}
+				<div className="flex justify-end border-b px-3 py-2">{tools}</div>
 				<NoFolderNote loaded={root.isSuccess} />
 			</main>
 		);
@@ -344,6 +341,7 @@ export function FilesView({
 			sort={sort}
 			onSort={setSort}
 			onShowShortcuts={() => setShortcuts(true)}
+			toolbarEnd={i === 0 ? tools : undefined}
 		/>
 	);
 
@@ -357,6 +355,7 @@ export function FilesView({
 				label={nameOfSource(src)}
 				sourcePicker={pickerFor(i)}
 				onActivate={() => setActive(i)}
+				toolbarEnd={i === 0 ? tools : undefined}
 			/>
 		) : (
 			libraryPane(i)
@@ -365,10 +364,6 @@ export function FilesView({
 
 	return (
 		<main className="flex h-full flex-col overflow-hidden">
-			{/* Scrolls away before the lists do, as the Library's header scrolls off with its page. */}
-			<div ref={headerRef} className="shrink-0">
-				{header}
-			</div>
 			<DragProvider onTransfer={transfer.onTransfer}>
 				<div ref={rootRef} className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
 					<HealthBar
@@ -393,43 +388,4 @@ export function FilesView({
 			</DragProvider>
 		</main>
 	);
-}
-
-/**
- * Scrolls the page header out of the way before the lists under it scroll, the way the Library's
- * header leaves with its page: scrolling down over `root` first moves the header up, pixel for
- * pixel; scrolling up at the top of a list brings it back. Works on the DOM directly, since it runs
- * on every wheel event.
- */
-function useHeaderScroll(
-	root: React.RefObject<HTMLElement | null>,
-	header: React.RefObject<HTMLElement | null>,
-) {
-	useEffect(() => {
-		const area = root.current;
-		const head = header.current;
-		if (!(area && head)) {
-			return;
-		}
-		let offset = 0;
-		const set = (next: number) => {
-			const height = head.scrollHeight;
-			offset = Math.min(height, Math.max(0, next));
-			head.style.marginTop = `${-offset}px`;
-			head.inert = offset >= height;
-		};
-		const onWheel = (ev: WheelEvent) => {
-			const list = ev.target instanceof Element ? ev.target.closest("[data-pane-list]") : null;
-			const next = headerOffsetAfter(
-				{ offset, height: head.scrollHeight, listAtTop: (list?.scrollTop ?? 0) <= 0 },
-				ev,
-			);
-			if (next !== null) {
-				ev.preventDefault();
-				set(next);
-			}
-		};
-		area.addEventListener("wheel", onWheel, { passive: false });
-		return () => area.removeEventListener("wheel", onWheel);
-	}, [root, header]);
 }

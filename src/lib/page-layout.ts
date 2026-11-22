@@ -7,11 +7,10 @@ export const PAGE_TOOLBAR =
 	"sticky top-0 z-10 space-y-2 border-hairline border-b bg-background px-6 py-2";
 export const PAGE_BODY = "px-6 pt-6 pb-10";
 /**
- * The square that starts a page header (a cover, the page's icon or a brand): one size and one
- * corner for all of them. It shrinks in a short window, where it would otherwise take a third of
- * the height before the page's own content starts.
+ * The small square that starts a page header's line (a cover or a brand): one size and one
+ * corner for all of them, the size of the sidebar's marks.
  */
-export const PAGE_ART = "size-16 shrink-0 rounded-lg [@media(max-height:44rem)]:size-12";
+export const PAGE_ART = "size-7 shrink-0 rounded-md";
 
 /**
  * The inset surface groups of rows sit in (the "well" of the bezel): a step lighter than the

@@ -1,4 +1,4 @@
-import { Trash2, TriangleAlert } from "lucide-react";
+import { FileX, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { fileMenuEntries } from "#/components/file-menu.tsx";
@@ -29,11 +29,12 @@ export function MissingIndicator({ onClick }: { onClick: () => void }) {
 		<button
 			type="button"
 			onClick={onClick}
-			title="Show the files missing from disk"
+			title={`${missing} ${missing === 1 ? "file" : "files"} missing from disk. Show them.`}
+			aria-label={`${missing} missing ${missing === 1 ? "file" : "files"}`}
 			className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-warning hover:bg-warning/15"
 		>
-			<TriangleAlert className="size-3.5" />
-			{missing} missing {missing === 1 ? "file" : "files"}
+			<FileX className="size-3.5" />
+			{missing} missing
 		</button>
 	);
 }

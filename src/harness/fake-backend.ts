@@ -32,8 +32,7 @@ import {
 	CLASHES,
 	DEFAULT_SELECTION,
 	DOWNLOADS_FOLDER,
-	ITUNES_PENDING,
-	ITUNES_STATUS,
+	IMPORT_FOLDERS,
 	NAS_TARGET_ID,
 	R2_TARGET_ID,
 	RECENTLY_DELETED,
@@ -77,7 +76,7 @@ interface State {
 	selections: Map<string, ExportSelection>;
 	deviceName: string;
 	defaultScope: Scope;
-	analysis: { writeTags: boolean; keyFormat: "musical" | "camelot"; replaceEdits: boolean };
+	analysis: { keyFormat: "musical" | "camelot"; replaceEdits: boolean };
 }
 
 function createState(scenario: Scenario): State {
@@ -95,7 +94,7 @@ function createState(scenario: Scenario): State {
 		selections: new Map(),
 		deviceName: "booth-macbook",
 		defaultScope: "shared",
-		analysis: { writeTags: true, keyFormat: "camelot", replaceEdits: false },
+		analysis: { keyFormat: "camelot", replaceEdits: false },
 	};
 }
 
@@ -334,6 +333,7 @@ function analysisCommands(state: State): Record<string, Command> {
 	};
 	return {
 		analysis_settings: () => state.analysis,
+		is_analyzing: () => false,
 		set_analysis_settings: (args) => {
 			state.analysis = args.get("settings") as State["analysis"];
 		},
@@ -820,6 +820,7 @@ function exportCommands(state: State): Record<string, Command> {
 			playlists: 4,
 			libraryTracks: 48,
 			backup: "PIONEER/manplay-backup/2026-11-21-101500",
+			deviceLibrary: true,
 			oneLibrary: true,
 			oneLibraryError: null,
 			seratoCrates: 3,
@@ -878,15 +879,18 @@ function usbDiff(state: State) {
 function importCommands(state: State): Record<string, Command> {
 	const configured = () => state.tracks.length > 0;
 	return {
-		import_get_folder: () => (configured() ? DOWNLOADS_FOLDER : null),
+		import_folders: () => (configured() ? IMPORT_FOLDERS : []),
+		import_add_folder: (args) => ({
+			id: 3,
+			path: text(args.get("path")),
+			enabled: true,
+			convertAac: args.get("convertAac") === true,
+			autoImport: args.get("autoImport") === true,
+		}),
 		import_scan: buildImportScan,
 		import_cached: () => (configured() ? buildImportScan() : null),
-		import_run: () => ({ imported: 0, images: 0, failed: [] }),
+		import_run: () => ({ imported: 0, images: 0, converted: [], covers: 0, failed: [] }),
 		import_preview: () => `${DOWNLOADS_FOLDER}/preview.mp3`,
-		itunes_status: () => (configured() ? ITUNES_STATUS : { path: null, last: null }),
-		itunes_set_path: () => ITUNES_STATUS,
-		itunes_pending: () => ITUNES_PENDING,
-		itunes_import: () => ITUNES_STATUS,
 		fs_list: (args) => listFolder(state.tracks, libraryFolder(args.get("path"))),
 		fs_dir_sizes: (args) => folderSizes(state.tracks, libraryFolder(args.get("path"))),
 		fs_make_dir: (args) => `${text(args.get("parent"))}/${text(args.get("name"))}`,
@@ -941,6 +945,8 @@ const ACCEPTED = new Set([
 	"audit_place",
 	"tag_value_create",
 	"import_trash",
+	"import_update_folder",
+	"import_remove_folder",
 	"usb_eject",
 	"usb_reveal",
 	"set_track_cues",

@@ -1,16 +1,15 @@
 import { AudioWaveform, FileAudio, RotateCcw, Square } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
-import { Drawer } from "#/components/drawer.tsx";
+import { FrameSection } from "#/components/frame.tsx";
 import { ErrorLine, Section } from "#/components/page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
-import { closeAnalysisDrawer, useAnalysisDrawerOpen } from "#/lib/analysis-drawer.ts";
 import {
 	type AnalysisProgress,
 	type AnalysisReport,
-	type AnalysisSettings,
+	type AnalysisSettings as AnalysisSettingsValue,
 	cancelAnalysis,
 	type FileFailure,
 	type TagWriteReport,
@@ -237,8 +236,8 @@ function KeyFormatPicker({
 	settings,
 	onChange,
 }: {
-	settings: AnalysisSettings;
-	onChange: (s: AnalysisSettings) => void;
+	settings: AnalysisSettingsValue;
+	onChange: (s: AnalysisSettingsValue) => void;
 }) {
 	const options = [
 		{ id: "musical", label: "Am", title: "Musical (Am, F#)" },
@@ -297,7 +296,7 @@ function FileTags({
 					variant="ghost"
 					size="sm"
 					disabled={running || withResults === 0}
-					title={`Write the saved BPM and key of ${plural(withResults, "song", "songs")} into their files`}
+					title={`Write the saved BPM and key of ${plural(withResults, "song", "songs")} into their files, e.g. songs analysed before results were always written`}
 					onClick={() => setConfirm(true)}
 				>
 					<FileAudio />
@@ -306,16 +305,6 @@ function FileTags({
 			}
 		>
 			<SettingRows>
-				<SettingRow
-					label="Write after each analysis"
-					title="So rekordbox, CDJs and other apps see them. BPM is rounded; the audio is never changed."
-				>
-					<Switch
-						label="Write BPM and key into files after each analysis"
-						checked={current.writeTags}
-						onChange={(on) => setSettings.mutate({ ...current, writeTags: on })}
-					/>
-				</SettingRow>
 				<SettingRow label="Key notation">
 					<KeyFormatPicker settings={current} onChange={(s) => setSettings.mutate(s)} />
 				</SettingRow>
@@ -486,12 +475,18 @@ function AnalysisBody() {
 	);
 }
 
-/** Slide-over for BPM and key analysis: coverage, running it, file tags and failures. */
-export function AnalysisDrawer() {
-	const open = useAnalysisDrawerOpen();
+/**
+ * BPM and key analysis in Settings: how much of the library is analysed, running it again, the
+ * key notation written into files, hand edits and failures. New songs are analysed on their own.
+ */
+export function AnalysisSettings() {
 	return (
-		<Drawer open={open} onClose={closeAnalysisDrawer} title="BPM and key" width="w-[30rem]">
+		<FrameSection
+			title="BPM & key"
+			description="Songs are analysed as they come into the library, and their BPM and key are written into the files so other apps and players see them. A BPM or key you set by hand is never replaced."
+			wellClassName="p-4"
+		>
 			<AnalysisBody />
-		</Drawer>
+		</FrameSection>
 	);
 }

@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { addSearchSchema, targetParamsSchema, usbSearchSchema } from "#/lib/place-routes.ts";
+import {
+	addSearchSchema,
+	folderParamsSchema,
+	targetParamsSchema,
+	usbSearchSchema,
+} from "#/lib/place-routes.ts";
+
+describe("folderParamsSchema", () => {
+	it.each([
+		{ raw: "1", folderId: 1 },
+		{ raw: "42", folderId: 42 },
+	])("reads $raw", ({ raw, folderId }) => {
+		expect(folderParamsSchema.parse({ folderId: raw })).toEqual({ folderId });
+	});
+
+	it.each(["0", "-1", "2.5", "downloads", ""])("refuses %j", (raw) => {
+		expect(folderParamsSchema.safeParse({ folderId: raw }).success).toBe(false);
+	});
+});
 
 describe("targetParamsSchema", () => {
 	it.each([

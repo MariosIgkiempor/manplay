@@ -8,6 +8,7 @@ import { MissingPanel } from "#/components/missing-files.tsx";
 import { PanelBar } from "#/components/panel-header.tsx";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
 import { SongPanel } from "#/components/song-panel.tsx";
+import { UsbExportPanel } from "#/components/usb-export.tsx";
 import { ValuePanel } from "#/components/value-panel.tsx";
 import { type DetailView, PanelScopeContext, useDetail } from "#/context/detail-context.ts";
 import { PanelBarContext } from "#/context/panel-bar.tsx";
@@ -35,6 +36,8 @@ function Content({ view }: { view: DetailView }) {
 			return <IssuesPanel />;
 		case "duplicates":
 			return <DuplicatesPanel />;
+		case "usbExport":
+			return <UsbExportPanel mount={view.mount} />;
 	}
 }
 

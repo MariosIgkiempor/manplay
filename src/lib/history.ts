@@ -1,4 +1,4 @@
-import type { Activity, ActivitySource, SyncRun } from "#/lib/api.ts";
+import type { Activity, SyncRun } from "#/lib/api.ts";
 
 export type Status = "ok" | "partial" | "failed";
 
@@ -19,9 +19,16 @@ export interface Part {
 	failedTotal: number;
 }
 
+/** Where a run came from, for telling runs apart in a history of several sources. */
+export type HistorySource = ActivityKind | "tailscale" | "r2";
+
+/** What kind of run an activity row is: an import folder's, or the rekordbox file's. */
+export type ActivityKind = "import" | "rekordbox";
+
 /** A run of any import or export source, in the shape the shared history UI shows. */
 export interface HistoryEntry {
 	key: string;
+	source: HistorySource;
 	title: string;
 	startedAt: number;
 	finishedAt: number;
@@ -79,6 +86,8 @@ export function syncEntries(runs: readonly SyncRun[]): HistoryEntry[] {
 		const first = rs[0];
 		return {
 			key,
+			// A batch of several is marked by its first; they all went out with one command.
+			source: first?.tailnet.startsWith("r2:") ? "r2" : "tailscale",
 			title: rs.length === 1 && first ? targetLabel(first) : `${rs.length} destinations`,
 			startedAt: Math.min(...rs.map((r) => r.startedAt)),
 			finishedAt: Math.max(...rs.map((r) => r.finishedAt)),
@@ -103,21 +112,16 @@ const plural = (n: number, one: string, many: string) =>
 	`${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 const ACTIVITY: Record<
-	ActivitySource,
+	ActivityKind,
 	{ ok: string; skipped: string; title: (a: Activity) => string }
 > = {
-	downloads: {
+	import: {
 		ok: "tracks added",
 		skipped: "skipped",
 		title: (a) =>
 			a.items.length === 1
 				? (a.items[0] ?? "")
 				: plural(a.items.length, "album added", "albums added"),
-	},
-	itunes: {
-		ok: "converted",
-		skipped: "already in library",
-		title: (a) => `${plural(a.ok, "song", "songs")} converted`,
 	},
 	rekordbox: {
 		ok: "tracks exported",
@@ -126,7 +130,7 @@ const ACTIVITY: Record<
 	},
 };
 
-export function activityEntries(rows: readonly Activity[], source: ActivitySource): HistoryEntry[] {
+export function activityEntries(rows: readonly Activity[], source: ActivityKind): HistoryEntry[] {
 	const copy = ACTIVITY[source];
 	return rows.map((a) => {
 		const stats: Stat[] = [
@@ -136,6 +140,7 @@ export function activityEntries(rows: readonly Activity[], source: ActivitySourc
 		];
 		return {
 			key: `a${a.id}`,
+			source,
 			title: copy.title(a),
 			startedAt: a.startedAt,
 			finishedAt: a.finishedAt,
@@ -155,4 +160,9 @@ export function activityEntries(rows: readonly Activity[], source: ActivitySourc
 			ids: [a.id],
 		};
 	});
+}
+
+/** Several sources' runs in one history, newest first. */
+export function mergedHistory(...lists: readonly (readonly HistoryEntry[])[]): HistoryEntry[] {
+	return lists.flat().sort((a, b) => b.finishedAt - a.finishedAt);
 }

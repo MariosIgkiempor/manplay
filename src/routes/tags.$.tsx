@@ -106,21 +106,22 @@ function TagPage() {
 			<CollectionHeader
 				sort={<HeaderSongSort songs={tagged.length} sort={sort} />}
 				kind={
-					<>
-						<Tag className="size-3.5" /> Tag
-						{parents.map((p) => (
-							<span key={p} className="inline-flex items-center gap-1.5">
-								<ChevronRight className="size-3.5" />
-								<Link
-									to="/tags/$"
-									params={{ _splat: p }}
-									className="hover:text-foreground hover:underline"
-								>
-									{tagLeaf(p)}
-								</Link>
-							</span>
-						))}
-					</>
+					parents.length === 0 ? undefined : (
+						<>
+							{parents.map((p, i) => (
+								<span key={p} className="inline-flex items-center gap-1.5">
+									{i > 0 && <ChevronRight className="size-3.5" />}
+									<Link
+										to="/tags/$"
+										params={{ _splat: p }}
+										className="hover:text-foreground hover:underline"
+									>
+										{tagLeaf(p)}
+									</Link>
+								</span>
+							))}
+						</>
+					)
 				}
 				title={tagLeaf(name)}
 				meta={<span>{songs(tagged.length)}</span>}

@@ -1,6 +1,7 @@
 import { Disc3, FolderTree, Laptop, type LucideIcon, Radio, Usb } from "lucide-react";
 import type {
 	PlaylistFoldersSummary,
+	RekordboxFormats,
 	UsbExportProgress,
 	UsbExportReport,
 	UsbMode,
@@ -9,7 +10,8 @@ import type {
 import { plural } from "#/lib/export-selection.ts";
 import { formatBytes } from "#/lib/format.ts";
 
-export type UsbOutput = keyof UsbOutputs;
+/** A format the export can switch on, by its switch in `UsbOutputs`. */
+export type UsbOutput = Exclude<keyof UsbOutputs, "rekordboxFormats">;
 
 /** One format an export can write onto the drive, as every part of the drawer shows it. */
 export interface UsbOutputOption {
@@ -22,9 +24,38 @@ export interface UsbOutputOption {
 	title: string;
 	detail: string;
 	/** What the review says the export will do, given what happens to the drive's other playlists. */
-	reviewNote: (mode: UsbMode) => string;
+	reviewNote: (mode: UsbMode, outputs: UsbOutputs) => string;
 	/** What the review says when it is switched off, if that changes the drive too. */
 	offNote?: string;
+}
+
+/** rekordbox's two libraries, as the export's options name them. */
+export const REKORDBOX_FORMATS: readonly {
+	key: keyof RekordboxFormats;
+	title: string;
+	players: string;
+}[] = [
+	{ key: "deviceLibrary", title: "Device Library", players: "CDJ-3000 and older players" },
+	{
+		key: "oneLibrary",
+		title: "OneLibrary",
+		players: "CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo",
+	},
+];
+
+/** The rekordbox libraries chosen, by name: `Device Library and OneLibrary`. */
+export function rekordboxFormatsName(formats: RekordboxFormats): string {
+	return listed(REKORDBOX_FORMATS.filter((f) => formats[f.key]).map((f) => f.title));
+}
+
+function rekordboxNote(formats: RekordboxFormats): string {
+	const both = formats.deviceLibrary && formats.oneLibrary;
+	if (both) {
+		return "The drive's songs and playlists are written as a rekordbox library.";
+	}
+	const kept = REKORDBOX_FORMATS.find((f) => formats[f.key]);
+	const dropped = REKORDBOX_FORMATS.find((f) => !formats[f.key]);
+	return `The drive's songs and playlists are written as rekordbox's ${kept?.title}, for the ${kept?.players}. A ${dropped?.title} already on the drive is removed, with a copy kept in PIONEER/manplay-backup.`;
 }
 
 export const USB_OUTPUTS: readonly UsbOutputOption[] = [
@@ -35,7 +66,7 @@ export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 		name: "rekordbox",
 		title: "rekordbox library",
 		detail: "For Pioneer and AlphaTheta players: CDJ, XDJ, Opus Quad and the rest, old and new.",
-		reviewNote: () => "The drive's songs and playlists are written as a rekordbox library.",
+		reviewNote: (_, outputs) => rekordboxNote(outputs.rekordboxFormats),
 		offNote:
 			"No rekordbox library is written. One already on the drive is removed, with a copy kept in PIONEER/manplay-backup.",
 	},
@@ -96,7 +127,7 @@ export function chosenOutputs(outputs: UsbOutputs): string[] {
 export function reviewNotes(outputs: UsbOutputs, mode: UsbMode): string[] {
 	return USB_OUTPUTS.flatMap((o) => {
 		if (outputs[o.key]) {
-			return [o.reviewNote(mode)];
+			return [o.reviewNote(mode, outputs)];
 		}
 		return o.offNote ? [o.offNote] : [];
 	});
@@ -148,13 +179,22 @@ function foldersLine(f: PlaylistFoldersSummary): string {
 	return `${plural(f.songs, "song")} in Playlists, ${plural(f.copies, "copy", "copies")} for songs in several playlists${copied}`;
 }
 
+/** Which players can read the rekordbox libraries the export wrote. */
+function rekordboxReach(report: UsbExportReport): string {
+	if (report.deviceLibrary && report.oneLibrary) {
+		return "Every Pioneer and AlphaTheta player";
+	}
+	const written = REKORDBOX_FORMATS.find((f) => report[f.key]);
+	return written ? `${written.players} only` : "No player: the OneLibrary could not be written";
+}
+
 /** What each format wrote, for the summary. */
 export function outputResults(report: UsbExportReport): OutputResult[] {
 	const out: OutputResult[] = [];
 	if (report.rekordbox) {
 		out.push({
 			label: "rekordbox",
-			text: report.oneLibrary ? "Every Pioneer and AlphaTheta player" : "CDJ-3000 and older only",
+			text: rekordboxReach(report),
 		});
 	}
 	if (report.seratoCrates !== null) {

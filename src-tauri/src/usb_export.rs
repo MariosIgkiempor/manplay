@@ -91,6 +91,39 @@ pub struct Outputs {
     /// Each playlist as a folder of its songs, for players that only browse folders (see
     /// [`playlist_folders`]).
     pub playlist_folders: bool,
+    /// Which of rekordbox's libraries [`Outputs::rekordbox`] writes.
+    pub rekordbox_formats: RekordboxFormats,
+}
+
+/// Which of rekordbox's two libraries an export writes, for the players that read each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RekordboxFormats {
+    /// `export.pdb`, the Device Library: the CDJ-3000 and older players.
+    pub device_library: bool,
+    /// `exportLibrary.db`, the `OneLibrary`: the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo.
+    pub one_library: bool,
+}
+
+impl Default for RekordboxFormats {
+    /// Both, which is what an export wrote before there was a choice.
+    fn default() -> Self {
+        Self {
+            device_library: true,
+            one_library: true,
+        }
+    }
+}
+
+impl RekordboxFormats {
+    /// The rekordbox libraries the drive at `mount` has; `None` when it has neither.
+    pub fn on_drive(mount: &Path) -> Option<Self> {
+        let formats = Self {
+            device_library: mount.join(PDB_PATH).is_file(),
+            one_library: mount.join(ONE_LIBRARY_PATH).is_file(),
+        };
+        (formats.device_library || formats.one_library).then_some(formats)
+    }
 }
 
 impl Default for Outputs {
@@ -102,11 +135,18 @@ impl Default for Outputs {
             virtual_dj: false,
             gemini: false,
             playlist_folders: false,
+            rekordbox_formats: RekordboxFormats::default(),
         }
     }
 }
 
 impl Outputs {
+    /// The rekordbox libraries to write; `None` when rekordbox is off or neither is chosen.
+    pub fn rekordbox_libraries(self) -> Option<RekordboxFormats> {
+        let formats = self.rekordbox_formats;
+        (self.rekordbox && (formats.device_library || formats.one_library)).then_some(formats)
+    }
+
     /// Whether songs need a beat grid and waveform on the drive: rekordbox's players read them,
     /// and the Gemini library is made from them.
     fn needs_analysis(self) -> bool {
@@ -161,7 +201,9 @@ pub struct Report {
     pub backup: Option<String>,
     /// Whether rekordbox's libraries were written.
     pub rekordbox: bool,
-    /// Whether `exportLibrary.db` was written alongside `export.pdb`.
+    /// Whether `export.pdb`, the Device Library, was written.
+    pub device_library: bool,
+    /// Whether `exportLibrary.db`, the `OneLibrary`, was written.
     pub one_library: bool,
     /// Why it was not; the drive's old copy is then removed so players never read a stale one.
     pub one_library_error: Option<String>,
@@ -229,7 +271,7 @@ pub fn safe_name(name: &str, fallback: &str) -> String {
 }
 
 /// Keeps the extension when shortening a file name.
-fn safe_file_name(name: &str) -> String {
+pub(crate) fn safe_file_name(name: &str) -> String {
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() && e.len() <= 5 => (s, Some(e)),
         _ => (name, None),
@@ -336,11 +378,12 @@ fn plan<'a>(lib: &Library, mount: &Path, sources: &[&'a Source]) -> Vec<Planned<
         .map(|t| (t.path.to_lowercase(), t.id))
         .collect();
     let mut by_size: HashMap<u32, Vec<u32>> = HashMap::new();
-    // A song in a playlist folder is not at its `Contents` path, but keeps its file name.
+    // A song in a playlist folder is not at its `Contents` path, but is known by its file name.
+    let originals = playlist_folders::original_names(mount, lib);
     let mut by_name_and_size: HashMap<(String, u32), Vec<u32>> = HashMap::new();
     for t in &lib.tracks {
         by_size.entry(t.file_size).or_default().push(t.id);
-        let name = playlist_folders::base_name(&t.path).to_lowercase();
+        let name = playlist_folders::own_name(&originals, t).to_lowercase();
         by_name_and_size
             .entry((name, t.file_size))
             .or_default()
@@ -697,6 +740,8 @@ pub struct Options<'a> {
     pub camelot: bool,
     pub mode: Mode,
     pub outputs: Outputs,
+    /// How songs in playlist folders are named, when [`Outputs::playlist_folders`] is on.
+    pub folder_file_names: &'a playlist_folders::FileNameTemplate,
 }
 
 /// What happens to what is already on the drive.
@@ -774,23 +819,24 @@ pub(crate) fn has_library(mount: &Path) -> bool {
 }
 
 /// Saves `lib` as the drive's list of songs and playlists, after keeping a copy of the rekordbox
-/// libraries there. With `rekordbox` that is both rekordbox libraries (`export.pdb` and
-/// `OneLibrary`); without, manplay's own file, and the rekordbox libraries are removed so no
-/// player reads one that is out of date. Returns the backup folder, and whether the `OneLibrary`
-/// could be written; when it could not, the old one is removed for the same reason.
+/// libraries there: the rekordbox libraries `rekordbox` names (`export.pdb` and `OneLibrary`),
+/// and manplay's own file when `export.pdb` is not one of them. A rekordbox library not written
+/// is removed so no player reads one that is out of date. Returns the backup folder, and whether
+/// the `OneLibrary` could be written; when it could not, the old one is removed for the same
+/// reason.
 pub(crate) fn write_libraries(
     mount: &Path,
     lib: &Library,
     sequence: u32,
     stamp: &str,
     today: &str,
-    rekordbox: bool,
+    rekordbox: Option<RekordboxFormats>,
 ) -> Result<(Option<String>, Result<(), String>), String> {
     let pdb_path = mount.join(PDB_PATH);
     let one_path = mount.join(ONE_LIBRARY_PATH);
     let own_path = mount.join(OWN_LIBRARY_PATH);
     let bytes = pdb::write(lib, sequence + 1);
-    if !rekordbox {
+    let Some(formats) = rekordbox else {
         let backup =
             back_up(mount, stamp).map_err(|e| format!("backing up the old library: {e}"))?;
         write_atomic(&own_path, &bytes)
@@ -799,21 +845,33 @@ pub(crate) fn write_libraries(
             .and_then(|()| remove_one_library(mount))
             .map_err(|e| format!("removing the rekordbox library: {e}"))?;
         return Ok((backup, Ok(())));
-    }
-    // Built before anything on the drive changes; written after export.pdb.
-    let one_bytes = onelib::build(one_path.is_file().then_some(one_path.as_path()), lib, today);
+    };
+    // Built before anything on the drive changes; written after the drive's list.
+    let one_bytes = formats
+        .one_library
+        .then(|| onelib::build(one_path.is_file().then_some(one_path.as_path()), lib, today));
     let backup = back_up(mount, stamp).map_err(|e| format!("backing up the old library: {e}"))?;
-    write_atomic(&pdb_path, &bytes).map_err(|e| format!("writing {}: {e}", pdb_path.display()))?;
-    let written = one_bytes.and_then(|b| {
-        remove_one_library(mount).map_err(|e| e.to_string())?;
-        write_atomic(&one_path, &b).map_err(|e| e.to_string())
-    });
-    let one = written.map_err(|e| match remove_one_library(mount) {
-        Ok(()) => e,
-        Err(r) => format!("{e}; the old OneLibrary could not be removed either: {r}"),
-    });
-    // The rekordbox library is the drive's list now; a second one would only go stale.
-    remove_if_there(&own_path).map_err(|e| format!("removing {}: {e}", own_path.display()))?;
+    let (list, stale) = if formats.device_library {
+        (&pdb_path, &own_path)
+    } else {
+        (&own_path, &pdb_path)
+    };
+    write_atomic(list, &bytes).map_err(|e| format!("writing {}: {e}", list.display()))?;
+    let one = if let Some(built) = one_bytes {
+        let written = built.and_then(|b| {
+            remove_one_library(mount).map_err(|e| e.to_string())?;
+            write_atomic(&one_path, &b).map_err(|e| e.to_string())
+        });
+        written.map_err(|e| match remove_one_library(mount) {
+            Ok(()) => e,
+            Err(r) => format!("{e}; the old OneLibrary could not be removed either: {r}"),
+        })
+    } else {
+        remove_one_library(mount).map_err(|e| format!("removing the OneLibrary: {e}"))?;
+        Ok(())
+    };
+    // One list of the drive's songs is enough; a second would only go stale.
+    remove_if_there(stale).map_err(|e| format!("removing {}: {e}", stale.display()))?;
     Ok((backup, one))
 }
 
@@ -983,7 +1041,13 @@ pub fn export(
     };
     // Songs move to where the playlists put them before the libraries are written, so the
     // libraries name the files where they are.
-    let arrangement = playlist_folders::move_homes(mount, &mut lib, opts.outputs.playlist_folders);
+    let arrangement = playlist_folders::move_homes(
+        mount,
+        &mut lib,
+        opts.outputs
+            .playlist_folders
+            .then_some(opts.folder_file_names),
+    );
     for (path, error) in &arrangement.failed {
         report.failed.push(Failure {
             path: path.clone(),
@@ -996,10 +1060,12 @@ pub fn export(
         sequence,
         opts.stamp,
         opts.today,
-        opts.outputs.rekordbox,
+        opts.outputs.rekordbox_libraries(),
     )?;
     report.backup = backup;
-    report.rekordbox = opts.outputs.rekordbox;
+    let rekordbox = opts.outputs.rekordbox_libraries();
+    report.rekordbox = rekordbox.is_some();
+    report.device_library = rekordbox.is_some_and(|f| f.device_library);
     let mut gone: Vec<String> = unheld.iter().map(|t| t.path.clone()).collect();
     gone.extend(arrangement.moved_from.iter().cloned());
     let filled = arrangement.fill(mount, &lib, |done, total, name| {
@@ -1068,7 +1134,7 @@ pub fn export(
     // Only once the libraries no longer list them, so a player never sees a missing file.
     delete_track_files(mount, &lib, &unheld, &mut report);
     match one {
-        Ok(()) => report.one_library = opts.outputs.rekordbox,
+        Ok(()) => report.one_library = rekordbox.is_some_and(|f| f.one_library),
         Err(e) => report.one_library_error = Some(e),
     }
     report.library_tracks = lib.tracks.len();
@@ -1603,6 +1669,9 @@ mod tests {
         std::sync::Mutex::new(crate::db::open(Path::new(":memory:")).expect("db"))
     }
 
+    static FILE_NAMES: std::sync::LazyLock<playlist_folders::FileNameTemplate> =
+        std::sync::LazyLock::new(playlist_folders::FileNameTemplate::default);
+
     fn opts(free: u64) -> Options<'static> {
         Options {
             today: "2026-11-15",
@@ -1612,6 +1681,7 @@ mod tests {
             camelot: true,
             mode: Mode::Add,
             outputs: Outputs::default(),
+            folder_file_names: &FILE_NAMES,
         }
     }
 
@@ -2202,6 +2272,25 @@ mod tests {
         assert_eq!(hot_cue, "0:0:600");
     }
 
+    /// Every library on the drive shows these songs (by title) and this many playlists.
+    fn every_library_browses(usb: &Path, songs: &[&str], playlists: usize) {
+        use crate::usb_browse::Format;
+        for format in [
+            Format::DeviceLibrary,
+            Format::OneLibrary,
+            Format::Serato,
+            Format::VirtualDj,
+            Format::Gemini,
+            Format::PlaylistFolders,
+        ] {
+            let lib = crate::usb_browse::library(usb, format).expect("browse");
+            let mut titles: Vec<&str> = lib.tracks.iter().map(|t| t.title.as_str()).collect();
+            titles.sort_unstable();
+            assert_eq!(titles, songs, "{format:?}");
+            assert_eq!(lib.playlists.len(), playlists, "{format:?}");
+        }
+    }
+
     #[test]
     fn playlist_folders_hold_each_song_once_for_every_library() {
         let lib_dir = dir("folders-lib");
@@ -2227,6 +2316,7 @@ mod tests {
                 virtual_dj: true,
                 gemini: true,
                 playlist_folders: true,
+                rekordbox_formats: RekordboxFormats::default(),
             },
             ..opts(1 << 40)
         };
@@ -2285,6 +2375,9 @@ mod tests {
         assert_eq!(size(formats.playlist_folders), Some((3, 2)));
         assert_eq!((formats.serato_error, formats.gemini_error), (None, None));
 
+        // Each library can be browsed with the same songs and playlists, a copy counting once.
+        every_library_browses(&usb, &["Song 1", "Song 2"], 2);
+
         // Exporting again finds the songs where they are: nothing is copied or added.
         let again = export(&usb, &sources, &playlists, &everything, |_| {}).expect("exports");
         assert_eq!((again.copied, again.already_there), (0, 2));
@@ -2301,6 +2394,81 @@ mod tests {
                 .is_file()
         );
         assert!(!usb.join("Playlists").exists());
+    }
+
+    #[test]
+    fn rekordbox_writes_only_the_libraries_chosen() {
+        let lib_dir = dir("rb-formats-lib");
+        let usb = dir("rb-formats-usb");
+        let sources = vec![source(
+            &lib_dir,
+            1,
+            "Burial",
+            "Untrue",
+            "01 Archangel.mp3",
+            1000,
+        )];
+        let playlists = vec![SourcePlaylist {
+            name: "Warm up".into(),
+            track_ids: vec![1],
+        }];
+        let with = |device_library, one_library, stamp| Options {
+            stamp,
+            outputs: Outputs {
+                rekordbox_formats: RekordboxFormats {
+                    device_library,
+                    one_library,
+                },
+                ..Outputs::default()
+            },
+            ..opts(1 << 40)
+        };
+        // (Device Library, OneLibrary) asked for, then what the drive holds afterwards.
+        let cases = [
+            ((true, true), (true, true, false)),
+            ((false, true), (false, true, true)),
+            ((true, false), (true, false, false)),
+            ((true, true), (true, true, false)),
+        ];
+        for (i, ((device, one), (has_pdb, has_one, has_own))) in cases.into_iter().enumerate() {
+            let stamp: &'static str = ["s0", "s1", "s2", "s3"][i];
+            let report = export(
+                &usb,
+                &sources,
+                &playlists,
+                &with(device, one, stamp),
+                |_| {},
+            )
+            .expect("exports");
+            let case = format!("device {device}, one {one}");
+            assert!(report.rekordbox, "{case}");
+            assert_eq!(
+                (report.device_library, report.one_library),
+                (device, one),
+                "{case}"
+            );
+            assert_eq!(
+                (report.copied, report.already_there),
+                (usize::from(i == 0), usize::from(i > 0)),
+                "{case}"
+            );
+            assert_eq!(
+                (
+                    usb.join(PDB_PATH).is_file(),
+                    usb.join(ONE_LIBRARY_PATH).is_file(),
+                    usb.join(OWN_LIBRARY_PATH).is_file()
+                ),
+                (has_pdb, has_one, has_own),
+                "{case}"
+            );
+            assert_eq!(
+                RekordboxFormats::on_drive(&usb).map(|f| (f.device_library, f.one_library)),
+                Some((has_pdb, has_one)),
+                "{case}"
+            );
+            let held = crate::usb::library(&usb).expect("the drive's list");
+            assert_eq!((held.tracks.len(), held.playlists.len()), (1, 1), "{case}");
+        }
     }
 
     #[test]
@@ -2322,6 +2490,7 @@ mod tests {
                 virtual_dj: false,
                 gemini: false,
                 playlist_folders: false,
+                rekordbox_formats: RekordboxFormats::default(),
             },
             ..opts(1 << 40)
         };

@@ -8,15 +8,13 @@ import type { PlaceKey, PlaceSection } from "#/lib/places.ts";
 import { cn } from "#/lib/utils.ts";
 
 /**
- * Top of an import source's or export destination's page (Downloads, iTunes, USB drive,
- * Tailscale folder, R2 bucket, rekordbox file): the shared header with the brand's tile, under
- * an `Export › <destination ▾>` crumb that jumps between siblings.
+ * Top of an import folder's or export destination's page: the shared header with the brand's
+ * mark, after an `Export ▾` crumb that jumps between siblings.
  */
 export function DestinationHeader({
 	section,
 	place,
 	brand,
-	kind,
 	title,
 	titleHint,
 	meta,
@@ -28,8 +26,6 @@ export function DestinationHeader({
 	section: PlaceSection;
 	place: PlaceKey;
 	brand: Brand;
-	/** What kind of destination, with an icon, e.g. "CDJ USB". */
-	kind: ReactNode;
 	title: string;
 	/** Hover text for the title, e.g. the full path. */
 	titleHint?: string | undefined;
@@ -46,19 +42,10 @@ export function DestinationHeader({
 	return (
 		<PageHeader
 			art={<BrandIcon brand={brand} className={PAGE_ART} />}
-			kind={
-				<>
-					<PlaceCrumb section={section} current={place} />
-					<span aria-hidden="true">·</span>
-					{kind}
-				</>
-			}
+			kind={<PlaceCrumb section={section} current={place} />}
 			badge={toggle}
-			title={
-				<h1 className="truncate font-semibold text-xl tracking-tight" title={titleHint ?? title}>
-					{title}
-				</h1>
-			}
+			title={title}
+			titleHint={titleHint}
 			meta={meta}
 			actions={actions}
 			tabs={tabs}

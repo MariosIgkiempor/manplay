@@ -1,6 +1,7 @@
 import { type ReactNode, useRef } from "react";
 import { createPortal } from "react-dom";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
+import { useDetail } from "#/context/detail-context.ts";
 import { useSplitSlot } from "#/context/split-slot.ts";
 import { CARD } from "#/lib/page-layout.ts";
 import { usePageMotion } from "#/lib/page-transition.ts";
@@ -14,10 +15,12 @@ const PAGE_ROOM = 420;
 
 /**
  * The Files page's second pane, in a card of its own beside the page's card. Drag the gap on its
- * left to resize it; double-click the gap for the starting width.
+ * left to resize it; double-click the gap for the starting width. While the side panel is open the
+ * two panes share what room is left equally, and the width chosen comes back once it closes.
  */
 export function FilesSplitCard({ children }: { children: ReactNode }) {
 	const slot = useSplitSlot();
+	const sharing = useDetail().view !== null;
 	const [width, setWidth] = usePaneWidth({
 		key: "manplay.files-split-width",
 		initial: INITIAL,
@@ -34,18 +37,25 @@ export function FilesSplitCard({ children }: { children: ReactNode }) {
 		<section
 			ref={cardRef}
 			aria-label="Second pane"
-			style={{ width }}
-			className={cn(CARD, "relative flex max-w-[60%] shrink-0 flex-col")}
+			style={sharing ? undefined : { width }}
+			className={cn(
+				CARD,
+				"relative flex flex-col",
+				// flex-1 is a zero basis, as the page's card has: the two come out the same width.
+				sharing ? "min-w-0 flex-1" : "max-w-[60%] shrink-0",
+			)}
 		>
-			<ResizeHandle
-				edge="left"
-				inGap
-				width={width}
-				min={MIN}
-				initial={INITIAL}
-				label="Resize second pane"
-				onWidth={setWidth}
-			/>
+			{!sharing && (
+				<ResizeHandle
+					edge="left"
+					inGap
+					width={width}
+					min={MIN}
+					initial={INITIAL}
+					label="Resize second pane"
+					onWidth={setWidth}
+				/>
+			)}
 			<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[inherit]">
 				{children}
 			</div>

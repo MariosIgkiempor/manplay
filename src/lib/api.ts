@@ -67,9 +67,8 @@ const analysisReportSchema = z.object({
 
 export type AnalysisReport = z.infer<typeof analysisReportSchema>;
 
+/** How analysis results are written; they always go into the files' tags too. */
 const analysisSettingsSchema = z.object({
-	/** Write detected BPM and key into the files' tags after each analysis. */
-	writeTags: z.boolean(),
 	/** Key notation in the tags. */
 	keyFormat: z.enum(["musical", "camelot"]),
 	/** Re-analysing replaces BPM, key and beat grids set by hand. */
@@ -131,6 +130,16 @@ export async function setTempoKey(
 /** Stops the running analysis after the files being read now. */
 export async function cancelAnalysis(): Promise<void> {
 	await invoke("cancel_analysis");
+}
+
+/** Whether an analysis is running, whoever started it (the page or the background). */
+export async function isAnalyzing(): Promise<boolean> {
+	return z.boolean().parse(await invoke("is_analyzing"));
+}
+
+/** Subscribes to the end of every analysis run, including background ones. */
+export function onAnalysisFinished(handler: () => void): Promise<() => void> {
+	return listen("analysis-finished", () => handler());
 }
 
 const analysisProgressSchema = z.object({
@@ -711,7 +720,8 @@ export async function dismissSyncRuns(ids: number[]): Promise<void> {
 	await invoke("dismiss_sync_runs", { ids });
 }
 
-export type ActivitySource = "downloads" | "itunes" | "rekordbox";
+/** Whose runs: an import folder's (`import:<id>`), or the rekordbox file's. */
+export type ActivitySource = `import:${number}` | "rekordbox";
 
 const activitySchema = z.object({
 	id: int,
@@ -954,14 +964,7 @@ export function onPullProgress(handler: (p: PullProgress) => void): Promise<() =
 	});
 }
 
-export type ServiceId =
-	| "downloads"
-	| "itunes"
-	| "tailscale"
-	| "r2"
-	| "rekordbox"
-	| "usb"
-	| "lookup";
+export type ServiceId = "appleCovers" | "tailscale" | "r2" | "rekordbox" | "usb" | "lookup";
 
 /** Explicit on/off choices by service id; a service never switched is absent. */
 export async function serviceFlags(): Promise<Record<string, string>> {
@@ -1047,6 +1050,19 @@ export async function rekordboxLibrary(): Promise<RekordboxLibrary | null> {
 	return rekordboxLibrarySchema.parse(await invoke("rekordbox_library"));
 }
 
+/** rekordbox's two libraries, each for the players that read it. */
+const rekordboxFormatsSchema = z.object({
+	/** `export.pdb`: the CDJ-3000 and older players. */
+	deviceLibrary: z.boolean().default(true),
+	/** `exportLibrary.db`: the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo. */
+	oneLibrary: z.boolean().default(true),
+});
+
+export type RekordboxFormats = z.infer<typeof rekordboxFormatsSchema>;
+
+/** Both of rekordbox's libraries, which is what an export wrote before there was a choice. */
+export const BOTH_REKORDBOX_FORMATS: RekordboxFormats = { deviceLibrary: true, oneLibrary: true };
+
 /** The formats a USB export writes onto the drive, each for the players that read it. */
 const usbOutputsSchema = z.object({
 	/** rekordbox's libraries, for Pioneer and AlphaTheta players. */
@@ -1059,9 +1075,56 @@ const usbOutputsSchema = z.object({
 	gemini: z.boolean().default(false),
 	/** Each playlist as a folder of its songs, for players that only browse folders. */
 	playlistFolders: z.boolean().default(false),
+	/** Which of rekordbox's two libraries `rekordbox` writes; at least one. */
+	rekordboxFormats: rekordboxFormatsSchema.default(BOTH_REKORDBOX_FORMATS),
 });
 
 export type UsbOutputs = z.infer<typeof usbOutputsSchema>;
+
+/** The song tags a playlist folder's file names can be made of. */
+export const FOLDER_NAME_TAGS = [
+	"fileName",
+	"title",
+	"artist",
+	"album",
+	"genre",
+	"key",
+	"bpm",
+	"year",
+	"trackNumber",
+] as const;
+
+export type FolderNameTag = (typeof FOLDER_NAME_TAGS)[number];
+
+/** The most parts a file name template holds, as `playlist_folders::file_name` allows. */
+export const FOLDER_NAME_MAX_PARTS = 16;
+/** The longest piece of text between tags, in characters. */
+export const FOLDER_NAME_MAX_TEXT = 40;
+
+const folderNamePartSchema = z.union([
+	z.object({ tag: z.enum(FOLDER_NAME_TAGS) }).strict(),
+	z
+		.object({
+			text: z
+				.string()
+				.min(1)
+				.refine((t) => [...t].length <= FOLDER_NAME_MAX_TEXT, "Text is too long"),
+		})
+		.strict(),
+]);
+
+export type FolderNamePart = z.infer<typeof folderNamePartSchema>;
+
+/** How songs in playlist folders are named after their position: tags and text, at least one tag. */
+export const folderFileNamesSchema = z
+	.array(folderNamePartSchema)
+	.max(FOLDER_NAME_MAX_PARTS)
+	.refine((parts) => parts.some((p) => "tag" in p), "A file name needs at least one tag");
+
+export type FolderFileNames = z.infer<typeof folderFileNamesSchema>;
+
+/** The song's own file name: what playlist folders held before names could be chosen. */
+export const DEFAULT_FOLDER_FILE_NAMES: FolderFileNames = [{ tag: "fileName" }];
 
 const exportSelectionSchema = z.object({
 	/** Library playlists, by id. */
@@ -1079,7 +1142,10 @@ const exportSelectionSchema = z.object({
 		virtualDj: false,
 		gemini: false,
 		playlistFolders: false,
+		rekordboxFormats: BOTH_REKORDBOX_FORMATS,
 	}),
+	/** USB drives: how songs in playlist folders are named. */
+	usbFolderFileNames: folderFileNamesSchema.default(DEFAULT_FOLDER_FILE_NAMES),
 });
 
 export type UsbMode = ExportSelection["usbMode"];
@@ -1372,49 +1438,6 @@ export type SmartPreview = z.infer<typeof smartPreviewSchema>;
 /** The songs a rule set picks right now. */
 export async function smartPlaylistPreview(rules: SmartRules): Promise<SmartPreview> {
 	return smartPreviewSchema.parse(await invoke("smart_playlist_preview", { rules }));
-}
-
-// ---- iTunes import --------------------------------------------------------
-
-const itunesReportSchema = z.object({
-	ranAt: int,
-	converted: z.array(
-		z.object({ artist: z.string(), album: z.string(), title: z.string(), dest: z.string() }),
-	),
-	skipped: int,
-	failed: z.array(z.object({ file: z.string(), error: z.string() })),
-	error: z.string().nullable(),
-});
-
-const itunesSchema = z.object({
-	path: z.string().nullable(),
-	last: itunesReportSchema.nullable(),
-});
-
-export type ItunesStatus = z.infer<typeof itunesSchema>;
-export type ItunesPendingSong = z.infer<typeof itunesReportSchema>["converted"][number];
-
-export async function itunesStatus(): Promise<ItunesStatus> {
-	return itunesSchema.parse(await invoke("itunes_status"));
-}
-
-/** Asks for the iTunes folder. Returns null if cancelled. */
-export function pickItunesFolder(): Promise<string | null> {
-	return open({ directory: true, multiple: false, title: "Choose your iTunes media folder" });
-}
-
-export async function setItunesPath(path: string | null): Promise<ItunesStatus> {
-	return itunesSchema.parse(await invoke("itunes_set_path", { path }));
-}
-
-/** Songs in the iTunes folder an import would add. Read-only. */
-export async function itunesPending(): Promise<ItunesPendingSong[]> {
-	return itunesReportSchema.shape.converted.parse(await invoke("itunes_pending"));
-}
-
-/** Converts new iTunes songs into the library. Null when iTunes or the library is not set up. */
-export async function itunesImport(): Promise<ItunesStatus | null> {
-	return itunesSchema.nullable().parse(await invoke("itunes_import"));
 }
 
 // ---- file browser ---------------------------------------------------------
@@ -1934,6 +1957,10 @@ export type ImportScan = z.infer<typeof importScanSchema>;
 const importReportSchema = z.object({
 	imported: int,
 	images: int,
+	/** Of the songs imported, those converted from AAC to MP3. */
+	converted: z.array(z.object({ source: z.string(), size: int, dest: z.string() })).default([]),
+	/** Songs given a cover fetched from Apple. */
+	covers: int.default(0),
 	failed: z.array(z.object({ file: z.string(), error: z.string() })),
 });
 
@@ -1946,16 +1973,51 @@ export interface ImportRequest {
 	images: SourceRef[];
 }
 
-/** Moves files, zips or folders inside the Downloads folder to the Trash. */
-export async function importTrash(paths: string[]): Promise<void> {
-	await invoke("import_trash", { paths });
+const importFolderIdSchema = int.brand<"ImportFolderId">();
+export type ImportFolderId = z.infer<typeof importFolderIdSchema>;
+
+/** A folder music is imported from, and how its songs come in. */
+const importFolderSchema = z.object({
+	id: importFolderIdSchema,
+	path: z.string(),
+	/** Switched off: kept with its settings and history, but not read. */
+	enabled: z.boolean(),
+	/** AAC (.m4a) songs are converted to 320 kbps MP3 as they come in. */
+	convertAac: z.boolean(),
+	/** Every new song is imported without asking, whenever the folder is looked at. */
+	autoImport: z.boolean(),
+});
+
+export type ImportFolder = z.infer<typeof importFolderSchema>;
+
+/** Whose runs an import folder's history lists. */
+export const importActivitySource = (id: ImportFolderId): ActivitySource => `import:${id}`;
+
+/** Every import folder (the Downloads and iTunes sources from before become the first two). */
+export async function importFolders(): Promise<ImportFolder[]> {
+	return z.array(importFolderSchema).parse(await invoke("import_folders"));
 }
 
-export async function importGetFolder(): Promise<string | null> {
-	return z
-		.string()
-		.nullable()
-		.parse(await invoke("import_get_folder"));
+export async function importAddFolder(
+	path: string,
+	options: { convertAac: boolean; autoImport: boolean },
+): Promise<ImportFolder> {
+	return importFolderSchema.parse(await invoke("import_add_folder", { path, ...options }));
+}
+
+/** Saves a folder's switch and options; its path stays. */
+export async function importUpdateFolder(folder: ImportFolder): Promise<void> {
+	await invoke("import_update_folder", { folder });
+}
+
+/** Stops importing from a folder; its files are never touched. */
+export async function importRemoveFolder(id: ImportFolderId): Promise<void> {
+	await invoke("import_remove_folder", { id });
+}
+
+/** Moves files, zips or folders inside an import folder to the Trash. */
+export async function importTrash(folder: ImportFolderId, paths: string[]): Promise<void> {
+	await invoke("import_trash", { folder, paths });
 }
 
 export function pickImportFolder(): Promise<string | null> {
@@ -1963,26 +2025,34 @@ export function pickImportFolder(): Promise<string | null> {
 }
 
 /**
- * Finds music in `folder` (zips included) that is not in the library yet. Files unchanged since
+ * Finds music in a folder (zips included) that is not in the library yet. Files unchanged since
  * the last scan come from a cache; `fresh` ignores it and reads everything again.
  */
-export async function importScan(folder: string, fresh = false): Promise<ImportScan> {
+export async function importScan(folder: ImportFolderId, fresh = false): Promise<ImportScan> {
 	return importScanSchema.parse(await invoke("import_scan", { folder, fresh }));
 }
 
-/** Copies the chosen tracks into the library as Artist/Album. */
-export async function importRun(folder: string, groups: ImportRequest[]): Promise<ImportReport> {
+/** Brings the chosen tracks into the library as Artist/Album, as the folder says. */
+export async function importRun(
+	folder: ImportFolderId,
+	groups: ImportRequest[],
+): Promise<ImportReport> {
 	return importReportSchema.parse(await invoke("import_run", { folder, groups }));
 }
 
-/** What the last scan of `folder` found, from the cache alone (instant). Null if never scanned. */
-export async function importCached(folder: string): Promise<ImportScan | null> {
+/** What the last scan of a folder found, from the cache alone (instant). Null if never scanned. */
+export async function importCached(folder: ImportFolderId): Promise<ImportScan | null> {
 	return importScanSchema.nullable().parse(await invoke("import_cached", { folder }));
 }
 
 /** A local file the player can stream for an import candidate (zip entries are extracted first). */
-export async function importPreview(folder: string, src: SourceRef): Promise<string> {
+export async function importPreview(folder: ImportFolderId, src: SourceRef): Promise<string> {
 	return z.string().parse(await invoke("import_preview", { folder, src }));
+}
+
+/** Subscribes to a folder that imports everything having brought songs in. */
+export function onImportFolderChanged(handler: () => void): Promise<() => void> {
+	return listen("import-folder-changed", () => handler());
 }
 
 const importProgressSchema = z.object({
@@ -2072,8 +2142,21 @@ export async function usbDrives(): Promise<UsbDrive[]> {
 	return z.array(usbDriveSchema).parse(await invoke("usb_drives"));
 }
 
-export async function usbLibrary(mount: string): Promise<UsbLibrary> {
-	return usbLibrarySchema.parse(await invoke("usb_library", { mount }));
+/** A library on a drive that can be browsed, besides its main list. */
+export type UsbLibraryFormat =
+	| "deviceLibrary"
+	| "oneLibrary"
+	| "serato"
+	| "virtualDj"
+	| "gemini"
+	| "playlistFolders";
+
+/**
+ * A library on a drive: its main list (rekordbox's, or manplay's own) without `format`, else the
+ * one in that format, with each song's details from the main list.
+ */
+export async function usbLibrary(mount: string, format?: UsbLibraryFormat): Promise<UsbLibrary> {
+	return usbLibrarySchema.parse(await invoke("usb_library", { mount, format: format ?? null }));
 }
 
 /** A change to the playlists on a drive. Positions are 0-based places in the playlist. */
@@ -2226,7 +2309,9 @@ const usbExportReportSchema = z.object({
 	backup: z.string().nullable(),
 	/** Whether rekordbox's libraries were written. */
 	rekordbox: z.boolean().default(true),
-	/** Whether the OneLibrary (`exportLibrary.db`) was written alongside `export.pdb`. */
+	/** Whether the Device Library (`export.pdb`) was written. */
+	deviceLibrary: z.boolean().default(false),
+	/** Whether the OneLibrary (`exportLibrary.db`) was written. */
 	oneLibrary: z.boolean(),
 	/** Why it was not; the drive's old OneLibrary was then removed. */
 	oneLibraryError: z.string().nullable(),

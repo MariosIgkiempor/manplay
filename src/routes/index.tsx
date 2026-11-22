@@ -4,14 +4,8 @@ import { RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { FrameHeader, TabsSearchBar } from "#/components/frame.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
-import {
-	AnalyzeButton,
-	LibraryEmpty,
-	LibraryList,
-	LibrarySortMenu,
-} from "#/components/library-parts.tsx";
+import { LibraryEmpty, LibraryList, LibrarySortMenu } from "#/components/library-parts.tsx";
 import { SearchPalette } from "#/components/search-palette.tsx";
-import { ButtonGroup } from "#/components/ui/button-group.tsx";
 import { ViewToggle } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { groupAlbums } from "#/lib/albums.ts";
@@ -100,20 +94,17 @@ function Library() {
 				}
 				actions={
 					hasRoot ? (
-						<ButtonGroup>
-							<AnalyzeButton tracks={tracks.data ?? []} />
-							<HeaderMenu
-								entries={[
-									{
-										label: scanning ? "Scanning…" : "Rescan",
-										icon: <RefreshCw />,
-										hint: "Look for added, changed and removed files",
-										onSelect: () => scan.mutate("saved"),
-										disabled: scanning,
-									},
-								]}
-							/>
-						</ButtonGroup>
+						<HeaderMenu
+							entries={[
+								{
+									label: scanning ? "Scanning…" : "Rescan",
+									icon: <RefreshCw />,
+									hint: "Look for added, changed and removed files",
+									onSelect: () => scan.mutate("saved"),
+									disabled: scanning,
+								},
+							]}
+						/>
 					) : null
 				}
 				continued={!libraryEmpty}

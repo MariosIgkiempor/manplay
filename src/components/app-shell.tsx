@@ -1,5 +1,4 @@
 import { type ReactNode, useRef, useState } from "react";
-import { AnalysisDrawer } from "#/components/analysis-drawer.tsx";
 import { CommandPalette } from "#/components/command-palette.tsx";
 import { PlayerBar } from "#/components/player-bar.tsx";
 import { Sidebar } from "#/components/sidebar.tsx";
@@ -9,12 +8,14 @@ import { SplitSlotContext } from "#/context/split-slot.ts";
 import { useStatusScopeHandlers } from "#/context/status-context.ts";
 import { CARD } from "#/lib/page-layout.ts";
 import { usePageMotion } from "#/lib/page-transition.ts";
+import { useAnalysisResults } from "#/lib/queries.ts";
 import { usePageSearchKey } from "#/lib/use-page-search-key.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** Sidebar, the page's card and the cards beside it, and the player; the status bar sits below. */
 export function Shell({ children }: { children: ReactNode }) {
 	const mainScope = useStatusScopeHandlers("main");
+	useAnalysisResults();
 	usePageSearchKey();
 	// The page's whole card moves as a page arrives, outline and all.
 	const pageRef = useRef<HTMLDivElement>(null);
@@ -34,7 +35,6 @@ export function Shell({ children }: { children: ReactNode }) {
 							{...mainScope}
 						>
 							<div className="@container/main h-full overflow-y-auto">{children}</div>
-							<AnalysisDrawer />
 							<SyncDrawers />
 						</div>
 						<div ref={setSplitSlot} className="contents" />

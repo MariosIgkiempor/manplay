@@ -365,7 +365,7 @@ mod tests {
 
     /// Makes a 7 s stereo song with ffmpeg; `None` when there is no ffmpeg (test skipped).
     fn make(dir: &Path, name: &str, codec: &[&str]) -> Option<PathBuf> {
-        let ffmpeg = crate::itunes::find_ffmpeg()?;
+        let ffmpeg = crate::convert::find_ffmpeg()?;
         let out = dir.join(name);
         let ok = crate::process::command(&ffmpeg)
             .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
@@ -381,7 +381,7 @@ mod tests {
 
     /// The whole song as floats, decoded by ffmpeg: what the WAV must hold.
     fn reference(path: &Path) -> Vec<u8> {
-        let ffmpeg = crate::itunes::find_ffmpeg().expect("ffmpeg");
+        let ffmpeg = crate::convert::find_ffmpeg().expect("ffmpeg");
         crate::process::command(&ffmpeg)
             .args(["-v", "error", "-i"])
             .arg(path)
@@ -469,7 +469,7 @@ mod timing {
     #[test]
     #[ignore = "timing, not a check"]
     fn six_minute_song() {
-        let Some(ffmpeg) = crate::itunes::find_ffmpeg() else {
+        let Some(ffmpeg) = crate::convert::find_ffmpeg() else {
             return;
         };
         let dir = std::env::temp_dir().join("manplay-pcm-timing");

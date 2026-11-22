@@ -1,6 +1,5 @@
 import {
 	CheckCircle2,
-	FolderOpen,
 	ListPlus,
 	LoaderCircle,
 	RefreshCw,
@@ -137,7 +136,7 @@ function Toolbar(p: ToolbarProps) {
 	return (
 		// The frame's own header, as every card has: what it holds on the left, its buttons right.
 		// It stays in view (opaque, in the frame's shade) while the list scrolls.
-		<div className="sticky top-0 z-10 rounded-t-2xl bg-background">
+		<div className="sticky top-[var(--pinned-header,0px)] z-10 rounded-t-2xl bg-background">
 			<div className="relative flex h-14 items-center gap-1.5 rounded-t-2xl bg-foreground/[0.018] pr-2 pl-4">
 				<h2 className="min-w-0 flex-1 truncate font-medium text-[0.9375rem]">
 					<ToolbarText {...p} />
@@ -240,18 +239,8 @@ function Skeleton() {
 	);
 }
 
-/** What the list shows with nothing in it: still looking, all caught up, or no folder yet. */
+/** What the list shows with nothing in it: still looking, or all caught up. */
 function EmptyList({ s }: { s: ReturnType<typeof useImport> }) {
-	if (s.folder === null) {
-		return (
-			<Message icon={<FolderOpen />} title="Choose your Downloads folder">
-				manplay looks there for new music, zips included.
-				<Button className="mt-3" onClick={() => s.choose.mutate()} disabled={s.choose.isPending}>
-					<FolderOpen /> Choose folder…
-				</Button>
-			</Message>
-		);
-	}
 	if (s.scan === null) {
 		return <Skeleton />;
 	}
@@ -259,7 +248,7 @@ function EmptyList({ s }: { s: ReturnType<typeof useImport> }) {
 		<Message icon={<CheckCircle2 />} title="All caught up">
 			{s.find.isPending
 				? "Checking for anything new…"
-				: "Everything in Downloads is already in your library."}
+				: "Everything in this folder is already in your library."}
 		</Message>
 	);
 }
@@ -294,13 +283,11 @@ export function ImportView({ s }: { s: ReturnType<typeof useImport> }) {
 	const progress = useImportProgress(scanning);
 	const groups = s.scan?.groups ?? [];
 	const total = countNew(s.scan);
-	const errors = [s.choose, s.find, s.add, s.trash].flatMap((m) =>
-		m.isError ? [String(m.error)] : [],
-	);
+	const errors = [s.find, s.add, s.trash].flatMap((m) => (m.isError ? [String(m.error)] : []));
 
 	const trashKeys = async (keys: ReadonlySet<string>) => {
 		// Tracks inside a zip go only with the whole zip, so a partly picked zip stays.
-		const { paths } = trashTargets(s.scan, keys, s.folder);
+		const { paths } = trashTargets(s.scan, keys, s.folder?.path ?? null);
 		if (paths.length === 0) {
 			return;
 		}
@@ -329,7 +316,7 @@ export function ImportView({ s }: { s: ReturnType<typeof useImport> }) {
 				/>
 				<div className={WELL}>
 					{groups.length > 0 && (
-						<div className="sticky top-14 z-10 rounded-t-xl bg-well">
+						<div className="sticky top-[calc(var(--pinned-header,0px)+3.5rem)] z-10 rounded-t-xl bg-well">
 							<BrowserHeader />
 						</div>
 					)}

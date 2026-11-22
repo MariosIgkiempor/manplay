@@ -267,7 +267,7 @@ function ReviewToolbar({
 	onShowUnchanged: (on: boolean) => void;
 }) {
 	return (
-		<div className="sticky top-0 z-30 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background px-[var(--diff-inset)] py-2 text-sm">
+		<div className="sticky top-[var(--pinned-header,0px)] z-30 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background px-[var(--diff-inset)] py-2 text-sm">
 			<fieldset className="flex gap-1.5">
 				<legend className="sr-only">Sync direction</legend>
 				{MODES.map((m) => {

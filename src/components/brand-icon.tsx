@@ -1,4 +1,4 @@
-import { Download, Library, Usb } from "lucide-react";
+import { Download, Folder, Library, Usb } from "lucide-react";
 import {
 	type SimpleIcon,
 	siCloudflare,
@@ -9,37 +9,66 @@ import {
 	siPioneerdj,
 	siTailscale,
 } from "simple-icons";
+import { type BrandArtwork, type BrandMark, GEMINI, SERATO, VIRTUALDJ } from "#/lib/brand-logos.ts";
 import { cn } from "#/lib/utils.ts";
 
-/** Services with a published logo (from Simple Icons), drawn in the service's own colour. */
-const LOGOS = {
-	cloudflare: { icon: siCloudflare, label: "Cloudflare" },
-	tailscale: { icon: siTailscale, label: "Tailscale" },
-	itunes: { icon: siItunes, label: "iTunes" },
-	rekordbox: { icon: siPioneerdj, label: "rekordbox" },
-	musicbrainz: { icon: siMusicbrainz, label: "MusicBrainz" },
-	discogs: { icon: siDiscogs, label: "Discogs" },
-	jellyfin: { icon: siJellyfin, label: "Jellyfin" },
-} as const satisfies Record<string, { icon: SimpleIcon; label: string }>;
+/** A logo in one colour, drawn in that colour or in white on a tile of it. */
+interface Mark {
+	path: string;
+	/** Without the `#`. */
+	hex: string;
+	viewBox: string;
+	/** Traced marks keep their white parts as holes. */
+	evenOdd: boolean;
+}
+
+const simple = (icon: SimpleIcon): Mark => ({
+	path: icon.path,
+	hex: icon.hex,
+	viewBox: "0 0 24 24",
+	evenOdd: false,
+});
+const traced = (mark: BrandMark): Mark => ({ ...mark, evenOdd: true });
 
 /**
- * Services Simple Icons has no logo for. They get their initials on a plain tile rather than a
- * drawing that only looks like their logo.
+ * Services with a published logo, drawn in the service's own colour: from Simple Icons, or from
+ * the brand's own files where Simple Icons has none (`brand-logos.ts`).
  */
-const LETTERMARKS = {
-	serato: { letters: "S", label: "Serato" },
-	virtualdj: { letters: "VDJ", label: "VirtualDJ" },
-	gemini: { letters: "G", label: "Gemini" },
-} as const;
+const LOGOS = {
+	cloudflare: { mark: simple(siCloudflare), label: "Cloudflare" },
+	tailscale: { mark: simple(siTailscale), label: "Tailscale" },
+	itunes: { mark: simple(siItunes), label: "iTunes" },
+	rekordbox: { mark: simple(siPioneerdj), label: "rekordbox" },
+	musicbrainz: { mark: simple(siMusicbrainz), label: "MusicBrainz" },
+	discogs: { mark: simple(siDiscogs), label: "Discogs" },
+	jellyfin: { mark: simple(siJellyfin), label: "Jellyfin" },
+	serato: { mark: traced(SERATO), label: "Serato" },
+	gemini: { mark: traced(GEMINI), label: "Gemini" },
+} as const satisfies Record<string, { mark: Mark; label: string }>;
+
+/** Logos in several colours, which only read drawn as they are, on a light tile. */
+const ARTWORK = {
+	virtualdj: { art: VIRTUALDJ, label: "VirtualDJ" },
+} as const satisfies Record<string, { art: BrandArtwork; label: string }>;
 
 type Logo = keyof typeof LOGOS;
-type Lettermark = keyof typeof LETTERMARKS;
+type Artwork = keyof typeof ARTWORK;
 
 /** A third-party service, or one of the app's own places that sits among them. */
-export type Brand = Logo | Lettermark | "downloads" | "usb" | "library";
+export type Brand = Logo | Artwork | "downloads" | "folder" | "usb" | "library";
 
-const isLogo = (brand: Brand): brand is Logo => brand in LOGOS;
-const isLettermark = (brand: Brand): brand is Lettermark => brand in LETTERMARKS;
+const isArtwork = (brand: Brand): brand is Artwork => brand in ARTWORK;
+
+/** A logo's layers as SVG paths; a layer without a fill takes the text colour. */
+function ArtworkSvg({ art, className }: { art: BrandArtwork; className?: string }) {
+	return (
+		<svg viewBox={art.viewBox} aria-hidden="true" className={className}>
+			{art.layers.map((l) => (
+				<path key={l.path.slice(0, 24)} d={l.path} fill={l.fill ?? "currentColor"} />
+			))}
+		</svg>
+	);
+}
 
 /**
  * Whether a logo colour is too dark to read on the app's dark surfaces, as Discogs' near-black
@@ -54,6 +83,13 @@ function isDark(hex: string): boolean {
 const TILE =
 	"grid size-9 shrink-0 place-items-center rounded-lg ring-1 ring-black/5 dark:ring-white/10";
 
+/** The app's own kinds of place, drawn on a neutral tile. */
+const OWN_PLACES = {
+	downloads: { Icon: Download, label: "Downloads" },
+	folder: { Icon: Folder, label: "Folder" },
+	usb: { Icon: Usb, label: "USB drive" },
+} as const;
+
 /** Brand glyph on a tile in the brand's colour. The app's own places get a neutral tile. */
 export function BrandIcon({ brand, className }: { brand: Brand; className?: string }) {
 	if (brand === "library") {
@@ -67,76 +103,61 @@ export function BrandIcon({ brand, className }: { brand: Brand; className?: stri
 			</span>
 		);
 	}
-	if (brand === "downloads" || brand === "usb") {
-		const Icon = brand === "usb" ? Usb : Download;
+	if (brand === "downloads" || brand === "folder" || brand === "usb") {
+		const place = OWN_PLACES[brand];
 		return (
-			<span
-				role="img"
-				aria-label={brand === "usb" ? "USB drive" : "Downloads"}
-				className={cn(TILE, "bg-muted", className)}
-			>
-				<Icon className="size-[55%] text-muted-foreground" />
+			<span role="img" aria-label={place.label} className={cn(TILE, "bg-muted", className)}>
+				<place.Icon className="size-[55%] text-muted-foreground" />
 			</span>
 		);
 	}
-	if (isLettermark(brand)) {
-		const mark = LETTERMARKS[brand];
+	if (isArtwork(brand)) {
+		const artwork = ARTWORK[brand];
 		return (
+			// Light in both themes, like the logo's own background; its dark parts stay dark.
 			<span
 				role="img"
-				aria-label={mark.label}
-				className={cn(TILE, "@container bg-muted font-semibold text-foreground/80", className)}
+				aria-label={artwork.label}
+				className={cn(TILE, "bg-white text-[#202020]", className)}
 			>
-				<span aria-hidden="true" className="text-[min(42cqw,1rem)] leading-none tracking-tight">
-					{mark.letters}
-				</span>
+				<ArtworkSvg art={artwork.art} className="size-[70%]" />
 			</span>
 		);
 	}
-	const { icon, label } = LOGOS[brand];
+	const { mark, label } = LOGOS[brand];
 	return (
 		<span
 			role="img"
 			aria-label={label}
 			className={cn(TILE, className)}
-			style={{ backgroundColor: `#${icon.hex}` }}
+			style={{ backgroundColor: `#${mark.hex}` }}
 		>
-			<svg viewBox="0 0 24 24" aria-hidden="true" className="size-[55%] fill-white">
-				<path d={icon.path} />
+			<svg viewBox={mark.viewBox} aria-hidden="true" className="size-[55%] fill-white">
+				<path d={mark.path} fillRule={mark.evenOdd ? "evenodd" : undefined} />
 			</svg>
 		</span>
 	);
 }
 
 /**
- * A service's mark without a tile, to sit beside its name in running text, a pill or a menu:
- * the logo in its own colour (or the text colour, when that is too dark to read), or its initials.
- * Sized by `className` (default 1rem). The name beside it is the label, so it is hidden from
- * screen readers.
+ * A service's mark without a tile, to sit beside its name in running text, a pill or a menu: the
+ * logo in its own colours (or the text colour, when its colour is too dark to read). Sized by
+ * `className` (default 1rem). The name beside it is the label, so it is hidden from screen readers.
  */
-export function BrandGlyph({ brand, className }: { brand: Logo | Lettermark; className?: string }) {
-	if (isLogo(brand)) {
-		const { icon } = LOGOS[brand];
-		return (
-			<svg
-				viewBox="0 0 24 24"
-				aria-hidden="true"
-				className={cn("size-4 shrink-0", isDark(icon.hex) && "fill-current", className)}
-				style={isDark(icon.hex) ? undefined : { fill: `#${icon.hex}` }}
-			>
-				<path d={icon.path} />
-			</svg>
-		);
+export function BrandGlyph({ brand, className }: { brand: Logo | Artwork; className?: string }) {
+	if (isArtwork(brand)) {
+		return <ArtworkSvg art={ARTWORK[brand].art} className={cn("size-4 shrink-0", className)} />;
 	}
+	const { mark } = LOGOS[brand];
+	const dark = isDark(mark.hex);
 	return (
-		<span
+		<svg
+			viewBox={mark.viewBox}
 			aria-hidden="true"
-			className={cn(
-				"inline-grid h-4 min-w-4 shrink-0 place-items-center rounded-[4px] bg-foreground/10 px-0.5 font-semibold text-[0.5625rem] leading-none tracking-tight",
-				className,
-			)}
+			className={cn("size-4 shrink-0", dark && "fill-current", className)}
+			style={dark ? undefined : { fill: `#${mark.hex}` }}
 		>
-			{LETTERMARKS[brand].letters}
-		</span>
+			<path d={mark.path} fillRule={mark.evenOdd ? "evenodd" : undefined} />
+		</svg>
 	);
 }

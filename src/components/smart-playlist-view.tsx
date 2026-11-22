@@ -51,16 +51,11 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 		<main>
 			<CollectionHeader
 				sort={<HeaderSongSort songs={songs.length} sort={sort} />}
-				kind={
-					<>
-						<Sparkles className="size-3.5" /> Smart playlist
-					</>
-				}
 				title={playlist.name}
 				meta={
 					<>
 						<span>
-							{songs.length} {songs.length === 1 ? "song" : "songs"} right now
+							{songs.length} {songs.length === 1 ? "song" : "songs"}
 						</span>
 						{seconds >= 1 && <span>{duration(seconds)}</span>}
 					</>

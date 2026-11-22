@@ -14,9 +14,9 @@ use lofty::tag::{Accessor, ItemKey, TagExt, TagType};
 use serde::Serialize;
 use walkdir::WalkDir;
 
+use crate::convert::{ffmpeg_args, sanitize};
 use crate::error::Error;
 use crate::fsops::{self, Undo};
-use crate::itunes::{ffmpeg_args, sanitize};
 use crate::scan::is_audio;
 
 /// MP3 tops out at 48 kHz; high-resolution sources must be resampled to convert.
@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn end_to_end_fixes_with_real_audio() {
-        let Some(ffmpeg) = crate::itunes::find_ffmpeg() else {
+        let Some(ffmpeg) = crate::convert::find_ffmpeg() else {
             return;
         };
         let root = tmp("e2e");

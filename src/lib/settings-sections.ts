@@ -1,4 +1,4 @@
-const SECTIONS = ["library", "lookup", "appearance", "shortcuts", "about"] as const;
+const SECTIONS = ["library", "analysis", "lookup", "appearance", "shortcuts", "about"] as const;
 
 /** A tab of Settings. */
 export type SettingsSection = (typeof SECTIONS)[number];

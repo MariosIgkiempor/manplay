@@ -1,4 +1,4 @@
-import type { ExportSelection } from "#/lib/api.ts";
+import { DEFAULT_FOLDER_FILE_NAMES, type ExportSelection } from "#/lib/api.ts";
 import { TAG_SEP } from "#/lib/tag-tree.ts";
 
 export const plural = (n: number, one: string, many = `${one}s`) =>
@@ -18,7 +18,9 @@ export const EMPTY_SELECTION: ExportSelection = {
 		virtualDj: false,
 		gemini: false,
 		playlistFolders: false,
+		rekordboxFormats: { deviceLibrary: true, oneLibrary: true },
 	},
+	usbFolderFileNames: DEFAULT_FOLDER_FILE_NAMES,
 };
 
 /** One thing a destination can be sent: a playlist, a smart playlist, or a tag as a playlist. */

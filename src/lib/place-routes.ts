@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { DESTINATION_SERVICES } from "#/lib/places.ts";
 
+/** `/import/$folderId`: the import folder's database id. */
+export const folderParamsSchema = z.object({
+	folderId: z.coerce.number().int().positive().brand<"ImportFolderId">(),
+});
+
 /** `/export/$targetId`: the destination's database id. */
 export const targetParamsSchema = z.object({ targetId: z.coerce.number().int().positive() });
 

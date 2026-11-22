@@ -75,11 +75,6 @@ function PlaylistPage() {
 		<main>
 			<CollectionHeader
 				sort={<HeaderSongSort songs={list.length} sort={sort} />}
-				kind={
-					<>
-						<ListMusic className="size-3.5" /> Playlist
-					</>
-				}
 				title={playlist?.name ?? "Playlist"}
 				meta={
 					<>

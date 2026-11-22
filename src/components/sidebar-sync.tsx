@@ -1,23 +1,23 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
 import {
 	ArrowRight,
 	Check,
 	CloudUpload,
 	Download,
+	Eject,
 	FolderOpen,
 	Loader2,
 	RefreshCw,
 	Trash2,
 	TriangleAlert,
 	Upload,
+	Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
-import { useDownloadsEnabled } from "#/components/downloads-source.tsx";
-import { useItunesOn } from "#/components/itunes-source.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { useRemoveDestination } from "#/components/remove-destination.tsx";
-import { LibraryBadge } from "#/components/shared-library.tsx";
 import { AddButton } from "#/components/sidebar-create.tsx";
 import { GroupHeading, RowTrailing, SectionLabel } from "#/components/sidebar-parts.tsx";
 import {
@@ -30,11 +30,12 @@ import {
 } from "#/components/sidebar-row.ts";
 import { type SyncKind, useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
-import { isR2, targetShortName } from "#/lib/api.ts";
+import { type ImportFolder, isR2, targetShortName, type UsbDrive, usbEject } from "#/lib/api.ts";
 import { compactCount as compact, formatBytes } from "#/lib/format.ts";
-import { useClashes, useItunesPending, useSyncScans, useSyncTargets } from "#/lib/queries.ts";
+import { folderBrand, folderName } from "#/lib/import-folders.ts";
+import { useClashes, useSyncScans, useSyncTargets } from "#/lib/queries.ts";
 import { type DestinationStatus, destinationStatus } from "#/lib/sync-status.ts";
-import { useDownloadsNewCount } from "#/lib/use-import.ts";
+import { useAddImportFolder, useImportFolders, useImportNewCount } from "#/lib/use-import.ts";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
@@ -75,7 +76,7 @@ function QuickActions() {
 
 /**
  * A source or destination: opens its page. Its state sits at the right end, lined up with every
- * row's count; a destination's Browse files button takes that spot while hovered.
+ * row's count; its hover action (Browse files, Eject) takes that spot while hovered.
  */
 function ChildRow({
 	brand,
@@ -83,9 +84,9 @@ function ChildRow({
 	title,
 	active,
 	dim,
-	badge,
+	shared,
 	trailing,
-	browse,
+	hoverAction,
 	onOpen,
 }: {
 	brand: Brand;
@@ -94,11 +95,11 @@ function ChildRow({
 	active: boolean;
 	/** Switched off: shown, but quieter. */
 	dim?: boolean;
-	/** A small mark right after the name, e.g. that it holds the shared library. */
-	badge?: ReactNode;
+	/** Holds the shared library: a small mark on the icon's corner. */
+	shared?: boolean;
 	trailing?: ReactNode;
-	/** Destination id whose files can be browsed; shows a button in the last column on hover. */
-	browse?: number;
+	/** A button shown over the trailing state while the row is hovered. */
+	hoverAction?: ReactNode;
 	onOpen: () => void;
 }) {
 	return (
@@ -110,27 +111,88 @@ function ChildRow({
 				className={cn(rowBase, "text-left outline-none", dim && "opacity-60")}
 				style={{ paddingLeft: `${CHILD_PAD}px` }}
 			>
-				<BrandIcon brand={brand} className="size-4 shrink-0 rounded-[4px] ring-0" />
+				<span className="-my-0.5 relative shrink-0">
+					<BrandIcon brand={brand} className="size-5 rounded-[5px] ring-0" />
+					{shared && <SharedMark />}
+				</span>
 				<span className="min-w-0 truncate">{label}</span>
-				{badge}
 				{trailing && (
-					<RowTrailing className={cn(browse !== undefined && UNDER_HOVER_END)}>
+					<RowTrailing className={cn(hoverAction !== undefined && UNDER_HOVER_END)}>
 						{trailing}
 					</RowTrailing>
 				)}
 			</button>
-			{browse !== undefined && (
-				<Link
-					to="/files"
-					search={{ target: browse }}
-					aria-label={`Browse files on ${label}`}
-					title="Browse files"
-					className={cn(iconButton, "size-5", HOVER_END)}
-				>
-					<FolderOpen />
-				</Link>
-			)}
+			{hoverAction}
 		</div>
+	);
+}
+
+/** That a destination holds the shared library, as a dot with people on the icon's top-left. */
+function SharedMark() {
+	return (
+		<span
+			role="img"
+			aria-label="Shared library"
+			title="Shared library: tags, playlists and analysis sync through here"
+			className="-top-1 -left-1 absolute grid size-3 place-items-center rounded-full bg-primary text-primary-foreground ring-2 ring-canvas"
+		>
+			<Users className="size-2" strokeWidth={3} />
+		</span>
+	);
+}
+
+/** Browse files on a destination, shown over its state while the row is hovered. */
+function BrowseButton({ target, label }: { target: number; label: string }) {
+	return (
+		<Link
+			to="/files"
+			search={{ target }}
+			aria-label={`Browse files on ${label}`}
+			title="Browse files"
+			className={cn(iconButton, "size-5", HOVER_END)}
+		>
+			<FolderOpen />
+		</Link>
+	);
+}
+
+/** Ejects a drive, shown over its free space while the row is hovered; leaves its page once gone. */
+function EjectButton({ drive }: { drive: UsbDrive }) {
+	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+	const matchRoute = useMatchRoute();
+	const onItsPage = Boolean(matchRoute({ to: "/export/usb", search: { mount: drive.mount } }));
+	const eject = useMutation({
+		mutationFn: () => usbEject(drive.mount),
+		onSuccess: async () => {
+			if (onItsPage) {
+				await navigate({ to: "/export" });
+			}
+			await queryClient.invalidateQueries({ queryKey: ["usb-drives"] });
+		},
+	});
+	const failed = eject.isError ? `Could not eject: ${String(eject.error)}` : null;
+	return (
+		<button
+			type="button"
+			aria-label={failed ?? `Eject ${drive.name}`}
+			title={failed ?? "Eject"}
+			disabled={eject.isPending}
+			onClick={() => eject.mutate()}
+			className={cn(
+				iconButton,
+				"size-5",
+				HOVER_END,
+				failed && "text-destructive opacity-100",
+				eject.isPending && "opacity-100",
+			)}
+		>
+			{eject.isPending ? (
+				<Loader2 className="animate-spin motion-reduce:animate-none" />
+			) : (
+				<Eject />
+			)}
+		</button>
 	);
 }
 
@@ -147,48 +209,31 @@ function PendingCount({ count, what }: { count: number | null; what: string }) {
 }
 
 function ImportItems() {
-	const navigate = useNavigate();
-	const matchRoute = useMatchRoute();
-	const downloads = useDownloadsEnabled().enabled;
-	const downloadsNew = useDownloadsNewCount(downloads);
-	const itunes = useItunesOn();
-	const itunesPending = useItunesPending(itunes).data?.length ?? null;
-	const rows = [
-		{
-			to: "/import/downloads",
-			brand: "downloads",
-			label: "Downloads",
-			on: downloads,
-			pending: <PendingCount count={downloadsNew} what="new songs found" />,
-		},
-		{
-			to: "/import/itunes",
-			brand: "itunes",
-			label: "iTunes",
-			on: itunes,
-			pending: <PendingCount count={itunesPending} what="songs not imported yet" />,
-		},
-	] as const satisfies readonly {
-		to: "/import/downloads" | "/import/itunes";
-		brand: Brand;
-		label: string;
-		on: boolean;
-		pending: ReactNode;
-	}[];
+	const folders = useImportFolders().data ?? [];
 	return (
 		<>
-			{rows.map((r) => (
-				<ChildRow
-					key={r.to}
-					brand={r.brand}
-					label={r.label}
-					active={Boolean(matchRoute({ to: r.to }))}
-					dim={!r.on}
-					trailing={r.on ? r.pending : "Off"}
-					onOpen={() => void navigate({ to: r.to })}
-				/>
+			{folders.map((f) => (
+				<ImportFolderItem key={f.id} folder={f} />
 			))}
 		</>
+	);
+}
+
+function ImportFolderItem({ folder }: { folder: ImportFolder }) {
+	const navigate = useNavigate();
+	const matchRoute = useMatchRoute();
+	const found = useImportNewCount(folder);
+	const params = { folderId: folder.id };
+	return (
+		<ChildRow
+			brand={folderBrand(folder.path)}
+			label={folderName(folder.path)}
+			title={folder.path}
+			active={Boolean(matchRoute({ to: "/import/$folderId", params }))}
+			dim={!folder.enabled}
+			trailing={folder.enabled ? <PendingCount count={found} what="new songs found" /> : "Off"}
+			onOpen={() => void navigate({ to: "/import/$folderId", params })}
+		/>
 	);
 }
 
@@ -295,8 +340,8 @@ function ExportItems() {
 							title={`${t.machine}: ${t.path.join(" / ") || "bucket root"}`}
 							// The URL holds the id as text; compare it as a number.
 							active={matchTarget !== false && Number(matchTarget.targetId) === t.id}
-							browse={t.id}
-							badge={t.libsync && <LibraryBadge target={t} focusable={false} />}
+							hoverAction={<BrowseButton target={t.id} label={targetShortName(t)} />}
+							shared={t.libsync}
 							trailing={
 								syncing.has(t.id) ? (
 									<span
@@ -331,6 +376,7 @@ function ExportItems() {
 					title={`${d.name}, ${formatBytes(d.freeBytes)} free`}
 					active={Boolean(matchRoute({ to: "/export/usb", search: { mount: d.mount } }))}
 					trailing={formatBytes(d.freeBytes)}
+					hoverAction={<EjectButton drive={d} />}
 					onOpen={() => void navigate({ to: "/export/usb", search: { mount: d.mount } })}
 				/>
 			))}
@@ -364,6 +410,7 @@ function ClashesRow() {
  */
 export function SidebarSync() {
 	const navigate = useNavigate();
+	const addFolder = useAddImportFolder();
 	const [importClosed, setImportClosed] = useStoredFlag("manplay.sidebar.importClosed");
 	const [exportClosed, setExportClosed] = useStoredFlag("manplay.sidebar.exportClosed");
 	return (
@@ -376,6 +423,18 @@ export function SidebarSync() {
 				icon={<Download />}
 				open={!importClosed}
 				onToggle={() => setImportClosed(!importClosed)}
+				action={
+					<AddButton
+						label="Add import folder"
+						onClick={() =>
+							addFolder.mutate(undefined, {
+								onSuccess: (f) =>
+									f && void navigate({ to: "/import/$folderId", params: { folderId: f.id } }),
+							})
+						}
+						className={HOVER_ACTION}
+					/>
+				}
 			/>
 			{!importClosed && <ImportItems />}
 			<GroupHeading

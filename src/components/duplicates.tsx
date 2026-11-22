@@ -40,11 +40,12 @@ export function DuplicatesIndicator({ onClick }: { onClick: () => void }) {
 			<button
 				type="button"
 				onClick={onClick}
-				title="Songs that were re-encoded can take their tags and playlists along"
+				title={`${carry.length} re-encoded ${carry.length === 1 ? "song" : "songs"}: they can take their tags and playlists along`}
+				aria-label={`${carry.length} re-encoded ${carry.length === 1 ? "song" : "songs"}`}
 				className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-warning hover:bg-warning/15"
 			>
 				<Copy className="size-3.5" />
-				{carry.length} re-encoded {carry.length === 1 ? "song" : "songs"}
+				{carry.length} re-encoded
 			</button>
 		);
 	}
@@ -53,11 +54,12 @@ export function DuplicatesIndicator({ onClick }: { onClick: () => void }) {
 		<button
 			type="button"
 			onClick={onClick}
-			title="Show songs stored more than once"
+			title={`${copies} duplicate ${copies === 1 ? "file" : "files"}: songs stored more than once. Show them.`}
+			aria-label={`${copies} duplicate ${copies === 1 ? "file" : "files"}`}
 			className="flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-warning hover:bg-warning/15"
 		>
 			<Copy className="size-3.5" />
-			{copies} duplicate {copies === 1 ? "file" : "files"}
+			{copies} {copies === 1 ? "duplicate" : "duplicates"}
 		</button>
 	);
 }

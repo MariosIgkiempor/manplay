@@ -1,5 +1,4 @@
-import { useIsMutating } from "@tanstack/react-query";
-import { AudioWaveform, FolderOpen, Music, RefreshCw } from "lucide-react";
+import { FolderOpen, Music, RefreshCw } from "lucide-react";
 import { useMemo } from "react";
 import { AlbumGrid } from "#/components/album-grid.tsx";
 import { ArtistGrid } from "#/components/artist-grid.tsx";
@@ -10,11 +9,9 @@ import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import type { View } from "#/components/view-toggle.tsx";
 import type { groupAlbums } from "#/lib/albums.ts";
-import { openAnalysisDrawer } from "#/lib/analysis-drawer.ts";
 import type { Track } from "#/lib/api.ts";
 import { groupArtists } from "#/lib/artists.ts";
 import type { LibrarySorts } from "#/lib/library-sorts.ts";
-import { ANALYSIS_KEY } from "#/lib/queries.ts";
 import { ALBUM_SORTS, ARTIST_SORTS, SONG_SORTS, sortArtists } from "#/lib/sorting.ts";
 
 /** The sort menu for whichever view the library shows. */
@@ -156,27 +153,5 @@ export function LibraryEmpty({
 		>
 			manplay reads the songs in it and keeps them where they are.
 		</EmptyState>
-	);
-}
-
-/** Opens the BPM and key analysis drawer; pulses while an analysis runs. */
-export function AnalyzeButton({ tracks }: { tracks: readonly Track[] }) {
-	const running = useIsMutating({ mutationKey: ANALYSIS_KEY }) > 0;
-	const pending = tracks.filter((t) => !t.analyzed).length;
-	const title = running
-		? "BPM & key analysis (running)"
-		: pending === 0
-			? "BPM & key analysis"
-			: `BPM & key analysis (${pending} ${pending === 1 ? "song" : "songs"} not analyzed yet)`;
-	return (
-		<Button variant="outline" title={title} onClick={openAnalysisDrawer}>
-			<AudioWaveform className={running ? "animate-pulse" : ""} />
-			BPM & key
-			{pending > 0 && !running && (
-				<span className="rounded-full bg-primary/15 px-1.5 text-primary text-xs tabular-nums">
-					{pending}
-				</span>
-			)}
-		</Button>
 	);
 }

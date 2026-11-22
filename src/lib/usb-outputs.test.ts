@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { UsbExportReport, UsbOutputs } from "#/lib/api.ts";
+import type { RekordboxFormats, UsbExportReport, UsbOutputs } from "#/lib/api.ts";
 import {
 	chosenOutputs,
 	exportSteps,
 	outputProblems,
 	outputResults,
+	rekordboxFormatsName,
 	reviewNotes,
 } from "#/lib/usb-outputs.ts";
 
@@ -14,6 +15,7 @@ const none: UsbOutputs = {
 	virtualDj: false,
 	gemini: false,
 	playlistFolders: false,
+	rekordboxFormats: { deviceLibrary: true, oneLibrary: true },
 };
 const rekordbox: UsbOutputs = { ...none, rekordbox: true };
 
@@ -30,6 +32,7 @@ const report: UsbExportReport = {
 	libraryTracks: 2,
 	backup: null,
 	rekordbox: false,
+	deviceLibrary: false,
 	oneLibrary: false,
 	oneLibraryError: null,
 	seratoCrates: null,
@@ -54,7 +57,14 @@ describe("exportSteps", () => {
 		["folders only", { ...none, playlistFolders: true }, ["copying", "writing", "folders"]],
 		[
 			"everything",
-			{ rekordbox: true, serato: true, virtualDj: true, gemini: true, playlistFolders: true },
+			{
+				...none,
+				rekordbox: true,
+				serato: true,
+				virtualDj: true,
+				gemini: true,
+				playlistFolders: true,
+			},
 			["copying", "analyzing", "writing", "folders", "libraries"],
 		],
 	])("lists the phases for %s", (_name, outputs, phases) => {
@@ -93,6 +103,43 @@ describe("reviewNotes", () => {
 	});
 });
 
+describe("rekordbox's libraries", () => {
+	it.each<[string, RekordboxFormats, string, string]>([
+		[
+			"both",
+			{ deviceLibrary: true, oneLibrary: true },
+			"Device Library and OneLibrary",
+			"The drive's songs and playlists are written as a rekordbox library.",
+		],
+		[
+			"Device Library only",
+			{ deviceLibrary: true, oneLibrary: false },
+			"Device Library",
+			"The drive's songs and playlists are written as rekordbox's Device Library, for the CDJ-3000 and older players. A OneLibrary already on the drive is removed, with a copy kept in PIONEER/manplay-backup.",
+		],
+		[
+			"OneLibrary only",
+			{ deviceLibrary: false, oneLibrary: true },
+			"OneLibrary",
+			"The drive's songs and playlists are written as rekordbox's OneLibrary, for the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo. A Device Library already on the drive is removed, with a copy kept in PIONEER/manplay-backup.",
+		],
+	])("%s are named and reviewed", (_, rekordboxFormats, name, note) => {
+		expect(rekordboxFormatsName(rekordboxFormats)).toBe(name);
+		expect(reviewNotes({ ...rekordbox, rekordboxFormats }, "add")).toEqual([note]);
+	});
+
+	it.each<[string, Partial<UsbExportReport>, string]>([
+		["both", { deviceLibrary: true, oneLibrary: true }, "Every Pioneer and AlphaTheta player"],
+		["Device Library", { deviceLibrary: true }, "CDJ-3000 and older players only"],
+		["OneLibrary", { oneLibrary: true }, "CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo only"],
+		["neither", { oneLibraryError: "locked" }, "No player: the OneLibrary could not be written"],
+	])("the summary says which players read %s", (_, written, text) => {
+		expect(outputResults({ ...report, rekordbox: true, ...written })).toEqual([
+			{ label: "rekordbox", text },
+		]);
+	});
+});
+
 describe("chosenOutputs", () => {
 	it("names what is switched on", () => {
 		expect(chosenOutputs(none)).toEqual([]);
@@ -110,11 +157,13 @@ describe("outputResults and outputProblems", () => {
 	});
 
 	it("say which players read the rekordbox library", () => {
-		expect(outputResults({ ...report, rekordbox: true, oneLibrary: true })).toEqual([
-			{ label: "rekordbox", text: "Every Pioneer and AlphaTheta player" },
+		expect(
+			outputResults({ ...report, rekordbox: true, deviceLibrary: true, oneLibrary: true }),
+		).toEqual([{ label: "rekordbox", text: "Every Pioneer and AlphaTheta player" }]);
+		const older = { ...report, rekordbox: true, deviceLibrary: true, oneLibraryError: "locked" };
+		expect(outputResults(older)).toEqual([
+			{ label: "rekordbox", text: "CDJ-3000 and older players only" },
 		]);
-		const older = { ...report, rekordbox: true, oneLibraryError: "locked" };
-		expect(outputResults(older)).toEqual([{ label: "rekordbox", text: "CDJ-3000 and older only" }]);
 		expect(outputProblems(older)[0]).toContain("locked");
 	});
 

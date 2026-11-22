@@ -15,7 +15,7 @@ use serde::Deserialize;
 use crate::gemini;
 use crate::pdb::{Library, Playlist};
 use crate::playlist_folders;
-use crate::usb_export::{has_library, has_rekordbox, read_libraries, write_libraries};
+use crate::usb_export::{RekordboxFormats, has_library, read_libraries, write_libraries};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(
@@ -172,11 +172,12 @@ pub fn edit(mount: &Path, edit: Edit, stamp: &str, today: &str) -> Result<Outcom
     if !has_library(mount) {
         return Err("This drive has no library yet.".into());
     }
-    let rekordbox = has_rekordbox(mount);
+    let rekordbox = RekordboxFormats::on_drive(mount);
     let (mut lib, sequence) = read_libraries(mount)?;
     let created = apply(&mut lib, edit)?;
     // A drive with playlist folders or a Gemini library keeps them in step with its playlists.
-    let arrangement = playlist_folders::move_homes(mount, &mut lib, playlist_folders::is_on(mount));
+    let arrangement =
+        playlist_folders::move_homes(mount, &mut lib, playlist_folders::template(mount).as_ref());
     let unmoved = arrangement
         .failed
         .first()
@@ -396,9 +397,8 @@ mod tests {
         let kept =
             fs::read(mount.join("PIONEER/manplay-backup/day-edits/export.pdb")).expect("copy");
         assert_eq!(kept, original);
-        // Players that read the newer library see the same (now empty) playlists.
-        let one = crate::onelib::read(&mount.join(ONE_LIBRARY_PATH)).expect("OneLibrary");
-        assert_eq!(one.playlists, []);
+        // The drive keeps the rekordbox libraries it had, and gains none it was exported without.
+        assert!(!mount.join(ONE_LIBRARY_PATH).exists());
         let _ = fs::remove_dir_all(&mount);
     }
 
