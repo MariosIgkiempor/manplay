@@ -119,3 +119,26 @@ switch is replaced by the join / leave flow.
 Known gaps: two devices that both carry over at the same moment can each write a
 `library.json` (step 7); a stale `devices/<id>.json` stays if its device never leaves; the member
 list has no "remove device"; Replace does not stop a rescan from recreating tags from file tags.
+
+## The library folder as the library's home
+
+A shared library can also live in the library folder itself (`<library folder>/.manplay/`, same
+files as on a destination), for a folder several computers open: a network share, or a folder a
+sync app copies around.
+
+- **Home**: `membership::Home` is `Target(id)` (`sync_targets.libsync`) or `Folder`
+  (`settings.library_in_folder = "1"`). Still one library per device.
+- **Store**: `libsync/folder.rs` (`FolderStore`). Every file is written under a dot-named temp
+  name and renamed; chunks are never replaced. The sync lock is `.manplay/sync.lock` as on a
+  destination, created with a hard link (or create-new where links are refused)
+  (`sync::lock::acquire_folder`).
+- **Detecting**: `FolderLibraryWatch` (mounted in `__root.tsx`) reads the folder's
+  `library.json` and `devices/` when the device is in no library. If another computer is a
+  member it opens the join dialog once per library (dismissal kept in `localStorage`).
+- **Sharing**: Settings → Shared library → Library folder → "Share or join…" (Start).
+- **Syncing**: `libsync_run_folder` at launch, every minute and when the window comes back
+  (`useFolderLibrarySync`). Waveforms move after each run like after a destination sync.
+- **Changing the library folder** leaves the old folder's library with a copy, like removing a
+  destination.
+
+Breaking changes: none. New setting `library_in_folder` (additive).

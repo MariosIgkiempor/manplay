@@ -139,7 +139,7 @@ function SyncTargetStep({ service }: { service: "tailscale" | "r2" }) {
 			{service === "r2" ? <AddR2 onAdded={setAdded} /> : <AddTailscale onAdded={setAdded} />}
 			{offer && (
 				<JoinLibraryDialog
-					target={offer}
+					place={{ kind: "target", target: offer }}
 					onClose={() => {
 						setAsked(offer.id);
 						setOffering(null);

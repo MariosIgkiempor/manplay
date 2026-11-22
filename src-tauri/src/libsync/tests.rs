@@ -2055,9 +2055,15 @@ async fn started(store: &Memory) -> (Mutex<Connection>, i64) {
     rename_device(&a, "Studio");
     tag(&a, "House", &[1]);
     tag(&a, "Peak", &[2]);
-    let sum = membership::join(&a, id, store, JoinChoice::Start, "Our crates")
-        .await
-        .expect("start");
+    let sum = membership::join(
+        &a,
+        membership::Home::Target(id),
+        store,
+        JoinChoice::Start,
+        "Our crates",
+    )
+    .await
+    .expect("start");
     assert!(sum.error.is_none(), "{:?}", sum.error);
     (a, id)
 }
@@ -2086,7 +2092,14 @@ async fn starting_a_library_writes_its_files_and_shares_what_is_there() {
     assert!(!found.members[0].mine);
     assert!(found.last_change.is_some());
     // Another device cannot start one where there already is one.
-    let err = membership::join(&b, 1, &store, JoinChoice::Start, "Other").await;
+    let err = membership::join(
+        &b,
+        membership::Home::Target(1),
+        &store,
+        JoinChoice::Start,
+        "Other",
+    )
+    .await;
     assert!(err.is_err());
     assert!(!is_joined(&b));
 }
@@ -2098,9 +2111,15 @@ async fn joining_with_merge_shares_mine_and_lists_same_names_as_clashes() {
     let (b, id) = unjoined(3);
     tag(&b, "House", &[3]);
     tag(&b, "Deep", &[3]);
-    let sum = membership::join(&b, id, &store, JoinChoice::Merge, "")
-        .await
-        .expect("join");
+    let sum = membership::join(
+        &b,
+        membership::Home::Target(id),
+        &store,
+        JoinChoice::Merge,
+        "",
+    )
+    .await
+    .expect("join");
     assert!(sum.error.is_none(), "{:?}", sum.error);
     assert!(is_joined(&b));
     assert!(run_both(&a, &b, &store).await);
@@ -2141,9 +2160,15 @@ async fn joining_and_keeping_mine_local_makes_mine_local_and_receives_theirs() {
     tag(&b, "House", &[3]);
     let pl = playlist(&b, "Warmup", &[1, 2]);
     assert!(pl > 0);
-    let sum = membership::join(&b, id, &store, JoinChoice::KeepLocal, "")
-        .await
-        .expect("join");
+    let sum = membership::join(
+        &b,
+        membership::Home::Target(id),
+        &store,
+        JoinChoice::KeepLocal,
+        "",
+    )
+    .await
+    .expect("join");
     assert!(sum.error.is_none(), "{:?}", sum.error);
     assert!(run_both(&a, &b, &store).await);
     let tags = scopes(&b, "tags");
@@ -2164,9 +2189,15 @@ async fn joining_and_replacing_mine_drops_mine_and_takes_theirs() {
     tag(&b, "Mine", &[3]);
     playlist(&b, "Warmup", &[1]);
     assert!(membership::replace_count(&b.lock().expect("lock")).expect("count") >= 2);
-    let sum = membership::join(&b, id, &store, JoinChoice::Replace, "")
-        .await
-        .expect("join");
+    let sum = membership::join(
+        &b,
+        membership::Home::Target(id),
+        &store,
+        JoinChoice::Replace,
+        "",
+    )
+    .await
+    .expect("join");
     assert!(sum.error.is_none(), "{:?}", sum.error);
     assert!(run_both(&a, &b, &store).await);
     assert_eq!(scopes(&b, "tags"), "House:shared,Peak:shared");
@@ -2215,7 +2246,14 @@ async fn a_device_in_one_library_cannot_join_another() {
             r.get(0)
         })
         .expect("id");
-    let err = membership::join(&a, second, &other, JoinChoice::Start, "Two").await;
+    let err = membership::join(
+        &a,
+        membership::Home::Target(second),
+        &other,
+        JoinChoice::Start,
+        "Two",
+    )
+    .await;
     assert!(err.is_err());
     assert_eq!(
         other.calls(),
@@ -2233,9 +2271,15 @@ async fn leaving_with_a_copy_keeps_every_item_as_local() {
     tag(&b, "Deep", &[3]);
     playlist(&b, "Warmup", &[1, 2]);
     smart(&b, "Housey", &["Deep"]);
-    membership::join(&b, bid, &store, JoinChoice::Merge, "")
-        .await
-        .expect("join");
+    membership::join(
+        &b,
+        membership::Home::Target(bid),
+        &store,
+        JoinChoice::Merge,
+        "",
+    )
+    .await
+    .expect("join");
     assert!(run_both(&a, &b, &store).await);
     let before = shown(&b);
     membership::leave(&b, &store, LeaveChoice::KeepCopy, true)
@@ -2304,15 +2348,27 @@ async fn rejoining_after_leaving_meets_the_kept_copies_as_clashes() {
     let store = Memory::default();
     let (_a, _) = started(&store).await;
     let (b, bid) = unjoined(3);
-    membership::join(&b, bid, &store, JoinChoice::Merge, "")
-        .await
-        .expect("join");
+    membership::join(
+        &b,
+        membership::Home::Target(bid),
+        &store,
+        JoinChoice::Merge,
+        "",
+    )
+    .await
+    .expect("join");
     membership::leave(&b, &store, LeaveChoice::KeepCopy, true)
         .await
         .expect("leave");
-    membership::join(&b, bid, &store, JoinChoice::Merge, "")
-        .await
-        .expect("rejoin");
+    membership::join(
+        &b,
+        membership::Home::Target(bid),
+        &store,
+        JoinChoice::Merge,
+        "",
+    )
+    .await
+    .expect("rejoin");
     // The kept copies stay local; the shared ones come back beside them.
     let conn = b.lock().expect("lock");
     assert_eq!(clashes::count(&conn).expect("count"), 2);
@@ -2326,9 +2382,15 @@ async fn leaving_and_keeping_only_local_items_removes_the_shared_ones() {
     db::set_setting(&b.lock().expect("lock"), "default_scope", Some("local")).expect("scope");
     tag(&b, "Mine", &[3]);
     db::set_setting(&b.lock().expect("lock"), "default_scope", None).expect("scope");
-    membership::join(&b, bid, &store, JoinChoice::Merge, "")
-        .await
-        .expect("join");
+    membership::join(
+        &b,
+        membership::Home::Target(bid),
+        &store,
+        JoinChoice::Merge,
+        "",
+    )
+    .await
+    .expect("join");
     assert!(run_both_one(&b, &store).await);
     assert!(scopes(&b, "tags").contains("House:shared"));
     membership::leave(&b, &store, LeaveChoice::KeepLocal, true)
@@ -3040,9 +3102,15 @@ async fn a_deleted_item_can_be_restored_with_its_old_uid_and_songs() {
     let (a, _) = started(&store).await;
     let (b, id) = unjoined(3);
     rename_device(&b, "Laptop");
-    let sum = membership::join(&b, id, &store, JoinChoice::Merge, "")
-        .await
-        .expect("join");
+    let sum = membership::join(
+        &b,
+        membership::Home::Target(id),
+        &store,
+        JoinChoice::Merge,
+        "",
+    )
+    .await
+    .expect("join");
     assert!(sum.error.is_none());
     let now = clock::now_ms();
     smart(&a, "Rule", &["House"]);
@@ -3163,6 +3231,7 @@ async fn years_of_edits_leave_about_one_snapshot_on_the_destination() {
 }
 
 mod edge;
+mod folder;
 
 #[test]
 fn real_audio_prints_name_waveform_files() {

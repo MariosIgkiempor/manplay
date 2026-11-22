@@ -565,9 +565,9 @@ impl LibraryOutcome {
 }
 
 /// Waveforms moved between progress reports, after a sync.
-const WAVEFORM_BATCH: usize = 20;
+pub(crate) const WAVEFORM_BATCH: usize = 20;
 /// Pause between waveform downloads, so the destination is not hammered.
-const FILL_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
+pub(crate) const FILL_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Sends this device's new library edits to the destination and applies everyone else's. Runs
 /// before the files so tags and playlists are in place when songs arrive.
@@ -658,7 +658,8 @@ pub async fn join_library(
         base,
     };
     let name = target_name(target);
-    let summary = libsync::membership::join(db, target.id, &store, choice, &name).await?;
+    let home = libsync::membership::Home::Target(target.id);
+    let summary = libsync::membership::join(db, home, &store, choice, &name).await?;
     let out = LibraryOutcome {
         target_id: target.id,
         name,

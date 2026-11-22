@@ -3,6 +3,7 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { Shell } from "#/components/app-shell.tsx";
 import { AutoRefresh } from "#/components/auto-refresh.tsx";
+import { FolderLibraryWatch } from "#/components/shared-library.tsx";
 import { StatusBarHost, StatusScopeProvider } from "#/components/status-bar.tsx";
 import { StatusNotices } from "#/components/status-notices.tsx";
 import { SyncScanEvents } from "#/components/sync-scan-events.tsx";
@@ -55,6 +56,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 												<SaveSlotContext.Provider value={saveSlot}>
 													<AutoRefresh />
 													<SyncScanEvents />
+													<FolderLibraryWatch />
 													<Shell>{children}</Shell>
 													<StatusBarHost
 														setSlot={setStatusSlot}

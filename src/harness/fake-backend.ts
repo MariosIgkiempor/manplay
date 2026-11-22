@@ -744,6 +744,18 @@ function syncCommands(state: State): Record<string, Command> {
 			newDeviceId: false,
 			error: null,
 		}),
+		libsync_home: () => ({ kind: "target", targetId: NAS_TARGET_ID, name: "Booth Library" }),
+		libsync_inspect_folder: () => null,
+		libsync_join_folder: () => ({
+			sent: 0,
+			received: 0,
+			unreadable: 0,
+			held: 0,
+			clockWrong: false,
+			newDeviceId: false,
+			error: null,
+		}),
+		libsync_run_folder: () => null,
 		get_device_name: () => state.deviceName,
 		set_device_name: (args) => {
 			state.deviceName = text(args.get("name")) || "booth-macbook";

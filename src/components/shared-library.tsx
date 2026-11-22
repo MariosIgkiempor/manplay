@@ -13,24 +13,67 @@ import {
 	type FoundLibrary,
 	type JoinChoice,
 	type LeaveChoice,
+	type LibraryHome,
 	libsyncInspect,
+	libsyncInspectFolder,
 	libsyncReplaceCount,
 	type SyncTarget,
 	targetName,
 } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
 import {
+	type LibraryPlace,
 	useClashes,
 	useDefaultScope,
+	useFolderLibrarySync,
 	useJoinLibrary,
 	useLeaveLibrary,
+	useLibraryHome,
+	useLibraryRoot,
 	useSyncTargets,
 } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
 
-/** What this device calls the shared library on a destination. */
-function libraryLabel(t: SyncTarget): string {
-	return t.libraryName ?? targetName(t);
+/** The last part of a folder path, for a library named after its folder. */
+function folderName(root: string): string {
+	return root.split(/[/\\]/).filter(Boolean).at(-1) ?? root;
+}
+
+/** What this device calls the library it is in, wherever it is kept; null outside one. */
+function homeLabel(home: LibraryHome, targets: SyncTarget[]): string | null {
+	switch (home.kind) {
+		case "none":
+			return null;
+		case "folder":
+			return home.name ?? folderName(home.root);
+		case "target": {
+			const target = targets.find((t) => t.id === home.targetId);
+			return home.name ?? (target ? targetName(target) : "the shared library");
+		}
+	}
+}
+
+/** Whether the library this device is in is kept at `place`. */
+function isHome(home: LibraryHome, place: LibraryPlace): boolean {
+	return place.kind === "folder"
+		? home.kind === "folder"
+		: home.kind === "target" && home.targetId === place.target.id;
+}
+
+/** How a sentence names a place: the destination's name, or "your library folder". */
+function placeName(place: LibraryPlace): string {
+	return place.kind === "target" ? targetName(place.target) : "your library folder";
+}
+
+/** Reads what a place holds; writes nothing. */
+function useInspect(place: LibraryPlace, options: { enabled?: boolean; staleTime?: number }) {
+	return useQuery({
+		queryKey: ["library-inspect", place.kind === "target" ? place.target.id : "folder"],
+		queryFn: () =>
+			place.kind === "target" ? libsyncInspect(place.target.id) : libsyncInspectFolder(),
+		retry: false,
+		...options,
+	});
 }
 
 /** Whether this destination holds the device's shared library or only takes the files. */
@@ -97,12 +140,13 @@ function Choice({
 
 /** Leaving the library: keep what was shared as local items, or only what was always local. */
 export function LeaveLibraryDialog({
-	target,
+	label,
 	title,
 	onDone,
 	onCancel,
 }: {
-	target: SyncTarget;
+	/** What this device calls the library. */
+	label: string;
 	title?: string;
 	onDone: () => void;
 	onCancel: () => void;
@@ -115,7 +159,7 @@ export function LeaveLibraryDialog({
 	};
 	return (
 		<Dialog
-			title={title ?? `Leave ${libraryLabel(target)}?`}
+			title={title ?? `Leave ${label}?`}
 			onCancel={onCancel}
 			footer={
 				<div className="space-y-2">
@@ -209,50 +253,44 @@ function ReplaceConfirm({
 type Stage = "leave" | "look" | "replace";
 
 /**
- * Reads what a destination holds and asks what to do about it: join (three ways), start a
- * library, or keep it files only. A device is in one library at a time, so a device that is in
- * another one is asked to leave it first.
+ * Reads what a destination (or the library folder) holds and asks what to do about it: join
+ * (three ways), start a library, or leave it be. A device is in one library at a time, so a device
+ * that is in another one is asked to leave it first.
  */
 export function JoinLibraryDialog({
-	target,
+	place,
 	onClose,
 }: {
-	target: SyncTarget;
+	place: LibraryPlace;
 	onClose: () => void;
 }) {
-	const targets = useSyncTargets();
-	const other = targets.data?.find((t) => t.libsync && t.id !== target.id);
+	const targets = useSyncTargets().data ?? [];
+	const home = useLibraryHome().data;
+	const other = home && !isHome(home, place) ? homeLabel(home, targets) : null;
 	const [stage, setStage] = useState<Stage>(other ? "leave" : "look");
 	const join = useJoinLibrary();
 	const [note, setNote] = useState<string | null>(null);
-	const found = useQuery({
-		queryKey: ["library-inspect", target.id],
-		queryFn: () => libsyncInspect(target.id),
-		enabled: stage !== "leave",
-		retry: false,
-		gcTime: 0,
-		refetchOnWindowFocus: false,
-	});
+	const found = useInspect(place, { enabled: stage !== "leave" });
 	const go = (choice: JoinChoice) =>
 		join.mutate(
-			{ id: target.id, choice },
+			{ place, choice },
 			{
-				onSuccess: (out) => {
-					if (out.error) {
-						setNote(out.error);
+				onSuccess: (error) => {
+					if (error) {
+						setNote(error);
 					} else {
 						onClose();
 					}
 				},
 			},
 		);
-	const where = targetName(target);
+	const where = placeName(place);
 
 	if (stage === "leave" && other) {
 		return (
 			<LeaveLibraryDialog
-				target={other}
-				title={`Leave ${libraryLabel(other)} to join ${where}?`}
+				label={other}
+				title={`Leave ${other} to join the one in ${where}?`}
 				onDone={() => setStage("look")}
 				onCancel={onClose}
 			/>
@@ -287,7 +325,7 @@ export function JoinLibraryDialog({
 	}
 	return (
 		<LookDialog
-			target={target}
+			place={place}
 			found={found}
 			join={join}
 			onChoose={go}
@@ -300,29 +338,52 @@ export function JoinLibraryDialog({
 type Inspect = UseQueryResult<FoundLibrary | null>;
 type Join = ReturnType<typeof useJoinLibrary>;
 
-/** What the destination holds, and the ways to join it, start one there, or not share. */
+/** How the dialogs word each kind of place. */
+const WORDING = {
+	target: {
+		startTitle: (where: string) => `Start a shared library on ${where}?`,
+		startLabel: "Start a shared library",
+		startBody:
+			"Your other devices can join it when they add this destination. The songs stay plain files, so Jellyfin sees them as before.",
+		starting: "Starting the library…",
+		notNow: "Files only",
+		notNowHint: "Copy the songs and nothing else. manplay writes nothing more here.",
+		foundTitle: (name: string) => `Library found: ${name}`,
+		dontJoin: "Files only",
+		dontJoinHint: "Don't join. manplay never reads or writes .manplay there.",
+	},
+	folder: {
+		startTitle: () => "Share your library folder?",
+		startLabel: "Share this library",
+		startBody:
+			"For a library folder that other computers open too, such as a network share or a folder a sync app keeps copied. When they choose it as their library folder, manplay offers to join.",
+		starting: "Sharing the library…",
+		notNow: "Not now",
+		notNowHint: "Keep it to this computer. manplay writes nothing more in the folder.",
+		foundTitle: (name: string) => `This folder holds a shared library: ${name}`,
+		dontJoin: "Don't join",
+		dontJoinHint: "Use the songs only. manplay never reads or writes .manplay in the folder.",
+	},
+} as const;
+
+/** What the place holds, and the ways to join it, start one there, or not share. */
 function LookDialog({
-	target,
+	place,
 	found,
 	join,
 	onChoose,
 	onReplace,
 	onClose,
 }: {
-	target: SyncTarget;
+	place: LibraryPlace;
 	found: Inspect;
 	join: Join;
 	onChoose: (choice: JoinChoice) => void;
 	onReplace: () => void;
 	onClose: () => void;
 }) {
-	const where = targetName(target);
-
-	const filesOnly = (
-		<Button variant="ghost" onClick={onClose} disabled={join.isPending}>
-			Files only
-		</Button>
-	);
+	const where = placeName(place);
+	const words = WORDING[place.kind];
 	if (found.isPending || found.isFetching) {
 		return (
 			<Dialog title={`Looking in ${where}`} onCancel={onClose} footer={null}>
@@ -337,7 +398,9 @@ function LookDialog({
 				onCancel={onClose}
 				footer={
 					<div className="flex justify-end gap-2">
-						{filesOnly}
+						<Button variant="ghost" onClick={onClose} disabled={join.isPending}>
+							{words.notNow}
+						</Button>
 						<Button onClick={() => found.refetch()}>Try again</Button>
 					</div>
 				}
@@ -347,47 +410,88 @@ function LookDialog({
 		);
 	}
 	if (found.data === null) {
-		return (
-			<Dialog
-				title={`Start a shared library on ${where}?`}
-				onCancel={onClose}
-				footer={
-					<div className="space-y-2">
-						<Choice
-							tone="main"
-							label="Start a shared library"
-							hint="Your tags and playlists are shared. Make any of them private from its page."
-							disabled={join.isPending}
-							onClick={() => onChoose("start")}
-						/>
-						<Choice
-							label="Files only"
-							hint="Copy the songs and nothing else. manplay writes nothing more here."
-							disabled={join.isPending}
-							onClick={onClose}
-						/>
-						{join.isError && <ErrorLine>{String(join.error)}</ErrorLine>}
-						{join.isPending && <LoadingLine>Starting the library…</LoadingLine>}
-					</div>
-				}
-			>
-				<p>
-					Your other devices can join it when they add this destination. The songs stay plain files,
-					so Jellyfin sees them as before.
-				</p>
-				<dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-					<dt className="text-foreground">Shared</dt>
-					<dd>Tags, playlists, smart playlists, BPM, key, beat grids, waveforms</dd>
-					<dt className="text-foreground">Stays here</dt>
-					<dd>Cues and settings</dd>
-				</dl>
-			</Dialog>
-		);
+		return <StartDialog place={place} join={join} onChoose={onChoose} onClose={onClose} />;
 	}
-	const library = found.data;
+	return (
+		<FoundDialog
+			place={place}
+			library={found.data}
+			join={join}
+			onChoose={onChoose}
+			onReplace={onReplace}
+			onClose={onClose}
+		/>
+	);
+}
+
+/** No library at the place yet: start one there, or leave it be. */
+function StartDialog({
+	place,
+	join,
+	onChoose,
+	onClose,
+}: {
+	place: LibraryPlace;
+	join: Join;
+	onChoose: (choice: JoinChoice) => void;
+	onClose: () => void;
+}) {
+	const words = WORDING[place.kind];
 	return (
 		<Dialog
-			title={`Library found: ${library.name}`}
+			title={words.startTitle(placeName(place))}
+			onCancel={onClose}
+			footer={
+				<div className="space-y-2">
+					<Choice
+						tone="main"
+						label={words.startLabel}
+						hint="Your tags and playlists are shared. Make any of them private from its page."
+						disabled={join.isPending}
+						onClick={() => onChoose("start")}
+					/>
+					<Choice
+						label={words.notNow}
+						hint={words.notNowHint}
+						disabled={join.isPending}
+						onClick={onClose}
+					/>
+					{join.isError && <ErrorLine>{String(join.error)}</ErrorLine>}
+					{join.isPending && <LoadingLine>{words.starting}</LoadingLine>}
+				</div>
+			}
+		>
+			<p>{words.startBody}</p>
+			<dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+				<dt className="text-foreground">Shared</dt>
+				<dd>Tags, playlists, smart playlists, BPM, key, beat grids, waveforms</dd>
+				<dt className="text-foreground">Stays here</dt>
+				<dd>Cues and settings</dd>
+			</dl>
+		</Dialog>
+	);
+}
+
+/** A library is at the place: who is in it, and the three ways to join. */
+function FoundDialog({
+	place,
+	library,
+	join,
+	onChoose,
+	onReplace,
+	onClose,
+}: {
+	place: LibraryPlace;
+	library: FoundLibrary;
+	join: Join;
+	onChoose: (choice: JoinChoice) => void;
+	onReplace: () => void;
+	onClose: () => void;
+}) {
+	const words = WORDING[place.kind];
+	return (
+		<Dialog
+			title={words.foundTitle(library.name)}
 			onCancel={onClose}
 			footer={
 				<div className="space-y-2">
@@ -412,8 +516,8 @@ function LookDialog({
 						onClick={() => onReplace()}
 					/>
 					<Choice
-						label="Files only"
-						hint="Don't join. manplay never reads or writes .manplay there."
+						label={words.dontJoin}
+						hint={words.dontJoinHint}
 						disabled={join.isPending}
 						onClick={onClose}
 					/>
@@ -435,20 +539,15 @@ function FloatingError({ error }: { error: unknown }): ReactNode {
 	);
 }
 
-function MemberList({ target }: { target: SyncTarget }) {
-	const found = useQuery({
-		queryKey: ["library-inspect", target.id],
-		queryFn: () => libsyncInspect(target.id),
-		retry: false,
-		staleTime: 60_000,
-	});
+function MemberList({ place }: { place: LibraryPlace }) {
+	const found = useInspect(place, { staleTime: 60_000 });
 	if (found.isPending) {
 		return <LoadingLine>Reading members…</LoadingLine>;
 	}
 	if (found.isError || !found.data) {
 		return (
 			<p className="text-muted-foreground text-xs">
-				Members show when {targetName(target)} can be reached.
+				Members show when {placeName(place)} can be reached.
 			</p>
 		);
 	}
@@ -487,68 +586,150 @@ function DefaultScope() {
 	);
 }
 
+/** The last sync of the library kept in the library folder, when it went wrong. */
+function FolderSyncStatus() {
+	const run = useFolderLibrarySync();
+	const error = run.data?.error ?? (run.isError ? String(run.error) : null);
+	return error ? <ErrorLine>{error}</ErrorLine> : null;
+}
+
+/** The library this device is in: where it is kept, who else is in it, what new items start as. */
+function JoinedRows({
+	home,
+	place,
+	label,
+	target,
+	onLeave,
+}: {
+	home: LibraryHome;
+	place: LibraryPlace;
+	label: string;
+	target: SyncTarget | undefined;
+	onLeave: () => void;
+}) {
+	return (
+		<>
+			<FieldRow
+				label={
+					<span className="flex items-center gap-2">
+						<Users className="size-4 text-primary" />
+						{label}
+					</span>
+				}
+				description={
+					home.kind === "folder" ? (
+						<>
+							Kept in your library folder, <code>{home.root}</code>. It syncs every minute while
+							manplay is open. Cues stay on this computer.
+							<FolderSyncStatus />
+						</>
+					) : (
+						<>
+							Kept on {target ? targetName(target) : "a destination"}. Cues stay on this computer.
+						</>
+					)
+				}
+				align="center"
+			>
+				<Button variant="outline" onClick={onLeave}>
+					Leave…
+				</Button>
+			</FieldRow>
+			<FieldRow label="Members" description="Every computer that reads and writes it.">
+				<div className="w-full">
+					<MemberList place={place} />
+				</div>
+			</FieldRow>
+			<DefaultScope />
+		</>
+	);
+}
+
+/** Outside a library: the library folder and each destination, to start or join one at. */
+function PlaceRows({
+	root,
+	targets,
+	onJoin,
+}: {
+	root: string | null;
+	targets: SyncTarget[];
+	onJoin: (place: LibraryPlace) => void;
+}) {
+	return (
+		<>
+			<FieldRow
+				label="Library folder"
+				description={
+					root
+						? "Share it with computers that open the same folder, or join the library already in it."
+						: "Choose a library folder in Library first."
+				}
+				align="center"
+			>
+				<Button variant="outline" disabled={!root} onClick={() => onJoin({ kind: "folder" })}>
+					Share or join…
+				</Button>
+			</FieldRow>
+			{targets.map((t) => (
+				<FieldRow
+					key={t.id}
+					label={targetName(t)}
+					description="Start a library here, or join the one already on it."
+					align="center"
+				>
+					<Button variant="outline" onClick={() => onJoin({ kind: "target", target: t })}>
+						Start or join…
+					</Button>
+				</FieldRow>
+			))}
+		</>
+	);
+}
+
+/** Where the library this device is in is kept, as a place; null outside one. */
+function homePlace(home: LibraryHome | undefined, target: SyncTarget | undefined) {
+	if (home?.kind === "folder") {
+		return { kind: "folder" } as const;
+	}
+	return target ? ({ kind: "target", target } as const) : null;
+}
+
 /**
  * Settings for the shared library: which one this device is in, who else is, what new items
- * start as, and clashes to settle. Outside a library, each destination can start or join one.
+ * start as, and clashes to settle. Outside a library, the library folder and each destination
+ * can start or join one.
  */
 export function SharedLibrarySettings() {
 	const targets = useSyncTargets().data ?? [];
-	const mine = targets.find((t) => t.libsync);
-	const [joining, setJoining] = useState<SyncTarget | null>(null);
+	const home = useLibraryHome().data;
+	const root = useLibraryRoot().data ?? null;
+	const [joining, setJoining] = useState<LibraryPlace | null>(null);
 	const [leaving, setLeaving] = useState(false);
+	const target = home?.kind === "target" ? targets.find((t) => t.id === home.targetId) : undefined;
+	const place = homePlace(home, target);
+	const label = home ? homeLabel(home, targets) : null;
 	return (
 		<>
 			<FrameSection
 				title="Shared library"
-				description="Tags, playlists, smart playlists, BPM, key, beat grids and waveforms, shared with your other computers through a destination. The songs stay plain files."
+				description="Tags, playlists, smart playlists, BPM, key, beat grids and waveforms, shared with other computers through a destination or through a library folder they open too. The songs stay plain files."
 			>
-				{mine ? (
-					<>
-						<FieldRow
-							label={
-								<span className="flex items-center gap-2">
-									<Users className="size-4 text-primary" />
-									{libraryLabel(mine)}
-								</span>
-							}
-							description={<>Kept on {targetName(mine)}. Cues stay on this computer.</>}
-							align="center"
-						>
-							<Button variant="outline" onClick={() => setLeaving(true)}>
-								Leave…
-							</Button>
-						</FieldRow>
-						<FieldRow label="Members" description="Every computer that reads and writes it.">
-							<div className="w-full">
-								<MemberList target={mine} />
-							</div>
-						</FieldRow>
-						<DefaultScope />
-					</>
-				) : targets.length === 0 ? (
-					<FieldRow
-						label="No destination yet"
-						description="A shared library lives on one of your destinations. Add one under Export first."
+				{home && place && label !== null ? (
+					<JoinedRows
+						home={home}
+						place={place}
+						label={label}
+						target={target}
+						onLeave={() => setLeaving(true)}
 					/>
 				) : (
-					targets.map((t) => (
-						<FieldRow
-							key={t.id}
-							label={targetName(t)}
-							description="Start a library here, or join the one already on it."
-							align="center"
-						>
-							<Button variant="outline" onClick={() => setJoining(t)}>
-								Start or join…
-							</Button>
-						</FieldRow>
-					))
+					<PlaceRows root={root} targets={targets} onJoin={setJoining} />
 				)}
 				<DeviceNameRow />
-				{joining && <JoinLibraryDialog target={joining} onClose={() => setJoining(null)} />}
-				{leaving && mine && (
+				{joining && <JoinLibraryDialog place={joining} onClose={() => setJoining(null)} />}
+				{leaving && label !== null && (
 					<LeaveLibraryDialog
-						target={mine}
+						label={label}
 						onDone={() => setLeaving(false)}
 						onCancel={() => setLeaving(false)}
 					/>
@@ -556,6 +737,63 @@ export function SharedLibrarySettings() {
 			</FrameSection>
 			<ClashPanel />
 		</>
+	);
+}
+
+const DISMISSED_KEY = "manplay.folder-library-dismissed";
+
+function dismissedLibrary(): string | null {
+	try {
+		return localStorage.getItem(DISMISSED_KEY);
+	} catch {
+		return null;
+	}
+}
+
+function dismissLibrary(libraryId: string) {
+	try {
+		localStorage.setItem(DISMISSED_KEY, libraryId);
+	} catch {
+		// Without storage the offer comes back next launch, which is harmless.
+	}
+}
+
+/**
+ * Notices a shared library that other computers keep in the library folder (a network share, a
+ * synced folder) and offers to join it, once per library. Inside a library kept in the folder it
+ * keeps that library in sync instead.
+ */
+export function FolderLibraryWatch() {
+	const home = useLibraryHome().data;
+	const root = useLibraryRoot().data ?? null;
+	useFolderLibrarySync();
+	const outside = home?.kind === "none" && root !== null;
+	const found = useQuery({
+		queryKey: ["library-inspect", "folder", root],
+		queryFn: libsyncInspectFolder,
+		enabled: outside,
+		retry: false,
+		refetchOnWindowFocus: false,
+	});
+	const [closed, setClosed] = useState<string | null>(null);
+	const library = found.data;
+	const offer =
+		outside &&
+		library &&
+		library.members.some((m) => !m.mine) &&
+		library.libraryId !== closed &&
+		library.libraryId !== dismissedLibrary();
+	if (!offer) {
+		return null;
+	}
+	return (
+		<JoinLibraryDialog
+			place={{ kind: "folder" }}
+			onClose={() => {
+				dismissLibrary(library.libraryId);
+				setClosed(library.libraryId);
+			}}
+		/>
 	);
 }
 

@@ -1,9 +1,11 @@
-//! Being in a shared library: reading what a destination holds, joining it, leaving it.
+//! Being in a shared library: reading what a destination (or the library folder) holds, joining
+//! it, leaving it.
 //!
-//! A destination with shared data has `.manplay/library.json` (which library it is) and one
-//! `.manplay/devices/<device id>.json` per member. A device belongs to at most one library: the
-//! destination whose `sync_targets.libsync` is on. Every other destination is files only and
-//! `.manplay/` there is never written. See `docs/plans/shared-library/05-join-and-leave.md`.
+//! A place with shared data has `.manplay/library.json` (which library it is) and one
+//! `.manplay/devices/<device id>.json` per member. A device belongs to at most one library, its
+//! [`Home`]: the destination whose `sync_targets.libsync` is on, or the library folder itself
+//! (`settings.library_in_folder`). Every other destination is files only and `.manplay/` there is
+//! never written. See `docs/plans/shared-library/05-join-and-leave.md`.
 
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,6 +32,8 @@ const SETTING_LIBRARY_ID: &str = "library_id";
 const SETTING_LIBRARY_NAME: &str = "library_name";
 const SETTING_DEVICE_NAME: &str = "device_name";
 const SETTING_SEEDED: &str = "libsync_seeded";
+/// `"1"` while the library folder itself holds this device's shared library.
+pub(crate) const SETTING_IN_FOLDER: &str = "library_in_folder";
 
 /// Version of `library.json`.
 pub const LIBRARY_FORMAT: u32 = 1;
@@ -168,13 +172,32 @@ pub fn library_name(conn: &Connection) -> Result<Option<String>, Error> {
     db::get_setting(conn, SETTING_LIBRARY_NAME)
 }
 
-fn joined_target(conn: &Connection) -> Option<i64> {
-    conn.query_row(
-        "SELECT id FROM sync_targets WHERE libsync = 1 ORDER BY id LIMIT 1",
-        [],
-        |r| r.get(0),
-    )
-    .ok()
+/// Where this device's shared library is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Home {
+    /// On a destination, by its id.
+    Target(i64),
+    /// In the library folder (`<library folder>/.manplay/`), for a folder other computers reach.
+    Folder,
+}
+
+/// The library this device is in, if any.
+pub fn home(conn: &Connection) -> Result<Option<Home>, Error> {
+    let target: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM sync_targets WHERE libsync = 1 ORDER BY id LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e),
+        })?;
+    if let Some(id) = target {
+        return Ok(Some(Home::Target(id)));
+    }
+    Ok((db::get_setting(conn, SETTING_IN_FOLDER)?.as_deref() == Some("1")).then_some(Home::Folder))
 }
 
 // ---- reading a destination ------------------------------------------------------
@@ -301,32 +324,38 @@ pub fn replace_count(conn: &Connection) -> Result<i64, Error> {
     Ok(total)
 }
 
-/// Joins `target_id`'s library (or starts one there with `Start`, called `new_name`), then does
-/// the first sync. Refused while another destination holds this device's library. Problems
-/// after the join itself (the first sync) are in the returned summary: the device is in the
-/// library and the next sync repeats them.
+/// Joins the library at `home` (or starts one there with `Start`, called `new_name`), then does
+/// the first sync. Refused while this device is in another library. Problems after the join
+/// itself (the first sync) are in the returned summary: the device is in the library and the
+/// next sync repeats them.
 pub async fn join<S: ChunkStore>(
     db: &Mutex<Connection>,
-    target_id: i64,
+    home: Home,
     store: &S,
     choice: JoinChoice,
     new_name: &str,
 ) -> Result<RunSummary, Error> {
     {
         let conn = lock(db)?;
-        let exists: bool = conn.query_row(
-            "SELECT EXISTS (SELECT 1 FROM sync_targets WHERE id = ?1)",
-            params![target_id],
-            |r| r.get(0),
-        )?;
-        if !exists {
-            return Err(Error::Msg("That destination no longer exists.".into()));
+        if let Home::Target(target_id) = home {
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM sync_targets WHERE id = ?1)",
+                params![target_id],
+                |r| r.get(0),
+            )?;
+            if !exists {
+                return Err(Error::Msg("That destination no longer exists.".into()));
+            }
         }
-        if let Some(other) = joined_target(&conn) {
-            return Err(Error::Msg(if other == target_id {
-                "This device is already in the library of this destination.".into()
-            } else {
-                "This device is in another shared library. Leave it first.".into()
+        if let Some(other) = self::home(&conn)? {
+            return Err(Error::Msg(match (other == home, home) {
+                (true, Home::Target(_)) => {
+                    "This device is already in the library of this destination.".into()
+                }
+                (true, Home::Folder) => {
+                    "This device is already in the library of the library folder.".into()
+                }
+                (false, _) => "This device is in another shared library. Leave it first.".into(),
             }));
         }
     }
@@ -365,13 +394,29 @@ pub async fn join<S: ChunkStore>(
         db::set_setting(&tx, SETTING_LIBRARY_ID, Some(&file.library_id))?;
         db::set_setting(&tx, SETTING_LIBRARY_NAME, Some(&file.name))?;
         tx.commit()?;
-        if let Err(e) = db::set_target_libsync(&mut conn, target_id, true) {
+        if let Err(e) = settle_home(&mut conn, home) {
             db::set_setting(&conn, SETTING_LIBRARY_ID, None)?;
             db::set_setting(&conn, SETTING_LIBRARY_NAME, None)?;
             return Err(e);
         }
     }
     Ok(run_joined(db, store, &file.name).await)
+}
+
+/// The join's last step: marks where the library is kept, and sends what this device already
+/// has (`seed`).
+fn settle_home(conn: &mut Connection, home: Home) -> Result<(), Error> {
+    match home {
+        Home::Target(id) => db::set_target_libsync(conn, id, true),
+        Home::Folder => {
+            db::set_setting(conn, SETTING_IN_FOLDER, Some("1"))?;
+            if let Err(e) = super::seed::seed(conn) {
+                db::set_setting(conn, SETTING_IN_FOLDER, None)?;
+                return Err(e);
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Before each sync of a joined device: makes sure the destination still holds this device's
@@ -695,7 +740,12 @@ pub fn leave_local(conn: &Connection, choice: LeaveChoice) -> Result<(), Error> 
          UPDATE analysis SET wf_pushed = 0;
          UPDATE sync_targets SET libsync = 0;",
     )?;
-    for key in [SETTING_LIBRARY_ID, SETTING_LIBRARY_NAME, SETTING_SEEDED] {
+    for key in [
+        SETTING_LIBRARY_ID,
+        SETTING_LIBRARY_NAME,
+        SETTING_SEEDED,
+        SETTING_IN_FOLDER,
+    ] {
         db::set_setting(conn, key, None)?;
     }
     snapshot::forget(conn)?;
@@ -711,6 +761,15 @@ pub fn detach_target(conn: &Connection, id: i64) -> Result<(), Error> {
         |r| r.get(0),
     )?;
     if joined {
+        leave_local(conn, LeaveChoice::KeepCopy)?;
+    }
+    Ok(())
+}
+
+/// The library folder is changing: if it held this device's library, this device leaves it,
+/// keeping a copy, without asking the old folder.
+pub fn detach_folder(conn: &Connection) -> Result<(), Error> {
+    if home(conn)? == Some(Home::Folder) {
         leave_local(conn, LeaveChoice::KeepCopy)?;
     }
     Ok(())

@@ -52,12 +52,13 @@ pub fn set_default_scope(conn: &Connection, scope: &str) -> Result<(), Error> {
     db::set_setting(conn, SETTING_DEFAULT_SCOPE, Some(scope_of(scope)?))
 }
 
-/// Whether library data is being shared: some destination has it switched on. Until then no
-/// edit writes an op.
+/// Whether library data is being shared: some destination holds this device's library, or the
+/// library folder does. Until then no edit writes an op.
 pub fn active(conn: &Connection) -> Result<bool, Error> {
     Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM sync_targets WHERE libsync = 1)",
-        [],
+        "SELECT EXISTS (SELECT 1 FROM sync_targets WHERE libsync = 1)
+             OR EXISTS (SELECT 1 FROM settings WHERE key = ?1 AND value = '1')",
+        [super::membership::SETTING_IN_FOLDER],
         |r| r.get(0),
     )?)
 }

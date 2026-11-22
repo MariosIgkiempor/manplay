@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useUndo } from "#/context/undo-context.ts";
 import {
 	type ActivitySource,
@@ -37,8 +37,11 @@ import {
 	jellyfinSettings,
 	type LeaveChoice,
 	libraryStatus,
+	libsyncHome,
 	libsyncJoin,
+	libsyncJoinFolder,
 	libsyncLeave,
+	libsyncRunFolder,
 	listCarryCandidates,
 	listClashes,
 	listDuplicates,
@@ -58,6 +61,7 @@ import {
 	resetLibrary,
 	restoreDeleted,
 	type ServiceId,
+	type SyncTarget,
 	saveAnalysisToFiles,
 	serviceFlags,
 	setAnalysisSettings,
@@ -146,9 +150,17 @@ export function useJellyfinSettings(targetId: number) {
 	});
 }
 
-/** Whether some destination shares library data: until then nothing is sent to anyone. */
+export const LIBRARY_HOME_KEY = ["library-home"] as const;
+
+/** Where this device's shared library is kept, if it is in one. */
+export function useLibraryHome() {
+	return useQuery({ queryKey: LIBRARY_HOME_KEY, queryFn: libsyncHome });
+}
+
+/** Whether this device is in a shared library: until then nothing is sent to anyone. */
 export function useSharingOn() {
-	return (useSyncTargets().data ?? []).some((t) => t.libsync);
+	const home = useLibraryHome().data;
+	return home !== undefined && home.kind !== "none";
 }
 
 export const CLASHES_KEY = ["clashes"] as const;
@@ -192,17 +204,65 @@ export function useRestoreDeleted() {
 	});
 }
 
-/** Joins or starts a shared library on a destination. Everything shared changes in the lists. */
+/** Where a shared library can be kept: on a destination, or in the library folder itself. */
+export type LibraryPlace = { kind: "target"; target: SyncTarget } | { kind: "folder" };
+
+/**
+ * Joins or starts a shared library on a destination or in the library folder, and says what the
+ * first sync could not do (null when it all went through). Everything shared changes in the lists.
+ */
 export function useJoinLibrary() {
 	const queryClient = useQueryClient();
 	const refresh = useRefreshItems();
 	return useMutation({
-		mutationFn: ({ id, choice }: { id: number; choice: JoinChoice }) => libsyncJoin(id, choice),
+		mutationFn: async ({
+			place,
+			choice,
+		}: {
+			place: LibraryPlace;
+			choice: JoinChoice;
+		}): Promise<string | null> =>
+			place.kind === "target"
+				? (await libsyncJoin(place.target.id, choice)).error
+				: (await libsyncJoinFolder(choice)).error,
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
+			await queryClient.invalidateQueries({ queryKey: LIBRARY_HOME_KEY });
 			await refresh();
 		},
 	});
+}
+
+export const FOLDER_RUN_KEY = ["library-folder-run"] as const;
+
+/** How often the library kept in the library folder syncs while the app is open. */
+const FOLDER_SYNC_EVERY_MS = 60_000;
+
+/**
+ * Keeps the shared library in the library folder in sync while the app is open: once at start,
+ * then every minute and when the window comes back. The lists refresh when something arrived.
+ */
+export function useFolderLibrarySync() {
+	const home = useLibraryHome().data;
+	const refresh = useRefreshItems();
+	const run = useQuery({
+		queryKey: FOLDER_RUN_KEY,
+		queryFn: libsyncRunFolder,
+		enabled: home?.kind === "folder",
+		refetchInterval: FOLDER_SYNC_EVERY_MS,
+		retry: false,
+	});
+	// `refresh` is a new function every render; only a new run's result should call it.
+	const refreshRef = useRef(refresh);
+	refreshRef.current = refresh;
+	const received = run.data?.received ?? 0;
+	const at = run.dataUpdatedAt;
+	useEffect(() => {
+		if (received > 0 && at > 0) {
+			void refreshRef.current();
+		}
+	}, [received, at]);
+	return run;
 }
 
 /** Leaves the shared library; the lists drop or keep the shared items. */
@@ -214,6 +274,7 @@ export function useLeaveLibrary() {
 			libsyncLeave(choice, sync),
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
+			await queryClient.invalidateQueries({ queryKey: LIBRARY_HOME_KEY });
 			await refresh();
 		},
 	});
@@ -469,6 +530,8 @@ export function useScan() {
 		onSuccess: async (count) => {
 			await queryClient.invalidateQueries({ queryKey: ["tracks"] });
 			await queryClient.invalidateQueries({ queryKey: ["library-root"] });
+			// A new folder leaves the shared library the old one held.
+			await queryClient.invalidateQueries({ queryKey: LIBRARY_HOME_KEY });
 			await queryClient.invalidateQueries({ queryKey: ["library-status"] });
 			await queryClient.invalidateQueries({ queryKey: ["playlists"] });
 			await queryClient.invalidateQueries({ queryKey: ["tags"] });

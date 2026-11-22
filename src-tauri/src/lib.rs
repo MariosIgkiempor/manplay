@@ -144,6 +144,12 @@ async fn scan_and_store(state: &AppState, root: PathBuf, depth: ScanDepth) -> Re
     // Shared tags and playlists that were waiting for these songs.
     libsync::apply::materialize_pending(&mut conn)?;
     db::replace_tag_values(&mut conn, &result.values)?;
+    if db::get_setting(&conn, SETTING_ROOT)?.as_deref() != root.to_str() {
+        // The old folder's shared library stays there; this device keeps a copy of it.
+        let tx = conn.transaction()?;
+        libsync::membership::detach_folder(&tx)?;
+        tx.commit()?;
+    }
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
     reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
     drop(conn);
@@ -2572,7 +2578,7 @@ async fn track_analysis(
 /// Asks the sharing destination for the waveform of audio that has an analysis here but no
 /// waveform (it was analysed on another device). Failing is fine: the song shows without one.
 async fn fetch_shared_waveform(state: &AppState, audio_fp: &str) {
-    let target = state.db.lock().ok().and_then(|c| {
+    let place = state.db.lock().ok().and_then(|c| {
         let waiting = c
             .query_row(
                 "SELECT EXISTS (SELECT 1 FROM analysis WHERE audio_fp = ?1 AND waveform IS NULL)",
@@ -2583,15 +2589,20 @@ async fn fetch_shared_waveform(state: &AppState, audio_fp: &str) {
         if !waiting {
             return None;
         }
-        db::get_targets(&c, None)
-            .ok()
-            .and_then(|t| t.into_iter().find(|t| t.libsync))
+        shared_place_of(&c).ok().flatten()
     });
-    if let Some(target) = target
-        && let Err(e) =
+    let fetched = match place {
+        Some(SharedPlace::Target(target)) => {
             sync::fetch_waveform(&state.http, &target, &state.db, &state.wf_misses, audio_fp).await
-    {
-        log::debug!("no waveform from the destination: {e}");
+        }
+        Some(SharedPlace::Folder(root)) => {
+            let store = libsync::folder::FolderStore::new(&root);
+            libsync::waveforms::fetch(&state.db, &store, &state.wf_misses, audio_fp).await
+        }
+        None => return,
+    };
+    if let Err(e) = fetched {
+        log::debug!("no waveform from the shared library: {e}");
     }
 }
 
@@ -3445,7 +3456,7 @@ async fn libsync_join(
     state.wf_misses.clear();
     let out = sync::join_library(&state.http, &target, &state.db, choice).await?;
     let target = shared_target(&state, target_id)?;
-    tauri::async_runtime::spawn(transfer_waveforms(app, target));
+    tauri::async_runtime::spawn(transfer_waveforms(app, SharedPlace::Target(target)));
     Ok(out)
 }
 
@@ -3457,12 +3468,166 @@ async fn libsync_leave(
     sync: bool,
 ) -> Result<(), Error> {
     let _claim = claim_sync(&state).await?;
-    let target = {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        db::list_targets(&conn)?.into_iter().find(|t| t.libsync)
+    match shared_place(&state)? {
+        Some(SharedPlace::Target(target)) => {
+            sync::leave_library(&state.http, &target, &state.db, choice, sync).await
+        }
+        Some(SharedPlace::Folder(root)) => {
+            let store = libsync::folder::FolderStore::new(&root);
+            libsync::membership::leave(&state.db, &store, choice, sync).await
+        }
+        None => Err(Error::Msg(
+            "This device is not in a shared library.".to_owned(),
+        )),
     }
-    .ok_or_else(|| Error::Msg("This device is not in a shared library.".to_owned()))?;
-    sync::leave_library(&state.http, &target, &state.db, choice, sync).await
+}
+
+/// Where this device's shared library is kept, with what is needed to reach it.
+#[derive(Debug, Clone)]
+enum SharedPlace {
+    Target(db::SyncTarget),
+    /// The library folder, by its path.
+    Folder(PathBuf),
+}
+
+fn shared_place(state: &AppState) -> Result<Option<SharedPlace>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    shared_place_of(&conn)
+}
+
+fn shared_place_of(conn: &rusqlite::Connection) -> Result<Option<SharedPlace>, Error> {
+    Ok(match libsync::membership::home(conn)? {
+        Some(libsync::membership::Home::Target(id)) => db::list_targets(conn)?
+            .into_iter()
+            .find(|t| t.id == id)
+            .map(SharedPlace::Target),
+        Some(libsync::membership::Home::Folder) => db::get_setting(conn, SETTING_ROOT)?
+            .map(PathBuf::from)
+            .map(SharedPlace::Folder),
+        None => None,
+    })
+}
+
+/// Where this device's shared library is kept, as the settings show it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum LibraryHome {
+    None,
+    #[serde(rename_all = "camelCase")]
+    Target {
+        target_id: i64,
+        name: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Folder {
+        root: String,
+        name: Option<String>,
+    },
+}
+
+#[tauri::command]
+fn libsync_home(state: State<'_, AppState>) -> Result<LibraryHome, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    let name = libsync::membership::library_name(&conn)?;
+    Ok(match libsync::membership::home(&conn)? {
+        Some(libsync::membership::Home::Target(target_id)) => {
+            LibraryHome::Target { target_id, name }
+        }
+        Some(libsync::membership::Home::Folder) => LibraryHome::Folder {
+            root: db::get_setting(&conn, SETTING_ROOT)?.unwrap_or_default(),
+            name,
+        },
+        None => LibraryHome::None,
+    })
+}
+
+/// The name a library started in the library folder gets: the folder's own name.
+fn folder_label(root: &Path) -> String {
+    root.file_name()
+        .and_then(|n| n.to_str())
+        .map_or_else(|| "Library".to_owned(), str::to_owned)
+}
+
+/// What the library folder holds: a shared library other computers keep there (its members), or
+/// none. Reads `.manplay/library.json` and `devices/`; writes nothing.
+#[tauri::command]
+async fn libsync_inspect_folder(
+    state: State<'_, AppState>,
+) -> Result<Option<libsync::membership::Found>, Error> {
+    let root = library_root(&state)?;
+    let store = libsync::folder::FolderStore::new(&root);
+    libsync::membership::inspect(&state.db, &store).await
+}
+
+/// Joins the shared library in the library folder, or starts one there, and syncs it once.
+#[tauri::command]
+async fn libsync_join_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    choice: libsync::membership::JoinChoice,
+) -> Result<libsync::remote::RunSummary, Error> {
+    let _claim = claim_sync(&state).await?;
+    let root = library_root(&state)?;
+    if !root.is_dir() {
+        return Err(Error::Msg(format!(
+            "The library folder {} cannot be reached.",
+            root.display()
+        )));
+    }
+    let owner = lock_owner(&state)?;
+    let held = sync::lock::acquire_folder(&root, &owner).await?;
+    state.wf_misses.clear();
+    let store = libsync::folder::FolderStore::new(&root);
+    let home = libsync::membership::Home::Folder;
+    let out =
+        libsync::membership::join(&state.db, home, &store, choice, &folder_label(&root)).await;
+    held.release().await;
+    let out = out?;
+    tauri::async_runtime::spawn(transfer_waveforms(app, SharedPlace::Folder(root)));
+    Ok(out)
+}
+
+/// One sync of the shared library kept in the library folder: sends this device's edits and
+/// applies everyone else's. `None` when the device keeps no library there, or another sync is
+/// running (the next round does it).
+#[tauri::command]
+async fn libsync_run_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<libsync::remote::RunSummary>, Error> {
+    let Some(SharedPlace::Folder(root)) = shared_place(&state)? else {
+        return Ok(None);
+    };
+    let Ok(_claim) = claim_sync(&state).await else {
+        return Ok(None);
+    };
+    if !root.is_dir() {
+        return Ok(Some(libsync::remote::RunSummary {
+            error: Some(format!(
+                "The library folder {} cannot be reached.",
+                root.display()
+            )),
+            ..libsync::remote::RunSummary::default()
+        }));
+    }
+    let owner = lock_owner(&state)?;
+    let held = match sync::lock::acquire_folder(&root, &owner).await {
+        Ok(held) => held,
+        Err(e) => {
+            return Ok(Some(libsync::remote::RunSummary {
+                error: Some(e.to_string()),
+                ..libsync::remote::RunSummary::default()
+            }));
+        }
+    };
+    state.wf_misses.clear();
+    let store = libsync::folder::FolderStore::new(&root);
+    let out = libsync::membership::run_joined(&state.db, &store, &folder_label(&root)).await;
+    held.release().await;
+    if out.error.is_none() {
+        tauri::async_runtime::spawn(transfer_waveforms(app, SharedPlace::Folder(root)));
+    }
+    Ok(Some(out))
 }
 
 fn shared_target(state: &AppState, id: i64) -> Result<db::SyncTarget, Error> {
@@ -3514,7 +3679,7 @@ async fn libsync_run(
         }
     }
     if let Some(target) = targets.into_iter().find(|t| t.libsync) {
-        tauri::async_runtime::spawn(transfer_waveforms(app, target));
+        tauri::async_runtime::spawn(transfer_waveforms(app, SharedPlace::Target(target)));
     }
     Ok(out)
 }
@@ -3522,7 +3687,7 @@ async fn libsync_run(
 /// Uploads this device's waveforms and downloads everyone else's after a sync, all of them, in
 /// the background, with `waveform-progress` events for the status bar. Problems are only logged:
 /// what is left goes after the next sync, and a missing waveform is fetched when its song shows.
-async fn transfer_waveforms(app: AppHandle, target: db::SyncTarget) {
+async fn transfer_waveforms(app: AppHandle, place: SharedPlace) {
     let state = app.state::<AppState>();
     if state.wf_filling.swap(true, Ordering::SeqCst) {
         // The running transfer goes round again for what this sync brought.
@@ -3535,13 +3700,29 @@ async fn transfer_waveforms(app: AppHandle, target: db::SyncTarget) {
         let report = |p: libsync::waveforms::Progress| {
             let _ = app.emit("waveform-progress", p);
         };
-        match sync::transfer_waveforms(&state.http, &target, &state.db, &state.wf_misses, report)
-            .await
-        {
+        let (moved, where_) = match &place {
+            SharedPlace::Target(target) => (
+                sync::transfer_waveforms(&state.http, target, &state.db, &state.wf_misses, report)
+                    .await,
+                sync::target_name(target),
+            ),
+            SharedPlace::Folder(root) => (
+                libsync::waveforms::transfer(
+                    &state.db,
+                    &libsync::folder::FolderStore::new(root),
+                    &state.wf_misses,
+                    sync::WAVEFORM_BATCH,
+                    sync::FILL_PAUSE,
+                    report,
+                )
+                .await,
+                "the library folder".to_owned(),
+            ),
+        };
+        match moved {
             Ok(t) => {
                 log::info!(
-                    "waveforms on {}: {} sent, {} fetched",
-                    sync::target_name(&target),
+                    "waveforms on {where_}: {} sent, {} fetched",
                     t.sent,
                     t.fetched
                 );
@@ -5065,6 +5246,10 @@ pub fn run() {
             add_r2_target,
             update_sync_target,
             libsync_inspect,
+            libsync_inspect_folder,
+            libsync_join_folder,
+            libsync_run_folder,
+            libsync_home,
             libsync_replace_count,
             libsync_join,
             libsync_leave,

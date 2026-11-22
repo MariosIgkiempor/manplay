@@ -79,12 +79,13 @@ fn standing(found: &Found, me: &DeviceId, now: UnixSeconds) -> Standing {
     }
 }
 
-fn busy_message(name: &str, expires_at: UnixSeconds, now: UnixSeconds) -> String {
+/// `place` is what is locked, as a sentence names it ("this destination").
+fn busy_message(name: &str, expires_at: UnixSeconds, now: UnixSeconds, place: &str) -> String {
     let minutes = ((expires_at - now).max(0) + 59) / 60;
     let minutes = minutes.max(1);
     format!(
-        "{name} is syncing with this destination. Try again when it finishes; if it stopped, \
-         the destination frees up within {minutes} min."
+        "{name} is syncing with {place}. Try again when it finishes; if it stopped, \
+         {place} frees up within {minutes} min."
     )
 }
 
@@ -143,7 +144,12 @@ pub async fn acquire(client: &Client, target: &SyncTarget, owner: &Owner) -> Res
         let found = read(&backend, &path, &tmp).await?;
         match standing(&found, &owner.device, now) {
             Standing::Busy { name, expires_at } => {
-                return Err(Error::Msg(busy_message(&name, expires_at, now)));
+                return Err(Error::Msg(busy_message(
+                    &name,
+                    expires_at,
+                    now,
+                    "this destination",
+                )));
             }
             Standing::Ours | Standing::Stale => backend.delete(&path).await?,
             Standing::Free => {}
@@ -214,6 +220,142 @@ impl Held {
 
 impl Drop for Held {
     /// Without a release (e.g. a panic) the lock stops being renewed and lapses on its own.
+    fn drop(&mut self) {
+        self.renewer.abort();
+    }
+}
+
+// ---- the library folder -------------------------------------------------------------
+
+/// What a lock file in the library folder holds, read from disk.
+async fn read_file(path: &Path) -> Result<Found, Error> {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).map_or(Found::Unreadable, Found::Lock)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Found::Absent),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn lock_json(owner: &Owner, now: UnixSeconds) -> Result<Vec<u8>, Error> {
+    serde_json::to_vec(&LockFile {
+        device: owner.device.clone(),
+        name: owner.name.clone(),
+        expires_at: now + LEASE_SECS,
+    })
+    .map_err(|e| Error::Msg(e.to_string()))
+}
+
+/// Puts a whole lock file at `path` only if there is none: written aside, then hard-linked into
+/// place, which fails when the name is taken. A folder that cannot hold hard links (some network
+/// shares) gets it created-if-new and then written. False when another device's is there.
+async fn create_file(path: &Path, bytes: &[u8]) -> Result<bool, Error> {
+    let tmp = path.with_extension(format!("{}.new", std::process::id()));
+    tokio::fs::write(&tmp, bytes).await?;
+    let linked = tokio::fs::hard_link(&tmp, path).await;
+    let _ = tokio::fs::remove_file(&tmp).await;
+    match linked {
+        Ok(()) => return Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(_) => {}
+    }
+    let opened = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await;
+    match opened {
+        Ok(mut file) => {
+            use tokio::io::AsyncWriteExt;
+            file.write_all(bytes).await?;
+            file.flush().await?;
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// A lock this device holds on the library folder's shared library, renewed until released.
+pub struct HeldFolder {
+    renewer: tauri::async_runtime::JoinHandle<()>,
+    path: PathBuf,
+    device: DeviceId,
+}
+
+/// Takes the lock of the shared library in the library folder `root`, or fails with who holds
+/// it. Same file and rules as on a destination.
+pub async fn acquire_folder(root: &Path, owner: &Owner) -> Result<HeldFolder, Error> {
+    let path = root.join(libsync::remote::DIR).join(LOCK_FILE);
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await?;
+    }
+    for _ in 0..2 {
+        let now = crate::unix_now();
+        match standing(&read_file(&path).await?, &owner.device, now) {
+            Standing::Busy { name, expires_at } => {
+                return Err(Error::Msg(busy_message(
+                    &name,
+                    expires_at,
+                    now,
+                    "the library folder",
+                )));
+            }
+            Standing::Ours | Standing::Stale => match tokio::fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            },
+            Standing::Free => {}
+        }
+        if create_file(&path, &lock_json(owner, now)?).await? {
+            return Ok(HeldFolder {
+                renewer: tauri::async_runtime::spawn(renew_file(path.clone(), owner.clone())),
+                path,
+                device: owner.device.clone(),
+            });
+        }
+    }
+    Err(Error::Msg(
+        "Another device is syncing with the library folder. Try again when it finishes.".to_owned(),
+    ))
+}
+
+/// Pushes the folder lock's expiry forward every minute while it is still this device's.
+async fn renew_file(path: PathBuf, owner: Owner) {
+    loop {
+        tokio::time::sleep(RENEW_EVERY).await;
+        let still_ours = matches!(
+            read_file(&path).await,
+            Ok(Found::Lock(lock)) if lock.device == owner.device
+        );
+        if !still_ours {
+            log::warn!("the library folder's sync lock was taken over");
+            return;
+        }
+        let renewed = match lock_json(&owner, crate::unix_now()) {
+            Ok(bytes) => libsync::folder::write_whole(&path, &bytes).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = renewed {
+            log::warn!("the library folder's sync lock was not renewed: {e}");
+        }
+    }
+}
+
+impl HeldFolder {
+    /// Gives the lock back, if it is still this device's.
+    pub async fn release(self) {
+        self.renewer.abort();
+        if let Ok(Found::Lock(lock)) = read_file(&self.path).await
+            && lock.device == self.device
+        {
+            let _ = tokio::fs::remove_file(&self.path).await;
+        }
+    }
+}
+
+impl Drop for HeldFolder {
+    /// Without a release the lock stops being renewed and lapses on its own.
     fn drop(&mut self) {
         self.renewer.abort();
     }
@@ -291,7 +433,7 @@ mod tests {
     #[test]
     fn busy_message_rounds_up_to_whole_minutes() {
         for (left, minutes) in [(0, 1), (1, 1), (60, 1), (61, 2), (300, 5)] {
-            let msg = busy_message("Studio", 1_000 + left, 1_000);
+            let msg = busy_message("Studio", 1_000 + left, 1_000, "this destination");
             assert!(
                 msg.contains(&format!("within {minutes} min")),
                 "{left}s: {msg}"

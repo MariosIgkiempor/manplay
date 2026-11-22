@@ -13,6 +13,7 @@ pub mod clashes;
 pub mod clock;
 pub mod compact;
 pub mod entities;
+pub mod folder;
 pub mod frac;
 pub mod identity;
 pub mod membership;

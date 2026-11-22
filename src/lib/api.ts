@@ -567,6 +567,48 @@ export async function libsyncJoin(targetId: number, choice: JoinChoice): Promise
 	return libraryOutcomeSchema.parse(await invoke("libsync_join", { targetId, choice }));
 }
 
+const runSummarySchema = z.object({
+	sent: int,
+	received: int,
+	unreadable: int,
+	held: int,
+	clockWrong: z.boolean(),
+	newDeviceId: z.boolean(),
+	error: z.string().nullable(),
+});
+/** What one sync of library data did. */
+export type RunSummary = z.infer<typeof runSummarySchema>;
+
+const libraryHomeSchema = z.discriminatedUnion("kind", [
+	z.object({ kind: z.literal("none") }),
+	z.object({ kind: z.literal("target"), targetId: int, name: z.string().nullable() }),
+	z.object({ kind: z.literal("folder"), root: z.string(), name: z.string().nullable() }),
+]);
+/** Where this device's shared library is kept: nowhere, on a destination, or in the library folder. */
+export type LibraryHome = z.infer<typeof libraryHomeSchema>;
+
+export async function libsyncHome(): Promise<LibraryHome> {
+	return libraryHomeSchema.parse(await invoke("libsync_home"));
+}
+
+/** What the library folder holds: a shared library other computers keep there, or null. */
+export async function libsyncInspectFolder(): Promise<FoundLibrary | null> {
+	return foundLibrarySchema.nullable().parse(await invoke("libsync_inspect_folder"));
+}
+
+/** Joins (or starts) the shared library in the library folder and syncs it once. */
+export async function libsyncJoinFolder(choice: JoinChoice): Promise<RunSummary> {
+	return runSummarySchema.parse(await invoke("libsync_join_folder", { choice }));
+}
+
+/**
+ * Syncs the shared library kept in the library folder once. Null when there is none, or another
+ * sync is running.
+ */
+export async function libsyncRunFolder(): Promise<RunSummary | null> {
+	return runSummarySchema.nullable().parse(await invoke("libsync_run_folder"));
+}
+
 /** What happens to the shared items on this device when it leaves: keep them as local or drop them. */
 export type LeaveChoice = "keepCopy" | "keepLocal";
 

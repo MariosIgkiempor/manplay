@@ -34,9 +34,15 @@ async fn joined_pair(
 ) {
     let (a, _) = started(store).await;
     let (b, id) = unjoined(3);
-    let sum = membership::join(&b, id, store, JoinChoice::Merge, "")
-        .await
-        .expect("join");
+    let sum = membership::join(
+        &b,
+        membership::Home::Target(id),
+        store,
+        JoinChoice::Merge,
+        "",
+    )
+    .await
+    .expect("join");
     assert!(sum.error.is_none(), "{:?}", sum.error);
     assert!(run_both(&a, &b, store).await);
     (a, b)
@@ -227,7 +233,14 @@ async fn a_library_of_a_newer_format_is_neither_joined_nor_synced() {
     let chunks = store.chunks.lock().expect("lock").len();
 
     let (b, id) = unjoined(3);
-    let refused = membership::join(&b, id, &store, JoinChoice::Merge, "").await;
+    let refused = membership::join(
+        &b,
+        membership::Home::Target(id),
+        &store,
+        JoinChoice::Merge,
+        "",
+    )
+    .await;
     assert!(
         refused
             .expect_err("refused")
@@ -311,9 +324,15 @@ async fn a_new_audio_fingerprint_is_remapped_and_older_builds_wait() {
         Some("2"),
     )
     .expect("version");
-    let joined = membership::join(&c, id, &store, JoinChoice::Merge, "")
-        .await
-        .expect("join");
+    let joined = membership::join(
+        &c,
+        membership::Home::Target(id),
+        &store,
+        JoinChoice::Merge,
+        "",
+    )
+    .await
+    .expect("join");
     assert!(
         joined.error.is_some(),
         "the build here is still on version 1"
@@ -337,9 +356,15 @@ async fn two_devices_starting_a_library_at_once_end_up_in_the_one_that_stands() 
     };
     *store.rival_library.lock().expect("lock") = Some(serde_json::to_vec(&rival).expect("json"));
     let (a, id) = unjoined(3);
-    let sum = membership::join(&a, id, &store, JoinChoice::Start, "Ours")
-        .await
-        .expect("start");
+    let sum = membership::join(
+        &a,
+        membership::Home::Target(id),
+        &store,
+        JoinChoice::Start,
+        "Ours",
+    )
+    .await
+    .expect("start");
     assert!(sum.error.is_none(), "{:?}", sum.error);
     let conn = a.lock().expect("lock");
     assert_eq!(
