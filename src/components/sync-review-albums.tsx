@@ -234,6 +234,9 @@ function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, onClose: 
 	}, [ref, open, onClose]);
 }
 
+/** Room below a lifted card for its shadow (`shadow-lg`), so the scroll area does not cut it. */
+const SHADOW_ROOM_PX = 24;
+
 /**
  * Reports how far an open card hangs below the mosaic, so the page can make room to scroll to
  * it, and brings it into view.
@@ -252,7 +255,9 @@ function useOverhang(
 			return;
 		}
 		const measure = () =>
-			onOverhang(Math.max(0, cell.offsetTop + card.offsetHeight - grid.clientHeight));
+			onOverhang(
+				Math.max(0, cell.offsetTop + card.offsetHeight + SHADOW_ROOM_PX - grid.clientHeight),
+			);
 		measure();
 		const observer = new ResizeObserver(measure);
 		observer.observe(card);
@@ -293,6 +298,7 @@ function floatStyle(cell: Cell, revealed: boolean): CSSProperties {
 		width: side === "below" ? cell.width : cell.width + panel,
 		minHeight: cell.height,
 		flexDirection: FLEX[side],
+		// The room around the card is for its shadow, which the clip would otherwise cut.
 		clipPath: revealed ? "inset(-2rem round 0.5rem)" : start,
 	};
 }
@@ -415,7 +421,7 @@ function AlbumCard({
 					"flex h-full min-w-0 overflow-hidden rounded-xl border border-hairline bg-well transition-colors",
 					floating && (open ? "z-20" : "z-10"),
 					floating &&
-						"h-auto border-primary/50 shadow-2xl shadow-black/25 transition-[clip-path] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none",
+						"h-auto border-primary/50 shadow-lg transition-[clip-path] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none",
 				)}
 				style={floating ? floatStyle(cell, revealed) : undefined}
 				onTransitionEnd={onTransitionEnd}
