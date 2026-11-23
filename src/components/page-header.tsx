@@ -392,10 +392,11 @@ function CompactHeader({
 			{hasTabs && (
 				<div ref={tabsRef} className="mt-3">
 					{shows(search) ? (
-						// Tabs that do not fit scroll sideways; the search keeps its room at the end.
+						// The search keeps its room at the end; tabs that do not fit scroll sideways.
 						<div className="-mb-px flex items-stretch gap-4">
-							<div className="min-w-0 overflow-x-auto no-scrollbar">{tabs}</div>
-							<div className="ml-auto flex min-w-64 max-w-md flex-1 items-center pb-1.5">
+							<div className="min-w-0">{tabs}</div>
+							{/* Room for typing only while the search is open; folded, the tabs get the space. */}
+							<div className="ml-auto flex max-w-md flex-1 items-center pb-1.5 has-[[data-search-open]]:min-w-64">
 								{search}
 							</div>
 						</div>

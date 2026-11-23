@@ -68,7 +68,7 @@ export function AlbumPanel({ albumKey: key }: { albumKey: string }) {
 				tracks={album.tracks}
 				tabs={
 					<Segmented
-						className="border-b-0"
+						ruled={false}
 						value={tabs.album}
 						onChange={(v) => setTab("album", v)}
 						label="Album view"

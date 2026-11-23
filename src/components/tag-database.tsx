@@ -393,7 +393,6 @@ function noticeFor(report: FixReport | null): { ok: boolean; text: string } {
 	};
 }
 
-/** The fields as the page's header tabs, scrolling sideways when they do not all fit. */
 /** One tab per field, each counting its values; while searching, the fields with matches. */
 function FieldTabs({
 	all,
@@ -408,7 +407,7 @@ function FieldTabs({
 }) {
 	return (
 		<Segmented
-			className="w-max border-b-0"
+			ruled={false}
 			value={source}
 			onChange={onPick}
 			label="Fields"

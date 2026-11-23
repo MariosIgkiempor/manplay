@@ -67,7 +67,7 @@ export function PlacePage({
 		<PlaceFrame
 			header={header(
 				<Segmented
-					className="border-b-0"
+					ruled={false}
 					value={tab}
 					onChange={setTab}
 					label="Page view"
@@ -140,7 +140,7 @@ export function OverviewTabs({
 }) {
 	return (
 		<Segmented
-			className="border-b-0"
+			ruled={false}
 			value={tab}
 			onChange={onChange}
 			label="Page view"

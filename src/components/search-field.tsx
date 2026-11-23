@@ -70,6 +70,7 @@ export function SearchShell({
 					fieldClassName,
 				)}
 				style={open ? { minWidth: foldedWidth } : undefined}
+				data-search-open={open || undefined}
 				// The folded button gives way to the field on a press, not on focus, so tabbing past it
 				// leaves the field folded.
 				onFocus={(e) => {

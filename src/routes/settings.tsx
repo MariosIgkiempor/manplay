@@ -43,7 +43,7 @@ function SettingsPage() {
 				title="Settings"
 				tabs={
 					<Segmented
-						className="border-b-0"
+						ruled={false}
 						value={section}
 						onChange={(next) => void navigate({ search: { section: next }, replace: true })}
 						label="Settings section"

@@ -232,7 +232,7 @@ export function RekordboxPage() {
 					}
 					tabs={
 						<Segmented
-							className="border-b-0"
+							ruled={false}
 							value={tab}
 							onChange={setTab}
 							label="rekordbox view"

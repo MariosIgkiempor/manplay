@@ -77,7 +77,7 @@ function PinnedValuePanel({
 				tabs={
 					editable && (
 						<Segmented
-							className="border-b-0"
+							ruled={false}
 							value={tab}
 							onChange={setTab}
 							label={`${kind} view`}

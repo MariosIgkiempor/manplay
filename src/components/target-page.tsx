@@ -319,7 +319,7 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 					}
 					tabs={
 						<Segmented
-							className="border-b-0"
+							ruled={false}
 							value={tab}
 							onChange={setTab}
 							label="Destination view"

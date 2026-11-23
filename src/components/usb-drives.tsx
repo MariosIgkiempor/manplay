@@ -88,7 +88,7 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 						// The search sits at the tab row's end, as on the Library's page.
 						<div className="flex items-end gap-4">
 							<Segmented
-								className="border-b-0"
+								ruled={false}
 								value={tab}
 								onChange={setTab}
 								label="Drive view"
