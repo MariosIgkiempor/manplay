@@ -60,7 +60,7 @@ function ImportPage() {
 			{tab === "list" &&
 				(folders.length === 0 ? (
 					<EmptyState icon={<FolderPlus />} title="No import folders yet" action={addButton}>
-						<Facts label="Add the folders new music lands in, such as Downloads or your iTunes media folder.">
+						<Facts label="Add folders where new music lands.">
 							<Fact>Downloads</Fact>
 							<Fact>iTunes Media</Fact>
 						</Facts>
@@ -105,7 +105,7 @@ function ImportSettings({ folders }: { folders: readonly ImportFolder[] }) {
 						<SettingLabel
 							icon={<ImageDown />}
 							title="Covers for songs bought from Apple"
-							hint="Songs bought on iTunes often come without their cover. Asks Apple for the album's official cover as they are imported; only the album's catalogue number is sent."
+							hint="Fetch the official cover from Apple when importing iTunes songs. Only the album's catalogue number is sent."
 						/>
 					}
 				>

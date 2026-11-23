@@ -99,7 +99,7 @@ function MissingBody({ onEmpty }: { onEmpty: () => void }) {
 					disabled={remove.isPending}
 					destructive
 					confirmLabel={`Remove ${status.missing} missing ${status.missing === 1 ? "song" : "songs"}`}
-					consequence="They leave the library and their copies on your sync destinations are removed too."
+					consequence="Removed from the library and from your sync destinations."
 					onConfirm={() => remove.mutate(undefined, { onSuccess: onEmpty })}
 				>
 					<Trash2 />

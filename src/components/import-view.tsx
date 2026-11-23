@@ -140,7 +140,7 @@ function Toolbar(p: ToolbarProps) {
 					variant="ghost"
 					size="icon-sm"
 					aria-label="Full rescan"
-					data-hint="Full rescan: read every file again, ignoring what was learned last time"
+					data-hint="Full rescan: read every file again"
 					onClick={() => s.rescan(true)}
 					disabled={s.folder === null || scanning}
 				>

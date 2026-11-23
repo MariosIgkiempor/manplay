@@ -107,7 +107,7 @@ function ReanalyzeConsequence({ edited, replaceEdits }: { edited: number; replac
 			? `, including the ${songs} you edited by hand.`
 			: `; the ${songs} you edited by hand keep your values.`;
 	}
-	const sentence = `${everything ? "Every BPM, key and beat grid is detected again" : "Detected BPM, keys and beat grids are replaced"}${editsPart} You can stop at any time and keep what is done.`;
+	const sentence = `${everything ? "Every BPM, key and beat grid is detected again" : "Detected BPM, keys and beat grids are replaced"}${editsPart} Stop any time; finished songs stay.`;
 	return (
 		<Facts label={sentence}>
 			<Fact tone="changed">{everything ? "Every BPM, key, grid" : "Detected BPM, key, grid"}</Fact>
@@ -226,7 +226,7 @@ function RunControls({
 			<ConfirmButton
 				variant="ghost"
 				disabled={counts.analyzed === 0}
-				data-hint="Detect BPM and key again for every song, replacing earlier results"
+				data-hint="Detect every song again, replacing earlier results"
 				confirmLabel={`Re-analyze ${plural(counts.total, "song", "songs")}`}
 				consequence={<ReanalyzeConsequence edited={counts.edited} replaceEdits={replaceEdits} />}
 				onConfirm={() => onRun(true)}
@@ -301,7 +301,7 @@ function FileTags({
 					variant="ghost"
 					size="sm"
 					disabled={running || withResults === 0}
-					data-hint={`Write the saved BPM and key of ${plural(withResults, "song", "songs")} into their files, e.g. songs analysed before results were always written`}
+					data-hint={`Write saved BPM and key of ${plural(withResults, "song", "songs")} into their files`}
 					confirmLabel={`Write tags into ${plural(withResults, "song", "songs")}`}
 					consequence={
 						<Facts
@@ -346,7 +346,7 @@ function HandEdits({ edited }: { edited: number }) {
 			<SettingRows>
 				<SettingRow
 					label="Re-analysis replaces my edits"
-					title="Off: a BPM, key or beat grid you set by hand stays when songs are analyzed again. Right-click a song to discard its edits."
+					title="Off: BPM, key and beat grids you set by hand survive re-analysis. Right-click a song to discard its edits."
 				>
 					<Switch
 						label="Re-analysis replaces BPM, keys and beat grids set by hand"
@@ -487,8 +487,8 @@ export function AnalysisSettings() {
 		<FrameSection
 			title="BPM & key"
 			description={
-				<Facts label="Songs are analysed as they come into the library, and their BPM and key are written into the files so other apps and players see them. A BPM or key you set by hand is never replaced.">
-					<Fact tone="changed">Analysed on arrival</Fact>
+				<Facts label="New songs are analyzed on import, and BPM and key are written into the files. Hand edits are never replaced.">
+					<Fact tone="changed">Analyzed on arrival</Fact>
 					<Fact tone="changed" hint="So other apps and players see them">
 						Written into files
 					</Fact>

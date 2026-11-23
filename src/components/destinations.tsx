@@ -220,7 +220,7 @@ export function Destinations() {
 						}
 					>
 						<Facts
-							label="Back up to a Tailscale folder or an R2 bucket, write a rekordbox file, or plug in a CDJ USB drive."
+							label="Back up to a Tailscale folder or R2 bucket, write a rekordbox file, or plug in a USB drive."
 							className="justify-center"
 						>
 							<Fact>Tailscale folder</Fact>

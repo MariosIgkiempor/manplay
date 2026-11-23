@@ -316,10 +316,10 @@ function formatsAdvice(f: UsbFormats): string | null {
 		return `The two libraries differ (${pdb.tracks.toLocaleString()} and ${one.tracks.toLocaleString()} tracks), so players show different songs. A CDJ-3000 on firmware 3.30 reads the OneLibrary first. Export from manplay to write both from one list.`;
 	}
 	if (pdb && pdb.tracks > 0 && !one) {
-		return "Players that read only OneLibrary show nothing from this drive. Export from manplay to add it.";
+		return "OneLibrary-only players show nothing from this drive. Export to add it.";
 	}
 	if (one && one.tracks > 0 && !pdb) {
-		return "The CDJ-3000 and older players show nothing from this drive. Export from manplay to add a Device Library.";
+		return "The CDJ-3000 and older players show nothing from this drive. Export to add a Device Library.";
 	}
 	return null;
 }
@@ -494,7 +494,7 @@ function BackupsRow({ drive }: { drive: UsbDrive }) {
 				destructive
 				confirmLabel={`Delete ${plural(older, "older backup", "older backups")}`}
 				consequence={
-					<Facts label="The newest backup stays. The others are deleted from the drive for good, so the space frees up now.">
+					<Facts label="The newest backup stays. The others are deleted for good.">
 						<Fact tone="kept">Newest backup</Fact>
 						<Fact tone="lost">Older ones, for good</Fact>
 					</Facts>
@@ -548,7 +548,7 @@ function ResetRow({ drive }: { drive: UsbDrive }) {
 					icon={<Eraser className="text-destructive" />}
 					title="Reset drive"
 					hint={
-						<Facts label="Removes the rekordbox library, analysis and exported songs, so the next export starts fresh. Player settings stay.">
+						<Facts label="Removes libraries, analysis and exported songs. Player settings stay.">
 							<Fact tone="lost">Libraries</Fact>
 							<Fact tone="lost">Analysis</Fact>
 							<Fact tone="lost">Exported songs</Fact>
@@ -586,8 +586,8 @@ function ResetRow({ drive }: { drive: UsbDrive }) {
 						<Facts
 							label={
 								isMac
-									? "The rekordbox library (both formats), the Serato, VirtualDJ and Gemini libraries, analysis files, artwork and every song in Contents and Playlists move to the drive's Trash. Players will show the drive as empty. The space frees up when you empty the Trash; until then you can put them back from it."
-									: "The rekordbox library (both formats), the Serato, VirtualDJ and Gemini libraries, analysis files, artwork and every song in Contents and Playlists are deleted from the drive for good (Windows keeps no Recycle Bin on USB drives). Players will show the drive as empty."
+									? "All libraries (rekordbox, Serato, VirtualDJ, Gemini), analysis files, artwork and songs move to the drive's Trash. Players will show it empty. Put them back from the Trash, or empty it to free the space."
+									: "All libraries (rekordbox, Serato, VirtualDJ, Gemini), analysis files, artwork and songs are deleted for good; USB drives have no Recycle Bin. Players will show it empty."
 							}
 						>
 							{RESET_REMOVES.map((item) => (

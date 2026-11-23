@@ -121,7 +121,7 @@ export function OffBadge() {
 		<StatusIcon
 			icon={<PowerOff />}
 			label="Off"
-			detail="Switched off: it doesn't look for new music. Turn it on from its menu or page."
+			detail="Switched off, so it finds no new music. Turn it on from its menu or page."
 		/>
 	);
 }

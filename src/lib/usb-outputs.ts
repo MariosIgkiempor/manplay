@@ -65,7 +65,7 @@ export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 		icon: Usb,
 		name: "rekordbox",
 		title: "rekordbox library",
-		detail: "For Pioneer and AlphaTheta players: CDJ, XDJ, Opus Quad and the rest, old and new.",
+		detail: "For Pioneer and AlphaTheta players: CDJ, XDJ, Opus Quad and more.",
 		reviewNote: (_, outputs) => rekordboxNote(outputs.rekordboxFormats),
 		offNote:
 			"No rekordbox library is written. One already on the drive is removed, with a copy kept in PIONEER/manplay-backup.",
@@ -76,7 +76,7 @@ export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 		icon: Disc3,
 		name: "Serato",
 		title: "Serato crates",
-		detail: "Serato DJ shows each playlist as a crate and analyses new songs itself.",
+		detail: "Serato DJ shows each playlist as a crate and analyzes new songs itself.",
 		reviewNote: (mode) =>
 			`Each exported playlist is written as a Serato crate${
 				mode === "add" ? "" : ", and removed playlists' crates go too"
@@ -89,7 +89,7 @@ export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 		name: "VirtualDJ",
 		title: "VirtualDJ library",
 		detail:
-			"VirtualDJ shows each playlist as a list on the drive, with the cues set in manplay, and analyses new songs itself. Export again after moving the drive between a Mac and a PC.",
+			"VirtualDJ shows each playlist as a list, with your cues, and analyzes new songs itself. Export again after moving the drive between a Mac and a PC.",
 		reviewNote: (mode) =>
 			`Each exported playlist is written as a VirtualDJ list${
 				mode === "add" ? "" : ", and removed playlists' lists go too"
@@ -114,7 +114,7 @@ export const USB_OUTPUTS: readonly UsbOutputOption[] = [
 		detail:
 			"For players that only browse folders, like the MDJ-500. Songs move into their playlist's folder in Playlists; only a song in several playlists is stored again.",
 		reviewNote: () =>
-			"Songs move into a folder per playlist in Playlists. A song in several playlists is copied into each further one.",
+			"One folder per playlist in Playlists. A song in several playlists is copied into each.",
 	},
 ];
 

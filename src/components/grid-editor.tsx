@@ -368,7 +368,7 @@ function Editor({
 				{track.edited.grid && (
 					<span
 						className="flex shrink-0 items-center gap-1.5 text-primary"
-						data-hint="Re-analysis keeps this grid unless the BPM and key drawer says to replace edits"
+						data-hint="Kept on re-analysis unless BPM & key settings replace edits"
 					>
 						<PencilLine className="size-3.5" /> Grid edited by you
 					</span>
@@ -385,7 +385,7 @@ function Editor({
 				)}
 				{changed && (
 					<StatusButton
-						title="Back to the grid and cues the song had when it was loaded. Undo brings the edits back."
+						title="Back to the grid and cues from when the song loaded. Undo restores your edits."
 						onClick={() => replace(opened)}
 					>
 						<RotateCcw /> Revert grid and cues
@@ -1139,7 +1139,7 @@ function MetronomeTiming({
 		<PropertyRow
 			label={<span className="truncate text-muted-foreground text-xs">Metronome</span>}
 			title={keyLabel(
-				"If the clicks sound late or early, move them until they land on the beat. Remembered on this device. 10 ms a press, 50 ms with ⇧.",
+				"Shift the clicks until they land on the beat. Saved on this device. 10 ms a press, 50 ms with ⇧.",
 			)}
 		>
 			<ButtonGroup>

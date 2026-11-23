@@ -151,7 +151,7 @@ export function LibraryEmpty({
 				</Button>
 			}
 		>
-			manplay reads the songs in it and keeps them where they are.
+			Songs stay where they are.
 		</EmptyState>
 	);
 }

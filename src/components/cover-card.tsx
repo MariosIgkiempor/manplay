@@ -192,7 +192,7 @@ export function CoverCard({
 							type="button"
 							className={cn(ON_PHOTO, GLASS, "disabled:opacity-60")}
 							disabled={busy}
-							data-hint="Choose a picture from this computer. You can also drop or paste one."
+							data-hint="Choose a picture, or drop or paste one"
 							onClick={() => void upload()}
 						>
 							<Upload />
@@ -306,7 +306,7 @@ const STAGE_WORDS: Record<Exclude<DownloadStage, "ready">, string> = {
 
 const STAGE_HINT: Record<Exclude<DownloadStage, "ready">, string> = {
 	idle: "Find this album's cover online",
-	ask: "Finding a cover sends the album's name and artist to MusicBrainz, and to Discogs if you saved a token for it, and turns tag lookup on. Press to go ahead.",
+	ask: "Sends the album and artist to MusicBrainz (and Discogs, if saved) and turns tag lookup on. Press to continue.",
 	searching: "Looking for this album",
 	loading: "Fetching the cover",
 	none: "No release of this album has a cover online. Press to search again.",

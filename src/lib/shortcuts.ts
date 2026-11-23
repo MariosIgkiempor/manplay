@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRASH } from "#/lib/platform.ts";
 
 /**
  * One key combination, written the same way everywhere: the modifiers held (`mod` is ⌘ on a Mac
@@ -324,7 +325,11 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
 	define("fileCut", "Organize", "files", "Cut", ["mod+KeyX", "KeyX"]),
 	define("fileCopy", "Organize", "files", "Copy", ["mod+KeyC", "KeyY"]),
 	define("filePaste", "Organize", "files", "Paste", ["mod+KeyV", "KeyP"]),
-	define("fileDelete", "Organize", "files", "Move to the bin", ["mod+Backspace", "Delete", "KeyD"]),
+	define("fileDelete", "Organize", "files", `Move to ${TRASH}`, [
+		"mod+Backspace",
+		"Delete",
+		"KeyD",
+	]),
 	define("fileSelectAll", "Organize", "files", "Select all", ["mod+KeyA"]),
 
 	define("fileNextIssue", "Fix and tag", "files", "Next issue", ["BracketRight"]),

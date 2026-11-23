@@ -148,7 +148,7 @@ export function ImportFolderSettings({ folder }: { folder: ImportFolder }) {
 						<SettingLabel
 							icon={<Zap />}
 							title="Import everything new"
-							hint="New songs come in by themselves, when the app starts and every few minutes, without you picking them. Off: you choose what to import."
+							hint="New songs import on launch and every few minutes. Off: you choose what to import."
 						/>
 					}
 				>
@@ -163,7 +163,7 @@ export function ImportFolderSettings({ folder }: { folder: ImportFolder }) {
 						<SettingLabel
 							icon={<Wand2 />}
 							title="Convert AAC to MP3"
-							hint="AAC songs (.m4a, as iTunes buys them) come in as 320 kbps MP3 with their tags and cover, so every player reads them. The originals stay in the folder."
+							hint="AAC songs (.m4a) import as 320 kbps MP3 with tags and cover. Originals stay in the folder."
 						/>
 					}
 				>
@@ -190,7 +190,7 @@ export function ImportFolderSettings({ folder }: { folder: ImportFolder }) {
 						destructive
 						confirmLabel={`Stop importing from ${folderName(folder.path)}`}
 						consequence={
-							<Facts label="Nothing in the folder is touched, and the songs already imported stay in your library. Its history is kept.">
+							<Facts label="The folder, imported songs and history stay.">
 								<Fact tone="kept">Folder's files</Fact>
 								<Fact tone="kept">Imported songs</Fact>
 								<Fact tone="kept">History</Fact>

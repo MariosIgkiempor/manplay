@@ -211,7 +211,7 @@ function UsbStep() {
 				<div className="rounded-xl border border-hairline border-dashed">
 					<EmptyState title="Plug in a USB drive">
 						Appears here while plugged in{" "}
-						<MoreInfo hint="It shows up here, and in your destinations, while it's plugged in." />
+						<MoreInfo hint="Shown here and in destinations while plugged in." />
 					</EmptyState>
 				</div>
 			) : (

@@ -65,7 +65,7 @@ function CombineDialog({
 		>
 			{data.sharesLocal
 				? clash.kind === "smart_playlist"
-					? `Your local smart playlist is replaced by the shared one, which keeps its rules.`
+					? "Your local smart playlist is replaced by the shared one and its rules."
 					: `${songs(data.songs)} from your local ${word} become visible to everyone on the destination. The shared ${word} keeps the name and your local one goes away.`
 				: `The two ${word}s become one for everyone on the destination, with the songs of both.`}
 			{combine.isError && <ErrorLine className="mt-2">{String(combine.error)}</ErrorLine>}

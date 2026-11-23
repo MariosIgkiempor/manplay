@@ -44,7 +44,7 @@ export function SyncButton({
 }
 
 const ABOUT: Record<SyncMode, string> = {
-	both: "Send your changes, bring in theirs, and decide what to do with files only they have.",
+	both: "Send your changes, bring in theirs, and decide about files only they have.",
 	pull: "Starts with what comes into your library; nothing is sent.",
 	push: "Starts with what goes to destinations; nothing comes in.",
 };

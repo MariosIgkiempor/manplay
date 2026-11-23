@@ -17,7 +17,7 @@ export function LookupSettings() {
 		<FrameSection
 			title="Tag lookup"
 			description={
-				<Facts label="Find missing tags and covers online, for the songs you choose. Nothing is sent for any other song.">
+				<Facts label="Find missing tags and covers online, only for songs you choose.">
 					<Fact tone="sent">Only songs you choose</Fact>
 				</Facts>
 			}
@@ -31,7 +31,7 @@ export function LookupSettings() {
 				}
 				htmlFor={switchId}
 				description={
-					<Facts label="Sends the title and first artist to MusicBrainz, a public music database, and finds covers in its Cover Art Archive by album name.">
+					<Facts label="Sends title and first artist to MusicBrainz, a public music database. Covers come from its Cover Art Archive by album name.">
 						<Fact tone="sent">Title</Fact>
 						<Fact tone="sent">First artist</Fact>
 						<Fact tone="sent">Album, for covers</Fact>
@@ -73,7 +73,7 @@ function DiscogsToken() {
 			}
 			htmlFor={token.saved ? undefined : inputId}
 			description={
-				<Facts label="Adds the style, label and cover Discogs has. Make a free token at discogs.com/settings/developers. It is kept in the keychain and sent only to Discogs.">
+				<Facts label="Adds style, label and cover from Discogs. Make a free token at discogs.com/settings/developers. It stays in the keychain and goes only to Discogs.">
 					<Fact tone="changed">Style</Fact>
 					<Fact tone="changed">Label</Fact>
 					<Fact tone="changed">Cover</Fact>

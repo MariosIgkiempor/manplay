@@ -177,7 +177,7 @@ export function LeaveLibraryDialog({
 					<Choice
 						tone="main"
 						label="Keep a copy"
-						hint="Syncs once more, then every shared tag and playlist stays here as a local one."
+						hint="Syncs once more, then shared tags and playlists stay here as local ones."
 						disabled={leave.isPending}
 						onClick={() => go("keepCopy", true)}
 					/>
@@ -363,8 +363,7 @@ const WORDING = {
 		startTitle: (where: string) => `Start a shared library on ${where}?`,
 		startLabel: "Start a shared library",
 		startSummary: "Your other devices join it from this destination.",
-		startBody:
-			"Your other devices can join it when they add this destination. The songs stay plain files, so Jellyfin sees them as before.",
+		startBody: "Other devices join when they add this destination. Songs stay plain files.",
 		starting: "Starting the library…",
 		notNow: "Files only",
 		notNowHint: "Copy the songs and nothing else. manplay writes nothing more here.",
@@ -377,7 +376,7 @@ const WORDING = {
 		startLabel: "Share this library",
 		startSummary: "Computers that open this folder can join.",
 		startBody:
-			"For a library folder that other computers open too, such as a network share or a folder a sync app keeps copied. When they choose it as their library folder, manplay offers to join.",
+			"For a library folder other computers open too, such as a network share or a synced folder. manplay offers to join when they choose it.",
 		starting: "Sharing the library…",
 		notNow: "Not now",
 		notNowHint: "Keep it to this computer. manplay writes nothing more in the folder.",
@@ -467,7 +466,7 @@ function StartDialog({
 					<Choice
 						tone="main"
 						label={words.startLabel}
-						hint="Your tags and playlists are shared. Make any of them private from its page."
+						hint="Tags and playlists are shared. Make any private from its page."
 						disabled={join.isPending}
 						onClick={() => onChoose("start")}
 					/>
@@ -705,7 +704,7 @@ function PlaceRows({
 					root ? (
 						<>
 							Share or join with computers opening it{" "}
-							<MoreInfo hint="Share it with computers that open the same folder, or join the library already in it." />
+							<MoreInfo hint="Share with computers that open this folder, or join the library in it." />
 						</>
 					) : (
 						"Choose a library folder in Library first."
@@ -760,7 +759,7 @@ export function SharedLibrarySettings() {
 			<FrameSection
 				title="Shared library"
 				description={
-					<Facts label="Tags, playlists, smart playlists, BPM, key, beat grids and waveforms, shared with other computers through a destination or through a library folder they open too. The songs stay plain files.">
+					<Facts label="Tags, playlists, smart playlists, BPM, key, beat grids and waveforms, shared through a destination or a library folder. Songs stay plain files.">
 						{SHARED_KINDS.map((kind) => (
 							<Fact key={kind}>{kind}</Fact>
 						))}

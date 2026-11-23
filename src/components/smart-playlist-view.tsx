@@ -85,7 +85,7 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 				<FrameSection
 					title="Rules"
 					description={
-						<Facts label="Songs join and leave on their own as you tag and analyse them.">
+						<Facts label="Songs join and leave as you tag and analyze them.">
 							<Fact tone="changed">Updates as you tag</Fact>
 						</Facts>
 					}
@@ -98,8 +98,7 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 					<h2 className={typeScale.sectionTitle}>Songs</h2>
 					{songs.length === 0 && !preview.isPending ? (
 						<EmptyState icon={<Sparkles />} title="No song matches every rule">
-							Remove a tag or filter to widen it.{" "}
-							<MoreInfo hint="Take a tag or filter out to widen it. Songs join on their own as you tag them." />
+							Remove a tag or filter to widen it. <MoreInfo hint="Songs join as you tag them." />
 						</EmptyState>
 					) : (
 						<SelectableTrackList

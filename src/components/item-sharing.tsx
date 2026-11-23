@@ -201,7 +201,7 @@ export function LocalTagsDialog({
 			onCancel={onCancel}
 			onConfirm={() => onConfirm(choices)}
 		>
-			<Facts label="Other devices cannot see local tags. Choose what happens to each one used by the rules.">
+			<Facts label="Other devices cannot see local tags. Choose what happens to each one the rules use.">
 				<Fact tone="warn">Local tags hidden from others</Fact>
 				<Fact>Choose for each</Fact>
 			</Facts>
@@ -345,7 +345,7 @@ export function PrivateDialog({
 			onCancel={onClose}
 			onConfirm={() => priv.mutate(data.usedBy.length > 0)}
 		>
-			<Facts label="This removes it for everyone else. You keep a copy that stays on this device.">
+			<Facts label="Removed for everyone else. You keep a copy here.">
 				<Fact tone="lost">Gone for everyone else</Fact>
 				<Fact tone="kept">Your copy here</Fact>
 			</Facts>

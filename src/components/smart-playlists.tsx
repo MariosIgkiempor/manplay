@@ -201,7 +201,7 @@ export function SmartPicker({
 			{list.isSuccess && all.length === 0 && (
 				<p className="py-4 text-center text-muted-foreground text-sm">
 					No smart playlists yet.{" "}
-					<MoreInfo hint="No smart playlists yet. Make one from rules like “instrumental and house”, and it shows up here." />
+					<MoreInfo hint="No smart playlists yet. Make one from rules like “instrumental and house”." />
 				</p>
 			)}
 			<Button
@@ -673,7 +673,7 @@ const TAG_LOOK: Record<TagRole, { icon: LucideIcon; text: string }> = {
 };
 
 const DEVICE_ONLY_NOTE =
-	"Counts when a song reached this device. Other devices sharing this playlist count their own, so they can list different songs.";
+	"Counted when a song reached this device, so other devices may list different songs.";
 
 const FILTER_LOOK: Record<FilterKind, { icon: LucideIcon; text: string; label: string }> = {
 	added: { icon: CalendarClock, text: "text-warning", label: "Added" },

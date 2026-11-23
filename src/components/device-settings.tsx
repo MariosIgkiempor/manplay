@@ -27,7 +27,7 @@ export function DeviceNameRow() {
 			description={
 				<>
 					Your name to other members{" "}
-					<MoreInfo hint="How the other members of a shared library see this computer. Leave it empty to use the computer's own name." />
+					<MoreInfo hint="How other members see this computer. Empty uses the computer's name." />
 				</>
 			}
 		>

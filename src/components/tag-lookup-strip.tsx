@@ -81,7 +81,7 @@ function Close({ found, label }: { found: TagSuggestions; label: string }) {
 function Consent({ found }: { found: TagSuggestions }) {
 	return (
 		<div className="space-y-2">
-			<Facts label="A lookup sends each song's title and first artist to MusicBrainz, a public music database, and to Discogs if you saved a token for it. Covers are found by album name. Nothing else leaves this computer. It runs only for the songs you choose, and can be switched off in Settings.">
+			<Facts label="A lookup sends the song's title and first artist to MusicBrainz, and to Discogs if you saved a token. Covers use the album name. Nothing else leaves this computer. Switch it off in Settings.">
 				<Fact tone="sent">Title</Fact>
 				<Fact tone="sent">First artist</Fact>
 				<Fact tone="sent">Album, for covers</Fact>

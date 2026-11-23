@@ -57,7 +57,7 @@ function Field({
 }
 
 const MOVE_HINT = (
-	<Facts label="Changing the folder re-uploads your library there. Files at the old location are left untouched.">
+	<Facts label="Changing the folder re-uploads your library. Files at the old location stay.">
 		<Fact tone="changed">Library uploads again</Fact>
 		<Fact tone="kept">Old location untouched</Fact>
 	</Facts>

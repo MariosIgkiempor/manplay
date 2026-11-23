@@ -106,7 +106,7 @@ function Review({ targetId, onClose }: { targetId: number; onClose: () => void }
 	const changing = rows.filter((r) => r.action !== "unchanged" || r.adopted).length;
 	return (
 		<div className="flex min-h-full flex-col gap-4">
-			<Facts label="What Send changes in Jellyfin. Before a playlist is changed or deleted, its song list is saved on this computer.">
+			<Facts label="What Send changes in Jellyfin. A playlist's song list is saved here before it is changed or deleted.">
 				<Fact tone="changed">What Send changes</Fact>
 				<Fact tone="kept">Song lists backed up first</Fact>
 			</Facts>
@@ -147,7 +147,7 @@ export function JellyfinPushRow({ targetId }: { targetId: number }) {
 						last ? (
 							`Sent ${timeAgo(last.at)}: ${pushSummaryText(last.summary)}.`
 						) : (
-							<Facts label="Sent after each sync. Renames, removals and take-overs wait for a review here.">
+							<Facts label="Sent after each sync. Renames, removals and take-overs wait for review.">
 								<Fact tone="changed">After each sync</Fact>
 								<Fact tone="warn">Renames, removals, take-overs: review</Fact>
 							</Facts>

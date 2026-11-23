@@ -155,7 +155,7 @@ function NoFolderNote({ loaded }: { loaded: boolean }) {
 						</Button>
 					}
 				>
-					Files shows the folders of your library once you have chosen one.
+					Your library folders show here once you choose one.
 				</EmptyState>
 			) : (
 				<LoadingLine>Loading…</LoadingLine>
