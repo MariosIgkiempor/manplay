@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Copy, ListMusic, PencilLine, Play, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
@@ -9,7 +9,14 @@ import { RowMenu } from "#/components/menu.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { AddButton, NewRow } from "#/components/sidebar-create.tsx";
 import { GroupHeading, RowCount } from "#/components/sidebar-parts.tsx";
-import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
+import {
+	CHILD_PAD,
+	HOVER_ACTION,
+	pageRow,
+	rowBase,
+	rowClass,
+	useRowMatch,
+} from "#/components/sidebar-row.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import {
 	addToPlaylist,
@@ -80,7 +87,7 @@ function usePlaylistActions() {
 export function SidebarPlaylists() {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
-	const matchRoute = useMatchRoute();
+	const matchRoute = useRowMatch();
 	const playlists = useQuery({ queryKey: ["playlists"], queryFn: listPlaylists });
 	const actions = usePlaylistActions();
 	const [renaming, setRenaming] = useState<number | null>(null);
@@ -194,6 +201,7 @@ export function SidebarPlaylists() {
 									to="/playlists/$id"
 									params={{ id: String(p.id) }}
 									className={rowBase}
+									{...pageRow(p.name)}
 									style={{ paddingLeft: CHILD_PAD }}
 									onDoubleClick={() => setRenaming(p.id)}
 								>

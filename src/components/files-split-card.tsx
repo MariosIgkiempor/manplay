@@ -1,10 +1,10 @@
-import { type ReactNode, useRef } from "react";
+import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { useSplitSlot } from "#/context/split-slot.ts";
 import { CARD } from "#/lib/page-layout.ts";
-import { usePageMotion } from "#/lib/page-transition.ts";
+import { PAGE_MOTION_ATTRIBUTE } from "#/lib/page-transition.ts";
 import { usePaneWidth } from "#/lib/use-pane-width.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -27,20 +27,18 @@ export function FilesSplitCard({ children }: { children: ReactNode }) {
 		min: MIN,
 		max: () => window.innerWidth - PAGE_ROOM,
 	});
-	// Arrives the same way as the page beside it.
-	const cardRef = useRef<HTMLElement>(null);
-	usePageMotion(cardRef);
 	if (!slot) {
 		return null;
 	}
 	return createPortal(
 		<section
-			ref={cardRef}
 			aria-label="Second pane"
+			{...{ [PAGE_MOTION_ATTRIBUTE]: "pane" }}
 			style={sharing ? undefined : { width }}
 			className={cn(
 				CARD,
-				"relative flex flex-col",
+				// Arrives the same way as the page beside it (`page-transition.ts`).
+				"relative flex flex-col [view-transition-name:pane]",
 				// flex-1 is a zero basis, as the page's card has: the two come out the same width.
 				sharing ? "min-w-0 flex-1" : "max-w-[60%] shrink-0",
 			)}

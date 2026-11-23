@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
 	ArrowRight,
 	Check,
@@ -24,9 +24,11 @@ import {
 	CHILD_PAD,
 	HOVER_ACTION,
 	HOVER_END,
+	pageRow,
 	rowBase,
 	rowClass,
 	UNDER_HOVER_END,
+	useRowMatch,
 } from "#/components/sidebar-row.ts";
 import { type SyncKind, useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
@@ -107,6 +109,7 @@ function ChildRow({
 			<button
 				type="button"
 				data-hint={title ?? label}
+				{...pageRow(label)}
 				onClick={onOpen}
 				className={cn(rowBase, "text-left outline-none", dim && "opacity-60")}
 				style={{ paddingLeft: `${CHILD_PAD}px` }}
@@ -160,7 +163,7 @@ function BrowseButton({ target, label }: { target: number; label: string }) {
 function EjectButton({ drive }: { drive: UsbDrive }) {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
-	const matchRoute = useMatchRoute();
+	const matchRoute = useRowMatch();
 	const onItsPage = Boolean(matchRoute({ to: "/export/usb", search: { mount: drive.mount } }));
 	const eject = useMutation({
 		mutationFn: () => usbEject(drive.mount),
@@ -221,15 +224,17 @@ function ImportItems() {
 
 function ImportFolderItem({ folder }: { folder: ImportFolder }) {
 	const navigate = useNavigate();
-	const matchRoute = useMatchRoute();
+	const matchRoute = useRowMatch();
 	const found = useImportNewCount(folder);
 	const params = { folderId: folder.id };
+	// The URL holds the id as text; compare it as a number.
+	const onItsPage = matchRoute({ to: "/import/$folderId" });
 	return (
 		<ChildRow
 			brand={folderBrand(folder.path)}
 			label={folderName(folder.path)}
 			title={folder.path}
-			active={Boolean(matchRoute({ to: "/import/$folderId", params }))}
+			active={onItsPage !== false && Number(onItsPage.folderId) === folder.id}
 			dim={!folder.enabled}
 			trailing={folder.enabled ? <PendingCount count={found} what="new songs found" /> : "Off"}
 			onOpen={() => void navigate({ to: "/import/$folderId", params })}
@@ -291,7 +296,7 @@ function ScanIndicator({ status }: { status: DestinationStatus | null }) {
 
 function ExportItems() {
 	const navigate = useNavigate();
-	const matchRoute = useMatchRoute();
+	const matchRoute = useRowMatch();
 	const scans = useSyncScans().data;
 	const targets = useSyncTargets().data ?? [];
 	const drives = useUsbDrives().data ?? [];

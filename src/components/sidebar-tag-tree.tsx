@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, PencilLine, Play, Tag, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
@@ -15,9 +15,11 @@ import {
 	chevronLeft,
 	HOVER_ACTION,
 	HOVER_END,
+	pageRow,
 	rowBase,
 	rowClass,
 	UNDER_HOVER_END,
+	useRowMatch,
 } from "#/components/sidebar-row.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import {
@@ -61,7 +63,7 @@ const nonBlank = (v: string) => {
 function useTagMove() {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
-	const matchRoute = useMatchRoute();
+	const matchRoute = useRowMatch();
 	return useMutation({
 		mutationFn: ({ from, to }: { from: string; to: string | null }) =>
 			migrateLibraryTags([from], to),
@@ -141,7 +143,7 @@ export function SidebarTagTree() {
 	const hiddenTags = useMemo(() => (tags.data ?? []).filter((t) => t.hidden), [tags.data]);
 	const tree = useMemo(() => buildTagTree((tags.data ?? []).filter((t) => !t.hidden)), [tags.data]);
 	const [open, setOpen] = useState(loadOpen);
-	const matchRoute = useMatchRoute();
+	const matchRoute = useRowMatch();
 	const player = usePlayer();
 	const tracks = useTracks();
 	const move = useTagMove();
@@ -259,6 +261,7 @@ export function SidebarTagTree() {
 									params={{ _splat: n.name }}
 									data-hint={n.name}
 									className={rowBase}
+									{...pageRow(n.label)}
 									style={{ paddingLeft: `${pad}px` }}
 								>
 									<Tag className="size-4 shrink-0" />

@@ -1,4 +1,4 @@
-import { type ReactNode, useRef, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { CommandPalette } from "#/components/command-palette.tsx";
 import { ConfirmHost } from "#/components/confirm-host.tsx";
 import { FilePickerHost } from "#/components/file-picker.tsx";
@@ -11,7 +11,7 @@ import { TextFieldMenu } from "#/components/text-field-menu.tsx";
 import { SplitSlotContext } from "#/context/split-slot.ts";
 import { useStatusScopeHandlers } from "#/context/status-context.ts";
 import { CARD } from "#/lib/page-layout.ts";
-import { usePageMotion } from "#/lib/page-transition.ts";
+import { PAGE_MOTION_ATTRIBUTE, usePageDirection } from "#/lib/page-transition.ts";
 import { useAnalysisResults } from "#/lib/queries.ts";
 import { usePageSearchKey } from "#/lib/use-page-search-key.ts";
 import { cn } from "#/lib/utils.ts";
@@ -21,9 +21,7 @@ export function Shell({ children }: { children: ReactNode }) {
 	const mainScope = useStatusScopeHandlers("main");
 	useAnalysisResults();
 	usePageSearchKey();
-	// The page's whole card moves as a page arrives, outline and all.
-	const pageRef = useRef<HTMLDivElement>(null);
-	usePageMotion(pageRef);
+	usePageDirection();
 	const [splitSlot, setSplitSlot] = useState<HTMLElement | null>(null);
 	return (
 		<SplitSlotContext.Provider value={splitSlot}>
@@ -32,10 +30,14 @@ export function Shell({ children }: { children: ReactNode }) {
 					<Sidebar />
 					{/* The page, a page's own second pane and the side panel: each a card on the canvas. */}
 					{/* Clips the cards as they slide in, so they rise from the canvas's edge. */}
-					<div className="flex min-w-0 flex-1 gap-2 overflow-hidden py-2 pr-2">
+					<div className="relative flex min-w-0 flex-1 gap-2 overflow-hidden py-2 pr-2">
+						{/* The whole card moves as the page changes, outline and all. */}
 						<div
-							ref={pageRef}
-							className={cn(CARD, "relative min-w-0 flex-1 overflow-hidden")}
+							className={cn(
+								CARD,
+								"relative min-w-0 flex-1 overflow-hidden [view-transition-name:page]",
+							)}
+							{...{ [PAGE_MOTION_ATTRIBUTE]: "page" }}
 							{...mainScope}
 						>
 							<div className="@container/main h-full overflow-y-auto">{children}</div>

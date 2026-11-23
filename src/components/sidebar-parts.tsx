@@ -1,7 +1,7 @@
-import { Link, useMatchRoute } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
-import { CHEVRON, rowBase, rowClass } from "#/components/sidebar-row.ts";
+import { CHEVRON, pageRow, rowBase, rowClass, useRowMatch } from "#/components/sidebar-row.ts";
 import { compactCount } from "#/lib/format.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -25,7 +25,7 @@ export function GroupHeading({
 	action?: ReactNode;
 	to?: "/import" | "/export";
 }) {
-	const matchRoute = useMatchRoute();
+	const matchRoute = useRowMatch();
 	const active = to ? !!matchRoute({ to }) : false;
 	const inner = (
 		<>
@@ -46,7 +46,7 @@ export function GroupHeading({
 				<ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
 			</button>
 			{to ? (
-				<Link to={to} className={rowBase}>
+				<Link to={to} className={rowBase} {...pageRow(label)}>
 					{inner}
 				</Link>
 			) : (

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link, useMatchRoute, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
@@ -8,7 +8,14 @@ import { RowMenu } from "#/components/menu.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { AddButton } from "#/components/sidebar-create.tsx";
 import { GroupHeading } from "#/components/sidebar-parts.tsx";
-import { CHILD_PAD, HOVER_ACTION, rowBase, rowClass } from "#/components/sidebar-row.ts";
+import {
+	CHILD_PAD,
+	HOVER_ACTION,
+	pageRow,
+	rowBase,
+	rowClass,
+	useRowMatch,
+} from "#/components/sidebar-row.ts";
 import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { deleteSmartPlaylist, type SmartPlaylist } from "#/lib/api.ts";
 import { useItemSharing } from "#/lib/use-item-sharing.tsx";
@@ -19,7 +26,7 @@ import { SMART_KEY, useCreateSmartPlaylist, useSmartPlaylists } from "#/lib/use-
 export function SidebarSmartPlaylists() {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
-	const matchRoute = useMatchRoute();
+	const matchRoute = useRowMatch();
 	const list = useSmartPlaylists();
 	const create = useCreateSmartPlaylist();
 	const [deleting, setDeleting] = useState<SmartPlaylist | null>(null);
@@ -89,6 +96,7 @@ export function SidebarSmartPlaylists() {
 							to="/smart/$id"
 							params={{ id: String(p.id) }}
 							className={rowBase}
+							{...pageRow(p.name)}
 							style={{ paddingLeft: CHILD_PAD }}
 						>
 							<Sparkles className="size-4 shrink-0 opacity-70" />

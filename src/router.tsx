@@ -7,6 +7,9 @@ export function getRouter() {
 		scrollRestoration: true,
 		defaultPreload: "intent",
 		defaultPreloadStaleTime: 0,
+		// Pages scroll past each other as the path changes (`page-transition.ts`); a change of
+		// search only, such as a tab, does not move the page.
+		defaultViewTransition: { types: ({ pathChanged }) => (pathChanged ? ["page"] : false) },
 	});
 
 	return router;

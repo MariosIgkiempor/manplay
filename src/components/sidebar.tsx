@@ -23,12 +23,11 @@ import { SidebarRecentlyDeleted } from "#/components/sidebar-deleted.tsx";
 import { SidebarHighlight } from "#/components/sidebar-highlight.tsx";
 import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
 import { SidebarPlaylists } from "#/components/sidebar-playlists.tsx";
-import { currentRow, rowActive } from "#/components/sidebar-row.ts";
+import { currentRow, pageRow, rowActive } from "#/components/sidebar-row.ts";
 import { SidebarSmartPlaylists } from "#/components/sidebar-smart-playlists.tsx";
 import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
-import { directionTo, markDirection } from "#/lib/page-transition.ts";
 import { useClashes, useTracks } from "#/lib/queries.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
 import { usePaneWidth, useStoredFlag } from "#/lib/use-pane-width.ts";
@@ -70,6 +69,7 @@ function NavLink({
 	return (
 		<Link
 			{...props}
+			{...pageRow(label)}
 			data-hint={collapsed ? label : undefined}
 			aria-label={collapsed ? label : undefined}
 			className={collapsed ? railLinkClass : linkClass}
@@ -180,12 +180,6 @@ function useWidthVariable(aside: React.RefObject<HTMLElement | null>) {
 	}, [aside]);
 }
 
-/** Before a sidebar click navigates, notes which way the page should move for it. */
-function noteDirection(aside: HTMLElement, clickY: number) {
-	const current = currentRow(aside)?.getBoundingClientRect() ?? null;
-	markDirection(directionTo(clickY, current));
-}
-
 /**
  * The app's left column: pages, sync, playlists and tags. Drag its edge to resize it; fold it to
  * an icon rail with the button at the top, by dragging it narrow, or with ⌘\.
@@ -230,7 +224,6 @@ export function Sidebar() {
 		<CollapsedContext.Provider value={collapsed}>
 			<aside
 				ref={asideRef}
-				onClickCapture={(e) => noteDirection(e.currentTarget, e.clientY)}
 				style={collapsed ? undefined : { width }}
 				className={cn(
 					"relative isolate flex shrink-0 flex-col gap-4 bg-canvas py-3",

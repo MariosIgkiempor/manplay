@@ -1,3 +1,5 @@
+import { useMatchRoute, useRouterState } from "@tanstack/react-router";
+import { useCallback } from "react";
 import { cn } from "#/lib/utils.ts";
 
 /**
@@ -26,6 +28,13 @@ export function currentRow(within: ParentNode): Element | null {
 }
 export const rowActive = `${CURRENT_ROW} font-medium text-foreground`;
 
+/**
+ * Marks a row's link or button as a page in the sidebar's order, holding the page's name. A page
+ * change passes the pages listed between the old and the new one (`page-transition.ts`).
+ */
+export const PAGE_ROW_ATTRIBUTE = "data-page-row";
+export const pageRow = (name: string) => ({ [PAGE_ROW_ATTRIBUTE]: name });
+
 export function rowClass(active: boolean) {
 	return cn("flex items-center rounded-md pr-2", active ? rowActive : rowIdle);
 }
@@ -49,3 +58,19 @@ export const UNDER_HOVER_END = "group-focus-within/row:invisible group-hover/row
 
 /** Classes that show a heading's + only while the heading is hovered or focused. */
 export const HOVER_ACTION = HOVER_END;
+
+/**
+ * `useMatchRoute` for marking the current row, matched against the page being opened. The
+ * router's own matches the old page until the new one has finished loading, which marks a row
+ * only after its page shows; the page's motion reads the marked row while the page changes.
+ */
+export function useRowMatch(): ReturnType<typeof useMatchRoute> {
+	const matchRoute = useMatchRoute();
+	const pending = useRouterState({ select: (s) => s.status === "pending" });
+	return useCallback(
+		((opts: Parameters<typeof matchRoute>[0]) => matchRoute({ ...opts, pending })) as ReturnType<
+			typeof useMatchRoute
+		>,
+		[matchRoute, pending],
+	);
+}

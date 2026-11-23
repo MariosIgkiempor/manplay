@@ -348,3 +348,71 @@ input[type="range"].slider {
 	display: inline-block;
 	animation: keycap-shake 320ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
 }
+
+/*
+ * Page changes (`page-transition.ts`). The old card leaves as a snapshot while the live new card
+ * moves in from script, one after the other with the canvas's 0.5rem gap between them. Only the
+ * page's card and the Files page's second pane take part; the rest of the window is not captured,
+ * so the sidebar and player keep running and stay clickable.
+ */
+/* biome-ignore-start lint/correctness/noUnknownTypeSelector: Biome reads a view transition's name as an element name */
+:root {
+	view-transition-name: none;
+}
+::view-transition {
+	pointer-events: none;
+}
+::view-transition-old(page),
+::view-transition-old(pane) {
+	animation-duration: 160ms;
+	animation-timing-function: ease-out;
+}
+@media (prefers-reduced-motion: no-preference) {
+	:root[data-page-move]::view-transition-old(page),
+	:root[data-page-move]::view-transition-old(pane) {
+		animation-duration: var(--page-scroll-ms, 420ms);
+		animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+	}
+	:root[data-page-move="down"]::view-transition-old(page),
+	:root[data-page-move="down"]::view-transition-old(pane) {
+		animation-name: page-to-top;
+	}
+	:root[data-page-move="up"]::view-transition-old(page),
+	:root[data-page-move="up"]::view-transition-old(pane) {
+		animation-name: page-to-bottom;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	::view-transition-group(page),
+	::view-transition-group(pane),
+	::view-transition-old(page),
+	::view-transition-old(pane) {
+		animation: none;
+	}
+}
+/* biome-ignore-end lint/correctness/noUnknownTypeSelector: Biome reads a view transition's name as an element name */
+/*
+ * The snapshot is drawn above the window, so nothing clips it; its clip moves against its travel
+ * to keep it cut at the canvas's edge, 0.5rem past the card, where the live cards are cut too. It
+ * travels `--page-steps` cards: one, and one more for each page passed on the way.
+ */
+@keyframes page-to-top {
+	from {
+		translate: 0 0;
+		clip-path: inset(-0.5rem 0 0 0);
+	}
+	to {
+		translate: 0 calc(var(--page-steps, 1) * (-100% - 0.5rem));
+		clip-path: inset(calc(var(--page-steps, 1) * (100% + 0.5rem) - 0.5rem) 0 0 0);
+	}
+}
+@keyframes page-to-bottom {
+	from {
+		translate: 0 0;
+		clip-path: inset(0 0 -0.5rem 0);
+	}
+	to {
+		translate: 0 calc(var(--page-steps, 1) * (100% + 0.5rem));
+		clip-path: inset(0 0 calc(var(--page-steps, 1) * (100% + 0.5rem) - 0.5rem) 0);
+	}
+}
