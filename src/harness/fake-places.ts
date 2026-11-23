@@ -494,11 +494,14 @@ export function buildDuplicates(tracks: readonly Track[]): DuplicateGroup[] {
 	return [
 		{
 			// Same name in two folders: nothing in the names says which is the copy.
-			audioFp: "fp-duplicate-1",
+			key: "fp-duplicate-1",
+			kind: "sameAudio",
 			tracks: [original(a), copyOf(a, `${LIBRARY_ROOT}/Unsorted/${a.title}.mp3`, 9100)],
 		},
 		{
-			audioFp: "fp-duplicate-2",
+			// Converted twice from one Apple Music file: each encode has audio of its own.
+			key: "source:/Users/demo/Music/iTunes/b.m4a",
+			kind: "sameSource",
 			tracks: [
 				original(b),
 				copyOf(b, `${folder(b)}/${stem(b)} (1).mp3`, 9101),
@@ -506,7 +509,8 @@ export function buildDuplicates(tracks: readonly Track[]): DuplicateGroup[] {
 			],
 		},
 		{
-			audioFp: "fp-duplicate-3",
+			key: "fp-duplicate-3",
+			kind: "sameAudio",
 			tracks: [
 				original(c),
 				{
@@ -516,7 +520,8 @@ export function buildDuplicates(tracks: readonly Track[]): DuplicateGroup[] {
 			],
 		},
 		{
-			audioFp: "fp-duplicate-4",
+			key: "fp-duplicate-4",
+			kind: "sameAudio",
 			tracks: [original(d), copyOf(d, `${folder(d)}/${stem(d)} copy 2.mp3`, 9104)],
 		},
 	];

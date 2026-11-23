@@ -14,6 +14,8 @@ use crate::r2::{self, R2};
 use crate::tags::{FieldMerge, Side};
 use crate::webdav;
 
+#[cfg(test)]
+mod dup_repro;
 pub mod lock;
 pub mod transfer;
 
@@ -1096,6 +1098,17 @@ fn in_library(items: &[Item], extras: &[(&Remote, Option<String>)]) -> HashSet<V
         .collect()
 }
 
+/// Each file with its fingerprint from `prints`, `None` when it has none.
+fn with_prints<'a>(
+    files: &[&'a Remote],
+    prints: &HashMap<&[String], Option<String>>,
+) -> Vec<(&'a Remote, Option<String>)> {
+    files
+        .iter()
+        .map(|r| (*r, prints.get(r.rel.as_slice()).cloned().flatten()))
+        .collect()
+}
+
 fn is_audio_name(rel: &[String]) -> bool {
     rel.last()
         .is_some_and(|n| !n.starts_with('.') && crate::scan::is_audio(Path::new(n)))
@@ -1286,7 +1299,7 @@ pub async fn plan_target(
         .iter()
         .partition(|r| known.get(&r.rel).is_some_and(|k| k.in_grace));
     plan.held = held
-        .into_iter()
+        .iter()
         .map(|r| Held {
             rel: r.rel.clone(),
             reason: "Missing from the library for less than 7 days".to_owned(),
@@ -1294,8 +1307,11 @@ pub async fn plan_target(
         .collect();
 
     // Audio extras are fingerprinted so a renamed copy is found instead of deleted and re-uploaded.
+    // Held ones too: a song retagged and moved locally leaves its old copy held, and it must not
+    // be offered for pull as if the library lacked it.
     let audio: Vec<Remote> = candidates
         .iter()
+        .chain(&held)
         .filter(|r| is_audio_name(&r.rel))
         .map(|r| (*r).clone())
         .collect();
@@ -1326,12 +1342,14 @@ pub async fn plan_target(
     for r in known_audio {
         by_rel.insert(r.rel.as_slice(), cached.get(&cache_key(r)).cloned());
     }
-    plan.unchecked = by_rel.values().filter(|p| p.is_none()).count() + unreadable;
-    let extras: Vec<(&Remote, Option<String>)> = candidates
+    let extras = with_prints(&candidates, &by_rel);
+    plan.unchecked = extras
         .iter()
-        .map(|r| (*r, by_rel.get(r.rel.as_slice()).cloned().flatten()))
-        .collect();
-    plan.in_library = in_library(items, &extras);
+        .filter(|(r, p)| p.is_none() && is_audio_name(&r.rel))
+        .count()
+        + unreadable;
+    let held_prints = with_prints(&held, &by_rel);
+    plan.in_library = in_library(items, &[extras.as_slice(), &held_prints].concat());
     let matched = pair(items, &d.uploads, &extras);
     let resolved = resolve_boths(app, client, target, &boths, bases).await;
 

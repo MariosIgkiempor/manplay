@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -904,6 +904,9 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     add_column(&conn, "sync_runs", "batch", "INTEGER NOT NULL DEFAULT 0")?;
     add_analysis_columns(&conn, "analysis")?;
     add_column(&conn, "cues", "main", "INTEGER NOT NULL DEFAULT 0")?;
+    // The source's audio fingerprint when it was converted, so a source retagged since (a new
+    // size) is still known; NULL for songs converted before this column.
+    add_column(&conn, "itunes_imported", "source_audio_fp", "TEXT")?;
     if get_setting(&conn, SETTING_AUDIO_FP_VERSION)?.is_none() {
         set_setting(
             &conn,
@@ -3255,16 +3258,19 @@ pub struct Known {
     pub id: i64,
     pub path: String,
     pub fingerprint: Option<String>,
+    /// The audio's own fingerprint; `None` or empty when it could not be read.
+    pub audio_fp: Option<String>,
 }
 
 /// Every track row, present or soft-deleted.
 pub fn all_known(conn: &Connection) -> Result<Vec<Known>, Error> {
-    let mut stmt = conn.prepare("SELECT id, path, fingerprint FROM tracks")?;
+    let mut stmt = conn.prepare("SELECT id, path, fingerprint, audio_fp FROM tracks")?;
     let rows = stmt.query_map([], |r| {
         Ok(Known {
             id: r.get(0)?,
             path: r.get(1)?,
             fingerprint: r.get(2)?,
+            audio_fp: r.get(3)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -3503,51 +3509,123 @@ pub struct DuplicateTrack {
     pub embedded_cues: Vec<crate::duplicate_trash::CueApp>,
 }
 
-/// Present songs that share one `audio_fp`: the same recording stored more than once. They share
-/// tags, analysis and playlist entries.
+/// Why the songs of a [`DuplicateGroup`] count as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DuplicateKind {
+    /// One `audio_fp`: the same recording stored more than once. The copies share tags,
+    /// analysis and playlist entries.
+    SameAudio,
+    /// Converted on import from the same source file more than once (see `itunes_imported`).
+    /// Each encode has audio of its own, so each copy keeps its own tags and playlists.
+    SameSource,
+}
+
+/// Present songs that are one song stored more than once.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DuplicateGroup {
-    pub audio_fp: String,
+    /// Names the group: its `audio_fp`, or `source:` and the source file it was converted from.
+    pub key: String,
+    pub kind: DuplicateKind,
     pub tracks: Vec<DuplicateTrack>,
 }
 
-/// Every group of present songs with the same audio, files in path order.
+/// Index of the set `at` belongs to, for joining songs into groups.
+fn set_of(parent: &mut [usize], at: usize) -> usize {
+    let mut root = at;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    let mut walk = at;
+    while parent[walk] != root {
+        let next = parent[walk];
+        parent[walk] = root;
+        walk = next;
+    }
+    root
+}
+
+/// Every group of present songs stored more than once, files in path order: songs with the same
+/// audio, and songs converted from the same source file. Groups that share a song are one group.
 pub fn duplicate_groups(conn: &Connection) -> Result<Vec<DuplicateGroup>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT t.audio_fp, t.id, t.path, t.artist, t.album, t.title, t.size FROM tracks t
-         WHERE t.missing_since IS NULL AND t.audio_fp <> '' AND t.audio_fp IN (
-             SELECT audio_fp FROM tracks
-             WHERE missing_since IS NULL AND audio_fp IS NOT NULL AND audio_fp <> ''
-             GROUP BY audio_fp HAVING COUNT(*) > 1)
-         ORDER BY t.audio_fp, t.path",
+        "SELECT t.id, t.path, t.artist, t.album, t.title, t.size, COALESCE(t.audio_fp, ''),
+                (SELECT MIN(i.source) FROM itunes_imported i WHERE i.dest = t.path)
+         FROM tracks t WHERE t.missing_since IS NULL ORDER BY t.path",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            DuplicateTrack {
-                id: r.get(1)?,
-                path: r.get(2)?,
-                artist: r.get(3)?,
-                album: r.get(4)?,
-                title: r.get(5)?,
-                size: r.get(6)?,
-                embedded_cues: Vec::new(),
-            },
-        ))
-    })?;
-    let mut groups: Vec<DuplicateGroup> = Vec::new();
-    for row in rows {
-        let (audio_fp, track) = row?;
-        match groups.last_mut() {
-            Some(g) if g.audio_fp == audio_fp => g.tracks.push(track),
-            _ => groups.push(DuplicateGroup {
-                audio_fp,
-                tracks: vec![track],
-            }),
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                DuplicateTrack {
+                    id: r.get(0)?,
+                    path: r.get(1)?,
+                    artist: r.get(2)?,
+                    album: r.get(3)?,
+                    title: r.get(4)?,
+                    size: r.get(5)?,
+                    embedded_cues: Vec::new(),
+                },
+                r.get::<_, String>(6)?,
+                r.get::<_, Option<String>>(7)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut parent: Vec<usize> = (0..rows.len()).collect();
+    let mut first_with: HashMap<String, usize> = HashMap::new();
+    for (at, (_, audio_fp, source)) in rows.iter().enumerate() {
+        let links = [
+            Some(audio_fp.as_str())
+                .filter(|fp| !fp.is_empty())
+                .map(|fp| format!("a:{fp}")),
+            source.as_deref().map(|s| format!("s:{s}")),
+        ];
+        for link in links.into_iter().flatten() {
+            let first = *first_with.entry(link).or_insert(at);
+            let (a, b) = (set_of(&mut parent, first), set_of(&mut parent, at));
+            parent[b] = a;
         }
     }
+
+    let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+    for at in 0..rows.len() {
+        members.entry(set_of(&mut parent, at)).or_default().push(at);
+    }
+    let mut rows: Vec<Option<_>> = rows.into_iter().map(Some).collect();
+    let mut groups: Vec<DuplicateGroup> = Vec::new();
+    for at in members.into_values().filter(|m| m.len() > 1) {
+        let taken: Vec<(DuplicateTrack, String, Option<String>)> =
+            at.iter().filter_map(|&i| rows[i].take()).collect();
+        let first_fp = taken[0].1.clone();
+        let one_audio = !first_fp.is_empty() && taken.iter().all(|(_, fp, _)| *fp == first_fp);
+        let (key, kind) = if one_audio {
+            (first_fp, DuplicateKind::SameAudio)
+        } else {
+            let source = taken.iter().filter_map(|(_, _, s)| s.clone()).min();
+            (
+                format!("source:{}", source.unwrap_or_default()),
+                DuplicateKind::SameSource,
+            )
+        };
+        groups.push(DuplicateGroup {
+            key,
+            kind,
+            tracks: taken.into_iter().map(|(t, _, _)| t).collect(),
+        });
+    }
+    groups.sort_by(|a, b| a.key.cmp(&b.key));
     Ok(groups)
+}
+
+/// The source file each present song was converted from on import, by the song's path.
+pub fn converted_from(conn: &Connection) -> Result<HashMap<String, String>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT i.dest, MIN(i.source) FROM itunes_imported i
+         JOIN tracks t ON t.path = i.dest AND t.missing_since IS NULL GROUP BY i.dest",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// Present songs with an audio fingerprint: `(id, path, audio_fp)`.
@@ -3714,31 +3792,43 @@ pub fn move_to_import_folders(conn: &Connection, downloads: Option<&str>) -> Res
 }
 
 /// Songs converted on import, by source path and size: the scan counts them as imported.
-pub fn converted_sources(conn: &Connection) -> Result<HashSet<(String, u64)>, Error> {
-    let mut stmt = conn.prepare("SELECT source, size FROM itunes_imported")?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                u64::try_from(r.get::<_, i64>(1)?).unwrap_or(0),
-            ))
-        })?
-        .collect::<Result<HashSet<_>, _>>()?;
-    Ok(rows)
+pub fn converted_sources(conn: &Connection) -> Result<crate::import::Converted, Error> {
+    let mut stmt = conn.prepare("SELECT source, source_audio_fp FROM itunes_imported")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?
+                .filter(|fp| !fp.is_empty())
+                .map_or(
+                    crate::import::SourcePrint::NotKept,
+                    crate::import::SourcePrint::Known,
+                ),
+        ))
+    })?;
+    let mut out = crate::import::Converted::new();
+    for row in rows {
+        let (source, print) = row?;
+        out.entry(source).or_default().push(print);
+    }
+    Ok(out)
 }
 
 /// Records a song converted on import, so later scans know it came in.
 pub fn record_converted(
     conn: &Connection,
-    source: &str,
-    size: u64,
-    dest: &str,
+    song: &crate::import::ConvertedSong,
     now: i64,
 ) -> Result<(), Error> {
     conn.execute(
-        "INSERT OR REPLACE INTO itunes_imported (source, size, dest, imported_at)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![source, i64::try_from(size).unwrap_or(i64::MAX), dest, now],
+        "INSERT OR REPLACE INTO itunes_imported (source, size, dest, imported_at, source_audio_fp)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            song.source,
+            i64::try_from(song.size).unwrap_or(i64::MAX),
+            song.dest,
+            now,
+            song.source_audio_fp
+        ],
     )?;
     Ok(())
 }
@@ -4282,9 +4372,105 @@ mod tests {
             1,
             "a missing copy and unreadable audio do not count"
         );
-        assert_eq!(groups[0].audio_fp, "x");
+        assert_eq!(groups[0].key, "x");
+        assert_eq!(groups[0].kind, DuplicateKind::SameAudio);
         let paths: Vec<&str> = groups[0].tracks.iter().map(|t| t.path.as_str()).collect();
         assert_eq!(paths, ["/a copy.mp3", "/a.mp3"]);
+    }
+
+    /// Songs converted from one source file more than once are one song, whatever their audio.
+    #[test]
+    fn duplicates_include_songs_converted_from_the_same_source() {
+        struct Case {
+            name: &'static str,
+            /// `(path, audio_fp, converted from)`.
+            songs: &'static [(&'static str, &'static str, Option<&'static str>)],
+            missing: &'static [i64],
+            groups: &'static [(DuplicateKind, &'static [&'static str])],
+        }
+        let cases = [
+            Case {
+                name: "converted twice, each encode its own audio",
+                songs: &[
+                    ("/a.mp3", "a1", Some("/src/a.m4a")),
+                    ("/a (2).mp3", "a2", Some("/src/a.m4a")),
+                ],
+                missing: &[],
+                groups: &[(DuplicateKind::SameSource, &["/a (2).mp3", "/a.mp3"])],
+            },
+            Case {
+                name: "converted twice to the same audio",
+                songs: &[
+                    ("/a.mp3", "a1", Some("/src/a.m4a")),
+                    ("/a (2).mp3", "a1", Some("/src/a.m4a")),
+                ],
+                missing: &[],
+                groups: &[(DuplicateKind::SameAudio, &["/a (2).mp3", "/a.mp3"])],
+            },
+            Case {
+                name: "a copy of one encode joins the group",
+                songs: &[
+                    ("/a.mp3", "a1", Some("/src/a.m4a")),
+                    ("/a (2).mp3", "a2", Some("/src/a.m4a")),
+                    ("/x/a.mp3", "a1", None),
+                ],
+                missing: &[],
+                groups: &[(
+                    DuplicateKind::SameSource,
+                    &["/a (2).mp3", "/a.mp3", "/x/a.mp3"],
+                )],
+            },
+            Case {
+                name: "the other encode is missing",
+                songs: &[
+                    ("/a.mp3", "a1", Some("/src/a.m4a")),
+                    ("/a (2).mp3", "a2", Some("/src/a.m4a")),
+                ],
+                missing: &[2],
+                groups: &[],
+            },
+            Case {
+                name: "different sources",
+                songs: &[
+                    ("/a.mp3", "a1", Some("/src/a.m4a")),
+                    ("/b.mp3", "b1", Some("/src/b.m4a")),
+                ],
+                missing: &[],
+                groups: &[],
+            },
+        ];
+        for case in cases {
+            let mut conn = open(Path::new(":memory:")).expect("db");
+            let tracks: Vec<NewTrack> = case
+                .songs
+                .iter()
+                .map(|(path, audio, _)| track(path, audio, None))
+                .collect();
+            upsert(&mut conn, &tracks).expect("upsert");
+            for (n, (path, _, source)) in case.songs.iter().enumerate() {
+                if let Some(source) = source {
+                    let song = crate::import::ConvertedSong {
+                        source: (*source).into(),
+                        size: u64::try_from(n).expect("small"),
+                        dest: (*path).into(),
+                        source_audio_fp: None,
+                    };
+                    record_converted(&conn, &song, 1).expect("record");
+                }
+            }
+            mark_missing(&mut conn, case.missing, 1).expect("missing");
+            let found: Vec<(DuplicateKind, Vec<String>)> = duplicate_groups(&conn)
+                .expect("groups")
+                .into_iter()
+                .map(|g| (g.kind, g.tracks.into_iter().map(|t| t.path).collect()))
+                .collect();
+            let expected: Vec<(DuplicateKind, Vec<String>)> = case
+                .groups
+                .iter()
+                .map(|(kind, paths)| (*kind, paths.iter().map(|p| (*p).to_owned()).collect()))
+                .collect();
+            assert_eq!(found, expected, "{}", case.name);
+        }
     }
 
     #[test]

@@ -52,8 +52,30 @@ impl SourceRef {
     }
 }
 
-/// Songs converted on import, by [`SourceRef::key`] and size.
-pub type Converted = HashSet<(String, u64)>;
+/// The audio fingerprint a source had when it was converted on import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourcePrint {
+    Known(String),
+    /// Converted before prints were kept: the path alone says it came in.
+    NotKept,
+}
+
+/// Songs converted on import, by [`SourceRef::key`]: the source's print each time it was converted.
+/// A source keeps its print when it is retagged, so it is not converted again.
+pub type Converted = HashMap<String, Vec<SourcePrint>>;
+
+/// Whether a source with these past conversions came in before. `current` is its audio
+/// fingerprint now, `None` when it cannot be read; then it counts as converted, since importing
+/// it again could only make a copy.
+fn converted_before(prints: &[SourcePrint], current: impl FnOnce() -> Option<String>) -> bool {
+    if prints.contains(&SourcePrint::NotKept) {
+        return true;
+    }
+    match current().filter(|fp| !fp.is_empty()) {
+        None => true,
+        Some(fp) => prints.contains(&SourcePrint::Known(fp)),
+    }
+}
 
 /// No songs converted, for scans that do not need to know.
 #[cfg(test)]
@@ -943,10 +965,21 @@ fn statuses(
             });
         }
         checked += 1;
-        if opts.converted.contains(&(e.src.key(), e.size)) {
-            already += 1;
-            status.insert(i, Status::InLibrary);
-            continue;
+        if let Some(prints) = opts.converted.get(&e.src.key()) {
+            let cached_print = old
+                .file_for(e)
+                .and_then(|r| r.audio_fp.clone())
+                .filter(|fp| !fp.is_empty());
+            let current = || match cached_print {
+                Some(fp) => Some(fp),
+                None if opts.cached_only => None,
+                None => opener.audio_print(&e.src),
+            };
+            if converted_before(prints, current) {
+                already += 1;
+                status.insert(i, Status::InLibrary);
+                continue;
+            }
         }
         let contested = known.contains_key(&e.size) || sizes.get(&e.size).is_some_and(|n| *n > 1);
         let mut record = old.file_for(e).cloned().unwrap_or_else(|| CachedFile {
@@ -1156,6 +1189,8 @@ pub struct ConvertedSong {
     pub source: String,
     pub size: u64,
     pub dest: String,
+    /// The source's audio fingerprint, `None` when it could not be read.
+    pub source_audio_fp: Option<String>,
 }
 
 #[derive(Serialize, Debug, Default)]
@@ -1281,6 +1316,7 @@ fn convert_track(
         PathBuf::from(&src.path)
     };
     let size = fs::metadata(&input).map(|m| m.len());
+    let source_audio_fp = crate::audioprint::audio_print_path(&input).filter(|fp| !fp.is_empty());
     let (file, dest) = create_unique(dir, stem, "mp3")?;
     drop(file);
     let converted = crate::convert::to_mp3(ffmpeg, &input, &dest);
@@ -1294,6 +1330,7 @@ fn convert_track(
             source: key,
             size: size?,
             dest: dest.to_string_lossy().into_owned(),
+            source_audio_fp,
         }),
         dest,
     })
@@ -1591,13 +1628,65 @@ mod tests {
         assert!(lib.join("Artist/Album/cover.jpg").is_file());
     }
 
+    /// An AAC file made by ffmpeg: a tone of `hz`, tagged with `title`.
+    fn aac(path: &Path, hz: u32, title: &str) -> bool {
+        let Some(ffmpeg) = crate::convert::find_ffmpeg() else {
+            return false;
+        };
+        fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+        crate::process::command(&ffmpeg)
+            .args(["-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(format!("sine=f={hz}:d=1"))
+            .args(["-c:a", "aac", "-metadata"])
+            .arg(format!("title={title}"))
+            .arg(path)
+            .status()
+            .expect("ffmpeg")
+            .success()
+    }
+
     #[test]
     fn songs_converted_before_count_as_imported() {
         let root = temp("converted");
-        put(&root, "Artist/Album/01 one.m4a", b"aac-bytes");
         let src = root.join("Artist/Album/01 one.m4a");
-        for (name, size, expected_new) in [("same file", 9, false), ("changed since", 10, true)] {
-            let converted: Converted = [(src.to_string_lossy().into_owned(), size)].into();
+        if !aac(&src, 440, "One") {
+            return;
+        }
+        let key = src.to_string_lossy().into_owned();
+        let print_then = crate::audioprint::audio_print_path(&src).expect("print");
+        // Retagged since it was converted: a longer title, a new size, the same audio.
+        assert!(aac(&src, 440, "One, with a much longer title than before"));
+        assert_eq!(
+            crate::audioprint::audio_print_path(&src).as_ref(),
+            Some(&print_then)
+        );
+        let cases = [
+            (
+                "converted before prints were kept",
+                vec![SourcePrint::NotKept],
+                false,
+            ),
+            (
+                "retagged since",
+                vec![SourcePrint::Known(print_then.clone())],
+                false,
+            ),
+            (
+                "other audio at that path",
+                vec![SourcePrint::Known("a1:other".into())],
+                true,
+            ),
+            (
+                "converted twice, once with other audio",
+                vec![
+                    SourcePrint::Known("a1:other".into()),
+                    SourcePrint::Known(print_then),
+                ],
+                false,
+            ),
+        ];
+        for (name, prints, expected_new) in cases {
+            let converted: Converted = [(key.clone(), prints)].into();
             let opts = Options {
                 converted: &converted,
                 ..quiet()
@@ -1605,6 +1694,22 @@ mod tests {
             let found = super::scan(&root, &ContentIndex::new(), &Cache::default(), &opts).0;
             assert_eq!(!found.groups.is_empty(), expected_new, "{name}");
         }
+    }
+
+    #[test]
+    fn a_source_that_cannot_be_read_counts_as_converted() {
+        assert!(converted_before(
+            &[SourcePrint::Known("a1:x".into())],
+            || None
+        ));
+        assert!(converted_before(
+            &[SourcePrint::Known("a1:x".into())],
+            || Some(String::new())
+        ));
+        assert!(!converted_before(
+            &[SourcePrint::Known("a1:x".into())],
+            || Some("a1:y".into())
+        ));
     }
 
     #[test]
@@ -1647,6 +1752,7 @@ mod tests {
                 source: src.to_string_lossy().into_owned(),
                 size: fs::metadata(&src).expect("source").len(),
                 dest: dest.to_string_lossy().into_owned(),
+                source_audio_fp: crate::audioprint::audio_print_path(&src),
             }]
         );
         assert!(src.is_file(), "the source is left alone");

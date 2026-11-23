@@ -153,7 +153,7 @@ async fn scan_and_store(state: &AppState, root: PathBuf, depth: ScanDepth) -> Re
         tx.commit()?;
     }
     db::set_setting(&conn, SETTING_ROOT, root.to_str())?;
-    reconcile_missing(&mut conn, &state.data_dir, &root, &result)?;
+    reconcile_missing(&mut conn, &state.data_dir, &result)?;
     drop(conn);
     library_changed(state);
     Ok(result.tracks.len())
@@ -304,6 +304,8 @@ fn detect_moves(
             moves.push((old, t));
         }
     }
+    let by_audio = audio_moves(&known, &found, &known_paths, scan, &moves);
+    moves.extend(by_audio);
     if moves.is_empty() {
         return Ok(0);
     }
@@ -316,12 +318,56 @@ fn detect_moves(
     Ok(moves.len())
 }
 
+/// Moves the whole-file fingerprint missed because the file also changed: retagged and moved
+/// together (Fix issues, or another tagger). Matched by the audio's own fingerprint, and only
+/// when exactly one vanished track and exactly one new file share it, so two copies of a song
+/// are never merged.
+fn audio_moves<'k, 's>(
+    known: &'k [db::Known],
+    found: &HashSet<&str>,
+    known_paths: &HashSet<&str>,
+    scan: &'s scan::ScanResult,
+    already: &[(&db::Known, &db::NewTrack)],
+) -> Vec<(&'k db::Known, &'s db::NewTrack)> {
+    let claimed_old: HashSet<i64> = already.iter().map(|(old, _)| old.id).collect();
+    let claimed_new: HashSet<&str> = already.iter().map(|(_, new)| new.path.as_str()).collect();
+    let audio_of = |fp: Option<&'k str>| fp.filter(|fp| !fp.is_empty());
+
+    let mut vanished: HashMap<&str, Vec<&db::Known>> = HashMap::new();
+    for k in known
+        .iter()
+        .filter(|k| !found.contains(k.path.as_str()) && !claimed_old.contains(&k.id))
+    {
+        if let Some(fp) = audio_of(k.audio_fp.as_deref()) {
+            vanished.entry(fp).or_default().push(k);
+        }
+    }
+    let mut arrived: HashMap<&str, Vec<&db::NewTrack>> = HashMap::new();
+    for t in scan.tracks.iter().filter(|t| {
+        !known_paths.contains(t.path.as_str()) && !claimed_new.contains(t.path.as_str())
+    }) {
+        if let Some(fp) = t.audio_fp.as_deref().filter(|fp| !fp.is_empty()) {
+            arrived.entry(fp).or_default().push(t);
+        }
+    }
+    arrived
+        .into_iter()
+        .filter_map(
+            |(fp, new)| match (vanished.get(fp)?.as_slice(), new.as_slice()) {
+                ([old], [new]) => Some((*old, *new)),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
 /// Soft-deletes tracks the scan could not find, then purges ones that have been gone
 /// past the grace period. The database is backed up before either step changes anything.
+/// Songs outside the scanned library folder (left from a folder used before) count as not found:
+/// they are no longer part of the library, and choosing that folder again brings them back.
 fn reconcile_missing(
     conn: &mut Connection,
     data_dir: &Path,
-    root: &Path,
     scan: &scan::ScanResult,
 ) -> Result<(), Error> {
     let now = unix_now();
@@ -333,7 +379,7 @@ fn reconcile_missing(
         let found: HashSet<&str> = scan.tracks.iter().map(|t| t.path.as_str()).collect();
         let gone: Vec<i64> = db::present_tracks(conn)?
             .into_iter()
-            .filter(|(_, p)| Path::new(p).starts_with(root) && !found.contains(p.as_str()))
+            .filter(|(_, p)| !found.contains(p.as_str()))
             .map(|(id, _)| id)
             .collect();
         if !gone.is_empty() {
@@ -371,7 +417,7 @@ fn library_status(state: State<'_, AppState>) -> Result<LibraryStatus, Error> {
     })
 }
 
-/// Groups of present songs with the same audio (see `db::duplicate_groups`).
+/// Groups of present songs stored more than once (see `db::duplicate_groups`).
 #[tauri::command]
 async fn list_duplicates(state: State<'_, AppState>) -> Result<Vec<db::DuplicateGroup>, Error> {
     let mut groups = {
@@ -390,18 +436,31 @@ async fn list_duplicates(state: State<'_, AppState>) -> Result<Vec<db::Duplicate
 }
 
 /// Moves the extra copies of duplicated songs to the Trash. Each copy is compared byte for byte
-/// with the copy being kept first; one that differs, or whose kept copy is gone, stays put.
+/// with the copy being kept first, unless both were converted from the same source file; one
+/// that differs, or whose kept copy is gone, stays put.
 #[tauri::command]
 async fn trash_duplicates(
     state: State<'_, AppState>,
     groups: Vec<duplicate_trash::TrashGroup>,
 ) -> Result<duplicate_trash::TrashReport, Error> {
     let root = library_root(&state)?;
+    let converted = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::converted_from(&conn)?
+    };
     let r = root.clone();
-    let report =
-        tauri::async_runtime::spawn_blocking(move || duplicate_trash::trash_copies(&r, &groups))
-            .await
-            .map_err(|e| Error::Msg(e.to_string()))??;
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        let converted_from: duplicate_trash::ConvertedFrom = converted
+            .into_iter()
+            .map(|(dest, source)| {
+                let dest = PathBuf::from(dest);
+                (dest.canonicalize().unwrap_or(dest), source)
+            })
+            .collect();
+        duplicate_trash::trash_copies(&r, &groups, &converted_from)
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))??;
     refresh_after_fs_change(&state, root).await;
     Ok(report)
 }
@@ -4795,7 +4854,7 @@ async fn import_into_library(
     {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         for c in &report.converted {
-            db::record_converted(&conn, &c.source, c.size, &c.dest, started_at)?;
+            db::record_converted(&conn, c, started_at)?;
         }
     }
     if report.imported > 0 {
@@ -5539,7 +5598,7 @@ mod tests {
             let root = self.root();
             detect_moves(&mut self.conn, &self.dir, &root, scan).expect("moves");
             db::upsert(&mut self.conn, &scan.tracks).expect("upsert");
-            reconcile_missing(&mut self.conn, &self.dir, &root, scan).expect("reconcile");
+            reconcile_missing(&mut self.conn, &self.dir, scan).expect("reconcile");
         }
 
         fn visible(&self) -> usize {
@@ -5568,6 +5627,90 @@ mod tests {
         assert_eq!(f.visible(), 2);
         assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
         assert_eq!(f.backups(), 1);
+    }
+
+    /// A file that changed bytes and path together is followed by its audio, but only when the
+    /// match is unambiguous.
+    #[test]
+    fn moves_fall_back_to_the_audio_fingerprint_only_when_unambiguous() {
+        struct Case {
+            name: &'static str,
+            /// `(path, audio_fp)` of the first scan.
+            before: &'static [(&'static str, &'static str)],
+            /// `(path, audio_fp)` of the second scan; every whole-file print is new.
+            after: &'static [(&'static str, &'static str)],
+            moved: usize,
+        }
+        let cases = [
+            Case {
+                name: "one gone, one new",
+                before: &[("a/1.mp3", "a1:x")],
+                after: &[("b/1.mp3", "a1:x")],
+                moved: 1,
+            },
+            Case {
+                name: "one gone, two new",
+                before: &[("a/1.mp3", "a1:x")],
+                after: &[("b/1.mp3", "a1:x"), ("c/1.mp3", "a1:x")],
+                moved: 0,
+            },
+            Case {
+                name: "two gone, one new",
+                before: &[("a/1.mp3", "a1:x"), ("a/2.mp3", "a1:x")],
+                after: &[("b/1.mp3", "a1:x")],
+                moved: 0,
+            },
+            Case {
+                name: "audio not fingerprinted",
+                before: &[("a/1.mp3", "")],
+                after: &[("b/1.mp3", "")],
+                moved: 0,
+            },
+            Case {
+                name: "different audio",
+                before: &[("a/1.mp3", "a1:x")],
+                after: &[("b/1.mp3", "a1:y")],
+                moved: 0,
+            },
+        ];
+        for case in cases {
+            let mut f = Fixture::new(&format!("audiomove-{}", case.name.replace(' ', "-")));
+            let scan = |files: &[(&str, &str)], generation: &str| ScanResult {
+                values: HashMap::new(),
+                errors: 0,
+                tracks: files
+                    .iter()
+                    .map(|(path, audio)| NewTrack {
+                        path: format!("/music/{path}"),
+                        title: (*path).into(),
+                        size: 1,
+                        fingerprint: Some(format!("{generation}-{path}")),
+                        audio_fp: Some((*audio).into()),
+                        ..NewTrack::default()
+                    })
+                    .collect(),
+            };
+            f.apply(&scan(case.before, "old"));
+            let after = scan(case.after, "new");
+            let root = f.root();
+            let moved = detect_moves(&mut f.conn, &f.dir, &root, &after).expect("moves");
+            assert_eq!(moved, case.moved, "{}", case.name);
+        }
+    }
+
+    /// Songs left from a library folder used before are not part of the library any more.
+    #[test]
+    fn songs_outside_the_scanned_folder_are_marked_missing() {
+        let mut f = Fixture::new("old-folder");
+        let mut first = f.scan_of(&["1", "2"], 0);
+        first.tracks[1].path = "/old-music/2".into();
+        f.apply(&first);
+        assert_eq!(f.visible(), 2);
+
+        f.apply(&f.scan_of(&["1"], 0));
+        assert_eq!(f.visible(), 1);
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
+        assert_eq!(f.backups(), 1, "backed up first");
     }
 
     #[test]
@@ -5625,7 +5768,7 @@ mod tests {
         step("apply waiting shared edits");
         db::replace_tag_values(&mut conn, &result.values).expect("values");
         step("replace tag values");
-        reconcile_missing(&mut conn, &dir, &root, &result).expect("missing");
+        reconcile_missing(&mut conn, &dir, &result).expect("missing");
         step("reconcile missing");
         let everything = scan::scan(&root, HashMap::new()).tracks.len();
         step("read every file, as a full rescan does");
@@ -5637,27 +5780,6 @@ mod tests {
             result.tracks.len(),
             result.errors
         );
-    }
-
-    #[test]
-    fn tracks_outside_the_scanned_root_are_left_alone() {
-        let mut f = Fixture::new("outside");
-        let other = ScanResult {
-            values: HashMap::new(),
-            tracks: vec![NewTrack {
-                path: "/elsewhere/x".into(),
-                artist: "a".into(),
-                album: "b".into(),
-                title: "x".into(),
-                size: 1,
-                fingerprint: Some("fp-x".into()),
-                ..NewTrack::default()
-            }],
-            errors: 0,
-        };
-        db::upsert(&mut f.conn, &other.tracks).expect("upsert");
-        f.apply(&f.scan_of(&["1"], 0));
-        assert_eq!(f.visible(), 2);
     }
 
     #[test]

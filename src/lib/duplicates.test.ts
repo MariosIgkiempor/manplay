@@ -39,8 +39,8 @@ const noIssues = () => 0;
 describe("extraCopies", () => {
 	it("counts the files beyond the first of each group", () => {
 		const groups: DuplicateGroup[] = [
-			{ audioFp: "x", tracks: [file(1), file(2)] },
-			{ audioFp: "y", tracks: [file(3), file(4), file(5)] },
+			{ key: "x", kind: "sameAudio", tracks: [file(1), file(2)] },
+			{ key: "y", kind: "sameAudio", tracks: [file(3), file(4), file(5)] },
 		];
 		expect(extraCopies(groups)).toBe(3);
 		expect(extraCopies([])).toBe(0);
@@ -136,14 +136,18 @@ describe("suggestKeeper", () => {
 
 describe("decideGroups and trashPlan", () => {
 	const groups: DuplicateGroup[] = [
-		{ audioFp: "a", tracks: [copy("/m/A.mp3", 5), copy("/m/A (1).mp3", 7)] },
-		{ audioFp: "b", tracks: [copy("/m/x/B.mp3"), copy("/m/y/B.mp3")] },
-		{ audioFp: "c", tracks: [copy("/m/C.mp3"), copy("/m/C copy.mp3", 3)] },
+		{ key: "a", kind: "sameAudio", tracks: [copy("/m/A.mp3", 5), copy("/m/A (1).mp3", 7)] },
+		{ key: "b", kind: "sameAudio", tracks: [copy("/m/x/B.mp3"), copy("/m/y/B.mp3")] },
+		{ key: "c", kind: "sameAudio", tracks: [copy("/m/C.mp3"), copy("/m/C copy.mp3", 3)] },
 	];
 
 	it("never throws away the kept path when a group lists it twice", () => {
 		const twice: DuplicateGroup[] = [
-			{ audioFp: "t", tracks: [copy("/m/T.mp3"), copy("/m/T.mp3"), copy("/m/T (1).mp3")] },
+			{
+				key: "t",
+				kind: "sameAudio",
+				tracks: [copy("/m/T.mp3"), copy("/m/T.mp3"), copy("/m/T (1).mp3")],
+			},
 		];
 		const choices = new Map<string, GroupChoice>([["t", { kind: "keep", path: "/m/T.mp3" }]]);
 		expect(trashPlan(twice, decideGroups(twice, choices, noIssues)).paths).toEqual([

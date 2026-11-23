@@ -2,7 +2,7 @@
 //! spotting DJ-app cue points kept inside a copy's own tags (which the library does not share
 //! between copies, unlike its own tags and cues).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -96,10 +96,23 @@ pub struct TrashReport {
     pub skipped: Vec<Skipped>,
 }
 
+/// The source file each library song was converted from on import, by the song's resolved path.
+pub type ConvertedFrom = HashMap<PathBuf, String>;
+
 /// The copies that are safe to throw away: each inside the library, not itself a kept file, and
-/// holding exactly the kept copy's audio, with the kept copy still on disk. Everything else is
-/// skipped with its reason, so a wrong match or a file changed since the scan never loses a song.
-pub fn verify(root: &Path, groups: &[TrashGroup]) -> (Vec<PathBuf>, Vec<Skipped>) {
+/// holding exactly the kept copy's audio or converted from the same source file as the kept copy,
+/// with the kept copy still on disk. Everything else is skipped with its reason, so a wrong match
+/// or a file changed since the scan never loses a song.
+pub fn verify(
+    root: &Path,
+    groups: &[TrashGroup],
+    converted_from: &ConvertedFrom,
+) -> (Vec<PathBuf>, Vec<Skipped>) {
+    let same_source = |a: &Path, b: &Path| {
+        converted_from
+            .get(a)
+            .is_some_and(|source| converted_from.get(b) == Some(source))
+    };
     let skip = |path: &Path, reason: &str| Skipped {
         path: path.display().to_string(),
         reason: reason.to_owned(),
@@ -132,7 +145,9 @@ pub fn verify(root: &Path, groups: &[TrashGroup]) -> (Vec<PathBuf>, Vec<Skipped>
                 // Listed twice: it is already going.
             } else if kept.contains(&resolved) {
                 skipped.push(skip(path, "it is the copy being kept"));
-            } else if !audioprint::same_audio(&keep, &resolved).unwrap_or(false) {
+            } else if !same_source(&keep, &resolved)
+                && !audioprint::same_audio(&keep, &resolved).unwrap_or(false)
+            {
                 skipped.push(skip(path, "its audio differs from the copy being kept"));
             } else {
                 ok.push(resolved);
@@ -143,8 +158,12 @@ pub fn verify(root: &Path, groups: &[TrashGroup]) -> (Vec<PathBuf>, Vec<Skipped>
 }
 
 /// Moves the verified copies to the Trash (the Recycle Bin on Windows) in one go.
-pub fn trash_copies(root: &Path, groups: &[TrashGroup]) -> Result<TrashReport, Error> {
-    let (ok, skipped) = verify(root, groups);
+pub fn trash_copies(
+    root: &Path,
+    groups: &[TrashGroup],
+    converted_from: &ConvertedFrom,
+) -> Result<TrashReport, Error> {
+    let (ok, skipped) = verify(root, groups, converted_from);
     if !ok.is_empty() {
         trash::delete_all(&ok).map_err(|e| Error::Msg(format!("could not move to Trash: {e}")))?;
     }
@@ -223,7 +242,7 @@ mod tests {
                 trash: vec![copy.clone()],
             },
         ];
-        let (ok, skipped) = verify(&dir, &groups);
+        let (ok, skipped) = verify(&dir, &groups, &ConvertedFrom::new());
         assert_eq!(ok, vec![copy.clone()]);
         let reasons: Vec<(&str, &str)> = skipped
             .iter()
@@ -245,6 +264,32 @@ mod tests {
         );
     }
 
+    /// Two encodes of one source never have the same audio; the import's record says they are
+    /// one song. Only that record lets them through.
+    #[test]
+    fn verify_lets_encodes_of_one_source_through() {
+        let dir = tmp("encodes");
+        let keep = mp3(&dir, "Song.mp3", b"tag", 0);
+        let encode = mp3(&dir, "Song (2).mp3", b"tag", 9);
+        let stranger = mp3(&dir, "Other.mp3", b"tag", 5);
+        let converted: ConvertedFrom = [
+            (keep.clone(), "/src/Song.m4a".to_owned()),
+            (encode.clone(), "/src/Song.m4a".to_owned()),
+            (stranger.clone(), "/src/Other.m4a".to_owned()),
+        ]
+        .into();
+        let groups = [TrashGroup {
+            keep,
+            trash: vec![encode.clone(), stranger.clone()],
+        }];
+        let (ok, skipped) = verify(&dir, &groups, &converted);
+        assert_eq!(ok, vec![encode]);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].path, stranger.display().to_string());
+        let (ok, _) = verify(&dir, &groups, &ConvertedFrom::new());
+        assert!(ok.is_empty(), "without the record their audio differs");
+    }
+
     #[test]
     fn verify_refuses_files_outside_the_library() {
         let lib = tmp("inside");
@@ -257,6 +302,7 @@ mod tests {
                 keep,
                 trash: vec![stray],
             }],
+            &ConvertedFrom::new(),
         );
         assert_eq!(ok, Vec::<PathBuf>::new());
         assert_eq!(skipped.len(), 1);

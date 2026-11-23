@@ -174,6 +174,10 @@ const HOVER_ONLY = "hidden group-hover/copy:inline-flex group-focus-within/copy:
 const SHOWN_AT_REST = "group-hover/copy:hidden group-focus-within/copy:hidden";
 
 /** One song's copies: which stays and which go, each copy one click from being the keeper. */
+/** Why a group of separate encodes counts as one song, and what goes with a removed copy. */
+const SAME_SOURCE_HINT =
+	"Converted from the same file more than once on import. Each copy has its own tags and playlists";
+
 function GroupCard({
 	group,
 	decision,
@@ -198,6 +202,10 @@ function GroupCard({
 				decision.kind === "undecided" ? (
 					<span className="font-medium text-warning" data-hint={UNDECIDED_HINT[decision.why]}>
 						Pick one
+					</span>
+				) : group.kind === "sameSource" ? (
+					<span data-hint={SAME_SOURCE_HINT}>
+						{[first?.artist, "Imported twice"].filter(Boolean).join(" · ")}
 					</span>
 				) : (
 					first?.artist
@@ -381,7 +389,7 @@ function TrashReview({
 	return (
 		<ReviewSheet
 			title={`Move ${plural(count, "file", "files")} to the ${TRASH}`}
-			summary={`Frees ${formatBytes(plan.bytes)}. Songs keep their tags, grid and playlists. A file whose audio differs from the kept copy is skipped.`}
+			summary={`Frees ${formatBytes(plan.bytes)}. Songs keep their tags, grid and playlists, except where marked. A file whose audio differs from the kept copy is skipped, unless both came from the same import.`}
 			onBack={onBack}
 			confirm={
 				<ConfirmButton
@@ -399,7 +407,7 @@ function TrashReview({
 		>
 			{plan.groups.map(({ group, keep, trash }) => (
 				<DiffGroup
-					key={group.audioFp}
+					key={group.key}
 					title={[keep.title || "Untitled", keep.artist].filter(Boolean).join(", ")}
 				>
 					{[keep, ...trash].map((t) => {
@@ -424,17 +432,29 @@ function TrashReview({
 								<div className="truncate text-muted-foreground text-xs">
 									{folderOf(root, t.path)}
 								</div>
-								{lost.length > 0 && (
-									<div className="pt-0.5">
-										<NoteChip tone="warning">{cueNames(lost)} cues lost</NoteChip>
-									</div>
-								)}
+								<RemovedNotes
+									lostCues={lost}
+									ownTags={side === "remove" && group.kind === "sameSource"}
+								/>
 							</DiffLine>
 						);
 					})}
 				</DiffGroup>
 			))}
 		</ReviewSheet>
+	);
+}
+
+/** What goes with a copy moved to the Trash: cue points in its tags, and its own tags and playlists. */
+function RemovedNotes({ lostCues, ownTags }: { lostCues: readonly CueApp[]; ownTags: boolean }) {
+	if (lostCues.length === 0 && !ownTags) {
+		return null;
+	}
+	return (
+		<div className="flex flex-wrap gap-1 pt-0.5">
+			{lostCues.length > 0 && <NoteChip tone="warning">{cueNames(lostCues)} cues lost</NoteChip>}
+			{ownTags && <NoteChip tone="warning">Own tags and playlists go with it</NoteChip>}
+		</div>
 	);
 }
 
@@ -499,11 +519,11 @@ function DuplicateList({ groups }: { groups: readonly DuplicateGroup[] }) {
 			{report && <TrashResult report={report} />}
 			{groups.map((g) => (
 				<GroupCard
-					key={g.audioFp}
+					key={g.key}
 					group={g}
-					decision={decisions.get(g.audioFp) ?? { kind: "undecided", why: "unclear" }}
+					decision={decisions.get(g.key) ?? { kind: "undecided", why: "unclear" }}
 					root={root}
-					onChoose={(choice) => choose(g.audioFp, choice)}
+					onChoose={(choice) => choose(g.key, choice)}
 				/>
 			))}
 		</div>

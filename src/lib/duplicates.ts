@@ -5,8 +5,8 @@ export type DuplicateCopy = DuplicateGroup["tracks"][number];
 export type CueApp = DuplicateCopy["embeddedCues"][number];
 /** Absolute path of one stored copy; copies of one song can share a track id, never a path. */
 export type CopyPath = string;
-/** A duplicate group's audio fingerprint, which names the group. */
-export type GroupKey = DuplicateGroup["audioFp"];
+/** Names a duplicate group: its audio fingerprint, or the source file its songs came from. */
+export type GroupKey = DuplicateGroup["key"];
 
 /** Files beyond the first of each group: what is stored more than once. */
 export function extraCopies(groups: readonly DuplicateGroup[]): number {
@@ -176,11 +176,11 @@ export function decideGroups(
 ): Map<GroupKey, GroupDecision> {
 	const out = new Map<GroupKey, GroupDecision>();
 	for (const group of groups) {
-		const choice = choices.get(group.audioFp);
+		const choice = choices.get(group.key);
 		const stillThere =
 			choice?.kind === "keep" ? group.tracks.some((t) => t.path === choice.path) : true;
 		out.set(
-			group.audioFp,
+			group.key,
 			choice && stillThere
 				? choice.kind === "keep"
 					? { kind: "keep", path: choice.path, reason: "picked" }
@@ -215,7 +215,7 @@ export function trashPlan(
 	let undecided = 0;
 	let keptAll = 0;
 	for (const group of groups) {
-		const decision = decisions.get(group.audioFp);
+		const decision = decisions.get(group.key);
 		if (decision === undefined) {
 			undecided += 1;
 			continue;

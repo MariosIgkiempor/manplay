@@ -220,7 +220,14 @@ export async function listMissing(): Promise<MissingTrack[]> {
 }
 
 const duplicateGroupSchema = z.object({
-	audioFp: z.string(),
+	/** Names the group: its audio fingerprint, or `source:` and the file its songs came from. */
+	key: z.string(),
+	/**
+	 * `sameAudio`: one recording stored more than once; the copies share tags, grid and
+	 * playlists. `sameSource`: converted from one file more than once on import; each encode
+	 * has its own audio, so each copy keeps its own tags and playlists.
+	 */
+	kind: z.enum(["sameAudio", "sameSource"]),
 	tracks: z.array(
 		z.object({
 			id: int,
@@ -237,7 +244,7 @@ const duplicateGroupSchema = z.object({
 
 export type DuplicateGroup = z.infer<typeof duplicateGroupSchema>;
 
-/** Groups of present songs with the same audio: they share tags, grid and playlist entries. */
+/** Groups of present songs stored more than once: the same audio, or one import source. */
 export async function listDuplicates(): Promise<DuplicateGroup[]> {
 	return z.array(duplicateGroupSchema).parse(await invoke("list_duplicates"));
 }
@@ -256,7 +263,8 @@ export interface TrashGroup {
 
 /**
  * Moves the extra copies to the Trash. The backend compares each with the copy being kept, byte
- * for byte, and skips (and reports) any that differ or whose kept copy is gone.
+ * for byte unless both were converted from one source, and skips (and reports) any that differ
+ * or whose kept copy is gone.
  */
 export async function trashDuplicates(groups: TrashGroup[]): Promise<TrashDuplicatesReport> {
 	return trashDuplicatesReportSchema.parse(await invoke("trash_duplicates", { groups }));
