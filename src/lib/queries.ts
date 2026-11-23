@@ -78,6 +78,7 @@ import {
 	syncScan,
 	syncScans,
 	type TagPaths,
+	type TrashGroup,
 	tagsLookup,
 	tagsLookupCover,
 	tagsPreview,
@@ -90,6 +91,7 @@ import {
 	tagValues,
 	tagValuesMigrate,
 	trackCues,
+	trashDuplicates,
 } from "#/lib/api.ts";
 import { bumpArt } from "#/lib/art-version.ts";
 import type { CoverWrite, LookupWrite } from "#/lib/tag-lookup.ts";
@@ -591,6 +593,14 @@ export function useFsTrash() {
 	});
 }
 
+export function useTrashDuplicates() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (groups: TrashGroup[]) => trashDuplicates(groups),
+		onSettled: () => refreshAfterFsChange(queryClient),
+	});
+}
+
 export function useFsMove() {
 	const queryClient = useQueryClient();
 	return useMutation({
@@ -840,6 +850,37 @@ export function useLookupCoverSet() {
 			const entry = undoCoverChange(report.previous);
 			if (entry) {
 				record(entry);
+			}
+			return report;
+		},
+		onSettled: () => refreshAfterFsChange(queryClient),
+	});
+}
+
+/**
+ * Files several songs under one artist and album, one after another; a file that fails is
+ * reported and the rest carry on, as with `auditFix`.
+ */
+export function useAuditPlaceMany() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async ({
+			paths,
+			artist,
+			album,
+		}: {
+			paths: readonly string[];
+			artist: string;
+			album: string;
+		}): Promise<FixReport> => {
+			const report: { fixed: number; failed: FixReport["failed"] } = { fixed: 0, failed: [] };
+			for (const path of paths) {
+				try {
+					await auditPlace(path, artist, album);
+					report.fixed += 1;
+				} catch (e) {
+					report.failed.push({ path, error: String(e) });
+				}
 			}
 			return report;
 		},

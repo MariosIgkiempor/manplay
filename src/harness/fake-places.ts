@@ -473,49 +473,95 @@ export function buildMissing(tracks: readonly Track[]): MissingTrack[] {
 }
 
 export function buildDuplicates(tracks: readonly Track[]): DuplicateGroup[] {
-	const original = tracks[20] as Track;
-	const summary = (path: string) => ({
-		id: original.id,
+	const copyOf = (track: Track, path: string, id: number) => ({
+		id,
 		path,
-		title: original.title,
-		artist: original.artist,
-		album: original.album,
-		size: original.size,
+		title: track.title,
+		artist: track.artist,
+		album: track.album,
+		size: track.size,
+		embeddedCues: [] as DuplicateGroup["tracks"][number]["embeddedCues"],
 	});
+	const original = (track: Track) => copyOf(track, track.path, track.id);
+	const folder = (track: Track) => track.path.slice(0, track.path.lastIndexOf("/"));
+	const stem = (track: Track) => track.path.slice(track.path.lastIndexOf("/") + 1, -".mp3".length);
+	const [a, b, c, d] = [20, 41, 57, 88].map((i) => tracks[i] as Track) as [
+		Track,
+		Track,
+		Track,
+		Track,
+	];
 	return [
 		{
+			// Same name in two folders: nothing in the names says which is the copy.
 			audioFp: "fp-duplicate-1",
+			tracks: [original(a), copyOf(a, `${LIBRARY_ROOT}/Unsorted/${a.title}.mp3`, 9100)],
+		},
+		{
+			audioFp: "fp-duplicate-2",
 			tracks: [
-				summary(original.path),
-				{ ...summary(`${LIBRARY_ROOT}/Unsorted/${original.title}.mp3`), id: 9100 },
+				original(b),
+				copyOf(b, `${folder(b)}/${stem(b)} (1).mp3`, 9101),
+				copyOf(b, `${folder(b)}/${stem(b)} (2).mp3`, 9102),
 			],
+		},
+		{
+			audioFp: "fp-duplicate-3",
+			tracks: [
+				original(c),
+				{
+					...copyOf(c, `${LIBRARY_ROOT}/Downloads/${stem(c)} - Copy.mp3`, 9103),
+					embeddedCues: ["serato"],
+				},
+			],
+		},
+		{
+			audioFp: "fp-duplicate-4",
+			tracks: [original(d), copyOf(d, `${folder(d)}/${stem(d)} copy 2.mp3`, 9104)],
 		},
 	];
 }
 
 export function buildAuditIssues(tracks: readonly Track[]): AuditIssue[] {
 	const at = (index: number) => (tracks[index] as Track).path;
+	const fixable = (path: string, kind: AuditIssue["kind"], message: string): AuditIssue => ({
+		path,
+		kind,
+		message,
+		fixable: true,
+		place: null,
+	});
+	const needsAlbum = (name: string): AuditIssue => ({
+		path: `${LIBRARY_ROOT}/Unsorted/${name}`,
+		kind: "misplaced",
+		message: "Not in an Artist/Album folder, and the file has no album tag",
+		fixable: false,
+		place: { artist: "Tomas Reyerson", album: null },
+	});
 	return [
+		fixable(at(70).replace(".mp3", ".flac"), "notMp3", "FLAC file, not MP3"),
+		fixable(at(71).replace(".mp3", ".wav"), "notMp3", "WAV file, not MP3"),
+		fixable(at(33), "tagVersion", "Tags are ID3v2.4; CDJs read ID3v2.3"),
+		fixable(at(34), "tagVersion", "Tags are ID3v2.4; CDJs read ID3v2.3"),
+		fixable(at(35), "tagVersion", "Tags are ID3v2.4; CDJs read ID3v2.3"),
+		fixable(
+			`${LIBRARY_ROOT}/Downloads/Hollow Signal (Dub).mp3`,
+			"misplaced",
+			"Belongs in Halden/Fjordlight",
+		),
+		fixable(
+			`${LIBRARY_ROOT}/Downloads/Hollow Signal (Dub).mp3`,
+			"tagVersion",
+			"Tags are ID3v2.4; CDJs read ID3v2.3",
+		),
+		needsAlbum("untitled bounce 3.mp3"),
+		needsAlbum("untitled bounce 4.mp3"),
 		{
-			path: at(70).replace(".mp3", ".flac"),
-			kind: "notMp3",
-			message: "FLAC file: convert to MP3",
-			fixable: true,
-			place: null,
-		},
-		{
-			path: at(33),
-			kind: "tagVersion",
-			message: "Tags are ID3v2.4; CDJs read ID3v2.3",
-			fixable: true,
-			place: null,
-		},
-		{
-			path: `${LIBRARY_ROOT}/Unsorted/untitled bounce 3.mp3`,
+			path: "/Volumes/Old Drive/stray.mp3",
 			kind: "misplaced",
-			message: "Not in an Artist/Album folder, and the file has no album tag",
+			message: "Misplaced: outside the library",
 			fixable: false,
-			place: { artist: "Tomas Reyerson", album: null },
+			place: null,
 		},
 	];
 }

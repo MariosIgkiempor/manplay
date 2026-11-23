@@ -162,3 +162,49 @@ export function kindLines(kinds: FolderSummary["kinds"]): string[] {
 export function issueSummary(list: readonly AuditIssue[]): string {
 	return list.map((i) => i.message).join("\n");
 }
+
+/** Files with a fixable issue of `kind`. */
+export function fixablePathsOfKind(issues: readonly AuditIssue[], kind: IssueKind): string[] {
+	return [...new Set(issues.filter((i) => i.fixable && i.kind === kind).map((i) => i.path))];
+}
+
+/** A file's name once its fixes have run: a file converted to MP3 takes the `.mp3` ending. */
+export function nameAfterFix(name: string, issues: readonly AuditIssue[]): string {
+	const converts = issues.some((i) => i.fixable && i.kind === "notMp3");
+	const dot = name.lastIndexOf(".");
+	return converts && dot > 0 ? `${name.slice(0, dot)}.mp3` : name;
+}
+
+const KIND_STEP: Record<IssueKind, (issue: AuditIssue) => string> = {
+	notMp3: () => `Convert to MP3, original to the ${TRASH}`,
+	tagVersion: () => "Rewrite tags as ID3v2.3",
+	// The backend says where a file belongs as "Belongs in Artist/Album"; read as the move it is.
+	misplaced: (i) => i.message.replace(/^Belongs in /, "Move to "),
+};
+
+/** What fixing one file does, a line per fixable issue in the order the fixes run. */
+export function fixSteps(issues: readonly AuditIssue[]): string[] {
+	return (Object.keys(KIND_STEP) as IssueKind[]).flatMap((kind) =>
+		issues.filter((i) => i.fixable && i.kind === kind).map((i) => KIND_STEP[kind](i)),
+	);
+}
+
+/** The file ending, upper case, as a format name: `FLAC` for `song.flac`. */
+function formatName(path: string): string {
+	const dot = path.lastIndexOf(".");
+	return dot > path.lastIndexOf("/") && dot >= 0 ? path.slice(dot + 1).toUpperCase() : "File";
+}
+
+/** One issue in a few words, for a chip beside the file: `FLAC → MP3`, `ID3v2.4 → v2.3`. */
+export function issueChip(issue: AuditIssue): string {
+	switch (issue.kind) {
+		case "notMp3":
+			return `${formatName(issue.path)} → MP3`;
+		case "tagVersion":
+			return "ID3v2.4 → v2.3";
+		case "misplaced": {
+			const words = issue.message.replace(/^Belongs in /, "Move to ").replace(/^Misplaced: /, "");
+			return words.charAt(0).toUpperCase() + words.slice(1);
+		}
+	}
+}

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { AuditIssue } from "#/lib/api.ts";
-import { describeFixes, fixablePaths, indexIssues, kindLines } from "#/lib/audit.ts";
+import {
+	describeFixes,
+	fixablePaths,
+	fixablePathsOfKind,
+	fixSteps,
+	indexIssues,
+	issueChip,
+	kindLines,
+	nameAfterFix,
+} from "#/lib/audit.ts";
 
 const issue = (path: string, kind: AuditIssue["kind"], fixable = true): AuditIssue => ({
 	path,
@@ -75,5 +84,51 @@ describe("kindLines", () => {
 	it("lists only the kinds present", () => {
 		expect(kindLines({ notMp3: 3, misplaced: 1 })).toEqual(["3 not MP3", "1 in the wrong folder"]);
 		expect(kindLines({})).toEqual([]);
+	});
+});
+
+describe("bulk fix helpers", () => {
+	it("finds the files with a fixable issue of one kind", () => {
+		expect(fixablePathsOfKind(issues, "notMp3")).toEqual(["/lib/A/B/1.flac"]);
+		expect(fixablePathsOfKind(issues, "misplaced")).toEqual([]);
+	});
+
+	it.each([
+		["a converted file takes .mp3", "1.flac", [issue("/x", "notMp3")], "1.mp3"],
+		["an unfixable conversion keeps its name", "1.flac", [issue("/x", "notMp3", false)], "1.flac"],
+		["a tag fix keeps the name", "2.mp3", [issue("/x", "tagVersion")], "2.mp3"],
+	])("names the file after the fix: %s", (_what, name, list, expected) => {
+		expect(nameAfterFix(name, list)).toBe(expected);
+	});
+
+	it("lists only fixable steps, in the order they run", () => {
+		const steps = fixSteps([
+			issue("/x", "misplaced"),
+			issue("/x", "tagVersion", false),
+			issue("/x", "notMp3"),
+		]);
+		expect(steps).toHaveLength(2);
+		expect(steps[0]).toMatch(/^Convert to MP3/);
+		expect(steps[1]).toBe("misplaced");
+	});
+});
+
+describe("issueChip", () => {
+	const withMessage = (path: string, kind: AuditIssue["kind"], message: string): AuditIssue => ({
+		...issue(path, kind),
+		message,
+	});
+	it.each([
+		["a FLAC to convert", withMessage("/l/a.flac", "notMp3", "FLAC file, not MP3"), "FLAC → MP3"],
+		["a file without an ending", withMessage("/l.d/song", "notMp3", "file, not MP3"), "File → MP3"],
+		["old tags", withMessage("/l/a.mp3", "tagVersion", "ID3v2.4 tags"), "ID3v2.4 → v2.3"],
+		["a move", withMessage("/l/a.mp3", "misplaced", "Belongs in A/B"), "Move to A/B"],
+		[
+			"a file outside",
+			withMessage("/a.mp3", "misplaced", "Misplaced: outside the library"),
+			"Outside the library",
+		],
+	])("words %s in a few words", (_what, given, expected) => {
+		expect(issueChip(given)).toBe(expected);
 	});
 });

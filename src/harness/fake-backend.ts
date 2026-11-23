@@ -287,6 +287,18 @@ function libraryCommands(state: State): Record<string, Command> {
 		library_status: () => ({ missing: state.tracks.length > 0 ? 2 : 0, graceDays: 30 }),
 		list_missing: () => buildMissing(state.tracks).filter(() => state.tracks.length > 0),
 		list_duplicates: () => (state.tracks.length > 0 ? buildDuplicates(state.tracks) : []),
+		trash_duplicates: (args) => {
+			const groups = (args.get("groups") ?? []) as { keep: string; trash: string[] }[];
+			const paths = groups.flatMap((g) => g.trash);
+			// A second numbered copy stands in for a false match, so the report's skipped list shows.
+			const differs = (p: string) => p.includes(" (2)");
+			return {
+				trashed: paths.filter((p) => !differs(p)),
+				skipped: paths
+					.filter(differs)
+					.map((path) => ({ path, reason: "its audio differs from the copy being kept" })),
+			};
+		},
 		list_carry_candidates: () => [],
 		carry_over: () => ({ tags: 0, playlists: 0, edits: 0 }),
 		scan_library: () => state.tracks.length,

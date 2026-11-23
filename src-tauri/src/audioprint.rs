@@ -59,8 +59,8 @@ fn mp3_region<R: Read + Seek>(r: &mut R, size: u64) -> Option<(u64, u64)> {
     (end > start).then_some((start, end))
 }
 
-/// FLAC: the decoded-audio MD5 from STREAMINFO when set, else the frames after the metadata.
-fn flac<R: Read + Seek>(r: &mut R, size: u64) -> Option<Result<String, (u64, u64)>> {
+/// FLAC: the decoded-audio MD5 from STREAMINFO when set, and the frames after the metadata.
+fn flac<R: Read + Seek>(r: &mut R, size: u64) -> Option<(Option<String>, (u64, u64))> {
     let mut at = 4;
     let mut md5 = None;
     loop {
@@ -75,7 +75,7 @@ fn flac<R: Read + Seek>(r: &mut R, size: u64) -> Option<Result<String, (u64, u64
                 for b in &info[18..34] {
                     let _ = write!(hex, "{b:02x}");
                 }
-                md5 = Some(hex);
+                md5 = Some(format!("flac:{hex}"));
             }
         }
         at += 4 + len;
@@ -83,10 +83,7 @@ fn flac<R: Read + Seek>(r: &mut R, size: u64) -> Option<Result<String, (u64, u64
             break;
         }
     }
-    Some(match md5 {
-        Some(m) => Ok(format!("flac:{m}")),
-        None => Err((at, size)),
-    })
+    Some((md5, (at, size)))
 }
 
 /// RIFF/WAVE `data` or AIFF `SSND` chunk.
@@ -145,29 +142,84 @@ fn region_print<R: Read + Seek>(r: &mut R, (start, end): (u64, u64)) -> Option<S
     Some(format!("a1:{}", hasher.finalize().to_hex()))
 }
 
-/// The audio fingerprint of a source of `size` bytes, or `None` for formats it does not know or
-/// files it cannot make sense of.
-pub fn audio_print<R: Read + Seek>(r: &mut R, size: u64) -> Option<String> {
+/// Where a file's audio is, and FLAC's own checksum of it when the file carries one.
+struct Audio {
+    region: (u64, u64),
+    flac_md5: Option<String>,
+}
+
+/// The audio of a source of `size` bytes, or `None` for formats it does not know.
+fn audio<R: Read + Seek>(r: &mut R, size: u64) -> Option<Audio> {
     let head = read_at(r, 0, 12.min(usize::try_from(size).ok()?))?;
-    let region = if head.starts_with(b"fLaC") {
-        match flac(r, size)? {
-            Ok(md5) => return Some(md5),
-            Err(region) => region,
-        }
+    let plain = |region| Audio {
+        region,
+        flac_md5: None,
+    };
+    if head.starts_with(b"fLaC") {
+        let (flac_md5, region) = flac(r, size)?;
+        Some(Audio { region, flac_md5 })
     } else if head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WAVE") {
-        chunk_region(r, size, *b"data", false)?
+        chunk_region(r, size, *b"data", false).map(plain)
     } else if head.starts_with(b"FORM") && matches!(head.get(8..12), Some(b"AIFF" | b"AIFC")) {
-        chunk_region(r, size, *b"SSND", true)?
+        chunk_region(r, size, *b"SSND", true).map(plain)
     } else if head.get(4..8) == Some(b"ftyp") {
-        mdat_region(r, size)?
+        mdat_region(r, size).map(plain)
     } else if head.starts_with(b"ID3")
         || (head.len() > 1 && head[0] == 0xff && head[1] & 0xe0 == 0xe0)
     {
-        mp3_region(r, size)?
+        mp3_region(r, size).map(plain)
     } else {
-        return None;
+        None
+    }
+}
+
+/// The audio fingerprint of a source of `size` bytes, or `None` for formats it does not know or
+/// files it cannot make sense of.
+pub fn audio_print<R: Read + Seek>(r: &mut R, size: u64) -> Option<String> {
+    let found = audio(r, size)?;
+    match found.flac_md5 {
+        Some(md5) => Some(md5),
+        None => region_print(r, found.region),
+    }
+}
+
+/// Start and end of the audio in a file on disk: everything outside it is tags and other
+/// metadata. `None` for formats [`audio_print`] does not know.
+pub fn audio_region_path(path: &std::path::Path) -> Option<(u64, u64)> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let size = f.metadata().ok()?.len();
+    audio(&mut f, size).map(|a| a.region)
+}
+
+/// Whether two files hold exactly the same audio bytes, whatever their tags. Unlike
+/// [`audio_print`], which samples, this reads all of both, so it is the check to make before a
+/// copy is thrown away.
+pub fn same_audio(a: &std::path::Path, b: &std::path::Path) -> std::io::Result<bool> {
+    const CHUNK: usize = 1024 * 1024;
+    let (Some((a_start, a_end)), Some((b_start, b_end))) =
+        (audio_region_path(a), audio_region_path(b))
+    else {
+        return Ok(false);
     };
-    region_print(r, region)
+    if a_end - a_start != b_end - b_start {
+        return Ok(false);
+    }
+    let mut fa = std::fs::File::open(a)?;
+    let mut fb = std::fs::File::open(b)?;
+    fa.seek(SeekFrom::Start(a_start))?;
+    fb.seek(SeekFrom::Start(b_start))?;
+    let mut left = a_end - a_start;
+    let (mut ba, mut bb) = (vec![0_u8; CHUNK], vec![0_u8; CHUNK]);
+    while left > 0 {
+        let n = usize::try_from(left.min(CHUNK as u64)).unwrap_or(CHUNK);
+        fa.read_exact(&mut ba[..n])?;
+        fb.read_exact(&mut bb[..n])?;
+        if ba[..n] != bb[..n] {
+            return Ok(false);
+        }
+        left -= n as u64;
+    }
+    Ok(true)
 }
 
 /// [`audio_print`] of a file on disk.

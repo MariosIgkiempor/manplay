@@ -8,6 +8,7 @@ mod audioprint;
 mod audit;
 mod convert;
 mod db;
+mod duplicate_trash;
 mod error;
 mod file_picker;
 mod fsops;
@@ -372,9 +373,37 @@ fn library_status(state: State<'_, AppState>) -> Result<LibraryStatus, Error> {
 
 /// Groups of present songs with the same audio (see `db::duplicate_groups`).
 #[tauri::command]
-fn list_duplicates(state: State<'_, AppState>) -> Result<Vec<db::DuplicateGroup>, Error> {
-    let conn = state.db.lock().map_err(|_| Error::Lock)?;
-    db::duplicate_groups(&conn)
+async fn list_duplicates(state: State<'_, AppState>) -> Result<Vec<db::DuplicateGroup>, Error> {
+    let mut groups = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::duplicate_groups(&conn)?
+    };
+    // Reading the files' tags happens off the lock and off the main thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        for track in groups.iter_mut().flat_map(|g| g.tracks.iter_mut()) {
+            track.embedded_cues = duplicate_trash::embedded_cues(Path::new(&track.path));
+        }
+        groups
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))
+}
+
+/// Moves the extra copies of duplicated songs to the Trash. Each copy is compared byte for byte
+/// with the copy being kept first; one that differs, or whose kept copy is gone, stays put.
+#[tauri::command]
+async fn trash_duplicates(
+    state: State<'_, AppState>,
+    groups: Vec<duplicate_trash::TrashGroup>,
+) -> Result<duplicate_trash::TrashReport, Error> {
+    let root = library_root(&state)?;
+    let r = root.clone();
+    let report =
+        tauri::async_runtime::spawn_blocking(move || duplicate_trash::trash_copies(&r, &groups))
+            .await
+            .map_err(|e| Error::Msg(e.to_string()))??;
+    refresh_after_fs_change(&state, root).await;
+    Ok(report)
 }
 
 /// Songs re-encoded under the same name whose old audio has tags or playlists to carry over.
@@ -5376,6 +5405,7 @@ pub fn run() {
             fs_move,
             fs_copy,
             fs_trash,
+            trash_duplicates,
             open_privacy_settings,
             audit_library,
             tags_read,

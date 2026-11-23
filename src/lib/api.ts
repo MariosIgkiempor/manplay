@@ -229,6 +229,8 @@ const duplicateGroupSchema = z.object({
 			artist: z.string(),
 			album: z.string(),
 			size: int,
+			/** DJ apps with cue points in this file's own tags, which go with the file. */
+			embeddedCues: z.array(z.enum(["serato", "traktor"])),
 		}),
 	),
 });
@@ -238,6 +240,26 @@ export type DuplicateGroup = z.infer<typeof duplicateGroupSchema>;
 /** Groups of present songs with the same audio: they share tags, grid and playlist entries. */
 export async function listDuplicates(): Promise<DuplicateGroup[]> {
 	return z.array(duplicateGroupSchema).parse(await invoke("list_duplicates"));
+}
+
+const trashDuplicatesReportSchema = z.object({
+	trashed: z.array(z.string()),
+	skipped: z.array(z.object({ path: z.string(), reason: z.string() })),
+});
+export type TrashDuplicatesReport = z.infer<typeof trashDuplicatesReportSchema>;
+
+/** One song's copies: the one that stays and the ones to move to the Trash. */
+export interface TrashGroup {
+	keep: string;
+	trash: string[];
+}
+
+/**
+ * Moves the extra copies to the Trash. The backend compares each with the copy being kept, byte
+ * for byte, and skips (and reports) any that differ or whose kept copy is gone.
+ */
+export async function trashDuplicates(groups: TrashGroup[]): Promise<TrashDuplicatesReport> {
+	return trashDuplicatesReportSchema.parse(await invoke("trash_duplicates", { groups }));
 }
 
 const carryCandidateSchema = z.object({

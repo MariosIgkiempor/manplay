@@ -3498,6 +3498,9 @@ pub struct DuplicateTrack {
     pub album: String,
     pub title: String,
     pub size: i64,
+    /// DJ apps with cue points in this file's own tags, which are lost with the file. Filled in
+    /// by the command, which reads the files; empty from the database alone.
+    pub embedded_cues: Vec<crate::duplicate_trash::CueApp>,
 }
 
 /// Present songs that share one `audio_fp`: the same recording stored more than once. They share
@@ -3529,6 +3532,7 @@ pub fn duplicate_groups(conn: &Connection) -> Result<Vec<DuplicateGroup>, Error>
                 album: r.get(4)?,
                 title: r.get(5)?,
                 size: r.get(6)?,
+                embedded_cues: Vec::new(),
             },
         ))
     })?;
