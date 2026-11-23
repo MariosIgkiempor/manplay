@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from "react";
+import { type ComponentProps, type ReactNode, useLayoutEffect, useRef } from "react";
 import { Bubble } from "#/components/ui/bubble.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useTwoPress } from "#/lib/two-press.ts";
@@ -7,7 +7,10 @@ import { cn } from "#/lib/utils.ts";
 type ButtonProps = ComponentProps<typeof Button>;
 type ButtonSize = NonNullable<ButtonProps["size"]>;
 
-/** An icon-only button has no room for the confirm label, so armed it takes the text size beside it. */
+/** What every armed button says; what it is about to do heads the card beside it. */
+export const ARMED_TEXT = "Are you sure?";
+
+/** An icon-only button has no room for the question, so armed it takes the text size beside it. */
 const ARMED_SIZE: Partial<Record<ButtonSize, ButtonSize>> = {
 	icon: "default",
 	"icon-xs": "xs",
@@ -27,11 +30,73 @@ const ARMED_COLOUR = {
 		"border-transparent! bg-primary! text-primary-foreground! ring-3 ring-primary/30 hover:bg-primary/85!",
 };
 
+const MORPH_MS = 220;
+const MORPH_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
+
+/**
+ * Eases `element` from its last width to its new one whenever `state` changes, so a button that
+ * changes its words grows or shrinks into them instead of jumping.
+ */
+function useWidthMorph(element: HTMLElement | null, state: unknown) {
+	const lastWidth = useRef<number | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `state` is what changes the width
+	useLayoutEffect(() => {
+		if (!element) {
+			return;
+		}
+		const to = element.offsetWidth;
+		const from = lastWidth.current;
+		lastWidth.current = to;
+		const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		if (from === null || from === to || still) {
+			return;
+		}
+		const morph = element.animate([{ width: `${from}px` }, { width: `${to}px` }], {
+			duration: MORPH_MS,
+			easing: MORPH_EASING,
+		});
+		return () => morph.cancel();
+	}, [element, state]);
+}
+
+/** The armed button's name: the question, and what it is about, which no longer shows on it. */
+function armedNaming(confirmLabel: ReactNode) {
+	return {
+		"data-hint": undefined,
+		"aria-label": typeof confirmLabel === "string" ? `${confirmLabel}: ${ARMED_TEXT}` : ARMED_TEXT,
+	};
+}
+
+/** Beside the armed button: what it is about to do, and what that does. */
+function ArmedCard({
+	anchor,
+	title,
+	consequence,
+}: {
+	anchor: HTMLElement;
+	title: ReactNode;
+	consequence: ReactNode;
+}) {
+	const explained = consequence !== undefined && consequence !== null;
+	return (
+		<Bubble
+			anchor={anchor}
+			role="status"
+			className="max-w-80 whitespace-normal rounded-xl p-0 text-sm shadow-lg"
+		>
+			<div className="w-max max-w-80">
+				<p className={cn("px-3.5 pt-2.5 font-medium", explained ? "pb-2" : "pb-2.5")}>{title}</p>
+				{explained && <div className="border-t px-3.5 pt-2.5 pb-3">{consequence}</div>}
+			</div>
+		</Bubble>
+	);
+}
+
 /**
  * A button for an action worth a second thought, in place of a confirmation dialog. The first
- * press arms it: it changes colour, its label becomes `confirmLabel`, and `consequence` shows
- * beside it. The second press does the action. Pressing anywhere else, Escape or waiting puts it
- * back.
+ * press arms it: it changes colour and grows into "Are you sure?", and a card beside it says what
+ * the action is (`confirmLabel`) and what it does (`consequence`). The second press does the
+ * action. Pressing anywhere else, Escape or waiting puts it back.
  */
 export function ConfirmButton({
 	confirmLabel,
@@ -44,14 +109,15 @@ export function ConfirmButton({
 	style,
 	...props
 }: Omit<ButtonProps, "onClick"> & {
-	/** What the button says once armed: the action in a word or two. */
+	/** The action in a few words, heading the card while armed and naming the armed button. */
 	confirmLabel: ReactNode;
-	/** What the action does, shown beside the armed button. */
+	/** What the action does, in the card under `confirmLabel`; an `EffectList` reads best. */
 	consequence?: ReactNode;
 	destructive?: boolean;
 	onConfirm: () => void;
 }) {
 	const { armed, press, element, setElement } = useTwoPress(onConfirm);
+	useWidthMorph(element, armed);
 	return (
 		<>
 			<Button
@@ -63,27 +129,21 @@ export function ConfirmButton({
 				style={armed && element ? { ...style, minWidth: element.offsetWidth } : style}
 				className={cn(
 					className,
-					"motion-reduce:transition-none",
+					"overflow-hidden motion-reduce:transition-none",
 					armed && ARMED_COLOUR[destructive ? "destructive" : "plain"],
 				)}
-				{...(armed ? { "data-hint": undefined } : {})}
+				{...(armed ? armedNaming(confirmLabel) : {})}
 				onClick={press}
 			>
 				<span
 					key={armed ? "armed" : "rest"}
-					className={cn(
-						"inline-flex items-center gap-[inherit]",
-						armed &&
-							"fade-in-0 slide-in-from-bottom-1 animate-in duration-150 motion-reduce:animate-none",
-					)}
+					className="fade-in-0 slide-in-from-bottom-2 inline-flex animate-in items-center gap-[inherit] duration-200 motion-reduce:animate-none"
 				>
-					{armed ? confirmLabel : children}
+					{armed ? ARMED_TEXT : children}
 				</span>
 			</Button>
-			{armed && element && consequence && (
-				<Bubble anchor={element} role="status" className="max-w-72 px-2.5 py-1.5">
-					{consequence}
-				</Bubble>
+			{armed && element && (
+				<ArmedCard anchor={element} title={confirmLabel} consequence={consequence} />
 			)}
 		</>
 	);

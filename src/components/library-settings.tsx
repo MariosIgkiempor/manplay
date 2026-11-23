@@ -4,8 +4,21 @@ import { FieldRow, FrameSection } from "#/components/frame.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
-import { Fact, Facts } from "#/components/ui/facts.tsx";
+import { type Effect, EffectList, Explainer } from "#/components/ui/explainer.tsx";
 import { SCAN_KEY, useLibraryRoot, useResetLibrary, useScan, useTracks } from "#/lib/queries.ts";
+
+const FOLDER_EFFECTS: readonly Effect[] = [
+	{ tone: "kept", what: "Your music files", detail: "They stay where they are." },
+];
+
+const RESET_EFFECTS: readonly Effect[] = [
+	{ tone: "changed", what: "Song list", detail: "Read again from the music folder." },
+	{ tone: "lost", what: "Playlists" },
+	{ tone: "lost", what: "Tag memberships" },
+	{ tone: "lost", what: "Sync records" },
+	{ tone: "kept", what: "A backup of the database", detail: "Saved before anything is cleared." },
+	{ tone: "kept", what: "Your music files" },
+];
 
 /** Where the library lives on disk, how to rescan it, and how to start its database over. */
 export function LibrarySettings() {
@@ -26,9 +39,12 @@ export function LibrarySettings() {
 		<FrameSection
 			title="Library"
 			description={
-				<Facts label="The folder manplay reads your music from. Files stay where they are.">
-					<Fact tone="kept">Files stay where they are</Fact>
-				</Facts>
+				<Explainer
+					summary="Files stay where they are"
+					title="Your music folder"
+					lead="manplay reads your music from this folder."
+					effects={FOLDER_EFFECTS}
+				/>
 			}
 		>
 			<FieldRow
@@ -37,13 +53,10 @@ export function LibrarySettings() {
 					root.data ? (
 						<>
 							<code className="break-all font-mono text-foreground/90 text-xs">{root.data}</code>
-							<Facts
-								label={`${songCount}, read again at every launch.`}
-								className="mt-1 flex tabular-nums"
-							>
-								<Fact icon={<Music />}>{songCount}</Fact>
-								<Fact tone="changed">Rescanned at launch</Fact>
-							</Facts>
+							<span className="mt-1 flex items-center gap-1.5 tabular-nums">
+								<Music className="size-3.5" aria-hidden />
+								{songCount} · read again at every launch
+							</span>
 						</>
 					) : (
 						"Choose a folder laid out as artist, album, then songs."
@@ -71,13 +84,11 @@ export function LibrarySettings() {
 				<FieldRow
 					label="Reset database"
 					description={
-						<Facts label="Rebuilds the song list from the folder. Playlists, tag memberships and sync records are cleared; a backup is kept.">
-							<Fact tone="changed">Song list</Fact>
-							<Fact tone="lost">Playlists</Fact>
-							<Fact tone="lost">Tag memberships</Fact>
-							<Fact tone="lost">Sync records</Fact>
-							<Fact tone="kept">Backup</Fact>
-						</Facts>
+						<Explainer
+							summary="Starts the song list over from the folder"
+							title="Reset database"
+							effects={RESET_EFFECTS}
+						/>
 					}
 					align="center"
 				>
@@ -86,15 +97,7 @@ export function LibrarySettings() {
 						disabled={scanning}
 						destructive
 						confirmLabel="Reset the library database"
-						consequence={
-							<Facts label="Songs are rebuilt from the folder. Playlist and tag memberships and sync records are cleared. A backup of the database is kept, and your music files are not touched.">
-								<Fact tone="lost">Playlists</Fact>
-								<Fact tone="lost">Tag memberships</Fact>
-								<Fact tone="lost">Sync records</Fact>
-								<Fact tone="kept">Backup</Fact>
-								<Fact tone="kept">Music files</Fact>
-							</Facts>
-						}
+						consequence={<EffectList effects={RESET_EFFECTS} />}
 						onConfirm={() => reset.mutate()}
 					>
 						<Trash2 />
