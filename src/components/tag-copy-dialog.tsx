@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { TagTarget } from "#/components/tag-editor.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { useExitGhost } from "#/lib/exit-ghost.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME } from "#/lib/page-layout.ts";
 import { useTagsRead } from "#/lib/queries.ts";
 import type { TagClipboard } from "#/lib/tag-clipboard.ts";
@@ -17,6 +18,7 @@ export function TagCopyDialog({
 	onCopy: (clip: TagClipboard) => void;
 	onClose: () => void;
 }) {
+	const overlay = useExitGhost();
 	const view = useTagsRead(target.paths ?? target.path);
 	const [picked, setPicked] = useState<Set<string> | null>(null);
 	useEffect(() => {
@@ -51,10 +53,11 @@ export function TagCopyDialog({
 	};
 
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center">
+		<div ref={overlay} className="fixed inset-0 z-50 flex items-center justify-center">
 			<div aria-hidden="true" onMouseDown={onClose} className={DIALOG_BACKDROP} />
 			<div
 				role="dialog"
+				data-exit
 				aria-label="Copy metadata"
 				className={cn(DIALOG_FRAME, "flex max-h-[80vh] w-[28rem] max-w-[calc(100%-2rem)] flex-col")}
 			>

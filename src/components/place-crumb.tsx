@@ -49,7 +49,13 @@ export function PlaceCrumb({ section, current }: { section: PlaceSection; curren
 					</MenuItem>
 					{places.length > 0 && <MenuSeparator className="-mx-1 my-1 h-px bg-border" />}
 					{places.map((p) => (
-						<MenuItem key={p.key} className={item} onSelect={() => p.go()}>
+						<MenuItem
+							key={p.key}
+							className={item}
+							onSelect={() => {
+								p.go();
+							}}
+						>
 							<BrandIcon brand={p.brand} className="size-4 rounded-[4px] ring-0" />
 							<span className="flex-1 truncate">{p.label}</span>
 							{p.key === current && <Check className="size-3.5 text-primary" />}

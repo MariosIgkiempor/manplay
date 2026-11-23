@@ -46,18 +46,22 @@ export function StatusBar({ children, leading }: { children: ReactNode; leading?
 	);
 }
 
-/** The last action as a pill that undoes it (also ⌘Z). */
+/**
+ * The last action as a pill that undoes it (also ⌘Z). Each new action pops it in with a short
+ * glow, so a delete or move visibly lands somewhere that shows how to take it back.
+ */
 function UndoPill() {
-	const { canUndo, label, undo } = useUndo();
+	const { canUndo, label, undo, recorded } = useUndo();
 	if (!canUndo || label === null) {
 		return null;
 	}
 	return (
 		<button
+			key={recorded}
 			type="button"
 			onClick={() => void undo()}
 			data-hint={`Undo ${label} (${keyLabel("⌘Z")})`}
-			className="flex min-w-0 shrink items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-foreground outline-none transition-colors hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5 [&_svg]:shrink-0"
+			className="flex min-w-0 shrink animate-undo-arrive items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-foreground outline-none transition-colors hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:animate-none [&_svg]:size-3.5 [&_svg]:shrink-0"
 		>
 			<Undo2 />
 			<span className="truncate">Undo {label}</span>

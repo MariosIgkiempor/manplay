@@ -89,7 +89,9 @@ export function HeaderMenu({
 							key={row.label}
 							data-hint={row.hint}
 							disabled={row.disabled ?? false}
-							onSelect={() => row.onSelect()}
+							onSelect={() => {
+								row.onSelect();
+							}}
 							className={cn(menuItem, row.destructive && "text-destructive")}
 						>
 							{row.icon}

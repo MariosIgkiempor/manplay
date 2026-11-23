@@ -26,6 +26,7 @@ import {
 	pickerPlaces,
 } from "#/lib/api.ts";
 import { coverTypeOf } from "#/lib/cover-choice.ts";
+import { useExitGhost } from "#/lib/exit-ghost.ts";
 import {
 	answerPick,
 	isUsable,
@@ -230,6 +231,7 @@ function FilePicker({
 	request: PickRequest;
 	onDone: (path: string | null) => void;
 }) {
+	const overlay = useExitGhost();
 	const { places, folder, listing, walkTo } = usePickerFolder(request.purpose);
 	const entries = listing.data?.entries ?? null;
 	const choice = usePickerChoice({ request, folder, entries, walkTo, onDone });
@@ -237,10 +239,11 @@ function FilePicker({
 	useEscapeKey(choice.namingFolder ? () => choice.setNamingFolder(false) : cancel);
 
 	return (
-		<div className="fixed inset-0 z-[60] flex items-center justify-center">
+		<div ref={overlay} className="fixed inset-0 z-[60] flex items-center justify-center">
 			<div aria-hidden="true" onMouseDown={cancel} className={DIALOG_BACKDROP} />
 			<div
 				role="dialog"
+				data-exit
 				aria-modal="true"
 				aria-label={request.title}
 				className={cn(

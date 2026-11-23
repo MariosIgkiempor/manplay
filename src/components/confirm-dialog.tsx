@@ -1,33 +1,150 @@
-import { type ReactNode, useEffect } from "react";
+import {
+	type CSSProperties,
+	type ReactNode,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { Button } from "#/components/ui/button.tsx";
+import { type ActionAnchor, currentActionAnchor, showLeaving } from "#/lib/action-anchor.ts";
+import { type BubblePosition, bubblePosition } from "#/lib/bubble-position.ts";
+import { useExitGhost } from "#/lib/exit-ghost.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME, WELL } from "#/lib/page-layout.ts";
 import { cn } from "#/lib/utils.ts";
 
-/** The modal frame: a title, a body and a footer row. Escape or a click outside cancels. */
+/** The space kept clear round the thing a question is about, so its own edge still shows. */
+const SPOTLIGHT_PAD = 3;
+
+/** A backdrop with a hole over `box`, so the thing being asked about stays lit. */
+function spotlightClip(box: ActionAnchor["box"]): string {
+	const left = box.left - SPOTLIGHT_PAD;
+	const top = box.top - SPOTLIGHT_PAD;
+	const right = box.left + box.width + SPOTLIGHT_PAD;
+	const bottom = box.top + box.height + SPOTLIGHT_PAD;
+	const hole = [
+		[left, top],
+		[right, top],
+		[right, bottom],
+		[left, bottom],
+		[left, top],
+	]
+		.map(([x, y]) => `${x}px ${y}px`)
+		.join(", ");
+	return `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${hole})`;
+}
+
+/** Where the card goes beside `anchor`, and the point it grows out of. */
+function placeCard(anchor: ActionAnchor, card: HTMLElement): BubblePosition & { origin: string } {
+	const size = { width: card.offsetWidth, height: card.offsetHeight };
+	const placed = bubblePosition(
+		anchor.box,
+		size,
+		{ width: window.innerWidth, height: window.innerHeight },
+		"bottom",
+	);
+	const pointX = anchor.box.left + anchor.box.width / 2 - placed.left;
+	const originX = Math.max(0, Math.min(size.width, pointX));
+	return { ...placed, origin: `${originX}px ${placed.side === "bottom" ? "0" : "100%"}` };
+}
+
+type Placed = ReturnType<typeof placeCard>;
+
+/** A card beside its anchor sits where it was placed, growing out of the anchor's side. */
+function anchoredCardStyle(placed: Placed | null): CSSProperties {
+	return {
+		position: "fixed",
+		left: placed?.left ?? 0,
+		top: placed?.top ?? 0,
+		...(placed ? { transformOrigin: placed.origin } : {}),
+	};
+}
+
+/** Its size, and how it comes in: hidden until placed, then sliding off the anchor's side. */
+function cardLook(anchored: boolean, placed: Placed | null): string {
+	if (!anchored) {
+		return "w-[28rem] max-w-[calc(100%-2rem)]";
+	}
+	return cn(
+		"w-[22rem] max-w-[calc(100%-1rem)] shadow-xl duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]",
+		placed === null && "invisible animate-none",
+		placed?.side === "bottom" && "slide-in-from-top-1",
+		placed?.side === "top" && "slide-in-from-bottom-1",
+	);
+}
+
+/**
+ * The modal frame: a title, a body and a footer row. Escape or a click outside cancels. Given an
+ * `anchor`, it opens as a card beside the thing it asks about, which stays lit while the rest of
+ * the window dims; without one it opens in the middle of the window.
+ */
 export function Dialog({
 	title,
 	children,
 	footer,
 	onCancel,
+	anchor = null,
+	destructive = false,
 }: {
 	title: string;
 	children?: ReactNode;
 	footer: ReactNode;
 	onCancel: () => void;
+	anchor?: ActionAnchor | null;
+	/** Marks the lit thing in the destructive colour: what the answer will remove. */
+	destructive?: boolean;
 }) {
+	const overlay = useExitGhost();
+	const card = useRef<HTMLDivElement>(null);
+	const [placed, setPlaced] = useState<Placed | null>(null);
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCancel();
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, [onCancel]);
-	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center">
-			<div aria-hidden="true" onMouseDown={onCancel} className={DIALOG_BACKDROP} />
+	useLayoutEffect(() => {
+		if (anchor && card.current) {
+			setPlaced(placeCard(anchor, card.current));
+		}
+	}, [anchor]);
+
+	const anchored = anchor !== null;
+	return createPortal(
+		<div
+			ref={overlay}
+			className={cn("fixed inset-0 z-50", !anchored && "flex items-center justify-center")}
+		>
+			<div
+				aria-hidden="true"
+				onMouseDown={onCancel}
+				className={cn(DIALOG_BACKDROP, anchored && "bg-canvas/45 backdrop-blur-[2px]")}
+				style={anchor?.element ? { clipPath: spotlightClip(anchor.box) } : undefined}
+			/>
+			{anchor?.element && placed && (
+				<div
+					aria-hidden="true"
+					className={cn(
+						"pointer-events-none fixed animate-in rounded-lg ring-2 fade-in-0 duration-200 motion-reduce:animate-none",
+						destructive ? "ring-destructive/70" : "ring-primary/70",
+					)}
+					style={{
+						left: anchor.box.left - SPOTLIGHT_PAD,
+						top: anchor.box.top - SPOTLIGHT_PAD,
+						width: anchor.box.width + SPOTLIGHT_PAD * 2,
+						height: anchor.box.height + SPOTLIGHT_PAD * 2,
+					}}
+				/>
+			)}
 			{/* The question sits in a well; its answers sit on the frame below it. */}
 			<div
+				ref={card}
 				role="dialog"
+				aria-modal="true"
 				aria-label={title}
-				className={cn(DIALOG_FRAME, "w-[28rem] max-w-[calc(100%-2rem)] p-1")}
+				data-exit
+				style={anchored ? anchoredCardStyle(placed) : undefined}
+				className={cn(DIALOG_FRAME, "p-1", cardLook(anchored, placed))}
 			>
 				<div className={`${WELL} space-y-1.5 p-4`}>
 					<div className="break-words font-medium text-sm">{title}</div>
@@ -35,11 +152,15 @@ export function Dialog({
 				</div>
 				<div className="px-2 pt-2 pb-1">{footer}</div>
 			</div>
-		</div>
+		</div>,
+		document.body,
 	);
 }
 
-/** Modal yes/no question. Escape or a click outside cancels. */
+/**
+ * Yes/no question, opened beside the button, row or menu it was asked from (see
+ * `action-anchor.ts`). Escape or a click outside cancels.
+ */
 export function ConfirmDialog({
 	title,
 	children,
@@ -60,10 +181,14 @@ export function ConfirmDialog({
 	/** A further choice, between Cancel and the confirm button. */
 	extra?: ReactNode;
 }) {
+	// Taken once, as the question opens: later presses are on the question itself.
+	const [anchor] = useState(() => currentActionAnchor());
 	return (
 		<Dialog
 			title={title}
 			onCancel={onCancel}
+			anchor={anchor}
+			destructive={destructive}
 			footer={
 				<div className="flex justify-end gap-2">
 					<Button variant="ghost" onClick={onCancel}>
@@ -72,7 +197,12 @@ export function ConfirmDialog({
 					{extra}
 					<Button
 						variant={destructive ? "destructive" : "default"}
-						onClick={onConfirm}
+						onClick={() => {
+							if (destructive) {
+								showLeaving(anchor);
+							}
+							onConfirm();
+						}}
 						disabled={busy}
 						autoFocus
 					>

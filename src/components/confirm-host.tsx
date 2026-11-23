@@ -1,9 +1,15 @@
+import { useEffect } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { trackActionAnchors } from "#/lib/action-anchor.ts";
 import { answerConfirm, usePendingConfirm } from "#/lib/confirm.ts";
 
-/** Shows the question `askConfirm` is asking. Mounted once, in the shell. */
+/**
+ * Shows the question `askConfirm` is asking, and notes where the user acts so every question
+ * opens beside its action. Mounted once, in the shell.
+ */
 export function ConfirmHost() {
 	const question = usePendingConfirm();
+	useEffect(() => trackActionAnchors(), []);
 	return (
 		question && (
 			<ConfirmDialog

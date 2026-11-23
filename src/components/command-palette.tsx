@@ -34,6 +34,7 @@ import { groupAlbums } from "#/lib/albums.ts";
 import { listPlaylists, listTags, type Track, targetName } from "#/lib/api.ts";
 import { groupArtists } from "#/lib/artists.ts";
 import { type PaletteItem, rankMatches } from "#/lib/command-palette.ts";
+import { useExitGhost } from "#/lib/exit-ghost.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { useScan, useSyncTargets, useTracks } from "#/lib/queries.ts";
@@ -243,6 +244,7 @@ const VERB: Record<Target["kind"], string> = {
  * albums and songs. Enter opens a page, runs an action, plays a song or shows an album or artist.
  */
 export function CommandPalette() {
+	const overlay = useExitGhost();
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
 	const groups = usePaletteGroups(query);
@@ -279,10 +281,11 @@ export function CommandPalette() {
 	};
 
 	return (
-		<div className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh]">
+		<div ref={overlay} className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh]">
 			<div aria-hidden="true" className={DIALOG_BACKDROP} onMouseDown={() => setOpen(false)} />
 			<div
 				role="dialog"
+				data-exit
 				aria-label="Search everything"
 				className={cn(DIALOG_FRAME, "w-[36rem] max-w-[calc(100%-2rem)] p-1")}
 				onKeyDown={(e) => {

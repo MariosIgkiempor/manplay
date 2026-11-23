@@ -5,6 +5,7 @@ import { ErrorLine } from "#/components/page.tsx";
 import { TagChanges, TagRow } from "#/components/tag-diff.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { tagsPreview } from "#/lib/api.ts";
+import { useExitGhost } from "#/lib/exit-ghost.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME, WELL_ROWS } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { type FieldSummary, type FileChanges, summarize } from "#/lib/tag-preview.ts";
@@ -23,6 +24,7 @@ export function TagConfirmDialog({
 	req: TagConfirmRequest;
 	onDone: (ok: boolean) => void;
 }) {
+	const overlay = useExitGhost();
 	const previews = useQueries({
 		queries: req.items.map((i) => ({
 			queryKey: ["tags-preview", i.path, i.edits],
@@ -60,10 +62,11 @@ export function TagConfirmDialog({
 	}, [ready]);
 
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center">
+		<div ref={overlay} className="fixed inset-0 z-50 flex items-center justify-center">
 			<div aria-hidden="true" onMouseDown={() => onDone(false)} className={DIALOG_BACKDROP} />
 			<div
 				role="dialog"
+				data-exit
 				aria-modal="true"
 				aria-label={req.title}
 				className={cn(

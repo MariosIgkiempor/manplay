@@ -23,6 +23,7 @@ export function UndoProvider({ children }: { children: ReactNode }) {
 	const stack = useRef<UndoEntry[]>([]);
 	const running = useRef(false);
 	const [label, setLabel] = useState<string | null>(null);
+	const [recorded, setRecorded] = useState(0);
 	const [toast, setToast] = useState<{ text: string; error: boolean } | null>(null);
 
 	useEffect(() => {
@@ -36,6 +37,7 @@ export function UndoProvider({ children }: { children: ReactNode }) {
 	const record = useCallback((entry: UndoEntry) => {
 		stack.current = [...stack.current, entry].slice(-MAX_ENTRIES);
 		setLabel(entry.label);
+		setRecorded((n) => n + 1);
 	}, []);
 
 	const undo = useCallback(async () => {
@@ -77,8 +79,8 @@ export function UndoProvider({ children }: { children: ReactNode }) {
 	}, [undo]);
 
 	const api = useMemo(
-		() => ({ record, undo, canUndo: label !== null, label }),
-		[record, undo, label],
+		() => ({ record, undo, canUndo: label !== null, label, recorded }),
+		[record, undo, label, recorded],
 	);
 
 	return (
@@ -87,7 +89,7 @@ export function UndoProvider({ children }: { children: ReactNode }) {
 			{toast && (
 				<output
 					className={cn(
-						"fixed bottom-20 left-1/2 z-50 max-w-lg -translate-x-1/2 rounded-md border bg-popover px-3 py-2 text-sm shadow-md",
+						"fixed bottom-20 left-1/2 z-50 max-w-lg -translate-x-1/2 animate-in rounded-md border bg-popover px-3 py-2 text-sm shadow-md fade-in-0 slide-in-from-bottom-2 duration-200 motion-reduce:animate-none",
 						toast.error && "text-destructive",
 					)}
 				>

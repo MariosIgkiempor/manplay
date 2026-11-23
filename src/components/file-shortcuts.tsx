@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { X } from "lucide-react";
 import { useEffect } from "react";
 import { Button } from "#/components/ui/button.tsx";
+import { useExitGhost } from "#/lib/exit-ghost.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { chordLabel, SHORTCUTS } from "#/lib/shortcuts.ts";
@@ -19,6 +20,7 @@ export function Key({ children }: { children: string }) {
 
 /** Every file browser shortcut on one sheet, with the keys chosen in Settings; its key opens it. */
 export function FileShortcuts({ onClose }: { onClose: () => void }) {
+	const overlay = useExitGhost();
 	const bindings = useBindings();
 	const mac = useMacLabels();
 	const files = SHORTCUTS.filter((d) => d.scope === "files");
@@ -39,10 +41,11 @@ export function FileShortcuts({ onClose }: { onClose: () => void }) {
 		return () => window.removeEventListener("keydown", onKey);
 	}, [onClose]);
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center">
+		<div ref={overlay} className="fixed inset-0 z-50 flex items-center justify-center">
 			<div aria-hidden="true" onMouseDown={onClose} className={DIALOG_BACKDROP} />
 			<div
 				role="dialog"
+				data-exit
 				aria-label="Keyboard shortcuts"
 				className={cn(
 					DIALOG_FRAME,

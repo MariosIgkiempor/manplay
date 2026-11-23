@@ -1460,6 +1460,7 @@ function EntryRow({
 			{/* biome-ignore lint/a11y/noStaticElementInteractions: selectable, draggable row */}
 			<div
 				data-row-path={path}
+				data-selected={selected ? "true" : undefined}
 				draggable
 				onDragStart={onDragStart}
 				onDragEnd={onDragEnd}
@@ -1541,7 +1542,9 @@ export function MenuShell({
 						key={label}
 						className={cn(menuItem, danger && "text-destructive")}
 						disabled={disabled ?? false}
-						onSelect={() => run()}
+						onSelect={() => {
+							run();
+						}}
 					>
 						<Icon className={cn("size-4", detail && "self-start mt-0.5")} />
 						<span className="min-w-0 flex-1">

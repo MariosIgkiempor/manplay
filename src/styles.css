@@ -416,3 +416,29 @@ input[type="range"].slider {
 		clip-path: inset(0 0 calc(var(--page-steps, 1) * (100% + 0.5rem) - 0.5rem) 0);
 	}
 }
+
+/*
+ * The undo pill as an action lands in it (a delete, a move): it pops in from below with a short
+ * glow in the cue colour, then settles to its quiet look.
+ */
+@keyframes undo-arrive {
+	0% {
+		opacity: 0;
+		translate: 0 6px;
+		scale: 0.92;
+		box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 0%, transparent);
+	}
+	35% {
+		opacity: 1;
+		translate: 0 0;
+		scale: 1.04;
+		box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 35%, transparent);
+	}
+	100% {
+		scale: 1;
+		box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 0%, transparent);
+	}
+}
+.animate-undo-arrive {
+	animation: undo-arrive 700ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}

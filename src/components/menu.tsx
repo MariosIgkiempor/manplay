@@ -87,7 +87,11 @@ export function MenuItems({ items }: { items: readonly MenuEntry[] }) {
 				key={item.label}
 				className={cn(menuItem, item.destructive && "text-destructive")}
 				disabled={item.disabled ?? false}
-				onSelect={() => item.onSelect()}
+				onSelect={() => {
+					// An action that returns a promise (one that asks first) would hold the menu open
+					// over its own question until answered; the menu closes as soon as it is picked.
+					item.onSelect();
+				}}
 			>
 				{item.icon}
 				{item.label}

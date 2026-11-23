@@ -12,6 +12,8 @@ export interface UndoApi {
 	canUndo: boolean;
 	/** Name of the operation Undo would reverse. */
 	label: string | null;
+	/** Counts operations recorded, so a new one can be shown arriving even under the same name. */
+	recorded: number;
 }
 
 export const UndoContext = createContext<UndoApi | null>(null);
