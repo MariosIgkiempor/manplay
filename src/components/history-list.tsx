@@ -18,6 +18,7 @@ import { FailureList } from "#/components/failure-list.tsx";
 import { FrameSection } from "#/components/frame.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { dismissActivity, dismissSyncRuns } from "#/lib/api.ts";
 import { duration, timeAgo } from "#/lib/format.ts";
 import type { HistoryEntry, HistorySource, Part, Stat, Status } from "#/lib/history.ts";
@@ -32,24 +33,55 @@ const STATUS = {
 	failed: { Icon: CircleX, tone: "text-destructive", label: "Failed" },
 } as const satisfies Record<Status, unknown>;
 
+/** A common failure in plain words: what went wrong, the fix, and the whole explanation. */
+interface Tip {
+	problem: string;
+	fix: string;
+	full: string;
+}
+
 /** Plain-language cause for the most common failures. */
-function hint(error: string): string | null {
+function hint(error: string): Tip | null {
 	if (/operation not permitted|permission denied/i.test(error)) {
 		return isMac
-			? "macOS is blocking access to a folder. Grant manplay (or the app that launches it) access under System Settings → Privacy & Security → Files & Folders / Full Disk Access."
-			: "Windows is blocking access to a folder. Check that the folder is not read-only, and that Controlled folder access in Windows Security allows manplay.";
+			? {
+					problem: "macOS blocks a folder",
+					fix: "Allow manplay in Privacy & Security",
+					full: "macOS is blocking access to a folder. Grant manplay (or the app that launches it) access under System Settings → Privacy & Security → Files & Folders / Full Disk Access.",
+				}
+			: {
+					problem: "Windows blocks a folder",
+					fix: "Check read-only and Controlled folder access",
+					full: "Windows is blocking access to a folder. Check that the folder is not read-only, and that Controlled folder access in Windows Security allows manplay.",
+				};
 	}
 	if (/access denied|\b40[13]\b/i.test(error)) {
-		return "The destination rejected the credentials. Check the key's permissions and the bucket name.";
+		return {
+			problem: "Credentials rejected",
+			fix: "Check the key's permissions and bucket name",
+			full: "The destination rejected the credentials. Check the key's permissions and the bucket name.",
+		};
 	}
 	if (/unreachable|timed out|dns|connect/i.test(error)) {
-		return "The destination could not be reached. Check your connection and that it is online.";
+		return {
+			problem: "Unreachable",
+			fix: "Check your connection and that it is online",
+			full: "The destination could not be reached. Check your connection and that it is online.",
+		};
 	}
 	if (/MKCOL 409/i.test(error)) {
-		return "The destination refused to create a folder. Check that the shared folder still exists and is writable.";
+		return {
+			problem: "Folder refused",
+			fix: "Check the shared folder exists and is writable",
+			full: "The destination refused to create a folder. Check that the shared folder still exists and is writable.",
+		};
 	}
 	if (/no such file|not found/i.test(error)) {
-		return "The file or folder no longer exists. Rescan your library.";
+		return {
+			problem: "File gone",
+			fix: "Rescan your library",
+			full: "The file or folder no longer exists. Rescan your library.",
+		};
 	}
 	return null;
 }
@@ -136,7 +168,12 @@ function PartDetail({ part, titled }: { part: Part; titled: boolean }) {
 					))}
 				</ul>
 			)}
-			{tip && <p className="text-warning text-xs">{tip}</p>}
+			{tip && (
+				<Facts label={tip.full} className="text-xs">
+					<Fact tone="warn">{tip.problem}</Fact>
+					<span className="text-muted-foreground">{tip.fix}</span>
+				</Facts>
+			)}
 			{part.errors.length > 0 && (
 				<FailureList messages={part.errors} total={part.failedTotal} heading={false} />
 			)}

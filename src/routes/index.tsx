@@ -2,9 +2,9 @@ import { useIsMutating, useQueries } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
-import { FrameHeader, TabsSearchBar } from "#/components/frame.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
 import { LibraryEmpty, LibraryList, LibrarySortMenu } from "#/components/library-parts.tsx";
+import { PageHeader } from "#/components/page-header.tsx";
 import { SearchPalette } from "#/components/search-palette.tsx";
 import { ViewToggle } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
@@ -81,7 +81,7 @@ function Library() {
 
 	return (
 		<main>
-			<FrameHeader
+			<PageHeader
 				title="Library"
 				titleHint={root.data ?? undefined}
 				meta={
@@ -107,7 +107,18 @@ function Library() {
 						/>
 					) : null
 				}
-				continued={!libraryEmpty}
+				tabs={libraryEmpty ? undefined : <ViewToggle view={view} onChange={setView} />}
+				search={
+					libraryEmpty ? undefined : (
+						<SearchPalette
+							pills={pills}
+							onPills={setPills}
+							text={search}
+							onText={setSearch}
+							trailing={<LibrarySortMenu view={view} sorts={sorts} segment />}
+						/>
+					)
+				}
 			/>
 			{libraryEmpty ? (
 				<LibraryEmpty
@@ -118,19 +129,6 @@ function Library() {
 				/>
 			) : (
 				<>
-					<TabsSearchBar
-						tabs={<ViewToggle view={view} onChange={setView} />}
-						search={
-							<SearchPalette
-								pills={pills}
-								onPills={setPills}
-								text={search}
-								onText={setSearch}
-								trailing={<LibrarySortMenu view={view} sorts={sorts} segment />}
-							/>
-						}
-					/>
-
 					<div className={cn("space-y-5", PAGE_BODY)}>
 						<LibraryList
 							view={view}

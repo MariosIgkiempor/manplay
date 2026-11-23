@@ -1,8 +1,10 @@
+import { KeyRound } from "lucide-react";
 import { useId, useState } from "react";
 import { BrandGlyph } from "#/components/brand-icon.tsx";
 import { FieldRow, FrameSection } from "#/components/frame.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { useDiscogsToken, useServices } from "#/lib/queries.ts";
@@ -14,7 +16,11 @@ export function LookupSettings() {
 	return (
 		<FrameSection
 			title="Tag lookup"
-			description="Find missing tags and covers online, for the songs you choose. Nothing is sent for any other song."
+			description={
+				<Facts label="Find missing tags and covers online, for the songs you choose. Nothing is sent for any other song.">
+					<Fact tone="sent">Only songs you choose</Fact>
+				</Facts>
+			}
 		>
 			<FieldRow
 				label={
@@ -24,7 +30,13 @@ export function LookupSettings() {
 					</span>
 				}
 				htmlFor={switchId}
-				description="Sends the title and first artist to MusicBrainz, a public music database, and finds covers in its Cover Art Archive by album name."
+				description={
+					<Facts label="Sends the title and first artist to MusicBrainz, a public music database, and finds covers in its Cover Art Archive by album name.">
+						<Fact tone="sent">Title</Fact>
+						<Fact tone="sent">First artist</Fact>
+						<Fact tone="sent">Album, for covers</Fact>
+					</Facts>
+				}
 				align="center"
 			>
 				<Switch
@@ -61,11 +73,17 @@ function DiscogsToken() {
 			}
 			htmlFor={token.saved ? undefined : inputId}
 			description={
-				<>
-					Adds the style, label and cover Discogs has. Make a free token at{" "}
-					<span className="text-foreground">discogs.com/settings/developers</span>. It is kept in
-					the keychain and sent only to Discogs.
-				</>
+				<Facts label="Adds the style, label and cover Discogs has. Make a free token at discogs.com/settings/developers. It is kept in the keychain and sent only to Discogs.">
+					<Fact tone="changed">Style</Fact>
+					<Fact tone="changed">Label</Fact>
+					<Fact tone="changed">Cover</Fact>
+					<Fact icon={<KeyRound />} hint="Make a free token at discogs.com/settings/developers">
+						discogs.com/settings/developers
+					</Fact>
+					<Fact tone="kept" hint="Kept in the keychain and sent only to Discogs">
+						Keychain
+					</Fact>
+				</Facts>
 			}
 			align={token.saved ? "center" : "start"}
 		>

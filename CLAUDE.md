@@ -9,8 +9,8 @@ Windows 10/11 x64.
 - **App shell:** Tauri 2. Rust backend in `src-tauri/src/`, app state lives in one SQLite database
   (`library.db` in the app data dir; rusqlite with bundled SQLCipher).
 - **Frontend:** React 19, TanStack Router (file routes in `src/routes/`, `routeTree.gen.ts` is
-  generated), TanStack Query, Tailwind 4, Base UI. Zod schemas in `src/lib/api.ts` validate
-  every `invoke` result.
+  generated), TanStack Query, Tailwind 4, UI SDK (`@ui-sdk/react`; menus and popovers go through
+  `src/components/ui/popup.tsx`). Zod schemas in `src/lib/api.ts` validate every `invoke` result.
 - **Sidecar:** static ffmpeg in `src-tauri/binaries/`, fetched by `pnpm install`
   (`scripts/fetch-ffmpeg.mjs`).
 

@@ -1,5 +1,5 @@
-import { ContextMenu } from "@base-ui/react/context-menu";
 import { useIsMutating, useQueryClient } from "@tanstack/react-query";
+import { MenuContextTrigger } from "@ui-sdk/react/menu";
 import {
 	AudioWaveform,
 	Copy,
@@ -19,6 +19,7 @@ import { type ReactNode, useContext } from "react";
 import { type MenuEntry, MenuItems, MenuLabel, MenuSeparator } from "#/components/menu.tsx";
 import { PlaylistSubmenu } from "#/components/playlist-submenu.tsx";
 import { TagSubmenu } from "#/components/tag-submenu.tsx";
+import { ContextMenuPopup, MenuRoot } from "#/components/ui/popup.tsx";
 import { useDetailNav } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
 import { TrackOrderContext } from "#/context/track-order.ts";
@@ -161,43 +162,39 @@ export function AddToPlaylistMenu({
 		...(extra ?? []),
 	];
 	return (
-		<ContextMenu.Root>
-			<ContextMenu.Trigger>{children}</ContextMenu.Trigger>
-			<ContextMenu.Portal>
-				<ContextMenu.Positioner className="z-50">
-					{/* Focus stays where the chosen item put it, e.g. in a rename field it opened. */}
-					<ContextMenu.Popup className={popup} finalFocus={false}>
-						<MenuLabel>{label}</MenuLabel>
-						<MenuItems
-							items={[
-								{
-									label: "Play",
-									icon: <Play />,
-									disabled: tracks.length === 0,
-									onSelect: onPlay ?? (() => player.play(tracks, 0)),
-								},
-								{
-									label: "Play next",
-									icon: <ListStart />,
-									disabled: tracks.length === 0,
-									onSelect: () => player.playNext(tracks),
-								},
-								{
-									label: "Add to queue",
-									icon: <ListEnd />,
-									disabled: tracks.length === 0,
-									onSelect: () => player.addToQueue(tracks),
-								},
-							]}
-						/>
-						<MenuSeparator />
-						<PlaylistSubmenu tracks={tracks} />
-						<TagSubmenu tracks={tracks} />
-						<MenuSeparator />
-						<MenuItems items={edits} />
-					</ContextMenu.Popup>
-				</ContextMenu.Positioner>
-			</ContextMenu.Portal>
-		</ContextMenu.Root>
+		<MenuRoot>
+			<MenuContextTrigger>{children}</MenuContextTrigger>
+			{/* Focus stays where the chosen item put it, e.g. in a rename field it opened. */}
+			<ContextMenuPopup className={popup} finalFocus="none">
+				<MenuLabel>{label}</MenuLabel>
+				<MenuItems
+					items={[
+						{
+							label: "Play",
+							icon: <Play />,
+							disabled: tracks.length === 0,
+							onSelect: onPlay ?? (() => player.play(tracks, 0)),
+						},
+						{
+							label: "Play next",
+							icon: <ListStart />,
+							disabled: tracks.length === 0,
+							onSelect: () => player.playNext(tracks),
+						},
+						{
+							label: "Add to queue",
+							icon: <ListEnd />,
+							disabled: tracks.length === 0,
+							onSelect: () => player.addToQueue(tracks),
+						},
+					]}
+				/>
+				<MenuSeparator />
+				<PlaylistSubmenu tracks={tracks} />
+				<TagSubmenu tracks={tracks} />
+				<MenuSeparator />
+				<MenuItems items={edits} />
+			</ContextMenuPopup>
+		</MenuRoot>
 	);
 }

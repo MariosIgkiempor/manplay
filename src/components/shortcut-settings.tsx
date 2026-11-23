@@ -1,4 +1,4 @@
-import { Popover } from "@base-ui/react/popover";
+import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import {
 	Flag,
 	FolderTree,
@@ -15,6 +15,7 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { FrameSection } from "#/components/frame.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { PopoverPopup } from "#/components/ui/popup.tsx";
 import { keyLabel } from "#/lib/platform.ts";
 import {
 	assign,
@@ -210,12 +211,12 @@ function ShortcutRow({
 							open={isOpen(chord)}
 							onOpenChange={(open) => onEdit(open ? { id: def.id, replacing: chord } : null)}
 							trigger={
-								<Popover.Trigger
+								<PopoverTrigger
 									aria-label={`Change ${chordLabel(chord, mac)} for ${def.label}`}
-									className="rounded-lg p-1 outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-primary/10"
+									className="rounded-lg p-1 outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60 data-[open]:bg-primary/10"
 								>
 									<Caps caps={chordParts(chord, mac)} />
-								</Popover.Trigger>
+								</PopoverTrigger>
 							}
 						/>
 					))}
@@ -226,13 +227,13 @@ function ShortcutRow({
 						open={isOpen(null)}
 						onOpenChange={(open) => onEdit(open ? { id: def.id, replacing: null } : null)}
 						trigger={
-							<Popover.Trigger
+							<PopoverTrigger
 								aria-label={`Add a key for ${def.label}`}
 								data-hint="Add a key"
-								className="grid size-8 place-items-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-primary/10 data-[popup-open]:text-primary [&_svg]:size-3.5"
+								className="grid size-8 place-items-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 data-[open]:bg-primary/10 data-[open]:text-primary [&_svg]:size-3.5"
 							>
 								<Plus />
-							</Popover.Trigger>
+							</PopoverTrigger>
 						}
 					/>
 				</div>
@@ -320,23 +321,23 @@ function RecorderCard({
 	trigger: ReactNode;
 }) {
 	return (
-		<Popover.Root open={open} onOpenChange={onOpenChange}>
+		<Popover open={open} onOpenChange={onOpenChange}>
 			{trigger}
-			<Popover.Portal>
-				<Popover.Positioner sideOffset={8} align="end" className="z-50">
-					<Popover.Popup className="w-80 rounded-xl border bg-popover p-3 text-popover-foreground shadow-2xl outline-none">
-						{open && (
-							<Recorder
-								def={def}
-								replacing={replacing}
-								bindings={bindings}
-								onClose={() => onOpenChange(false)}
-							/>
-						)}
-					</Popover.Popup>
-				</Popover.Positioner>
-			</Popover.Portal>
-		</Popover.Root>
+			<PopoverPopup
+				sideOffset={8}
+				align="end"
+				className="w-80 rounded-xl border bg-popover p-3 text-popover-foreground shadow-2xl outline-none"
+			>
+				{open && (
+					<Recorder
+						def={def}
+						replacing={replacing}
+						bindings={bindings}
+						onClose={() => onOpenChange(false)}
+					/>
+				)}
+			</PopoverPopup>
+		</Popover>
 	);
 }
 

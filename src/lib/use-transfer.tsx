@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import {
 	type PullOutcome,
 	type RemoteItem,
@@ -116,9 +117,21 @@ export function useTransfer(nameOf: (source: PaneSource) => string) {
 		>
 			<p className="break-words">{itemList(names)}</p>
 			<p className="mt-2 text-xs">
-				{pending.op === "move"
-					? `Moves them on ${nameOf(pending.dest.source)}. This can’t be undone here.`
-					: `From ${nameOf(pending.session.source)} to ${nameOf(pending.dest.source)}. Files already there are skipped.`}
+				{pending.op === "move" ? (
+					<Facts label={`Moves them on ${nameOf(pending.dest.source)}. This can’t be undone here.`}>
+						<Fact tone="changed">Moved on {nameOf(pending.dest.source)}</Fact>
+						<Fact tone="warn">No undo here</Fact>
+					</Facts>
+				) : (
+					<Facts
+						label={`From ${nameOf(pending.session.source)} to ${nameOf(pending.dest.source)}. Files already there are skipped.`}
+					>
+						<Fact>
+							{nameOf(pending.session.source)} → {nameOf(pending.dest.source)}
+						</Fact>
+						<Fact tone="kept">Existing files skipped</Fact>
+					</Facts>
+				)}
 			</p>
 		</ConfirmDialog>
 	);

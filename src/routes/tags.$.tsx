@@ -14,6 +14,7 @@ import {
 } from "#/components/selectable-track-list.tsx";
 import { SharingControl } from "#/components/sharing-control.tsx";
 import { listTags, migrateLibraryTags, type Tag as TagItem } from "#/lib/api.ts";
+import { PAGE_BODY } from "#/lib/page-layout.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { TAG_SEP, tagLeaf, tagWithin, trackHasTag } from "#/lib/tag-tree.ts";
 
@@ -148,7 +149,7 @@ function TagPage() {
 					</div>
 				)}
 			</CollectionHeader>
-			<div className="space-y-3 p-6">
+			<div className={`space-y-3 ${PAGE_BODY}`}>
 				{migrate.isError && <ErrorLine>{String(migrate.error)}</ErrorLine>}
 				{tagged.length === 0 && !tracks.isPending ? (
 					<EmptyState icon={<Tag />} title="No songs have this tag">

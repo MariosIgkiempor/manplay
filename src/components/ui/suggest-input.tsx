@@ -1,11 +1,21 @@
-import { Autocomplete } from "@base-ui/react/autocomplete";
-import type { ComponentProps } from "react";
+import {
+	Autocomplete,
+	AutocompleteContent,
+	AutocompleteEmpty,
+	AutocompleteInput,
+	AutocompleteItem,
+	AutocompleteList,
+} from "@ui-sdk/react/autocomplete";
+import { type ComponentProps, useState } from "react";
+import { popupContainer } from "#/components/ui/popup.tsx";
 import { cn } from "#/lib/utils.ts";
 
 type NativeInputProps = Omit<
 	ComponentProps<"input">,
-	"value" | "onChange" | "list" | "defaultValue"
->;
+	"value" | "onChange" | "list" | "defaultValue" | "children" | "readOnly" | "className" | "style"
+> & { className?: string | undefined };
+
+const SUGGESTION_KEYS = new Set(["ArrowUp", "ArrowDown", "Home", "End"]);
 
 /**
  * A text input that offers suggestions in the app's own popup while typing. Any text is allowed:
@@ -17,45 +27,66 @@ export function SuggestInput({
 	onValueChange,
 	suggestions,
 	className,
+	onKeyDown,
 	...inputProps
 }: NativeInputProps & {
 	value: string;
 	onValueChange: (value: string) => void;
 	suggestions: readonly string[];
 }) {
+	const [open, setOpen] = useState(false);
 	return (
-		<Autocomplete.Root
-			items={suggestions}
+		<Autocomplete
 			value={value}
+			modal={false}
+			container={popupContainer()}
+			onOpenChange={(next, details) => {
+				if (!details.canceled) {
+					setOpen(next);
+				}
+			}}
 			onValueChange={(next) => onValueChange(next)}
 		>
-			<Autocomplete.Input className={className} {...inputProps} />
-			<Autocomplete.Portal>
-				<Autocomplete.Positioner sideOffset={4} align="start" className="z-50 outline-none">
-					<Autocomplete.Popup
-						// The popup is a React child of its field, which may sit in a clickable row.
-						onClick={(e) => e.stopPropagation()}
-						onDoubleClick={(e) => e.stopPropagation()}
-						onContextMenu={(e) => e.stopPropagation()}
-						className="max-w-(--available-width) min-w-(--anchor-width) rounded-lg border bg-popover text-popover-foreground shadow-md has-[[data-empty]]:hidden"
-					>
-						<Autocomplete.List className="max-h-56 overflow-y-auto p-1 outline-none">
-							{(suggestion: string) => (
-								<Autocomplete.Item
-									key={suggestion}
-									value={suggestion}
-									className={cn(
-										"flex cursor-pointer items-center rounded-md px-2 py-1 text-sm outline-none",
-										"data-[highlighted]:bg-muted",
-									)}
-								>
-									<span className="truncate">{suggestion}</span>
-								</Autocomplete.Item>
+			<AutocompleteInput
+				{...(className === undefined ? {} : { className })}
+				{...inputProps}
+				onKeyDown={(event) => {
+					onKeyDown?.(event);
+					// While suggestions show, the keys that move through them stay with the field.
+					if (open && SUGGESTION_KEYS.has(event.key)) {
+						event.stopPropagation();
+					}
+					// Escape closes the suggestions; pressed again with them closed, it empties the field.
+					if (event.key === "Escape" && !open && !event.defaultPrevented && value !== "") {
+						onValueChange("");
+					}
+				}}
+			/>
+			<AutocompleteContent
+				sideOffset={4}
+				align="start"
+				// The popup is a React child of its field, which may sit in a clickable row.
+				onClick={(e) => e.stopPropagation()}
+				onDoubleClick={(e) => e.stopPropagation()}
+				onContextMenu={(e) => e.stopPropagation()}
+				className="max-w-(--available-width) min-w-(--anchor-width) rounded-lg border bg-popover p-0 text-popover-foreground shadow-md has-[[data-empty]]:hidden"
+			>
+				<AutocompleteEmpty />
+				<AutocompleteList className="max-h-56 overflow-y-auto p-1 outline-none">
+					{suggestions.map((suggestion) => (
+						<AutocompleteItem
+							key={suggestion}
+							value={suggestion}
+							className={cn(
+								"flex cursor-pointer items-center rounded-md px-2 py-1 text-sm outline-none",
+								"data-[highlighted]:bg-muted",
 							)}
-						</Autocomplete.List>
-					</Autocomplete.Popup>
-				</Autocomplete.Positioner>
-			</Autocomplete.Portal>
-		</Autocomplete.Root>
+						>
+							<span className="truncate">{suggestion}</span>
+						</AutocompleteItem>
+					))}
+				</AutocompleteList>
+			</AutocompleteContent>
+		</Autocomplete>
 	);
 }

@@ -218,6 +218,8 @@ export function PageHeader({
 	actions,
 	children,
 	tabs,
+	search,
+	below,
 	variant = "page",
 }: {
 	/** A cover or brand at the start; app pages have none. */
@@ -242,6 +244,10 @@ export function PageHeader({
 	children?: ReactNode;
 	/** Tabs along the bottom edge. */
 	tabs?: ReactNode;
+	/** The page's search, at the tabs' right end and pinned with them (page headers only). */
+	search?: ReactNode;
+	/** A row under the tabs, pinned with them, e.g. what to do with a selection (page headers only). */
+	below?: ReactNode;
 	variant?: keyof typeof VARIANTS;
 }) {
 	if (variant === "page") {
@@ -254,6 +260,8 @@ export function PageHeader({
 				meta={meta}
 				actions={actions}
 				tabs={tabs}
+				search={search}
+				below={below}
 			>
 				{children}
 			</CompactHeader>
@@ -306,6 +314,8 @@ function CompactHeader({
 	meta,
 	actions,
 	tabs,
+	search,
+	below,
 	children,
 }: {
 	art: ReactNode;
@@ -315,12 +325,14 @@ function CompactHeader({
 	meta: ReactNode;
 	actions: ReactNode;
 	tabs: ReactNode;
+	search: ReactNode;
+	below: ReactNode;
 	children: ReactNode;
 }) {
 	const ref = useRef<HTMLElement>(null);
 	const tabsRef = useRef<HTMLDivElement>(null);
 	const [top, setTop] = useState(0);
-	const hasTabs = shows(tabs);
+	const hasTabs = shows(tabs) || shows(search);
 	useLayoutEffect(() => {
 		const header = ref.current;
 		const page = header?.parentElement;
@@ -378,8 +390,19 @@ function CompactHeader({
 			</div>
 			{shows(children) && <div className="pt-3">{children}</div>}
 			{hasTabs && (
-				<div ref={tabsRef} className="-mb-px mt-3">
-					{tabs}
+				<div ref={tabsRef} className="mt-3">
+					{shows(search) ? (
+						// Tabs that do not fit scroll sideways; the search keeps its room at the end.
+						<div className="-mb-px flex items-stretch gap-4">
+							<div className="min-w-0 overflow-x-auto no-scrollbar">{tabs}</div>
+							<div className="ml-auto flex min-w-64 max-w-md flex-1 items-center pb-1.5">
+								{search}
+							</div>
+						</div>
+					) : (
+						<div className="-mb-px">{tabs}</div>
+					)}
+					{shows(below) && <div className="pt-1 pb-2">{below}</div>}
 				</div>
 			)}
 		</header>

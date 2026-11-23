@@ -1,14 +1,18 @@
-import { Popover } from "@base-ui/react/popover";
+import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import { ImagePlus, LoaderCircle } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { CoverCard } from "#/components/cover-card.tsx";
 import { SaveState } from "#/components/save-state.tsx";
+import { PopoverPopup } from "#/components/ui/popup.tsx";
 import { bumpArt } from "#/lib/art-version.ts";
 import { COVER_TYPES } from "#/lib/cover-choice.ts";
 import { isPickOpen } from "#/lib/file-picker.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { useTagsSetCover } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
+
+/** The card's side, in pixels: `size-60`. */
+const COVER_CARD_PX = 240;
 
 /**
  * Cover art you can replace. Click it and it grows into a card with the cover large and two
@@ -83,15 +87,24 @@ export function CoverPicker({
 	}, []);
 
 	const busy = setCover.isPending;
+	const triggerRef = useRef<HTMLButtonElement>(null);
+	// The middle of the cover, read on every placement, so the card can open centred on it.
+	const centre = {
+		getBoundingClientRect: () => {
+			const rect = triggerRef.current?.getBoundingClientRect() ?? new DOMRect();
+			return new DOMRect(rect.x + rect.width / 2, rect.y + rect.height / 2, 0, 0);
+		},
+	};
 	return (
 		<>
 			<SaveState status={busy ? "saving" : error ? "error" : "saved"} error={error} />
-			<Popover.Root
+			<Popover
 				open={open}
 				// A click in the file picker is a click outside the card, and must not close it.
 				onOpenChange={(next) => (next || !isPickOpen()) && setOpen(next)}
 			>
-				<Popover.Trigger
+				<PopoverTrigger
+					ref={triggerRef}
 					aria-label={`Change the cover of ${name}`}
 					data-hint={error ?? `Click to change the cover, or paste one (${keyLabel("⌘V")})`}
 					disabled={busy}
@@ -112,25 +125,20 @@ export function CoverPicker({
 					>
 						{busy ? <LoaderCircle className="animate-spin" /> : <ImagePlus />}
 					</span>
-				</Popover.Trigger>
-				<Popover.Portal>
-					{/* Centred on the cover and grown out from its middle, so the cover itself seems to grow. */}
-					<Popover.Positioner
-						side="bottom"
-						align="center"
-						sideOffset={({ anchor, positioner }) => -(anchor.height + positioner.height) / 2}
-						collisionPadding={12}
-						className="z-50"
-					>
-						<Popover.Popup
-							aria-label={`Change the cover of ${name}`}
-							className="size-60 max-w-[calc(100vw-2rem)] origin-center overflow-hidden rounded-xl bg-muted shadow-2xl outline-none ring-1 ring-foreground/15 transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.3,0,0.2,1)] data-[ending-style]:scale-[0.4] data-[starting-style]:scale-[0.4] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none"
-						>
-							<CoverCard paths={paths} name={name} onDone={() => setOpen(false)} />
-						</Popover.Popup>
-					</Popover.Positioner>
-				</Popover.Portal>
-			</Popover.Root>
+				</PopoverTrigger>
+				{/* Centred on the cover and grown out from its middle, so the cover itself seems to grow. */}
+				<PopoverPopup
+					side="bottom"
+					align="center"
+					anchor={centre}
+					sideOffset={-COVER_CARD_PX / 2}
+					collisionPadding={12}
+					aria-label={`Change the cover of ${name}`}
+					className="size-60 max-w-[calc(100vw-2rem)] origin-center overflow-hidden rounded-xl bg-muted shadow-2xl outline-none ring-1 ring-foreground/15 transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.3,0,0.2,1)] data-[ending-style]:scale-[0.4] data-[starting-style]:scale-[0.4] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none"
+				>
+					<CoverCard paths={paths} name={name} onDone={() => setOpen(false)} />
+				</PopoverPopup>
+			</Popover>
 		</>
 	);
 }

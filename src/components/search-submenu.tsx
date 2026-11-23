@@ -1,7 +1,7 @@
-import { ContextMenu } from "@base-ui/react/context-menu";
+import { MenuItem, MenuSub, MenuSubContent, MenuSubTrigger } from "@ui-sdk/react/menu";
 import { Check, ChevronRight, Plus } from "lucide-react";
-import { type ComponentType, useRef, useState } from "react";
-import { menuItem, popup } from "#/lib/menu-styles.ts";
+import { type ComponentType, useCallback, useRef, useState } from "react";
+import { menuItem, popup, submenuTrigger } from "#/lib/menu-styles.ts";
 
 export interface SearchItem {
 	name: string;
@@ -33,6 +33,14 @@ export function SearchSubmenu({ label, icon: Icon, items, placeholder, emptyHint
 	// Names picked during this menu session show a check straight away.
 	const [done, setDone] = useState<ReadonlySet<string>>(new Set());
 	const input = useRef<HTMLInputElement>(null);
+	// The submenu's content mounts as it opens; the field takes focus a frame later. Stable, so a
+	// re-render does not pull focus back from an item the arrow keys moved to.
+	const focusOnMount = useCallback((element: HTMLInputElement | null) => {
+		input.current = element;
+		if (element) {
+			requestAnimationFrame(() => element.focus());
+		}
+	}, []);
 
 	const q = query.trim();
 	const lower = q.toLowerCase();
@@ -55,83 +63,73 @@ export function SearchSubmenu({ label, icon: Icon, items, placeholder, emptyHint
 	};
 
 	return (
-		<ContextMenu.SubmenuRoot
+		<MenuSub
 			onOpenChange={(open) => {
-				if (open) {
-					requestAnimationFrame(() => input.current?.focus());
-				} else {
+				if (!open) {
 					setQuery("");
 					setDone(new Set());
 				}
 			}}
 		>
-			<ContextMenu.SubmenuTrigger className={`${menuItem} w-full justify-between`}>
+			<MenuSubTrigger className={`${submenuTrigger} w-full justify-between`}>
 				<span className="flex items-center gap-2">
 					<Icon className="size-4" /> {label}
 				</span>
 				<ChevronRight className="size-4" />
-			</ContextMenu.SubmenuTrigger>
-			<ContextMenu.Portal>
-				<ContextMenu.Positioner className="z-50" sideOffset={4}>
-					<ContextMenu.Popup className={`${popup} w-56`}>
-						<input
-							ref={input}
-							value={query}
-							onChange={(e) => setQuery(e.target.value)}
-							onKeyDown={(e) => {
-								// Typing must not trigger the menu's own typeahead / navigation.
-								if (e.key !== "Escape" && e.key !== "ArrowDown" && e.key !== "ArrowUp") {
-									e.stopPropagation();
-								}
-								if (e.key === "Enter") {
-									e.preventDefault();
-									onEnter();
-								}
-							}}
-							placeholder={placeholder}
-							aria-label={placeholder}
-							className="mb-1 h-8 w-full rounded-md border bg-background px-2 text-sm outline-none focus-visible:border-ring"
-						/>
-						<div className="max-h-64 overflow-y-auto">
-							{matches.map((t) => (
-								<ContextMenu.Item
-									key={t.name}
-									className={menuItem}
-									closeOnClick={false}
-									onClick={() => pick(t.name, false)}
-								>
-									<span className="flex size-4 items-center justify-center">
-										{(t.checked || done.has(t.name.toLowerCase())) && (
-											<Check className="size-4 text-primary" />
-										)}
-									</span>
-									<span
-										className="flex-1 truncate"
-										data-hint={t.name}
-										style={q === "" && t.depth ? { paddingLeft: `${t.depth * 12}px` } : undefined}
-									>
-										{q === "" ? (t.label ?? t.name) : t.name}
-									</span>
-									<span className="text-muted-foreground text-xs">{t.count}</span>
-								</ContextMenu.Item>
-							))}
-							{q !== "" && !exact && (
-								<ContextMenu.Item
-									className={menuItem}
-									closeOnClick={false}
-									onClick={() => pick(q, true)}
-								>
-									<Plus className="size-4 text-primary" />
-									<span className="truncate">Create “{q}”</span>
-								</ContextMenu.Item>
-							)}
-							{items.length === 0 && q === "" && (
-								<div className="px-2 py-1.5 text-muted-foreground">{emptyHint}</div>
-							)}
-						</div>
-					</ContextMenu.Popup>
-				</ContextMenu.Positioner>
-			</ContextMenu.Portal>
-		</ContextMenu.SubmenuRoot>
+			</MenuSubTrigger>
+			<MenuSubContent align="start" sideOffset={4} alignOffset={0} className={`${popup} w-56`}>
+				<input
+					ref={focusOnMount}
+					value={query}
+					onChange={(e) => setQuery(e.target.value)}
+					onKeyDown={(e) => {
+						// Typing must not trigger the menu's own typeahead / navigation.
+						if (e.key !== "Escape" && e.key !== "ArrowDown" && e.key !== "ArrowUp") {
+							e.stopPropagation();
+						}
+						if (e.key === "Enter") {
+							e.preventDefault();
+							onEnter();
+						}
+					}}
+					placeholder={placeholder}
+					aria-label={placeholder}
+					className="mb-1 h-8 w-full rounded-md border bg-background px-2 text-sm outline-none focus-visible:border-ring"
+				/>
+				<div className="max-h-64 overflow-y-auto">
+					{matches.map((t) => (
+						<MenuItem
+							key={t.name}
+							className={menuItem}
+							closeOnSelect={false}
+							onSelect={() => pick(t.name, false)}
+						>
+							<span className="flex size-4 items-center justify-center">
+								{(t.checked || done.has(t.name.toLowerCase())) && (
+									<Check className="size-4 text-primary" />
+								)}
+							</span>
+							<span
+								className="flex-1 truncate"
+								data-hint={t.name}
+								style={q === "" && t.depth ? { paddingLeft: `${t.depth * 12}px` } : undefined}
+							>
+								{q === "" ? (t.label ?? t.name) : t.name}
+							</span>
+							<span className="text-muted-foreground text-xs">{t.count}</span>
+						</MenuItem>
+					))}
+					{q !== "" && !exact && (
+						<MenuItem className={menuItem} closeOnSelect={false} onSelect={() => pick(q, true)}>
+							<Plus className="size-4 text-primary" />
+							<span className="truncate">Create “{q}”</span>
+						</MenuItem>
+					)}
+					{items.length === 0 && q === "" && (
+						<div className="px-2 py-1.5 text-muted-foreground">{emptyHint}</div>
+					)}
+				</div>
+			</MenuSubContent>
+		</MenuSub>
 	);
 }

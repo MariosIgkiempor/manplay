@@ -2,6 +2,7 @@ import { History, ListMusic, Sparkles, Tag } from "lucide-react";
 import type { ReactNode } from "react";
 import { EmptyState, ErrorLine, Page } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import type { DeletedItem, ItemKind } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
 import { useRecentlyDeleted, useRestoreDeleted } from "#/lib/queries.ts";
@@ -58,7 +59,10 @@ export function RecentlyDeleted() {
 		>
 			{items.length === 0 ? (
 				<EmptyState icon={<History />} title="Nothing deleted">
-					Tags and playlists deleted from the shared library stay here for 90 days.
+					<Facts label="Tags and playlists deleted from the shared library stay here for 90 days.">
+						<Fact tone="kept">Shared tags and playlists</Fact>
+						<Fact icon={<History />}>90 days</Fact>
+					</Facts>
 				</EmptyState>
 			) : (
 				<ul className="border-t">

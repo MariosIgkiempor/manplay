@@ -5,6 +5,7 @@ import { CheckList, CheckRow, Filter, LinkButton, TagTree } from "#/components/c
 import { FrameSection } from "#/components/frame.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { SmartPicker } from "#/components/smart-playlists.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
 import {
 	type ExportSelection,
@@ -35,7 +36,7 @@ function PickerHeader({
 	onAll,
 	onClear,
 }: {
-	hint: string;
+	hint: ReactNode;
 	allOn: boolean;
 	noneOn: boolean;
 	onAll: () => void;
@@ -43,7 +44,7 @@ function PickerHeader({
 }) {
 	return (
 		<div className="flex items-center justify-between gap-3 text-xs">
-			<p className="text-muted-foreground">{hint}</p>
+			<div className="text-muted-foreground">{hint}</div>
 			<div className="flex shrink-0 gap-3">
 				<LinkButton disabled={allOn} onClick={onAll}>
 					Select all
@@ -126,7 +127,12 @@ function TagPicker({
 	return (
 		<div className="space-y-2">
 			<PickerHeader
-				hint="Each tag becomes a playlist of its songs, including tags below it"
+				hint={
+					<Facts label="Each tag becomes a playlist of its songs, including tags below it">
+						<Fact tone="changed">Each tag → a playlist</Fact>
+						<Fact>Includes tags below it</Fact>
+					</Facts>
+				}
 				allOn={chosen.length >= tags.length}
 				noneOn={chosen.length === 0}
 				onAll={() => onChange(tags.map((t) => t.name))}

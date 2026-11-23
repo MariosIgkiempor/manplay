@@ -10,6 +10,7 @@ import { useRemoveDestination } from "#/components/remove-destination.tsx";
 import { LibraryBadge } from "#/components/shared-library.tsx";
 import { SyncButton } from "#/components/sync-flow.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import {
 	isR2,
@@ -218,8 +219,15 @@ export function Destinations() {
 							</Button>
 						}
 					>
-						Back up to a Tailscale folder or an R2 bucket, write a rekordbox file, or plug in a CDJ
-						USB drive.
+						<Facts
+							label="Back up to a Tailscale folder or an R2 bucket, write a rekordbox file, or plug in a CDJ USB drive."
+							className="justify-center"
+						>
+							<Fact>Tailscale folder</Fact>
+							<Fact>R2 bucket</Fact>
+							<Fact>rekordbox file</Fact>
+							<Fact>CDJ USB drive</Fact>
+						</Facts>
 					</EmptyState>
 				</div>
 			) : (

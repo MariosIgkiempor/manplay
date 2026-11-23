@@ -9,9 +9,8 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { SearchGlyph } from "#/components/search-field.tsx";
+import { SearchShell } from "#/components/search-field.tsx";
 import { listPlaylists, listTags } from "#/lib/api.ts";
-import { keyLabel } from "#/lib/platform.ts";
 import { useTracks } from "#/lib/queries.ts";
 import {
 	type Pill,
@@ -21,7 +20,7 @@ import {
 	type SuggestionGroup,
 	suggest,
 } from "#/lib/search.ts";
-import { SEARCH_FIELD } from "#/lib/search-field.ts";
+import { searchInputClass } from "#/lib/search-field.ts";
 import { cn } from "#/lib/utils.ts";
 
 const ICONS: Record<PillKind, ComponentType<{ className?: string | undefined }>> = {
@@ -110,11 +109,14 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 		}
 		return true;
 	};
+	// Escape closes the suggestions, then empties the text, then folds the field.
 	const onEscape = () => {
-		if (open) {
+		if (open && groups.length > 0) {
 			setOpen(false);
-		} else {
+		} else if (text !== "") {
 			onText("");
+		} else {
+			input.current?.blur();
 		}
 		return true;
 	};
@@ -140,11 +142,21 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 
 	const hasAny = text !== "" || pills.length > 0;
 	return (
-		<div className="relative min-w-40 flex-1">
-			<div className="flex h-8 items-stretch gap-1">
-				<label className={cn(SEARCH_FIELD, "flex-1")}>
-					<SearchGlyph active={hasAny} />
-					<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar">
+		<SearchShell
+			active={hasAny}
+			inputRef={input}
+			label="Search this page"
+			fieldClassName="relative"
+			trailing={trailing && <div className="flex h-full shrink-0 items-stretch">{trailing}</div>}
+		>
+			{(shown) => (
+				<>
+					<div
+						className={cn(
+							"flex h-full min-w-0 items-center gap-1 overflow-x-auto no-scrollbar",
+							shown && "flex-1",
+						)}
+					>
 						{pills.map((p) => (
 							<PillChip
 								key={pillKey(p)}
@@ -156,6 +168,7 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 							ref={input}
 							data-page-search
 							value={text}
+							tabIndex={shown ? 0 : -1}
 							onChange={(e) => {
 								onText(e.target.value);
 								setActive(0);
@@ -169,17 +182,9 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 							role="combobox"
 							aria-expanded={open}
 							aria-controls={listId}
-							className="h-full min-w-24 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+							className={cn(searchInputClass(shown), pills.length > 0 && "min-w-24")}
 						/>
 					</div>
-					{!hasAny && !open && (
-						<kbd
-							data-hint="Search this page"
-							className="shrink-0 rounded border px-1.5 font-sans text-[11px] text-muted-foreground/70"
-						>
-							{keyLabel("⌘F")}
-						</kbd>
-					)}
 					{hasAny && (
 						<button
 							type="button"
@@ -191,19 +196,18 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 							<X className="size-4" />
 						</button>
 					)}
-				</label>
-				{trailing && <div className="flex shrink-0 items-stretch">{trailing}</div>}
-			</div>
-			{open && groups.length > 0 && (
-				<SuggestionList
-					id={listId}
-					groups={groups}
-					active={active}
-					onActive={setActive}
-					onPick={pick}
-				/>
+					{open && groups.length > 0 && (
+						<SuggestionList
+							id={listId}
+							groups={groups}
+							active={active}
+							onActive={setActive}
+							onPick={pick}
+						/>
+					)}
+				</>
 			)}
-		</div>
+		</SearchShell>
 	);
 }
 

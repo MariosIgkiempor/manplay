@@ -1,5 +1,5 @@
-import { Popover } from "@base-ui/react/popover";
 import { useQueries } from "@tanstack/react-query";
+import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import { ChevronRight, Folder, FolderOpen } from "lucide-react";
 import {
 	type DragEvent,
@@ -9,6 +9,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { PopoverPopup } from "#/components/ui/popup.tsx";
 import { pickRows } from "#/lib/folder-pick.ts";
 import { joinPath } from "#/lib/fs-path.ts";
 import type { useFileDrag } from "#/lib/use-file-drag.tsx";
@@ -194,31 +195,31 @@ function Crumb({
 	const [open, setOpen] = useState(false);
 	const to = joinPath(dir, name);
 	return (
-		<Popover.Root open={open} onOpenChange={setOpen}>
-			<Popover.Trigger
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger
 				className={cn(
-					"min-w-0 truncate rounded-md px-1 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-muted",
+					"min-w-0 truncate rounded-md px-1 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60 data-[open]:bg-muted",
 					strong && "font-medium",
 					drag.dropTarget === to && "bg-primary/20",
 				)}
 				{...dropProps(drag, to)}
 			>
 				{name}
-			</Popover.Trigger>
-			<Popover.Portal>
-				<Popover.Positioner sideOffset={4} align="start" className="z-50">
-					<Popover.Popup className="overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg outline-none">
-						<FolderPicker
-							dir={dir}
-							current={name}
-							source={source}
-							onNavigate={onNavigate}
-							onClose={() => setOpen(false)}
-						/>
-					</Popover.Popup>
-				</Popover.Positioner>
-			</Popover.Portal>
-		</Popover.Root>
+			</PopoverTrigger>
+			<PopoverPopup
+				sideOffset={4}
+				align="start"
+				className="overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg outline-none"
+			>
+				<FolderPicker
+					dir={dir}
+					current={name}
+					source={source}
+					onNavigate={onNavigate}
+					onClose={() => setOpen(false)}
+				/>
+			</PopoverPopup>
+		</Popover>
 	);
 }
 

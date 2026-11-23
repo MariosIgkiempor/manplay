@@ -10,6 +10,7 @@ import { OffBadge, PlaceRow } from "#/components/place-row.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { type ImportFolder, type ImportFolderId, importActivitySource } from "#/lib/api.ts";
 import { activityEntries } from "#/lib/history.ts";
@@ -188,7 +189,13 @@ export function ImportFolderSettings({ folder }: { folder: ImportFolder }) {
 						disabled={remove.isPending}
 						destructive
 						confirmLabel={`Stop importing from ${folderName(folder.path)}`}
-						consequence="Nothing in the folder is touched, and the songs already imported stay in your library. Its history is kept."
+						consequence={
+							<Facts label="Nothing in the folder is touched, and the songs already imported stay in your library. Its history is kept.">
+								<Fact tone="kept">Folder's files</Fact>
+								<Fact tone="kept">Imported songs</Fact>
+								<Fact tone="kept">History</Fact>
+							</Facts>
+						}
 						onConfirm={() =>
 							remove.mutate(folder.id, {
 								onSuccess: () => void navigate({ to: "/import" }),

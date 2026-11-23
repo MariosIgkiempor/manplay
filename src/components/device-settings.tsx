@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from "react";
 import { FieldRow } from "#/components/frame.tsx";
 import { ErrorLine } from "#/components/page.tsx";
+import { MoreInfo } from "#/components/ui/facts.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { useDeviceName } from "#/lib/queries.ts";
 
@@ -23,7 +24,12 @@ export function DeviceNameRow() {
 		<FieldRow
 			label="Device name"
 			htmlFor={inputId}
-			description="How the other members of a shared library see this computer. Leave it empty to use the computer's own name."
+			description={
+				<>
+					Your name to other members{" "}
+					<MoreInfo hint="How the other members of a shared library see this computer. Leave it empty to use the computer's own name." />
+				</>
+			}
 		>
 			<Input
 				id={inputId}

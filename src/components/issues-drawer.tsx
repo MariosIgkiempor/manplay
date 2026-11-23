@@ -14,6 +14,7 @@ import {
 } from "#/components/problem-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { PanelBarTitle } from "#/context/panel-bar.tsx";
 import type { AuditIssue } from "#/lib/api.ts";
 import { describeFixes } from "#/lib/audit.ts";
@@ -292,13 +293,18 @@ function IssuesBody() {
 	return (
 		<div className="space-y-4">
 			<PanelIntro>
-				These files break the library's conventions: where they sit, their file type or their tag
-				version. Tick the ones to fix, or fix them all.
+				<Facts label="These files break the library's conventions: where they sit, their file type or their tag version. Tick the ones to fix, or fix them all.">
+					<Fact tone="warn">Wrong place</Fact>
+					<Fact tone="warn">Wrong file type</Fact>
+					<Fact tone="warn">Old tag version</Fact>
+				</Facts>
 			</PanelIntro>
 			{noFfmpeg && (
 				<PanelIntro>
-					ffmpeg is missing from this copy of manplay, so non-MP3 files cannot be converted.
-					Reinstall the app.
+					<Facts label="ffmpeg is missing from this copy of manplay, so non-MP3 files cannot be converted. Reinstall the app.">
+						<Fact tone="warn">ffmpeg missing: no conversion</Fact>
+						<Fact tone="changed">Reinstall the app</Fact>
+					</Facts>
 				</PanelIntro>
 			)}
 			<Actions

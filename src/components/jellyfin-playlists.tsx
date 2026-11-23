@@ -135,8 +135,8 @@ export function JellyfinPlaylistsRow({ targetId }: { targetId: number }) {
 					title="Playlists"
 					hint={
 						count === 0
-							? "None chosen. Choose here, or from a playlist's ⋯ menu."
-							: `${plural(count, "playlist")} chosen. Change here, or from a playlist's ⋯ menu.`
+							? "None chosen: pick here or from a playlist's ⋯"
+							: `${plural(count, "playlist")} chosen: change here or from a playlist's ⋯`
 					}
 				/>
 			}

@@ -1,3 +1,6 @@
+/* UI SDK adds a little CSS of its own in this layer; declared first so the app's styles win. */
+@layer ui-sdk;
+
 @import "tailwindcss";
 @import "@fontsource/iosevka/latin-400.css";
 @import "tw-animate-css";
@@ -251,7 +254,62 @@ input[type="range"].slider {
 }
 
 /*
- * Menus and popovers (Base UI popups) open from their trigger: a short fade and a slight grow
+ * A popup that flips to fit (a menu that opens upward near the bottom of the window) is placed by
+ * a CSS position-try fallback, and WebKit then drops the initial values of registered custom
+ * properties in it. Tailwind's borders, shadows, rings and transforms read those, so they would
+ * vanish; these are Tailwind's own initial values, set again. In the base layer, so any utility
+ * still overrides them.
+ */
+@layer base {
+	:where([popover], [popover] *, [popover] ::before, [popover] ::after) {
+		--tw-translate-x: 0;
+		--tw-translate-y: 0;
+		--tw-translate-z: 0;
+		--tw-scale-x: 1;
+		--tw-scale-y: 1;
+		--tw-scale-z: 1;
+		--tw-space-y-reverse: 0;
+		--tw-divide-y-reverse: 0;
+		--tw-border-style: solid;
+		--tw-gradient-from: #0000;
+		--tw-gradient-via: #0000;
+		--tw-gradient-to: #0000;
+		--tw-gradient-from-position: 0%;
+		--tw-gradient-via-position: 50%;
+		--tw-gradient-to-position: 100%;
+		--tw-shadow: 0 0 #0000;
+		--tw-shadow-alpha: 100%;
+		--tw-inset-shadow: 0 0 #0000;
+		--tw-inset-shadow-alpha: 100%;
+		--tw-ring-shadow: 0 0 #0000;
+		--tw-inset-ring-shadow: 0 0 #0000;
+		--tw-ring-offset-width: 0px;
+		--tw-ring-offset-color: #fff;
+		--tw-ring-offset-shadow: 0 0 #0000;
+		--tw-outline-style: solid;
+		--tw-drop-shadow-alpha: 100%;
+		--tw-content: "";
+		--tw-animation-delay: 0s;
+		--tw-animation-direction: normal;
+		--tw-animation-fill-mode: none;
+		--tw-animation-iteration-count: 1;
+		--tw-enter-blur: 0;
+		--tw-enter-opacity: 1;
+		--tw-enter-rotate: 0;
+		--tw-enter-scale: 1;
+		--tw-enter-translate-x: 0;
+		--tw-enter-translate-y: 0;
+		--tw-exit-blur: 0;
+		--tw-exit-opacity: 1;
+		--tw-exit-rotate: 0;
+		--tw-exit-scale: 1;
+		--tw-exit-translate-x: 0;
+		--tw-exit-translate-y: 0;
+	}
+}
+
+/*
+ * Menus and popovers (UI SDK popups) open from their trigger: a short fade and a slight grow
  * from the side they are anchored to, and the same in reverse as they close.
  */
 .bg-popover[data-side] {

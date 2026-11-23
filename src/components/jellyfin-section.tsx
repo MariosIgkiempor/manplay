@@ -8,6 +8,7 @@ import { JellyfinPushRow } from "#/components/jellyfin-push.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts, UiPath } from "#/components/ui/facts.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Select, type SelectOption } from "#/components/ui/select.tsx";
 import {
@@ -245,7 +246,12 @@ function VisibilityRows({
 			<Row
 				icon={<Eye />}
 				title="Visible to"
-				hint="Playlists already sent are made again when this changes, after a review."
+				hint={
+					<Facts label="Playlists already sent are made again when this changes, after a review.">
+						<Fact tone="changed">Sent playlists remade</Fact>
+						<Fact tone="warn">After review</Fact>
+					</Facts>
+				}
 				control={(id) => (
 					<Select
 						id={id}
@@ -379,7 +385,12 @@ function JellyfinForm({
 				<Row
 					icon={<KeyRound />}
 					title="API key"
-					hint="Make one in Jellyfin under Dashboard → API Keys. Kept in the keychain."
+					hint={
+						<Facts label="Make one in Jellyfin under Dashboard → API Keys. Kept in the keychain.">
+							<UiPath parts={["Dashboard", "API Keys"]} />
+							<Fact tone="kept">Keychain</Fact>
+						</Facts>
+					}
 					control={(id) => (
 						<Input
 							id={id}
@@ -488,7 +499,7 @@ export function JellyfinSection({ targetId }: { targetId: number }) {
 				about={
 					saved
 						? `Connected to ${saved.serverName} as ${saved.user.name}, library ${saved.library.name}.`
-						: "Connect the Jellyfin server that plays this destination, to send it playlists."
+						: "Connect the server playing this destination, to send playlists."
 				}
 			/>
 			{saved && <SongCheck targetId={targetId} />}

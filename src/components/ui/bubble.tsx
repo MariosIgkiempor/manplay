@@ -49,7 +49,9 @@ export function Bubble({
 			className={cn(
 				HINT_SURFACE,
 				"pointer-events-none fixed z-[80] whitespace-pre-line",
-				position ? "fade-in-0 animate-in duration-100 motion-reduce:animate-none" : "invisible",
+				position
+					? "fade-in-0 animate-in animation-duration-100 motion-reduce:animate-none"
+					: "invisible",
 				className,
 			)}
 		>

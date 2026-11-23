@@ -138,8 +138,8 @@ export function PullReview({ targetId, onDone }: { targetId: number; onDone: () 
 			<Notice
 				text={
 					scan.total === 0
-						? "The folder is empty. The first sync will fill it."
-						: "Your library already has every audio file in this folder."
+						? "Folder empty: the first sync fills it."
+						: "Your library has every audio file here."
 				}
 				onDone={onDone}
 			/>

@@ -1,5 +1,5 @@
-import { Menu } from "@base-ui/react/menu";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { MenuItemIndicator, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@ui-sdk/react/menu";
 import {
 	Check,
 	ChevronDown,
@@ -21,6 +21,8 @@ import {
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ButtonGroup } from "#/components/ui/button-group.tsx";
+import { Fact, Facts, type FactTone } from "#/components/ui/facts.tsx";
+import { MenuPopup, MenuRoot } from "#/components/ui/popup.tsx";
 import { UsbOutputsSettings } from "#/components/usb-outputs.tsx";
 import { type PlaylistSource, Review, ReviewCounts } from "#/components/usb-review.tsx";
 import { useDetail } from "#/context/detail-context.ts";
@@ -591,24 +593,40 @@ function status(x: ExportState): { text: ReactNode; warn: boolean } {
 	return { text: sizes, warn: false };
 }
 
-const MODES: readonly { value: UsbMode; icon: LucideIcon; title: string; detail: string }[] = [
+const MODES: readonly {
+	value: UsbMode;
+	icon: LucideIcon;
+	title: string;
+	detail: string;
+	/** The detail as chips: what stays and what goes. */
+	facts: readonly { tone: FactTone; text: string }[];
+}[] = [
 	{
 		value: "add",
 		icon: ListPlus,
 		title: "Add to the drive",
 		detail: "Playlists already on the drive stay.",
+		facts: [{ tone: "kept", text: "Drive's playlists" }],
 	},
 	{
 		value: "replacePlaylists",
 		icon: ListX,
 		title: "Replace the drive's playlists",
 		detail: "Removes playlists not chosen here. Songs stay on the drive.",
+		facts: [
+			{ tone: "lost", text: "Unchosen playlists" },
+			{ tone: "kept", text: "Songs" },
+		],
 	},
 	{
 		value: "replaceAll",
 		icon: Trash2,
 		title: "Replace playlists and delete songs",
 		detail: "Removes playlists not chosen here, then deletes songs no exported playlist holds.",
+		facts: [
+			{ tone: "lost", text: "Unchosen playlists" },
+			{ tone: "lost", text: "Songs in no playlist" },
+		],
 	},
 ];
 
@@ -630,52 +648,63 @@ function ReviewSplitButton({ x }: { x: ExportState }) {
 			<Button onClick={() => x.review.mutate()} disabled={x.count === 0 || busy}>
 				{busy ? "Checking the drive…" : `Review ${plural(x.count, "playlist")}`}
 			</Button>
-			<Menu.Root>
-				<Menu.Trigger
+			<MenuRoot>
+				<MenuTrigger
 					disabled={busy}
 					render={
 						<Button aria-label="What happens on the drive" style={{ paddingInline: "0.5rem" }} />
 					}
 				>
 					<ChevronDown />
-				</Menu.Trigger>
-				<Menu.Portal>
-					<Menu.Positioner side="top" align="end" sideOffset={6} className="z-50">
-						<Menu.Popup className="w-80 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg outline-none">
-							<Menu.RadioGroup
-								value={x.selection.usbMode}
-								onValueChange={(v: string) => x.setDraft({ ...x.selection, usbMode: v as UsbMode })}
+				</MenuTrigger>
+				<MenuPopup
+					side="top"
+					align="end"
+					sideOffset={6}
+					className="w-80 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg outline-none"
+				>
+					<MenuRadioGroup
+						value={x.selection.usbMode}
+						onValueChange={(v: string) => x.setDraft({ ...x.selection, usbMode: v as UsbMode })}
+					>
+						{MODES.map((m) => (
+							<MenuRadioItem
+								key={m.value}
+								value={m.value}
+								closeOnSelect
+								className="flex cursor-default items-start gap-3 rounded-md px-2 py-2 outline-none data-[highlighted]:bg-muted"
 							>
-								{MODES.map((m) => (
-									<Menu.RadioItem
-										key={m.value}
-										value={m.value}
-										closeOnClick
-										className="flex cursor-default items-start gap-3 rounded-md px-2 py-2 outline-none data-[highlighted]:bg-muted"
-									>
-										<m.icon
-											className={cn(
-												"mt-0.5 size-4 shrink-0",
-												m.value === "add" ? "text-muted-foreground" : "text-destructive",
-											)}
-										/>
-										<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-											<span className="font-medium text-sm">{m.title}</span>
-											<span className="text-muted-foreground text-xs">{m.detail}</span>
-										</span>
-										<Menu.RadioItemIndicator className="mt-0.5 text-primary">
-											<Check className="size-4" />
-										</Menu.RadioItemIndicator>
-									</Menu.RadioItem>
-								))}
-							</Menu.RadioGroup>
-							<p className="px-2 pt-1.5 pb-1 text-muted-foreground text-xs">
-								You see every change before anything is written. Remembered for {x.drive.name}.
-							</p>
-						</Menu.Popup>
-					</Menu.Positioner>
-				</Menu.Portal>
-			</Menu.Root>
+								<m.icon
+									className={cn(
+										"mt-0.5 size-4 shrink-0",
+										m.value === "add" ? "text-muted-foreground" : "text-destructive",
+									)}
+								/>
+								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+									<span className="font-medium text-sm">{m.title}</span>
+									<Facts label={m.detail}>
+										{m.facts.map((f) => (
+											<Fact key={f.text} tone={f.tone}>
+												{f.text}
+											</Fact>
+										))}
+									</Facts>
+								</span>
+								<MenuItemIndicator className="mt-0.5 text-primary">
+									<Check className="size-4" />
+								</MenuItemIndicator>
+							</MenuRadioItem>
+						))}
+					</MenuRadioGroup>
+					<Facts
+						label={`You see every change before anything is written. Remembered for ${x.drive.name}.`}
+						className="px-2 pt-1.5 pb-1"
+					>
+						<Fact tone="kept">Reviewed first</Fact>
+						<Fact>Remembered for {x.drive.name}</Fact>
+					</Facts>
+				</MenuPopup>
+			</MenuRoot>
 		</ButtonGroup>
 	);
 }

@@ -1,6 +1,6 @@
-import { Popover } from "@base-ui/react/popover";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import {
 	ArrowLeft,
 	ArrowRight,
@@ -25,6 +25,7 @@ import { ButtonGroup, GroupButton, PropertyRow } from "#/components/property-row
 import { SaveState } from "#/components/save-state.tsx";
 import { StatusButton, StatusPortal } from "#/components/status-action.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { PopoverPopup } from "#/components/ui/popup.tsx";
 import { WaveformDetail } from "#/components/waveform.tsx";
 import { usePlayer, usePlayerTime } from "#/context/player-context.ts";
 import { setBeatGrid, setTrackCues, type Track, type TrackAnalysis } from "#/lib/api.ts";
@@ -677,57 +678,55 @@ function ShortcutHelp({
 			.map((k) => (k ? chordLabel(k, mac) : "–"))
 			.join(" ");
 	return (
-		<Popover.Root open={open} onOpenChange={onOpenChange}>
-			<Popover.Trigger
+		<Popover open={open} onOpenChange={onOpenChange}>
+			<PopoverTrigger
 				aria-label="Keyboard shortcuts"
 				data-hint={title}
-				className="grid size-7 place-items-center rounded-md text-neutral-400 outline-none transition-colors hover:bg-white/10 hover:text-neutral-100 focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-white/10 data-[popup-open]:text-neutral-50 [&_svg]:size-4"
+				className="grid size-7 place-items-center rounded-md text-neutral-400 outline-none transition-colors hover:bg-white/10 hover:text-neutral-100 focus-visible:ring-2 focus-visible:ring-ring/60 data-[open]:bg-white/10 data-[open]:text-neutral-50 [&_svg]:size-4"
 			>
 				<Keyboard />
-			</Popover.Trigger>
-			<Popover.Portal>
-				<Popover.Positioner sideOffset={6} align="end" className="z-50">
-					<Popover.Popup
-						data-deck-popup
-						className="w-[34rem] rounded-lg border bg-popover p-4 text-popover-foreground text-sm shadow-lg outline-none"
+			</PopoverTrigger>
+			<PopoverPopup
+				sideOffset={6}
+				align="end"
+				data-deck-popup
+				className="w-[34rem] rounded-lg border bg-popover p-4 text-popover-foreground text-sm shadow-lg outline-none"
+			>
+				<div className="grid grid-cols-2 gap-x-6 gap-y-4">
+					{groups.map((group) => (
+						<section key={group} className="space-y-1.5">
+							<h3 className="font-medium text-muted-foreground text-xs">{group}</h3>
+							<dl className="space-y-1">
+								{deck
+									.filter((d) => d.group === group)
+									.map((d) => (
+										<HelpRow key={d.id} what={d.label} keys={keysOf(d.id)} />
+									))}
+								{group === "Cues" && (
+									<>
+										<HelpRow what="Hot cues A–H" keys={pads("pad")} />
+										<HelpRow what="Clear hot cues A–H" keys={pads("clearPad")} />
+									</>
+								)}
+							</dl>
+						</section>
+					))}
+				</div>
+				<div className="mt-4 flex items-center justify-between border-t pt-3 text-muted-foreground text-xs">
+					<span>{keyLabel("⌥ with the arrows takes finer steps.")}</span>
+					<Button
+						size="xs"
+						variant="outline"
+						onClick={() => {
+							onOpenChange(false);
+							void navigate({ to: "/settings", search: { section: "shortcuts" } });
+						}}
 					>
-						<div className="grid grid-cols-2 gap-x-6 gap-y-4">
-							{groups.map((group) => (
-								<section key={group} className="space-y-1.5">
-									<h3 className="font-medium text-muted-foreground text-xs">{group}</h3>
-									<dl className="space-y-1">
-										{deck
-											.filter((d) => d.group === group)
-											.map((d) => (
-												<HelpRow key={d.id} what={d.label} keys={keysOf(d.id)} />
-											))}
-										{group === "Cues" && (
-											<>
-												<HelpRow what="Hot cues A–H" keys={pads("pad")} />
-												<HelpRow what="Clear hot cues A–H" keys={pads("clearPad")} />
-											</>
-										)}
-									</dl>
-								</section>
-							))}
-						</div>
-						<div className="mt-4 flex items-center justify-between border-t pt-3 text-muted-foreground text-xs">
-							<span>{keyLabel("⌥ with the arrows takes finer steps.")}</span>
-							<Button
-								size="xs"
-								variant="outline"
-								onClick={() => {
-									onOpenChange(false);
-									void navigate({ to: "/settings", search: { section: "shortcuts" } });
-								}}
-							>
-								Change keys
-							</Button>
-						</div>
-					</Popover.Popup>
-				</Popover.Positioner>
-			</Popover.Portal>
-		</Popover.Root>
+						Change keys
+					</Button>
+				</div>
+			</PopoverPopup>
+		</Popover>
 	);
 }
 
@@ -759,28 +758,26 @@ function DownbeatButton({ onDownbeat, children }: { onDownbeat: () => void; chil
 			>
 				<Crosshair /> Set 1
 			</button>
-			<Popover.Root>
-				<Popover.Trigger
+			<Popover>
+				<PopoverTrigger
 					aria-label="Beat grid settings"
 					data-hint="Beat grid settings"
 					className={cn(
 						half,
-						"rounded-r-md border-white/10 border-l px-1.5 data-[popup-open]:bg-white/10 data-[popup-open]:text-neutral-50 [&_svg]:size-3",
+						"rounded-r-md border-white/10 border-l px-1.5 data-[open]:bg-white/10 data-[open]:text-neutral-50 [&_svg]:size-3",
 					)}
 				>
 					<ChevronDown />
-				</Popover.Trigger>
-				<Popover.Portal>
-					<Popover.Positioner sideOffset={6} align="end" className="z-50">
-						<Popover.Popup
-							data-deck-popup
-							className="w-80 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg outline-none"
-						>
-							{children}
-						</Popover.Popup>
-					</Popover.Positioner>
-				</Popover.Portal>
-			</Popover.Root>
+				</PopoverTrigger>
+				<PopoverPopup
+					sideOffset={6}
+					align="end"
+					data-deck-popup
+					className="w-80 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg outline-none"
+				>
+					{children}
+				</PopoverPopup>
+			</Popover>
 		</div>
 	);
 }

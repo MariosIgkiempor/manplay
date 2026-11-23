@@ -1,5 +1,12 @@
-import { Button as ButtonPrimitive } from "@base-ui/react/button";
+import { Button as ButtonPrimitive } from "@ui-sdk/react/button";
 import { cva, type VariantProps } from "class-variance-authority";
+import type {
+	ComponentProps,
+	CSSProperties,
+	MouseEvent,
+	MouseEventHandler,
+	ReactNode,
+} from "react";
 import { cn } from "#/lib/utils.ts";
 
 const buttonVariants = cva(
@@ -39,18 +46,44 @@ const buttonVariants = cva(
 	},
 );
 
+type ButtonProps = Omit<
+	ComponentProps<typeof ButtonPrimitive>,
+	"onClick" | "className" | "style" | "disabled" | "children"
+> &
+	VariantProps<typeof buttonVariants> & {
+		className?: string | undefined;
+		style?: CSSProperties | undefined;
+		disabled?: boolean | undefined;
+		children?: ReactNode;
+		onClick?: MouseEventHandler<HTMLElement> | undefined;
+	};
+
 function Button({
 	className,
 	variant = "default",
 	size = "default",
+	disabled = false,
+	style,
+	onClick,
 	...props
-}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+}: ButtonProps) {
 	return (
 		<ButtonPrimitive
 			data-slot="button"
 			data-variant={variant}
 			className={cn(buttonVariants({ variant, size, className }))}
+			disabled={disabled}
+			{...(style === undefined ? {} : { style })}
 			{...props}
+			// A handler that returns a Promise would make UI SDK hold the button pending until it
+			// settles; the app shows its own busy states, so a press stays a plain press.
+			{...(onClick === undefined
+				? {}
+				: {
+						onClick: (event: MouseEvent<HTMLElement>) => {
+							onClick(event);
+						},
+					})}
 		/>
 	);
 }

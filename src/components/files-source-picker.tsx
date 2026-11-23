@@ -1,6 +1,15 @@
-import { Menu } from "@base-ui/react/menu";
+import {
+	MenuGroup,
+	MenuGroupLabel,
+	MenuItemIndicator,
+	MenuRadioGroup,
+	MenuRadioItem,
+	MenuTrigger,
+} from "@ui-sdk/react/menu";
 import { Check, ChevronRight, ChevronsUpDown, Folder } from "lucide-react";
+import type { KeyboardEvent } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
+import { MenuPopup, MenuRoot } from "#/components/ui/popup.tsx";
 import { isR2, type SyncTarget, targetShortName } from "#/lib/api.ts";
 import { useLibraryRoot, useSyncTargets } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
@@ -60,7 +69,7 @@ const item =
  * the page header's segmented control, so it takes the group's outline instead of drawing its own.
  */
 const CRUMB =
-	"flex h-6 max-w-48 items-center gap-1.5 rounded-md px-1 text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-muted";
+	"flex h-6 max-w-48 items-center gap-1.5 rounded-md px-1 text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60 data-[open]:bg-muted";
 
 /**
  * Chooses what a Files pane shows, the library folder or any connected destination, as the first
@@ -93,11 +102,22 @@ export function FilesSourcePicker({
 		);
 	}
 	const selected = current ? String(current.id) : LIBRARY;
-	const pick = (value: string) =>
-		value === selected ? onTop() : onChange(value === LIBRARY ? undefined : Number(value));
+	// Choosing what is already shown changes no value, so the group reports nothing; its row
+	// catches the press itself to go back to the top folder.
+	const reselect = (value: string) =>
+		value === selected
+			? {
+					onClick: onTop,
+					onKeyDown: (event: KeyboardEvent) => {
+						if (event.key === "Enter" || event.key === " ") {
+							onTop();
+						}
+					},
+				}
+			: {};
 	return (
-		<Menu.Root>
-			<Menu.Trigger
+		<MenuRoot>
+			<MenuTrigger
 				aria-label="Choose what to browse"
 				data-hint={
 					current ? `${current.machine}: ${current.path.join(" / ")}` : (library ?? undefined)
@@ -107,56 +127,51 @@ export function FilesSourcePicker({
 				{icon}
 				<span className="min-w-0 truncate font-medium">{name}</span>
 				<ChevronsUpDown className="size-3 shrink-0 text-muted-foreground" />
-			</Menu.Trigger>
-			<Menu.Portal>
-				<Menu.Positioner sideOffset={6} align="start" className="z-50">
-					<Menu.Popup className="w-80 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg outline-none">
-						<Menu.RadioGroup value={selected}>
-							<Menu.RadioItem
-								value={LIBRARY}
+			</MenuTrigger>
+			<MenuPopup
+				sideOffset={6}
+				align="start"
+				className="w-80 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg outline-none"
+			>
+				<MenuRadioGroup
+					value={selected}
+					onValueChange={(value: string) => onChange(value === LIBRARY ? undefined : Number(value))}
+				>
+					<MenuRadioItem value={LIBRARY} className={item} closeOnSelect {...reselect(LIBRARY)}>
+						<BrandIcon brand="library" className="size-9" />
+						<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+							<span className="text-sm font-medium">Library</span>
+							<PathTrail segments={rootFolders(library)} empty="No folder chosen" />
+						</span>
+						<MenuItemIndicator className="text-primary">
+							<Check className="size-4" />
+						</MenuItemIndicator>
+					</MenuRadioItem>
+					<MenuGroup>
+						<MenuGroupLabel className="px-2 pt-2.5 pb-1 text-muted-foreground text-xs">
+							Destinations
+						</MenuGroupLabel>
+						{targets.map((t) => (
+							<MenuRadioItem
+								key={t.id}
+								value={String(t.id)}
 								className={item}
-								closeOnClick
-								onClick={() => pick(LIBRARY)}
+								closeOnSelect
+								{...reselect(String(t.id))}
 							>
-								<BrandIcon brand="library" className="size-9" />
+								<BrandIcon brand={brandOf(t)} className="size-9" />
 								<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-									<span className="text-sm font-medium">Library</span>
-									<PathTrail segments={rootFolders(library)} empty="No folder chosen" />
+									<span className="truncate text-sm font-medium">{targetShortName(t)}</span>
+									<PathTrail segments={t.path} empty={isR2(t) ? "Bucket root" : "Whole share"} />
 								</span>
-								<Menu.RadioItemIndicator className="text-primary">
+								<MenuItemIndicator className="text-primary">
 									<Check className="size-4" />
-								</Menu.RadioItemIndicator>
-							</Menu.RadioItem>
-							<Menu.Group>
-								<Menu.GroupLabel className="px-2 pt-2.5 pb-1 text-muted-foreground text-xs">
-									Destinations
-								</Menu.GroupLabel>
-								{targets.map((t) => (
-									<Menu.RadioItem
-										key={t.id}
-										value={String(t.id)}
-										className={item}
-										closeOnClick
-										onClick={() => pick(String(t.id))}
-									>
-										<BrandIcon brand={brandOf(t)} className="size-9" />
-										<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-											<span className="truncate text-sm font-medium">{targetShortName(t)}</span>
-											<PathTrail
-												segments={t.path}
-												empty={isR2(t) ? "Bucket root" : "Whole share"}
-											/>
-										</span>
-										<Menu.RadioItemIndicator className="text-primary">
-											<Check className="size-4" />
-										</Menu.RadioItemIndicator>
-									</Menu.RadioItem>
-								))}
-							</Menu.Group>
-						</Menu.RadioGroup>
-					</Menu.Popup>
-				</Menu.Positioner>
-			</Menu.Portal>
-		</Menu.Root>
+								</MenuItemIndicator>
+							</MenuRadioItem>
+						))}
+					</MenuGroup>
+				</MenuRadioGroup>
+			</MenuPopup>
+		</MenuRoot>
 	);
 }

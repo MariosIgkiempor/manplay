@@ -1,9 +1,10 @@
-import { Popover } from "@base-ui/react/popover";
+import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import { TriangleAlert, Wrench } from "lucide-react";
 import { useState } from "react";
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
+import { PopoverPopup } from "#/components/ui/popup.tsx";
 import { cardFor, type IssueIndex, type PlaceDefaults } from "#/lib/audit.ts";
 import { useAuditPlace } from "#/lib/queries.ts";
 
@@ -28,8 +29,8 @@ export function IssuePopover({ path, isDir, health, fixing, onFix, open, onOpenC
 		return null;
 	}
 	return (
-		<Popover.Root open={open} onOpenChange={onOpenChange}>
-			<Popover.Trigger
+		<Popover open={open} onOpenChange={onOpenChange}>
+			<PopoverTrigger
 				aria-label="Show issues"
 				className="flex shrink-0 items-center gap-1 rounded-md px-1 text-warning text-xs hover:bg-warning/15"
 				onClick={(ev) => ev.stopPropagation()}
@@ -38,37 +39,28 @@ export function IssuePopover({ path, isDir, health, fixing, onFix, open, onOpenC
 			>
 				<TriangleAlert className="size-3.5" />
 				{isDir && health.folders.get(path)?.count}
-			</Popover.Trigger>
-			<Popover.Portal>
-				<Popover.Positioner sideOffset={6} className="z-50">
-					{/* The card lives inside the pane in the React tree; keep its keys (Enter, typing) to itself. */}
-					<Popover.Popup className={popup} onKeyDown={(ev) => ev.stopPropagation()}>
-						<div className="space-y-2">
-							{card.title && <p className="font-medium">{card.title}</p>}
-							<ul className="space-y-1 text-muted-foreground text-xs">
-								{card.lines.map((l) => (
-									<li key={l}>• {l}</li>
-								))}
-							</ul>
-							{card.fixable > 0 && (
-								<Button
-									size="sm"
-									className="w-full"
-									disabled={fixing}
-									onClick={() => onFix([path])}
-								>
-									<Wrench />
-									{fixing ? "Fixing…" : card.fixLabel}
-								</Button>
-							)}
-							{card.form && (
-								<PlaceForm path={path} defaults={card.form} onDone={() => onOpenChange(false)} />
-							)}
-						</div>
-					</Popover.Popup>
-				</Popover.Positioner>
-			</Popover.Portal>
-		</Popover.Root>
+			</PopoverTrigger>
+			{/* The card lives inside the pane in the React tree; keep its keys (Enter, typing) to itself. */}
+			<PopoverPopup sideOffset={6} className={popup} onKeyDown={(ev) => ev.stopPropagation()}>
+				<div className="space-y-2">
+					{card.title && <p className="font-medium">{card.title}</p>}
+					<ul className="space-y-1 text-muted-foreground text-xs">
+						{card.lines.map((l) => (
+							<li key={l}>• {l}</li>
+						))}
+					</ul>
+					{card.fixable > 0 && (
+						<Button size="sm" className="w-full" disabled={fixing} onClick={() => onFix([path])}>
+							<Wrench />
+							{fixing ? "Fixing…" : card.fixLabel}
+						</Button>
+					)}
+					{card.form && (
+						<PlaceForm path={path} defaults={card.form} onDone={() => onOpenChange(false)} />
+					)}
+				</div>
+			</PopoverPopup>
+		</Popover>
 	);
 }
 

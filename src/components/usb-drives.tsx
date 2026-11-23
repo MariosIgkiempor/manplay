@@ -21,6 +21,7 @@ import { SearchField } from "#/components/search-field.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
+import { Fact, Facts, MoreInfo } from "#/components/ui/facts.tsx";
 import { Hint } from "#/components/ui/hint.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { UsbBrowser } from "#/components/usb-browser.tsx";
@@ -447,10 +448,9 @@ export function DriveSettings({ drive }: { drive: UsbDrive }) {
 	return (
 		<div className="space-y-3">
 			{!drive.writable && (
-				<p className="flex gap-2 text-muted-foreground text-xs">
-					<TriangleAlert className="size-4 shrink-0 text-warning" />
-					The drive is read-only, so nothing here can change it.
-				</p>
+				<Facts label="The drive is read-only, so nothing here can change it.">
+					<Fact tone="warn">Read-only drive</Fact>
+				</Facts>
 			)}
 			<SettingRows title="Drive">
 				<BackupsRow drive={drive} />
@@ -473,12 +473,16 @@ function BackupsRow({ drive }: { drive: UsbDrive }) {
 		},
 	});
 	const b = backups.data;
-	let hint = "Checking…";
+	let hint: ReactNode = "Checking…";
 	if (b) {
 		hint =
-			b.count === 0
-				? "None yet. Each export keeps a copy of the library it replaces."
-				: `${plural(b.count, "copy", "copies")} of earlier libraries, ${formatBytes(b.bytes)}. The newest is from ${b.latest?.slice(0, 10)}.`;
+			b.count === 0 ? (
+				<>
+					None yet <MoreInfo hint="Each export keeps a copy of the library it replaces." />
+				</>
+			) : (
+				`${plural(b.count, "copy", "copies")}, ${formatBytes(b.bytes)}, newest ${b.latest?.slice(0, 10)}`
+			);
 	}
 	const older = (b?.count ?? 0) - 1;
 	return (
@@ -489,7 +493,12 @@ function BackupsRow({ drive }: { drive: UsbDrive }) {
 				disabled={!drive.writable || older < 1 || prune.isPending}
 				destructive
 				confirmLabel={`Delete ${plural(older, "older backup", "older backups")}`}
-				consequence="The newest backup stays. The others are deleted from the drive for good, so the space frees up now."
+				consequence={
+					<Facts label="The newest backup stays. The others are deleted from the drive for good, so the space frees up now.">
+						<Fact tone="kept">Newest backup</Fact>
+						<Fact tone="lost">Older ones, for good</Fact>
+					</Facts>
+				}
 				onConfirm={() => {
 					prune.reset();
 					prune.mutate();
@@ -502,6 +511,15 @@ function BackupsRow({ drive }: { drive: UsbDrive }) {
 		</SettingRow>
 	);
 }
+
+/** What a drive reset takes off the drive. */
+const RESET_REMOVES = [
+	"rekordbox libraries",
+	"Serato, VirtualDJ, Gemini",
+	"Analysis",
+	"Artwork",
+	"Contents and Playlists songs",
+] as const;
 
 /**
  * Starts the drive afresh. Everything an export puts there (both libraries, analysis files,
@@ -529,7 +547,14 @@ function ResetRow({ drive }: { drive: UsbDrive }) {
 				<SettingLabel
 					icon={<Eraser className="text-destructive" />}
 					title="Reset drive"
-					hint="Removes the rekordbox library, analysis and exported songs, so the next export starts fresh. Player settings stay."
+					hint={
+						<Facts label="Removes the rekordbox library, analysis and exported songs, so the next export starts fresh. Player settings stay.">
+							<Fact tone="lost">Libraries</Fact>
+							<Fact tone="lost">Analysis</Fact>
+							<Fact tone="lost">Exported songs</Fact>
+							<Fact tone="kept">Player settings</Fact>
+						</Facts>
+					}
 				/>
 			}
 		>
@@ -558,11 +583,25 @@ function ResetRow({ drive }: { drive: UsbDrive }) {
 					onConfirm={() => reset.mutate()}
 				>
 					<div className="space-y-3">
-						<p>
-							{isMac
-								? "The rekordbox library (both formats), the Serato, VirtualDJ and Gemini libraries, analysis files, artwork and every song in Contents and Playlists move to the drive's Trash. Players will show the drive as empty. The space frees up when you empty the Trash; until then you can put them back from it."
-								: "The rekordbox library (both formats), the Serato, VirtualDJ and Gemini libraries, analysis files, artwork and every song in Contents and Playlists are deleted from the drive for good (Windows keeps no Recycle Bin on USB drives). Players will show the drive as empty."}
-						</p>
+						<Facts
+							label={
+								isMac
+									? "The rekordbox library (both formats), the Serato, VirtualDJ and Gemini libraries, analysis files, artwork and every song in Contents and Playlists move to the drive's Trash. Players will show the drive as empty. The space frees up when you empty the Trash; until then you can put them back from it."
+									: "The rekordbox library (both formats), the Serato, VirtualDJ and Gemini libraries, analysis files, artwork and every song in Contents and Playlists are deleted from the drive for good (Windows keeps no Recycle Bin on USB drives). Players will show the drive as empty."
+							}
+						>
+							{RESET_REMOVES.map((item) => (
+								<Fact key={item} tone="lost">
+									{item}
+								</Fact>
+							))}
+							{isMac ? (
+								<Fact tone="kept">Restorable from the drive's Trash</Fact>
+							) : (
+								<Fact tone="warn">Deleted for good, no Recycle Bin</Fact>
+							)}
+							<Fact tone="info">Players see an empty drive</Fact>
+						</Facts>
 						<div className="space-y-1.5">
 							<label htmlFor={field} className="block text-foreground text-xs">
 								Type <span className="font-medium">{drive.name}</span> to confirm

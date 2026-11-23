@@ -6,6 +6,7 @@ import { RowMenu } from "#/components/menu.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { CHILD_PAD, rowBase } from "#/components/sidebar-row.ts";
 import { StatusIcon } from "#/components/status-icon.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import {
 	type ItemKind,
 	type LocalTagUse,
@@ -200,17 +201,27 @@ export function LocalTagsDialog({
 			onCancel={onCancel}
 			onConfirm={() => onConfirm(choices)}
 		>
-			Other devices cannot see local tags. Choose what happens to each one used by the rules.
+			<Facts label="Other devices cannot see local tags. Choose what happens to each one used by the rules.">
+				<Fact tone="warn">Local tags hidden from others</Fact>
+				<Fact>Choose for each</Fact>
+			</Facts>
 			<TagChoices
 				tags={tags}
 				choices={choices}
 				onChoose={(t, c) => setChoices((m) => ({ ...m, [t]: c }))}
 			/>
 			{shared.length > 0 && (
-				<p className="mt-2">
-					Sharing {shared.map((t) => `“${t.tag}”`).join(", ")} shows{" "}
-					{songs(shared.reduce((n, t) => n + t.songs, 0))} with it to everyone.
-				</p>
+				<Facts
+					label={`Sharing ${shared.map((t) => `“${t.tag}”`).join(", ")} shows ${songs(shared.reduce((n, t) => n + t.songs, 0))} with it to everyone.`}
+					className="mt-2 flex"
+				>
+					{shared.map((t) => (
+						<Fact key={t.tag} tone="sent">
+							{t.tag}
+						</Fact>
+					))}
+					<Fact tone="sent">{songs(shared.reduce((n, t) => n + t.songs, 0))} to everyone</Fact>
+				</Facts>
 			)}
 		</ConfirmDialog>
 	);
@@ -273,9 +284,19 @@ export function ShareDialog({
 			onCancel={onClose}
 			onConfirm={() => share.mutate({})}
 		>
-			{item.kind === "smart_playlist"
-				? "Everyone on the destination gets its rules."
-				: `Everyone on the destination gets it${data.songs > 0 ? `, and it shows ${songs(data.songs)} to them` : ""}. They can change it, and changes come back to you.`}
+			{item.kind === "smart_playlist" ? (
+				<Facts label="Everyone on the destination gets its rules.">
+					<Fact tone="sent">Rules to everyone</Fact>
+				</Facts>
+			) : (
+				<Facts
+					label={`Everyone on the destination gets it${data.songs > 0 ? `, and it shows ${songs(data.songs)} to them` : ""}. They can change it, and changes come back to you.`}
+				>
+					<Fact tone="sent">To everyone</Fact>
+					{data.songs > 0 && <Fact tone="sent">{songs(data.songs)} shown</Fact>}
+					<Fact tone="changed">Edits sync both ways</Fact>
+				</Facts>
+			)}
 			{error}
 		</ConfirmDialog>
 	);
@@ -324,13 +345,20 @@ export function PrivateDialog({
 			onCancel={onClose}
 			onConfirm={() => priv.mutate(data.usedBy.length > 0)}
 		>
-			This removes it for everyone else. You keep a copy that stays on this device.
+			<Facts label="This removes it for everyone else. You keep a copy that stays on this device.">
+				<Fact tone="lost">Gone for everyone else</Fact>
+				<Fact tone="kept">Your copy here</Fact>
+			</Facts>
 			{data.usedBy.length > 0 && (
-				<p className="mt-2">
-					The shared smart {data.usedBy.length === 1 ? "playlist" : "playlists"}{" "}
-					{data.usedBy.map((n) => `“${n}”`).join(", ")} use it: the rule is removed from{" "}
-					{data.usedBy.length === 1 ? "it" : "them"}.
-				</p>
+				<Facts
+					label={`The shared smart ${data.usedBy.length === 1 ? "playlist" : "playlists"} ${data.usedBy.map((n) => `“${n}”`).join(", ")} use it: the rule is removed from ${data.usedBy.length === 1 ? "it" : "them"}.`}
+					className="mt-2 flex"
+				>
+					<Fact tone="lost">Rule removed from</Fact>
+					{data.usedBy.map((n) => (
+						<Fact key={n}>{n}</Fact>
+					))}
+				</Facts>
 			)}
 			{priv.isError && <ErrorLine className="mt-2">{String(priv.error)}</ErrorLine>}
 		</ConfirmDialog>

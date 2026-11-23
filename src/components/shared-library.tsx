@@ -1,5 +1,5 @@
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
-import { FileAudio, Users } from "lucide-react";
+import { FileAudio, FolderOpen, Server, Users } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { ClashList } from "#/components/clashes.tsx";
 import { ConfirmDialog, Dialog } from "#/components/confirm-dialog.tsx";
@@ -9,6 +9,7 @@ import { ScopeSwitch } from "#/components/item-sharing.tsx";
 import { ErrorLine, LoadingLine } from "#/components/page.tsx";
 import { StatusIcon } from "#/components/status-icon.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts, MoreInfo } from "#/components/ui/facts.tsx";
 import {
 	type FoundLibrary,
 	type JoinChoice,
@@ -34,6 +35,16 @@ import {
 } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
 
+/** What a shared library carries between computers. */
+const SHARED_KINDS = [
+	"Tags",
+	"Playlists",
+	"Smart playlists",
+	"BPM",
+	"Key",
+	"Beat grids",
+	"Waveforms",
+] as const;
 /** The last part of a folder path, for a library named after its folder. */
 function folderName(root: string): string {
 	return root.split(/[/\\]/).filter(Boolean).at(-1) ?? root;
@@ -243,9 +254,17 @@ function ReplaceConfirm({
 			onCancel={onCancel}
 			onConfirm={onConfirm}
 		>
-			{n === undefined
-				? "Counting…"
-				: `${n.toLocaleString()} of your tags, playlists and smart playlists are removed from this device and replaced by the shared ones. Songs and files are not touched.`}
+			{n === undefined ? (
+				"Counting…"
+			) : (
+				<Facts
+					label={`${n.toLocaleString()} of your tags, playlists and smart playlists are removed from this device and replaced by the shared ones. Songs and files are not touched.`}
+				>
+					<Fact tone="lost">{n.toLocaleString()} tags, playlists and smart playlists</Fact>
+					<Fact tone="changed">Shared ones instead</Fact>
+					<Fact tone="kept">Songs and files</Fact>
+				</Facts>
+			)}
 		</ConfirmDialog>
 	);
 }
@@ -343,6 +362,7 @@ const WORDING = {
 	target: {
 		startTitle: (where: string) => `Start a shared library on ${where}?`,
 		startLabel: "Start a shared library",
+		startSummary: "Your other devices join it from this destination.",
 		startBody:
 			"Your other devices can join it when they add this destination. The songs stay plain files, so Jellyfin sees them as before.",
 		starting: "Starting the library…",
@@ -355,6 +375,7 @@ const WORDING = {
 	folder: {
 		startTitle: () => "Share your library folder?",
 		startLabel: "Share this library",
+		startSummary: "Computers that open this folder can join.",
 		startBody:
 			"For a library folder that other computers open too, such as a network share or a folder a sync app keeps copied. When they choose it as their library folder, manplay offers to join.",
 		starting: "Sharing the library…",
@@ -461,13 +482,21 @@ function StartDialog({
 				</div>
 			}
 		>
-			<p>{words.startBody}</p>
-			<dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-				<dt className="text-foreground">Shared</dt>
-				<dd>Tags, playlists, smart playlists, BPM, key, beat grids, waveforms</dd>
-				<dt className="text-foreground">Stays here</dt>
-				<dd>Cues and settings</dd>
-			</dl>
+			<p>
+				{words.startSummary} <MoreInfo hint={words.startBody} />
+			</p>
+			<Facts
+				label="Shared: tags, playlists, smart playlists, BPM, key, beat grids, waveforms. Stays here: cues and settings."
+				className="mt-3"
+			>
+				{SHARED_KINDS.map((kind) => (
+					<Fact key={kind} tone="sent">
+						{kind}
+					</Fact>
+				))}
+				<Fact tone="kept">Cues</Fact>
+				<Fact tone="kept">Settings</Fact>
+			</Facts>
 		</Dialog>
 	);
 }
@@ -574,7 +603,12 @@ function DefaultScope() {
 	return (
 		<FieldRow
 			label="New tags and playlists"
-			description="Where they start. Each one can be switched later from its page header."
+			description={
+				<>
+					Where they start{" "}
+					<MoreInfo hint="Where they start. Each one can be switched later from its page header." />
+				</>
+			}
 			align="center"
 		>
 			<ScopeSwitch
@@ -619,14 +653,22 @@ function JoinedRows({
 				description={
 					home.kind === "folder" ? (
 						<>
-							Kept in your library folder, <code>{home.root}</code>. It syncs every minute while
-							manplay is open. Cues stay on this computer.
+							<Facts
+								label={`Kept in your library folder, ${home.root}. It syncs every minute while manplay is open. Cues stay on this computer.`}
+							>
+								<Fact icon={<FolderOpen />}>{home.root}</Fact>
+								<Fact tone="changed">Every minute</Fact>
+								<Fact tone="kept">Cues stay here</Fact>
+							</Facts>
 							<FolderSyncStatus />
 						</>
 					) : (
-						<>
-							Kept on {target ? targetName(target) : "a destination"}. Cues stay on this computer.
-						</>
+						<Facts
+							label={`Kept on ${target ? targetName(target) : "a destination"}. Cues stay on this computer.`}
+						>
+							<Fact icon={<Server />}>{target ? targetName(target) : "A destination"}</Fact>
+							<Fact tone="kept">Cues stay here</Fact>
+						</Facts>
 					)
 				}
 				align="center"
@@ -660,9 +702,14 @@ function PlaceRows({
 			<FieldRow
 				label="Library folder"
 				description={
-					root
-						? "Share it with computers that open the same folder, or join the library already in it."
-						: "Choose a library folder in Library first."
+					root ? (
+						<>
+							Share or join with computers opening it{" "}
+							<MoreInfo hint="Share it with computers that open the same folder, or join the library already in it." />
+						</>
+					) : (
+						"Choose a library folder in Library first."
+					)
 				}
 				align="center"
 			>
@@ -712,7 +759,14 @@ export function SharedLibrarySettings() {
 		<>
 			<FrameSection
 				title="Shared library"
-				description="Tags, playlists, smart playlists, BPM, key, beat grids and waveforms, shared with other computers through a destination or through a library folder they open too. The songs stay plain files."
+				description={
+					<Facts label="Tags, playlists, smart playlists, BPM, key, beat grids and waveforms, shared with other computers through a destination or through a library folder they open too. The songs stay plain files.">
+						{SHARED_KINDS.map((kind) => (
+							<Fact key={kind}>{kind}</Fact>
+						))}
+						<Fact tone="kept">Songs stay plain files</Fact>
+					</Facts>
+				}
 			>
 				{home && place && label !== null ? (
 					<JoinedRows
@@ -806,7 +860,12 @@ function ClashPanel() {
 	return (
 		<FrameSection
 			title="Clashes"
-			description="Changes made on two computers at once. Pick which one to keep."
+			description={
+				<Facts label="Changes made on two computers at once. Pick which one to keep.">
+					<Fact tone="warn">Edited on two computers</Fact>
+					<Fact>Pick one</Fact>
+				</Facts>
+			}
 		>
 			<div className="[--diff-inset:1rem] [&_section]:border-b-0">
 				<ClashList />

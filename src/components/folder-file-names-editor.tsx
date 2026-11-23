@@ -1,4 +1,4 @@
-import { Menu } from "@base-ui/react/menu";
+import { MenuItem, MenuTrigger } from "@ui-sdk/react/menu";
 import { ChevronDown } from "lucide-react";
 import {
 	type CSSProperties,
@@ -12,6 +12,7 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { MenuPopup, MenuRoot } from "#/components/ui/popup.tsx";
 import type { FolderFileNames, FolderNameTag } from "#/lib/api.ts";
 import {
 	EXAMPLE_SONG,
@@ -248,27 +249,29 @@ export function FolderFileNamesEditor({
 						</FloatingList>
 					)}
 				</div>
-				<Menu.Root>
-					<Menu.Trigger className="flex h-8 shrink-0 items-center gap-1 rounded-lg border bg-background px-2.5 text-muted-foreground text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-muted [&_svg]:size-3.5">
+				<MenuRoot>
+					<MenuTrigger className="flex h-8 shrink-0 items-center gap-1 rounded-lg border bg-background px-2.5 text-muted-foreground text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 data-[open]:bg-muted [&_svg]:size-3.5">
 						Presets
 						<ChevronDown />
-					</Menu.Trigger>
-					<Menu.Portal>
-						<Menu.Positioner sideOffset={4} align="end" className="z-50">
-							<Menu.Popup className="w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
-								{FOLDER_NAME_PRESETS.map((preset) => (
-									<Menu.Item
-										key={preset.label}
-										className={menuItem}
-										onClick={() => onChange(preset.parts)}
-									>
-										{preset.label}
-									</Menu.Item>
-								))}
-							</Menu.Popup>
-						</Menu.Positioner>
-					</Menu.Portal>
-				</Menu.Root>
+					</MenuTrigger>
+					<MenuPopup
+						sideOffset={4}
+						align="end"
+						className="w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
+					>
+						{FOLDER_NAME_PRESETS.map((preset) => (
+							<MenuItem
+								key={preset.label}
+								className={menuItem}
+								onSelect={() => {
+									onChange(preset.parts);
+								}}
+							>
+								{preset.label}
+							</MenuItem>
+						))}
+					</MenuPopup>
+				</MenuRoot>
 			</div>
 
 			{parsed.ok ? (

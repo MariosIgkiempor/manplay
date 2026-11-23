@@ -10,6 +10,7 @@ import { PlaceFrame } from "#/components/place-page.tsx";
 import { RekordboxExportButton } from "#/components/rekordbox-view.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts, UiPath } from "#/components/ui/facts.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
 import type { RekordboxStatus } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
@@ -18,10 +19,23 @@ import { WELL } from "#/lib/page-layout.ts";
 import { useActivity } from "#/lib/queries.ts";
 import { useRekordbox } from "#/lib/use-rekordbox.ts";
 
+/** The setup, each step as where to go in rekordbox and what to do there. */
 const STEPS = [
-	"In rekordbox open Settings → Advanced → Database, and under “rekordbox xml” click Browse and choose the file above.",
-	"In Settings → View → Layout, tick “rekordbox xml” so it appears in the left-hand tree.",
-	"Open “rekordbox xml” → “manplay” in the tree, right-click a playlist and choose Import Playlist.",
+	{
+		said: "In rekordbox open Settings → Advanced → Database, and under “rekordbox xml” click Browse and choose the file above.",
+		path: ["Settings", "Advanced", "Database", "rekordbox xml"],
+		action: "Browse → the file above",
+	},
+	{
+		said: "In Settings → View → Layout, tick “rekordbox xml” so it appears in the left-hand tree.",
+		path: ["Settings", "View", "Layout"],
+		action: "Tick “rekordbox xml”",
+	},
+	{
+		said: "Open “rekordbox xml” → “manplay” in the tree, right-click a playlist and choose Import Playlist.",
+		path: ["rekordbox xml", "manplay"],
+		action: "Right-click a playlist → Import Playlist",
+	},
 ] as const;
 
 function Setup() {
@@ -30,12 +44,20 @@ function Setup() {
 			<summary className="cursor-pointer font-medium">One-time setup in rekordbox</summary>
 			<ol className="mt-3 list-decimal space-y-2 pl-5">
 				{STEPS.map((step) => (
-					<li key={step}>{step}</li>
+					<li key={step.said} aria-label={step.said} data-hint={step.said}>
+						<span className="flex flex-wrap items-center gap-1.5">
+							<UiPath parts={step.path} />
+							<span className="text-muted-foreground text-xs">{step.action}</span>
+						</span>
+					</li>
 				))}
 			</ol>
-			<p className="mt-3 text-muted-foreground text-xs">
-				After changing a playlist, export again and re-import it in rekordbox.
-			</p>
+			<Facts
+				label="After changing a playlist, export again and re-import it in rekordbox."
+				className="mt-3"
+			>
+				<Fact tone="changed">Playlist changed? Export, then re-import</Fact>
+			</Facts>
 		</details>
 	);
 }
@@ -116,7 +138,12 @@ function RekordboxSettings({
 							<SettingLabel
 								icon={<Trash2 className="text-destructive" />}
 								title="Stop exporting"
-								hint="manplay stops writing the file. The file stays where it is."
+								hint={
+									<Facts label="manplay stops writing the file. The file stays where it is.">
+										<Fact tone="lost">Updates</Fact>
+										<Fact tone="kept">The file</Fact>
+									</Facts>
+								}
 							/>
 						}
 					>

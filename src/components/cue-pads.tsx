@@ -1,8 +1,9 @@
-import { ContextMenu } from "@base-ui/react/context-menu";
+import { MenuContextTrigger } from "@ui-sdk/react/menu";
 import { Crosshair, Palette, PencilLine, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { type MenuEntry, MenuItems, MenuLabel } from "#/components/menu.tsx";
+import { ContextMenuPopup, MenuRoot } from "#/components/ui/popup.tsx";
 import { CUE_COLORS, type Cue, PAD_LETTERS, stamp } from "#/lib/cues.ts";
 import { popup } from "#/lib/menu-styles.ts";
 import type { ShortcutId } from "#/lib/shortcuts.ts";
@@ -116,8 +117,8 @@ function SetPad({
 	const padKey = keyHint(useShortcutLabel(padShortcut(slot)));
 	const color = cue.color || CUE_COLORS[0].hex;
 	return (
-		<ContextMenu.Root>
-			<ContextMenu.Trigger
+		<MenuRoot>
+			<MenuContextTrigger
 				render={
 					<div
 						className={cn(
@@ -175,16 +176,12 @@ function SetPad({
 						)}
 					</span>
 				)}
-			</ContextMenu.Trigger>
-			<ContextMenu.Portal>
-				<ContextMenu.Positioner className="z-50">
-					<ContextMenu.Popup data-deck-popup className={popup} finalFocus={false}>
-						<MenuLabel>Hot cue {letter}</MenuLabel>
-						<MenuItems items={padMenu(cue, slot, actions, () => setRenaming(true))} />
-					</ContextMenu.Popup>
-				</ContextMenu.Positioner>
-			</ContextMenu.Portal>
-		</ContextMenu.Root>
+			</MenuContextTrigger>
+			<ContextMenuPopup data-deck-popup className={popup} finalFocus="none">
+				<MenuLabel>Hot cue {letter}</MenuLabel>
+				<MenuItems items={padMenu(cue, slot, actions, () => setRenaming(true))} />
+			</ContextMenuPopup>
+		</MenuRoot>
 	);
 }
 

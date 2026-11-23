@@ -1,5 +1,15 @@
-import { Select as SelectPrimitive } from "@base-ui/react/select";
+import {
+	SelectContent,
+	SelectItem,
+	SelectItemIndicator,
+	SelectItemText,
+	SelectList,
+	Select as SelectPrimitive,
+	SelectTrigger,
+	SelectValue,
+} from "@ui-sdk/react/select";
 import { Check, ChevronsUpDown } from "lucide-react";
+import { keepListKeys, popupContainer } from "#/components/ui/popup.tsx";
 import { pickerItem, pickerPopup, pickerTrigger } from "#/lib/menu-styles.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -31,46 +41,51 @@ export function Select({
 	className?: string;
 }) {
 	return (
-		<SelectPrimitive.Root
-			id={id}
+		<SelectPrimitive
 			value={value}
-			items={options}
-			onValueChange={(next) => typeof next === "string" && onChange(next)}
+			items={options.map((o) => ({ value: o.value, label: o.label }))}
+			modal
+			container={popupContainer()}
+			onValueChange={(next: string | null) => {
+				if (next !== null) {
+					onChange(next);
+				}
+			}}
 		>
-			<SelectPrimitive.Trigger aria-label={label} className={cn(pickerTrigger, className)}>
+			<SelectTrigger
+				{...(id === undefined ? {} : { id })}
+				aria-label={label}
+				className={cn(pickerTrigger, className)}
+			>
 				<span className="truncate">
-					<SelectPrimitive.Value />
+					<SelectValue />
 				</span>
 				<ChevronsUpDown className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
-			</SelectPrimitive.Trigger>
-			<SelectPrimitive.Portal>
-				<SelectPrimitive.Positioner
-					sideOffset={4}
-					align="start"
-					alignItemWithTrigger={false}
-					className="z-50"
-				>
-					<SelectPrimitive.Popup className={pickerPopup}>
-						<SelectPrimitive.List className="max-h-72 overflow-y-auto">
-							{options.map((o) => (
-								<SelectPrimitive.Item
-									key={o.value}
-									value={o.value}
-									data-hint={o.hint}
-									className={pickerItem}
-								>
-									<SelectPrimitive.ItemText className="flex-1 truncate">
-										{o.label}
-									</SelectPrimitive.ItemText>
-									<SelectPrimitive.ItemIndicator className="text-primary">
-										<Check className="size-3.5" />
-									</SelectPrimitive.ItemIndicator>
-								</SelectPrimitive.Item>
-							))}
-						</SelectPrimitive.List>
-					</SelectPrimitive.Popup>
-				</SelectPrimitive.Positioner>
-			</SelectPrimitive.Portal>
-		</SelectPrimitive.Root>
+			</SelectTrigger>
+			<SelectContent
+				sideOffset={4}
+				align="start"
+				alignItemWithTrigger={false}
+				onKeyDown={keepListKeys}
+				className={pickerPopup}
+			>
+				<SelectList className="max-h-72 overflow-y-auto">
+					{options.map((o) => (
+						<SelectItem
+							key={o.value}
+							value={o.value}
+							label={o.label}
+							data-hint={o.hint}
+							className={pickerItem}
+						>
+							<SelectItemText className="flex-1 truncate">{o.label}</SelectItemText>
+							<SelectItemIndicator className="text-primary">
+								<Check className="size-3.5" />
+							</SelectItemIndicator>
+						</SelectItem>
+					))}
+				</SelectList>
+			</SelectContent>
+		</SelectPrimitive>
 	);
 }

@@ -3,15 +3,17 @@ import { AudioWaveform, Globe, Info, Keyboard, Library, Palette } from "lucide-r
 import { AnalysisSettings } from "#/components/analysis-settings.tsx";
 import { AppUpdate } from "#/components/app-update.tsx";
 import { AppearanceSettings } from "#/components/appearance-settings.tsx";
-import { FrameHeader } from "#/components/frame.tsx";
 import { LibrarySettings } from "#/components/library-settings.tsx";
 import { LookupSettings } from "#/components/lookup-settings.tsx";
+import { PageHeader } from "#/components/page-header.tsx";
 import { SharedLibrarySettings } from "#/components/shared-library.tsx";
 import { ShortcutSettings } from "#/components/shortcut-settings.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
+import { PAGE_BODY } from "#/lib/page-layout.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { parseSettingsSection, type SettingsSection } from "#/lib/settings-sections.ts";
+import { cn } from "#/lib/utils.ts";
 
 export const Route = createFileRoute("/settings")({
 	// `?section=shortcuts` opens that tab; anything else opens Library.
@@ -37,7 +39,7 @@ function SettingsPage() {
 	const navigate = useNavigate({ from: "/settings" });
 	return (
 		<main>
-			<FrameHeader
+			<PageHeader
 				title="Settings"
 				tabs={
 					<Segmented
@@ -50,7 +52,7 @@ function SettingsPage() {
 					/>
 				}
 			/>
-			<div className="w-full max-w-4xl space-y-6 px-6 pt-6 pb-12">
+			<div className={cn("w-full max-w-5xl space-y-8", PAGE_BODY)}>
 				{section === "library" && (
 					<>
 						<LibrarySettings />

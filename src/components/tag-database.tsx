@@ -20,10 +20,11 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
-import { Framed, FrameHeader, TabsSearchBar } from "#/components/frame.tsx";
+import { Framed } from "#/components/frame.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
+import { PageHeader } from "#/components/page-header.tsx";
 import { SearchField } from "#/components/search-field.tsx";
 import { SortMenu } from "#/components/sort-menu.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
@@ -226,9 +227,9 @@ export function TagDatabase() {
 				search={search}
 				selected={selected.size}
 			/>
-			<FrameHeader
+			{/* The fields, the search across all of them, and any selection stay at hand. */}
+			<PageHeader
 				title="Metadata"
-				continued
 				meta={
 					<>
 						<span>{plural(VALUE_FIELDS.length, "field", "fields")}</span>
@@ -240,9 +241,6 @@ export function TagDatabase() {
 						<Plus /> Create
 					</Button>
 				}
-			/>
-			{/* The fields, the search across all of them, and any selection stay at hand. */}
-			<TabsSearchBar
 				tabs={<FieldTabs all={all} query={query} source={source} onPick={setSource} />}
 				search={<ValueSearch search={search} onSearch={setSearch} sort={sort} onSort={setSort} />}
 				below={

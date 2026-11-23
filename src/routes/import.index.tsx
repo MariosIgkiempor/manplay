@@ -9,6 +9,7 @@ import { EmptyState, ErrorLine, Page } from "#/components/page.tsx";
 import { type OverviewTab, OverviewTabs, PlaceSettingsGroup } from "#/components/place-page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { type ImportFolder, importActivitySource } from "#/lib/api.ts";
 import { activityEntries, mergedHistory } from "#/lib/history.ts";
@@ -59,7 +60,10 @@ function ImportPage() {
 			{tab === "list" &&
 				(folders.length === 0 ? (
 					<EmptyState icon={<FolderPlus />} title="No import folders yet" action={addButton}>
-						Add the folders new music lands in, such as Downloads or your iTunes media folder.
+						<Facts label="Add the folders new music lands in, such as Downloads or your iTunes media folder.">
+							<Fact>Downloads</Fact>
+							<Fact>iTunes Media</Fact>
+						</Facts>
 					</EmptyState>
 				) : (
 					<FrameSection title="Folders" count={folders.length} action={addButton}>

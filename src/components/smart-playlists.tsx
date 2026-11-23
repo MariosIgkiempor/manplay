@@ -26,6 +26,7 @@ import { Picker, type PickerOption } from "#/components/picker.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { DateField } from "#/components/ui/date-field.tsx";
+import { Fact, Facts, MoreInfo } from "#/components/ui/facts.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import {
 	type AddedRule,
@@ -199,8 +200,8 @@ export function SmartPicker({
 			)}
 			{list.isSuccess && all.length === 0 && (
 				<p className="py-4 text-center text-muted-foreground text-sm">
-					No smart playlists yet. Make one from rules like “instrumental and house”, and it shows up
-					here.
+					No smart playlists yet.{" "}
+					<MoreInfo hint="No smart playlists yet. Make one from rules like “instrumental and house”, and it shows up here." />
 				</p>
 			)}
 			<Button
@@ -777,10 +778,13 @@ function TagSection({ rules, setRules }: SectionProps) {
 			<TagGroup group="any" rules={rules} setRules={setRules} placeholder="e.g. house, techno" />
 			<AndRule />
 			<TagGroup group="none" rules={rules} setRules={setRules} placeholder="e.g. vocal" />
-			<p className="pt-1 text-muted-foreground text-xs">
-				Empty groups are ignored. A tag also covers the tags under it, so Genre covers Genre ›
-				House.
-			</p>
+			<Facts
+				className="pt-1"
+				label="Empty groups are ignored. A tag also covers the tags under it, so Genre covers Genre › House."
+			>
+				<Fact>Empty groups ignored</Fact>
+				<Fact>Genre covers Genre › House</Fact>
+			</Facts>
 		</section>
 	);
 }

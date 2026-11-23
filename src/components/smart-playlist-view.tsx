@@ -14,8 +14,10 @@ import {
 } from "#/components/selectable-track-list.tsx";
 import { SharingControl } from "#/components/sharing-control.tsx";
 import { SmartRulesEditor } from "#/components/smart-playlists.tsx";
+import { Fact, Facts, MoreInfo } from "#/components/ui/facts.tsx";
 import { deleteSmartPlaylist, type SmartPlaylist, saveSmartPlaylist } from "#/lib/api.ts";
 import { duration } from "#/lib/format.ts";
+import { PAGE_BODY } from "#/lib/page-layout.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { typeScale } from "#/lib/type-scale.ts";
 import { SMART_KEY, useSmartPreview } from "#/lib/use-smart.ts";
@@ -76,13 +78,17 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 					/>
 				}
 			/>
-			<div className="space-y-8 p-6">
+			<div className={`space-y-8 ${PAGE_BODY}`}>
 				{[rename, destroy].map(
 					(m) => m.isError && <ErrorLine key={m.submittedAt}>{String(m.error)}</ErrorLine>,
 				)}
 				<FrameSection
 					title="Rules"
-					description="Songs join and leave on their own as you tag and analyse them."
+					description={
+						<Facts label="Songs join and leave on their own as you tag and analyse them.">
+							<Fact tone="changed">Updates as you tag</Fact>
+						</Facts>
+					}
 				>
 					<div className="p-4">
 						<SmartRulesEditor playlist={playlist} />
@@ -92,7 +98,8 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 					<h2 className={typeScale.sectionTitle}>Songs</h2>
 					{songs.length === 0 && !preview.isPending ? (
 						<EmptyState icon={<Sparkles />} title="No song matches every rule">
-							Take a tag or filter out to widen it. Songs join on their own as you tag them.
+							Remove a tag or filter to widen it.{" "}
+							<MoreInfo hint="Take a tag or filter out to widen it. Songs join on their own as you tag them." />
 						</EmptyState>
 					) : (
 						<SelectableTrackList
@@ -116,7 +123,11 @@ export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
 						destroy.mutate();
 					}}
 				>
-					Its rules go. The songs stay in your library, and drives keep it until their next export.
+					<Facts label="Its rules go. The songs stay in your library, and drives keep it until their next export.">
+						<Fact tone="lost">Rules</Fact>
+						<Fact tone="kept">Songs</Fact>
+						<Fact tone="kept">On drives until next export</Fact>
+					</Facts>
 				</ConfirmDialog>
 			)}
 		</main>

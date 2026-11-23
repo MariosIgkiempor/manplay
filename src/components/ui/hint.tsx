@@ -1,5 +1,6 @@
-import { Tooltip } from "@base-ui/react/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@ui-sdk/react/tooltip";
 import type { ReactElement, ReactNode } from "react";
+import { popupContainer } from "#/components/ui/popup.tsx";
 
 /**
  * A short hover and focus hint for an icon or figure whose meaning is not written next to it.
@@ -16,15 +17,16 @@ export function Hint({
 	side?: "top" | "bottom" | "left" | "right";
 }) {
 	return (
-		<Tooltip.Root>
-			<Tooltip.Trigger delay={150} closeDelay={0} render={children} />
-			<Tooltip.Portal>
-				<Tooltip.Positioner side={side} sideOffset={6} className="z-50">
-					<Tooltip.Popup className="max-w-64 rounded-md border bg-popover px-2 py-1 text-popover-foreground text-xs shadow-md transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0">
-						{label}
-					</Tooltip.Popup>
-				</Tooltip.Positioner>
-			</Tooltip.Portal>
-		</Tooltip.Root>
+		<Tooltip delay={150} closeDelay={0}>
+			<TooltipTrigger render={children} />
+			<TooltipContent
+				side={side}
+				sideOffset={6}
+				container={popupContainer()}
+				className="max-w-64 rounded-md border bg-popover px-2 py-1 text-popover-foreground text-xs shadow-md transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0"
+			>
+				{label}
+			</TooltipContent>
+		</Tooltip>
 	);
 }

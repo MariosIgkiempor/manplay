@@ -1,6 +1,14 @@
-import { Menu } from "@base-ui/react/menu";
+import {
+	MenuCheckboxItem,
+	MenuItemIndicator,
+	MenuRadioGroup,
+	MenuRadioItem,
+	MenuSeparator,
+	MenuTrigger,
+} from "@ui-sdk/react/menu";
 import { Check, ChevronDown, Disc3, FolderTree } from "lucide-react";
 import type { ReactNode } from "react";
+import { MenuPopup, MenuRoot } from "#/components/ui/popup.tsx";
 import type { ReviewView } from "#/lib/sync-review-view.ts";
 
 const VIEWS: Record<ReviewView, { label: string; icon: ReactNode }> = {
@@ -24,50 +32,48 @@ export function ReviewViewMenu({
 	onShowUnchanged: (on: boolean) => void;
 }) {
 	return (
-		<Menu.Root>
-			<Menu.Trigger
+		<MenuRoot>
+			<MenuTrigger
 				data-slot="button"
 				data-variant="outline"
 				aria-label={`View: ${VIEWS[view].label}`}
-				className="flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-muted-foreground text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 data-[popup-open]:bg-muted data-[popup-open]:text-foreground [&_svg]:size-3.5"
+				className="flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-muted-foreground text-xs outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 data-[open]:bg-muted data-[open]:text-foreground [&_svg]:size-3.5"
 			>
 				{VIEWS[view].icon}
 				{VIEWS[view].label}
 				<ChevronDown />
-			</Menu.Trigger>
-			<Menu.Portal>
-				<Menu.Positioner sideOffset={4} align="end" className="z-50">
-					<Menu.Popup className="w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
-						<Menu.RadioGroup value={view} onValueChange={(v: ReviewView) => onView(v)}>
-							{(Object.keys(VIEWS) as ReviewView[]).map((v) => (
-								<Menu.RadioItem key={v} value={v} className={item} closeOnClick>
-									<span className="text-muted-foreground">{VIEWS[v].icon}</span>
-									<span className="flex-1">{VIEWS[v].label}</span>
-									<Menu.RadioItemIndicator className="text-primary">
-										<Check />
-									</Menu.RadioItemIndicator>
-								</Menu.RadioItem>
-							))}
-						</Menu.RadioGroup>
-						<Menu.Separator className="my-1 border-t" />
-						<Menu.CheckboxItem
-							checked={showUnchanged}
-							onCheckedChange={onShowUnchanged}
-							disabled={view !== "folders"}
-							data-hint={view === "folders" ? undefined : "Folders view only"}
-							className={item}
-						>
-							<span className="flex-1">Show unchanged folders</span>
-							<Menu.CheckboxItemIndicator
-								keepMounted
-								className="text-primary data-[unchecked]:invisible"
-							>
+			</MenuTrigger>
+			<MenuPopup
+				sideOffset={4}
+				align="end"
+				className="w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
+			>
+				<MenuRadioGroup value={view} onValueChange={(v: ReviewView) => onView(v)}>
+					{(Object.keys(VIEWS) as ReviewView[]).map((v) => (
+						<MenuRadioItem key={v} value={v} className={item} closeOnSelect>
+							<span className="text-muted-foreground">{VIEWS[v].icon}</span>
+							<span className="flex-1">{VIEWS[v].label}</span>
+							<MenuItemIndicator className="text-primary">
 								<Check />
-							</Menu.CheckboxItemIndicator>
-						</Menu.CheckboxItem>
-					</Menu.Popup>
-				</Menu.Positioner>
-			</Menu.Portal>
-		</Menu.Root>
+							</MenuItemIndicator>
+						</MenuRadioItem>
+					))}
+				</MenuRadioGroup>
+				<MenuSeparator className="my-1 border-t" />
+				<MenuCheckboxItem
+					value="show-unchanged"
+					checked={showUnchanged}
+					onCheckedChange={onShowUnchanged}
+					disabled={view !== "folders"}
+					data-hint={view === "folders" ? undefined : "Folders view only"}
+					className={item}
+				>
+					<span className="flex-1">Show unchanged folders</span>
+					<MenuItemIndicator keepMounted className="text-primary data-[unchecked]:invisible">
+						<Check />
+					</MenuItemIndicator>
+				</MenuCheckboxItem>
+			</MenuPopup>
+		</MenuRoot>
 	);
 }

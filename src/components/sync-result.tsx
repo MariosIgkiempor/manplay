@@ -13,17 +13,17 @@ function libraryNotes(l: LibraryOutcome): string[] {
 	const notes: string[] = [];
 	if (l.clockWrong) {
 		notes.push(
-			"This device's clock is wrong. Set its date, time and time zone (automatic if you can). Until then the other devices hold back what you edit here.",
+			"Clock wrong: set date, time and time zone (automatic if you can). Other devices hold back your edits until then.",
 		);
 	}
 	if (l.held > 0) {
 		notes.push(
-			`${l.held.toLocaleString()} edits from another device are held back because its clock is ahead of yours.`,
+			`${l.held.toLocaleString()} edits held back: another device's clock is ahead of yours.`,
 		);
 	}
 	if (l.newDeviceId) {
 		notes.push(
-			"Another copy of manplay was using this device's ID (copied app data or a restored backup). This one has a new ID now; nothing was lost.",
+			"Device ID was in use by another copy (copied app data or a backup). New ID given; nothing lost.",
 		);
 	}
 	return notes;

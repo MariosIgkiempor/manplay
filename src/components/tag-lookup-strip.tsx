@@ -1,8 +1,10 @@
-import { Menu } from "@base-ui/react/menu";
+import { MenuItemIndicator, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@ui-sdk/react/menu";
 import { Check, ChevronsUpDown, Globe, Music, RefreshCw, X } from "lucide-react";
 import { useState } from "react";
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
+import { MenuPopup, MenuRoot } from "#/components/ui/popup.tsx";
 import { PanelBarActions, useHasPanelBar } from "#/context/panel-bar.tsx";
 import { type LookupCandidate, lookupCoverUrl, type ReleaseId } from "#/lib/api.ts";
 import {
@@ -79,14 +81,14 @@ function Close({ found, label }: { found: TagSuggestions; label: string }) {
 function Consent({ found }: { found: TagSuggestions }) {
 	return (
 		<div className="space-y-2">
-			<p className="text-sm">
-				A lookup sends each song's <strong>title</strong> and <strong>first artist</strong> to
-				MusicBrainz, a public music database, and to Discogs if you saved a token for it. Covers are
-				found by album name. Nothing else leaves this computer.
-			</p>
-			<p className="text-muted-foreground">
-				It runs only for the songs you choose, and can be switched off in Settings.
-			</p>
+			<Facts label="A lookup sends each song's title and first artist to MusicBrainz, a public music database, and to Discogs if you saved a token for it. Covers are found by album name. Nothing else leaves this computer. It runs only for the songs you choose, and can be switched off in Settings.">
+				<Fact tone="sent">Title</Fact>
+				<Fact tone="sent">First artist</Fact>
+				<Fact tone="sent">Album, for covers</Fact>
+				<Fact>MusicBrainz · Discogs with a token</Fact>
+				<Fact tone="kept">Nothing else</Fact>
+				<Fact>Only songs you choose</Fact>
+			</Facts>
 			<div className="flex gap-2">
 				<Button size="sm" onClick={found.allow}>
 					Turn on and look up
@@ -439,50 +441,50 @@ function MatchChoice({ song, found }: { song: MatchedSong; found: TagSuggestions
 		return <span className="truncate">{releaseOf(current)}</span>;
 	}
 	return (
-		<Menu.Root>
-			<Menu.Trigger
+		<MenuRoot>
+			<MenuTrigger
 				aria-label={`Match: ${releaseOf(current)}`}
 				data-hint="Choose another match"
-				className="flex h-6 min-w-0 items-center gap-1.5 rounded-md border border-input bg-transparent pr-1.5 pl-2 text-xs outline-none transition-colors hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-[popup-open]:bg-muted/50 motion-reduce:transition-none dark:bg-input/30"
+				className="flex h-6 min-w-0 items-center gap-1.5 rounded-md border border-input bg-transparent pr-1.5 pl-2 text-xs outline-none transition-colors hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-[open]:bg-muted/50 motion-reduce:transition-none dark:bg-input/30"
 			>
 				<span className="min-w-0 flex-1 truncate text-left">{releaseOf(current)}</span>
 				<span className="shrink-0 text-muted-foreground tabular-nums">
 					{chosen + 1} of {candidates.length}
 				</span>
 				<ChevronsUpDown className="size-3 shrink-0 text-muted-foreground" />
-			</Menu.Trigger>
-			<Menu.Portal>
-				<Menu.Positioner sideOffset={4} align="start" className="z-50">
-					<Menu.Popup className="w-80 max-w-[calc(100vw-2rem)] rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
-						<Menu.RadioGroup
-							value={String(chosen)}
-							onValueChange={(index: string) => found.choose(song.path, Number(index))}
+			</MenuTrigger>
+			<MenuPopup
+				sideOffset={4}
+				align="start"
+				className="w-80 max-w-[calc(100vw-2rem)] rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
+			>
+				<MenuRadioGroup
+					value={String(chosen)}
+					onValueChange={(index: string) => found.choose(song.path, Number(index))}
+				>
+					{candidates.map((candidate, index) => (
+						<MenuRadioItem
+							key={`${candidate.recording}:${candidate.release ?? ""}`}
+							value={String(index)}
+							closeOnSelect
+							className="flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-muted"
 						>
-							{candidates.map((candidate, index) => (
-								<Menu.RadioItem
-									key={`${candidate.recording}:${candidate.release ?? ""}`}
-									value={String(index)}
-									closeOnClick
-									className="flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-muted"
-								>
-									<span className="flex size-3.5 shrink-0 items-center justify-center text-primary">
-										<Menu.RadioItemIndicator>
-											<Check className="size-3.5" />
-										</Menu.RadioItemIndicator>
-									</span>
-									<span className="min-w-0 flex-1">
-										<span className="block truncate text-sm">{releaseOf(candidate)}</span>
-										<span className="block truncate text-muted-foreground text-xs">
-											{songOf(candidate)}
-										</span>
-									</span>
-									<Confidence candidate={candidate} />
-								</Menu.RadioItem>
-							))}
-						</Menu.RadioGroup>
-					</Menu.Popup>
-				</Menu.Positioner>
-			</Menu.Portal>
-		</Menu.Root>
+							<span className="flex size-3.5 shrink-0 items-center justify-center text-primary">
+								<MenuItemIndicator>
+									<Check className="size-3.5" />
+								</MenuItemIndicator>
+							</span>
+							<span className="min-w-0 flex-1">
+								<span className="block truncate text-sm">{releaseOf(candidate)}</span>
+								<span className="block truncate text-muted-foreground text-xs">
+									{songOf(candidate)}
+								</span>
+							</span>
+							<Confidence candidate={candidate} />
+						</MenuRadioItem>
+					))}
+				</MenuRadioGroup>
+			</MenuPopup>
+		</MenuRoot>
 	);
 }

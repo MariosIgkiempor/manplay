@@ -1,5 +1,5 @@
-import { Menu } from "@base-ui/react/menu";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { MenuItem, MenuTrigger } from "@ui-sdk/react/menu";
 import {
 	Folder,
 	FolderInput,
@@ -30,6 +30,7 @@ import { Cover } from "#/components/page-header.tsx";
 import { PanelHeader } from "#/components/panel-header.tsx";
 import { TrackList } from "#/components/track-list.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { MenuPopup, MenuRoot } from "#/components/ui/popup.tsx";
 import {
 	type Track,
 	type UsbEdit,
@@ -227,28 +228,38 @@ function NewMenu({
 	const item =
 		"flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-muted [&_svg]:size-4 [&_svg]:text-muted-foreground";
 	return (
-		<Menu.Root>
-			<Menu.Trigger
+		<MenuRoot>
+			<MenuTrigger
 				disabled={disabled}
 				aria-label="New playlist or folder"
 				data-hint="New playlist or folder"
-				className="grid size-5 place-items-center rounded text-muted-foreground outline-none transition-colors hover:bg-foreground/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40 data-[popup-open]:bg-foreground/[0.06] [&_svg]:size-3.5"
+				className="grid size-5 place-items-center rounded text-muted-foreground outline-none transition-colors hover:bg-foreground/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40 data-[open]:bg-foreground/[0.06] [&_svg]:size-3.5"
 			>
 				<Plus />
-			</Menu.Trigger>
-			<Menu.Portal>
-				<Menu.Positioner sideOffset={4} align="end" className="z-50">
-					<Menu.Popup className="w-44 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none">
-						<Menu.Item className={item} onClick={() => onCreate(false)}>
-							<ListPlus /> New playlist
-						</Menu.Item>
-						<Menu.Item className={item} onClick={() => onCreate(true)}>
-							<FolderPlus /> New folder
-						</Menu.Item>
-					</Menu.Popup>
-				</Menu.Positioner>
-			</Menu.Portal>
-		</Menu.Root>
+			</MenuTrigger>
+			<MenuPopup
+				sideOffset={4}
+				align="end"
+				className="w-44 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
+			>
+				<MenuItem
+					className={item}
+					onSelect={() => {
+						onCreate(false);
+					}}
+				>
+					<ListPlus /> New playlist
+				</MenuItem>
+				<MenuItem
+					className={item}
+					onSelect={() => {
+						onCreate(true);
+					}}
+				>
+					<FolderPlus /> New folder
+				</MenuItem>
+			</MenuPopup>
+		</MenuRoot>
 	);
 }
 

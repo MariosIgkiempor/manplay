@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, Folder } from "lucide-react";
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts, UiPath } from "#/components/ui/facts.tsx";
 import { driveList } from "#/lib/api.ts";
 
 interface BrowserProps {
@@ -13,8 +14,16 @@ interface BrowserProps {
 	picking: boolean;
 }
 
-const EMPTY_ROOT =
+const EMPTY_ROOT_SAID =
 	"No shared folders. On that machine, share one in Tailscale → Settings → Taildrive, and make sure your ACLs allow Taildrive access.";
+
+const EMPTY_ROOT = (
+	<Facts label={EMPTY_ROOT_SAID}>
+		<span>No shared folders. Share one on that machine:</span>
+		<UiPath parts={["Tailscale", "Settings", "Taildrive"]} />
+		<Fact tone="warn">ACLs must allow Taildrive</Fact>
+	</Facts>
+);
 
 export function FolderBrowser({ tailnet, machine, path, setPath, onPick, picking }: BrowserProps) {
 	const entries = useQuery({

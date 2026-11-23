@@ -5,6 +5,7 @@ import { ErrorLine, Section } from "#/components/page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import {
 	type AnalysisProgress,
@@ -94,6 +95,30 @@ function OutcomeLine({ outcome }: { outcome: Outcome }) {
 		return <ErrorLine>{outcome.message}</ErrorLine>;
 	}
 	return <p className="text-muted-foreground text-sm">{summary(outcome)}</p>;
+}
+
+/** What re-analysing every song does to detected values and to values set by hand. */
+function ReanalyzeConsequence({ edited, replaceEdits }: { edited: number; replaceEdits: boolean }) {
+	const everything = edited === 0 || replaceEdits;
+	const songs = plural(edited, "song", "songs");
+	let editsPart = ".";
+	if (edited > 0) {
+		editsPart = replaceEdits
+			? `, including the ${songs} you edited by hand.`
+			: `; the ${songs} you edited by hand keep your values.`;
+	}
+	const sentence = `${everything ? "Every BPM, key and beat grid is detected again" : "Detected BPM, keys and beat grids are replaced"}${editsPart} You can stop at any time and keep what is done.`;
+	return (
+		<Facts label={sentence}>
+			<Fact tone="changed">{everything ? "Every BPM, key, grid" : "Detected BPM, key, grid"}</Fact>
+			{edited > 0 && (
+				<Fact tone={replaceEdits ? "lost" : "kept"}>
+					{plural(edited, "hand edit", "hand edits")}
+				</Fact>
+			)}
+			<Fact tone="kept">Stop any time</Fact>
+		</Facts>
+	);
 }
 
 /** How much of the library has been analyzed, or how far the running analysis has got. */
@@ -203,18 +228,7 @@ function RunControls({
 				disabled={counts.analyzed === 0}
 				data-hint="Detect BPM and key again for every song, replacing earlier results"
 				confirmLabel={`Re-analyze ${plural(counts.total, "song", "songs")}`}
-				consequence={
-					<>
-						{counts.edited === 0 || replaceEdits
-							? "Every BPM, key and beat grid is detected again"
-							: "Detected BPM, keys and beat grids are replaced"}
-						{counts.edited > 0 &&
-							(replaceEdits
-								? `, including the ${plural(counts.edited, "song", "songs")} you edited by hand.`
-								: `; the ${plural(counts.edited, "song", "songs")} you edited by hand keep your values.`)}
-						{counts.edited === 0 && "."} You can stop at any time and keep what is done.
-					</>
-				}
+				consequence={<ReanalyzeConsequence edited={counts.edited} replaceEdits={replaceEdits} />}
 				onConfirm={() => onRun(true)}
 			>
 				<RotateCcw />
@@ -289,7 +303,15 @@ function FileTags({
 					disabled={running || withResults === 0}
 					data-hint={`Write the saved BPM and key of ${plural(withResults, "song", "songs")} into their files, e.g. songs analysed before results were always written`}
 					confirmLabel={`Write tags into ${plural(withResults, "song", "songs")}`}
-					consequence={`Their BPM and key tags are replaced, with keys in ${notation} notation. Files that already match are left alone.`}
+					consequence={
+						<Facts
+							label={`Their BPM and key tags are replaced, with keys in ${notation} notation. Files that already match are left alone.`}
+						>
+							<Fact tone="changed">BPM and key tags</Fact>
+							<Fact>{notation}</Fact>
+							<Fact tone="kept">Matching files</Fact>
+						</Facts>
+					}
 					onConfirm={() =>
 						save.mutate(undefined, {
 							onSuccess: (report) => onOutcome({ kind: "tags", report }),
@@ -464,7 +486,15 @@ export function AnalysisSettings() {
 	return (
 		<FrameSection
 			title="BPM & key"
-			description="Songs are analysed as they come into the library, and their BPM and key are written into the files so other apps and players see them. A BPM or key you set by hand is never replaced."
+			description={
+				<Facts label="Songs are analysed as they come into the library, and their BPM and key are written into the files so other apps and players see them. A BPM or key you set by hand is never replaced.">
+					<Fact tone="changed">Analysed on arrival</Fact>
+					<Fact tone="changed" hint="So other apps and players see them">
+						Written into files
+					</Fact>
+					<Fact tone="kept">Hand edits kept</Fact>
+				</Facts>
+			}
 			wellClassName="p-4"
 		>
 			<AnalysisBody />

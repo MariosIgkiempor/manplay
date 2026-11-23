@@ -1,5 +1,13 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, Loader2, RefreshCw } from "lucide-react";
+import {
+	ArrowDown,
+	ArrowUp,
+	ArrowUpDown,
+	CheckCircle2,
+	Clock,
+	Loader2,
+	RefreshCw,
+} from "lucide-react";
 import {
 	type Dispatch,
 	type ReactNode,
@@ -19,6 +27,7 @@ import { FolderTree } from "#/components/sync-review-tree.tsx";
 import { ReviewViewMenu } from "#/components/sync-review-view-menu.tsx";
 import { SyncShell, type SyncShellVariant } from "#/components/sync-shell.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import {
 	type ApplySummary,
@@ -942,11 +951,18 @@ function UpToDate({
 					</Button>
 				}
 			>
-				{matching > 0
-					? `All ${count(matching)} songs match ${where}.`
-					: `Nothing to sync with ${where}.`}{" "}
-				Checked {timeAgo(scannedAt)}.
-				{held > 0 && ` ${count(held)} removed songs are kept there for 7 days.`}
+				<Facts
+					label={`${matching > 0 ? `All ${count(matching)} songs match ${where}.` : `Nothing to sync with ${where}.`} Checked ${timeAgo(scannedAt)}.${held > 0 ? ` ${count(held)} removed songs are kept there for 7 days.` : ""}`}
+					className="justify-center"
+				>
+					{matching > 0 ? (
+						<Fact tone="kept">{count(matching)} songs match</Fact>
+					) : (
+						<Fact>Nothing to sync</Fact>
+					)}
+					<Fact icon={<Clock />}>Checked {timeAgo(scannedAt)}</Fact>
+					{held > 0 && <Fact tone="kept">{count(held)} removed, kept 7 days</Fact>}
+				</Facts>
 			</EmptyState>
 		</SyncShell>
 	);
@@ -993,7 +1009,9 @@ function NewerRead({ show, onShow }: { show: boolean; onShow: () => void }) {
 	return (
 		<div className="flex items-center justify-between gap-3 border-b bg-muted/40 px-[var(--diff-inset)] py-2 text-sm">
 			<span className="text-muted-foreground">
-				The destination was read again since you started ticking.
+				<Facts label="The destination was read again since you started ticking.">
+					<Fact tone="changed">Newer read ready</Fact>
+				</Facts>
 			</span>
 			<Button size="sm" variant="outline" onClick={onShow}>
 				Show the latest

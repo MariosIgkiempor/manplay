@@ -23,6 +23,7 @@ import { SaveState } from "#/components/save-state.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { SyncPanel } from "#/components/sync-summary.tsx";
 import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
 import { isR2, type SyncTarget, targetShortName, updateSyncTarget } from "#/lib/api.ts";
@@ -39,7 +40,7 @@ function Field({
 }: {
 	icon: ReactNode;
 	label: string;
-	hint?: string | undefined;
+	hint?: ReactNode;
 } & React.ComponentProps<typeof Input>) {
 	const id = useId();
 	return (
@@ -55,8 +56,12 @@ function Field({
 	);
 }
 
-const MOVE_HINT =
-	"Changing the folder re-uploads your library there. Files at the old location are left untouched.";
+const MOVE_HINT = (
+	<Facts label="Changing the folder re-uploads your library there. Files at the old location are left untouched.">
+		<Fact tone="changed">Library uploads again</Fact>
+		<Fact tone="kept">Old location untouched</Fact>
+	</Facts>
+);
 
 const parsePath = (raw: string) =>
 	raw
@@ -222,7 +227,12 @@ function RemoveRow({
 				<SettingLabel
 					icon={<Trash2 className="text-destructive" />}
 					title="Remove destination"
-					hint="manplay stops syncing here and forgets it. The files there stay."
+					hint={
+						<Facts label="manplay stops syncing here and forgets it. The files there stay.">
+							<Fact tone="lost">Syncing here</Fact>
+							<Fact tone="kept">Files there</Fact>
+						</Facts>
+					}
 				/>
 			}
 		>
@@ -234,7 +244,12 @@ function RemoveRow({
 				disabled={busy}
 				destructive
 				confirmLabel={`Remove ${targetShortName(target)}`}
-				consequence={removalConsequence(target)}
+				consequence={
+					<Facts label={removalConsequence(target)}>
+						<Fact tone="lost">Syncing here</Fact>
+						<Fact tone="kept">Files there</Fact>
+					</Facts>
+				}
 				onConfirm={onRemove}
 			>
 				Remove

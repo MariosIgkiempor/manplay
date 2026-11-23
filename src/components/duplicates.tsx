@@ -12,6 +12,7 @@ import {
 } from "#/components/problem-panel.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { PanelBarTitle } from "#/context/panel-bar.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import { type CarryCandidate, type DuplicateGroup, fsReveal } from "#/lib/api.ts";
@@ -77,9 +78,13 @@ function DuplicateList({ groups }: { groups: readonly DuplicateGroup[] }) {
 	return (
 		<div className="space-y-4">
 			<PanelIntro>
-				The same recording is stored in more than one file. The copies share their tags, beat grid
-				and playlist entries, and playlists show them once. Keep one and move the others to the{" "}
-				{TRASH}.
+				<Facts
+					label={`The same recording is stored in more than one file. The copies share their tags, beat grid and playlist entries, and playlists show them once. Keep one and move the others to the ${TRASH}.`}
+				>
+					<Fact>Same recording, several files</Fact>
+					<Fact tone="kept">Tags, grid, playlists shared</Fact>
+					<Fact tone="changed">Keep one, rest to {TRASH}</Fact>
+				</Facts>
 			</PanelIntro>
 			{(error ?? (trash.isError ? String(trash.error) : null)) && (
 				<ErrorLine>{error ?? String(trash.error)}</ErrorLine>
@@ -169,8 +174,11 @@ function CarryList({ items }: { items: readonly CarryCandidate[] }) {
 	return (
 		<div className="space-y-4">
 			<PanelIntro>
-				These songs have new audio (a re-encode, such as MP3 to FLAC), so the tags, playlists and
-				hand-set tempo of the old audio no longer point at them. Carry them over to keep them.
+				<Facts label="These songs have new audio (a re-encode, such as MP3 to FLAC), so the tags, playlists and hand-set tempo of the old audio no longer point at them. Carry them over to keep them.">
+					<Fact tone="changed">Re-encoded audio</Fact>
+					<Fact tone="warn">Tags, playlists, tempo left behind</Fact>
+					<Fact tone="kept">Carry over to keep</Fact>
+				</Facts>
 			</PanelIntro>
 			{decide.isError && <ErrorLine>{String(decide.error)}</ErrorLine>}
 			<ProblemList title={`${items.length} re-encoded ${items.length === 1 ? "song" : "songs"}`}>

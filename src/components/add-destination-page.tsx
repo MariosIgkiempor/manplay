@@ -12,6 +12,7 @@ import { PlaceFrame } from "#/components/place-page.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
 import { JoinLibraryDialog } from "#/components/shared-library.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts, MoreInfo } from "#/components/ui/facts.tsx";
 import { PAGE_ART, WELL_ROWS } from "#/lib/page-layout.ts";
 import type { DestinationService } from "#/lib/places.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
@@ -172,7 +173,13 @@ function RekordboxStep() {
 							Already writing to <span className="font-mono text-xs">{path}</span>
 						</>
 					) : (
-						"Choose where to save the file. Nothing is written until you export."
+						<Facts
+							label="Choose where to save the file. Nothing is written until you export."
+							className="justify-center"
+						>
+							<span>Choose where to save the file.</span>
+							<Fact tone="kept">Nothing written until export</Fact>
+						</Facts>
 					)}
 				</p>
 				<div className="flex justify-center gap-2">
@@ -203,7 +210,8 @@ function UsbStep() {
 			{drives.length === 0 ? (
 				<div className="rounded-xl border border-hairline border-dashed">
 					<EmptyState title="Plug in a USB drive">
-						It shows up here, and in your destinations, while it's plugged in.
+						Appears here while plugged in{" "}
+						<MoreInfo hint="It shows up here, and in your destinations, while it's plugged in." />
 					</EmptyState>
 				</div>
 			) : (

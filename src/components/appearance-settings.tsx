@@ -1,6 +1,7 @@
 import { Monitor, Moon, Sun } from "lucide-react";
 import type { ComponentType } from "react";
 import { FieldRow, FrameSection } from "#/components/frame.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import type { ThemeChoice } from "#/lib/theme.ts";
 import { setThemeChoice, useThemeChoice } from "#/lib/use-theme.ts";
 
@@ -21,7 +22,11 @@ export function AppearanceSettings() {
 		<FrameSection title="Appearance">
 			<FieldRow
 				label="Theme"
-				description="System follows your computer's light or dark setting as it changes."
+				description={
+					<Facts label="System follows your computer's light or dark setting as it changes.">
+						<Fact tone="changed">System follows your computer</Fact>
+					</Facts>
+				}
 				align="center"
 			>
 				<fieldset className="inline-flex overflow-clip rounded-lg border text-sm">

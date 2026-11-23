@@ -1,4 +1,4 @@
-import { ContextMenu } from "@base-ui/react/context-menu";
+import { MenuContextTrigger, MenuItem as MenuItemPart } from "@ui-sdk/react/menu";
 import {
 	ArrowDown,
 	ArrowRight,
@@ -39,9 +39,10 @@ import {
 import { IssuePopover } from "#/components/issue-popover.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { PathCrumbs } from "#/components/path-crumbs.tsx";
-import { SearchGlyph } from "#/components/search-field.tsx";
+import { KeyCap, SearchGlyph } from "#/components/search-field.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
+import { ContextMenuPopup, MenuRoot } from "#/components/ui/popup.tsx";
 import type { UndoEntry } from "#/context/undo-context.ts";
 import { type FsEntry, fsReveal, pathArtUrl } from "#/lib/api.ts";
 import type { IssueIndex } from "#/lib/audit.ts";
@@ -66,7 +67,7 @@ import type { FsClipboard } from "#/lib/use-fs-ops.ts";
 import { useFsOps } from "#/lib/use-fs-ops.ts";
 import { undoMakeDir, undoRename } from "#/lib/use-fs-undo.ts";
 import { useIssueNav } from "#/lib/use-issue-nav.ts";
-import { shortcutFor, useBindings, useMacLabels } from "#/lib/use-shortcuts.ts";
+import { shortcutFor, useBindings, useMacLabels, useShortcutLabel } from "#/lib/use-shortcuts.ts";
 import { LOCAL_TREE, useTree } from "#/lib/use-tree.ts";
 import { expandOrEnter, useVimNav } from "#/lib/use-vim-nav.ts";
 import { cn } from "#/lib/utils.ts";
@@ -687,6 +688,7 @@ export function LocationBar({
 	children: React.ReactNode;
 }) {
 	const [focused, setFocused] = useState(false);
+	const filterKey = useShortcutLabel("fileFilter");
 	const on = value.trim() !== "";
 	const searching = focused || on;
 	return (
@@ -747,10 +749,10 @@ export function LocationBar({
 					</button>
 				</>
 			)}
-			{!searching && (
-				<kbd className="hidden shrink-0 rounded border px-1.5 text-[11px] text-muted-foreground/70 @sm/pane:inline">
-					/
-				</kbd>
+			{!searching && filterKey && (
+				<span className="hidden @sm/pane:inline">
+					<KeyCap>{filterKey}</KeyCap>
+				</span>
 			)}
 		</div>
 	);
@@ -1531,37 +1533,30 @@ export function MenuShell({
 	children: React.ReactElement;
 }) {
 	return (
-		<ContextMenu.Root>
-			<ContextMenu.Trigger render={children} />
-			<ContextMenu.Portal>
-				<ContextMenu.Positioner className="z-50">
-					<ContextMenu.Popup className={popup}>
-						{items.map(({ label, icon: Icon, run, shortcut, disabled, danger, detail }) => (
-							<ContextMenu.Item
-								key={label}
-								className={cn(menuItem, danger && "text-destructive")}
-								disabled={disabled}
-								onClick={run}
-							>
-								<Icon className={cn("size-4", detail && "self-start mt-0.5")} />
-								<span className="min-w-0 flex-1">
-									{label}
-									{detail?.map((line) => (
-										<span
-											key={line}
-											className="block max-w-64 truncate text-muted-foreground text-xs"
-										>
-											{line}
-										</span>
-									))}
+		<MenuRoot>
+			<MenuContextTrigger render={children} />
+			<ContextMenuPopup className={popup}>
+				{items.map(({ label, icon: Icon, run, shortcut, disabled, danger, detail }) => (
+					<MenuItemPart
+						key={label}
+						className={cn(menuItem, danger && "text-destructive")}
+						disabled={disabled ?? false}
+						onSelect={() => run()}
+					>
+						<Icon className={cn("size-4", detail && "self-start mt-0.5")} />
+						<span className="min-w-0 flex-1">
+							{label}
+							{detail?.map((line) => (
+								<span key={line} className="block max-w-64 truncate text-muted-foreground text-xs">
+									{line}
 								</span>
-								{shortcut && <span className="text-muted-foreground text-xs">{shortcut}</span>}
-							</ContextMenu.Item>
-						))}
-					</ContextMenu.Popup>
-				</ContextMenu.Positioner>
-			</ContextMenu.Portal>
-		</ContextMenu.Root>
+							))}
+						</span>
+						{shortcut && <span className="text-muted-foreground text-xs">{shortcut}</span>}
+					</MenuItemPart>
+				))}
+			</ContextMenuPopup>
+		</MenuRoot>
 	);
 }
 

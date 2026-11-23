@@ -7,6 +7,7 @@ import { ExportFooter } from "#/components/export-chooser.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { SettingRow } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { type JellyfinPlanRow, jellyfinPlan, pushJellyfin } from "#/lib/api.ts";
 import { plural } from "#/lib/export-selection.ts";
 import { timeAgo } from "#/lib/format.ts";
@@ -59,7 +60,7 @@ function PlanList({ rows }: { rows: JellyfinPlanRow[] }) {
 	if (sorted.length === 0) {
 		return (
 			<p className="text-muted-foreground text-sm">
-				No playlists chosen. Choose some under Playlists first.
+				No playlists chosen yet: pick them under Playlists.
 			</p>
 		);
 	}
@@ -105,10 +106,10 @@ function Review({ targetId, onClose }: { targetId: number; onClose: () => void }
 	const changing = rows.filter((r) => r.action !== "unchanged" || r.adopted).length;
 	return (
 		<div className="flex min-h-full flex-col gap-4">
-			<p className="text-muted-foreground text-sm">
-				What Send changes in Jellyfin. Before a playlist is changed or deleted, its song list is
-				saved on this computer.
-			</p>
+			<Facts label="What Send changes in Jellyfin. Before a playlist is changed or deleted, its song list is saved on this computer.">
+				<Fact tone="changed">What Send changes</Fact>
+				<Fact tone="kept">Song lists backed up first</Fact>
+			</Facts>
 			{plan.isPending && <p className="text-muted-foreground text-sm">Reading Jellyfin…</p>}
 			{plan.isError && <ErrorLine>{String(plan.error)}</ErrorLine>}
 			{plan.isSuccess && <PlanList rows={rows} />}
@@ -143,9 +144,14 @@ export function JellyfinPushRow({ targetId }: { targetId: number }) {
 					icon={<Send />}
 					title="Send playlists"
 					hint={
-						last
-							? `Sent ${timeAgo(last.at)}: ${pushSummaryText(last.summary)}.`
-							: "Sent after each sync. Renames, removals and take-overs wait for a review here."
+						last ? (
+							`Sent ${timeAgo(last.at)}: ${pushSummaryText(last.summary)}.`
+						) : (
+							<Facts label="Sent after each sync. Renames, removals and take-overs wait for a review here.">
+								<Fact tone="changed">After each sync</Fact>
+								<Fact tone="warn">Renames, removals, take-overs: review</Fact>
+							</Facts>
+						)
 					}
 				/>
 			}

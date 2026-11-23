@@ -1,6 +1,7 @@
-import { Popover } from "@base-ui/react/popover";
+import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
+import { PopoverPopup } from "#/components/ui/popup.tsx";
 import {
 	type CalendarDate,
 	formatIsoDate,
@@ -52,39 +53,37 @@ export function DateField({
 		? toLocalDate(chosen).toLocaleDateString(undefined, { dateStyle: "medium" })
 		: "Pick a date";
 	return (
-		<Popover.Root open={open} onOpenChange={setOpen}>
-			<Popover.Trigger
+		<Popover open={open} onOpenChange={setOpen}>
+			<PopoverTrigger
 				aria-label={`${label}: ${text}`}
 				className={cn(pickerTrigger, !chosen && "text-muted-foreground", className)}
 			>
 				<CalendarDays className="size-3.5 shrink-0 text-muted-foreground" />
 				<span className="truncate tabular-nums">{text}</span>
-			</Popover.Trigger>
-			<Popover.Portal>
-				<Popover.Positioner sideOffset={4} align="start" className="z-50">
-					<Popover.Popup
-						aria-label={label}
-						className="w-64 rounded-lg border bg-popover p-2 text-popover-foreground text-sm shadow-lg outline-none"
-					>
-						<MonthCalendar
-							chosen={chosen}
-							onPick={(date) => {
-								onChange(formatIsoDate(date));
-								setOpen(false);
-							}}
-							onClear={
-								clearable
-									? () => {
-											onChange("");
-											setOpen(false);
-										}
-									: undefined
-							}
-						/>
-					</Popover.Popup>
-				</Popover.Positioner>
-			</Popover.Portal>
-		</Popover.Root>
+			</PopoverTrigger>
+			<PopoverPopup
+				sideOffset={4}
+				align="start"
+				aria-label={label}
+				className="w-64 rounded-lg border bg-popover p-2 text-popover-foreground text-sm shadow-lg outline-none"
+			>
+				<MonthCalendar
+					chosen={chosen}
+					onPick={(date) => {
+						onChange(formatIsoDate(date));
+						setOpen(false);
+					}}
+					onClear={
+						clearable
+							? () => {
+									onChange("");
+									setOpen(false);
+								}
+							: undefined
+					}
+				/>
+			</PopoverPopup>
+		</Popover>
 	);
 }
 

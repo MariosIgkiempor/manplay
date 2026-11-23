@@ -1,7 +1,14 @@
-import { Menu } from "@base-ui/react/menu";
+import {
+	MenuCheckboxItem,
+	MenuItem,
+	MenuItemIndicator,
+	MenuSeparator,
+	MenuTrigger,
+} from "@ui-sdk/react/menu";
 import { Check, Ellipsis } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "#/components/ui/button.tsx";
+import { MenuPopup, MenuRoot } from "#/components/ui/popup.tsx";
 import { menuItem, popup } from "#/lib/menu-styles.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -56,8 +63,8 @@ export function HeaderMenu({
 		return null;
 	}
 	return (
-		<Menu.Root>
-			<Menu.Trigger
+		<MenuRoot>
+			<MenuTrigger
 				render={
 					<Button
 						variant="outline"
@@ -68,47 +75,44 @@ export function HeaderMenu({
 				}
 			>
 				<Ellipsis />
-			</Menu.Trigger>
-			<Menu.Portal>
-				<Menu.Positioner sideOffset={6} align="end" className="z-50">
-					<Menu.Popup className={popup}>
-						{rows.map((row, n) =>
-							row === "separator" ? (
-								<Menu.Separator
-									// biome-ignore lint/suspicious/noArrayIndexKey: separators have no identity of their own
-									key={`sep-${n}`}
-									className="-mx-1 my-1 h-px bg-border"
-								/>
-							) : row.checked === undefined ? (
-								<Menu.Item
-									key={row.label}
-									data-hint={row.hint}
-									disabled={row.disabled ?? false}
-									onClick={row.onSelect}
-									className={cn(menuItem, row.destructive && "text-destructive")}
-								>
-									{row.icon}
-									{row.label}
-								</Menu.Item>
-							) : (
-								<Menu.CheckboxItem
-									key={row.label}
-									data-hint={row.hint}
-									disabled={row.disabled ?? false}
-									checked={row.checked}
-									onCheckedChange={row.onSelect}
-									className={menuItem}
-								>
-									<Menu.CheckboxItemIndicator keepMounted className="data-[unchecked]:invisible">
-										<Check />
-									</Menu.CheckboxItemIndicator>
-									{row.label}
-								</Menu.CheckboxItem>
-							),
-						)}
-					</Menu.Popup>
-				</Menu.Positioner>
-			</Menu.Portal>
-		</Menu.Root>
+			</MenuTrigger>
+			<MenuPopup sideOffset={6} align="end" className={popup}>
+				{rows.map((row, n) =>
+					row === "separator" ? (
+						<MenuSeparator
+							// biome-ignore lint/suspicious/noArrayIndexKey: separators have no identity of their own
+							key={`sep-${n}`}
+							className="-mx-1 my-1 h-px bg-border"
+						/>
+					) : row.checked === undefined ? (
+						<MenuItem
+							key={row.label}
+							data-hint={row.hint}
+							disabled={row.disabled ?? false}
+							onSelect={() => row.onSelect()}
+							className={cn(menuItem, row.destructive && "text-destructive")}
+						>
+							{row.icon}
+							{row.label}
+						</MenuItem>
+					) : (
+						<MenuCheckboxItem
+							key={row.label}
+							value={row.label}
+							data-hint={row.hint}
+							disabled={row.disabled ?? false}
+							checked={row.checked}
+							onCheckedChange={row.onSelect}
+							className={menuItem}
+						>
+							<MenuItemIndicator keepMounted className="data-[unchecked]:invisible">
+								<Check />
+							</MenuItemIndicator>
+							{row.label}
+						</MenuCheckboxItem>
+					),
+				)}
+			</MenuPopup>
+		</MenuRoot>
 	);
 }

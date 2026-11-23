@@ -1,6 +1,7 @@
-import { Popover } from "@base-ui/react/popover";
+import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import { Scissors, X } from "lucide-react";
 import { Button } from "#/components/ui/button.tsx";
+import { PopoverPopup } from "#/components/ui/popup.tsx";
 import { applySplit, suggestSplits } from "#/lib/name-split.ts";
 import { useDismissedSplits } from "#/lib/use-dismissed-splits.ts";
 
@@ -40,32 +41,29 @@ export function NameSplitPills({
 							→ {suggestion.parts.join(", ")}
 						</span>
 					</button>
-					<Popover.Root>
-						<Popover.Trigger
+					<Popover>
+						<PopoverTrigger
 							aria-label={`Dismiss split suggestion for ${suggestion.name}`}
 							className="mr-0.5 flex size-4 items-center justify-center rounded-full hover:bg-primary/10"
 						>
 							<X className="size-3" />
-						</Popover.Trigger>
-						<Popover.Portal>
-							<Popover.Positioner sideOffset={6} className="z-50">
-								<Popover.Popup
-									className="z-50 w-64 space-y-2 rounded-lg border bg-popover p-3 text-popover-foreground text-sm shadow-lg outline-none"
-									onKeyDown={(ev) => ev.stopPropagation()}
-								>
-									<p>
-										Treat <span className="font-medium">{suggestion.name}</span> as one artist?
-									</p>
-									<p className="text-muted-foreground text-xs">
-										The split suggestion won't appear for this name again.
-									</p>
-									<Button size="sm" className="w-full" onClick={() => dismiss(suggestion.name)}>
-										Don't suggest splitting
-									</Button>
-								</Popover.Popup>
-							</Popover.Positioner>
-						</Popover.Portal>
-					</Popover.Root>
+						</PopoverTrigger>
+						<PopoverPopup
+							sideOffset={6}
+							className="z-50 w-64 space-y-2 rounded-lg border bg-popover p-3 text-popover-foreground text-sm shadow-lg outline-none"
+							onKeyDown={(ev) => ev.stopPropagation()}
+						>
+							<p>
+								Treat <span className="font-medium">{suggestion.name}</span> as one artist?
+							</p>
+							<p className="text-muted-foreground text-xs">
+								The split suggestion won't appear for this name again.
+							</p>
+							<Button size="sm" className="w-full" onClick={() => dismiss(suggestion.name)}>
+								Don't suggest splitting
+							</Button>
+						</PopoverPopup>
+					</Popover>
 				</span>
 			))}
 		</div>

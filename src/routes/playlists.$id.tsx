@@ -22,6 +22,7 @@ import {
 	renamePlaylist,
 } from "#/lib/api.ts";
 import { duration } from "#/lib/format.ts";
+import { PAGE_BODY } from "#/lib/page-layout.ts";
 import { undoRemoveFromPlaylist } from "#/lib/undo-entries.ts";
 
 export const Route = createFileRoute("/playlists/$id")({ component: PlaylistPage });
@@ -104,7 +105,7 @@ function PlaylistPage() {
 					/>
 				}
 			/>
-			<div className="space-y-3 p-6">
+			<div className={`space-y-3 ${PAGE_BODY}`}>
 				{[remove, rename, destroy].map(
 					(m) => m.isError && <ErrorLine key={m.submittedAt}>{String(m.error)}</ErrorLine>,
 				)}
