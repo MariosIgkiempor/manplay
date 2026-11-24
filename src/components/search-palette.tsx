@@ -21,6 +21,7 @@ import {
 	suggest,
 } from "#/lib/search.ts";
 import { searchInputClass } from "#/lib/search-field.ts";
+import { focusListRow } from "#/lib/use-list-entry-keys.ts";
 import { cn } from "#/lib/utils.ts";
 
 const ICONS: Record<PillKind, ComponentType<{ className?: string | undefined }>> = {
@@ -102,10 +103,13 @@ export function SearchPalette({ pills, onPills, text, onText, trailing }: Props)
 		move(-1);
 		return true;
 	};
+	// With no suggestion showing, Enter goes on to the songs found, to move through with J and K.
 	const choose = () => {
-		const s = flat[active];
+		const s = open ? flat[active] : undefined;
 		if (s) {
 			pick(s);
+		} else {
+			focusListRow();
 		}
 		return true;
 	};

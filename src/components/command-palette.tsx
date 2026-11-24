@@ -35,6 +35,7 @@ import { listPlaylists, listTags, type Track, targetName } from "#/lib/api.ts";
 import { groupArtists } from "#/lib/artists.ts";
 import { type PaletteItem, rankMatches } from "#/lib/command-palette.ts";
 import { useExitGhost } from "#/lib/exit-ghost.ts";
+import { onOpenPalette } from "#/lib/open-palette.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { useScan, useSyncTargets, useTracks } from "#/lib/queries.ts";
@@ -251,7 +252,8 @@ export function CommandPalette() {
 	const detail = useDetail();
 	const player = usePlayer();
 
-	useShortcut("palette", () => setOpen((o) => !o), { anywhere: true });
+	useShortcut("palette", () => setOpen((o) => !o));
+	useEffect(() => onOpenPalette(() => setOpen(true)), []);
 
 	useEffect(() => {
 		if (!open) {

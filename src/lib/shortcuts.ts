@@ -147,18 +147,25 @@ export function chordLabel(chord: Chord, mac: boolean): string {
 
 /**
  * Where a shortcut works: `app` on every page; `deck` while the waveform above the player is
- * shown; `files` while the file browser has focus. App and deck keys listen at once, so they share
- * one set of keys; the file browser keeps its keys while focused, sharing them only with the app
- * keys that work even there (`anywhere`).
+ * shown; `files` while the file browser has focus; `list` while a song list has focus. App and
+ * deck keys listen at once, so they share one set of keys. A focused file browser or song list
+ * comes first for its own keys; ⌘ keys of `anywhere` app actions still reach it, so those must
+ * not clash with it.
  */
-export type ShortcutScope = "app" | "deck" | "files";
+export type ShortcutScope = "app" | "deck" | "files" | "list";
+
+/** Scopes that only hear keys while they have focus, ahead of the app and the deck. */
+const FOCUSED_SCOPES: ReadonlySet<ShortcutScope> = new Set(["files", "list"]);
 
 const PADS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 const PAD_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const;
 type Pad = (typeof PADS)[number];
 
 /** Every action a key can be bound to. */
-export type ShortcutId =
+export type ShortcutId = AppShortcutId | DeckShortcutId | FileShortcutId | ListShortcutId;
+
+/** The actions that work on every page. */
+export type AppShortcutId =
 	| "undo"
 	| "redo"
 	| "save"
@@ -166,8 +173,28 @@ export type ShortcutId =
 	| "palette"
 	| "pageSearch"
 	| "sidebar"
+	| "panel"
 	| "prevSong"
 	| "nextSong"
+	| "playerPrev"
+	| "playerNext"
+	| "waveform"
+	| "addPlaying"
+	| "back"
+	| "forward"
+	| "settings"
+	| "shortcuts"
+	| "revealPlaying"
+	| "seekBack"
+	| "seekForward"
+	| "goLibrary"
+	| "goFiles"
+	| "goMetadata"
+	| "goImport"
+	| "goExport";
+
+/** The grid editor's actions, while the waveform above the player shows. */
+export type DeckShortcutId =
 	| "beatBack"
 	| "beatOn"
 	| "barBack"
@@ -190,8 +217,26 @@ export type ShortcutId =
 	| "snap"
 	| "help"
 	| `pad${Pad}`
-	| `clearPad${Pad}`
-	| FileShortcutId;
+	| `clearPad${Pad}`;
+
+/** A focused song list's actions. */
+export type ListShortcutId =
+	| "listNext"
+	| "listPrev"
+	| "listExtendNext"
+	| "listExtendPrev"
+	| "listFirst"
+	| "listLast"
+	| "listPlay"
+	| "listOpen"
+	| "listBack"
+	| "listSelect"
+	| "listSelectAll"
+	| "listClear"
+	| "listRename"
+	| "listPlayNext"
+	| "listQueue"
+	| "listEdit";
 
 /** The file browser's actions. */
 export type FileShortcutId =
@@ -231,7 +276,10 @@ export interface ShortcutDef {
 	defaults: readonly Chord[];
 	/** Held with ⌥ the action takes a finer step, so ⌥ is not part of its keys. */
 	fineWithAlt?: true;
-	/** Works even while typing in a field or with a list focused, like ⌘K. */
+	/**
+	 * Its ⌘ keys work even while typing in a field or with a list focused, like ⌘K. Keys without
+	 * ⌘ never do: they would take a letter from the field.
+	 */
 	anywhere?: true;
 }
 
@@ -259,13 +307,60 @@ const ANYWHERE = { anywhere: true } as const;
 export const SHORTCUTS: readonly ShortcutDef[] = [
 	define("play", "Anywhere", "app", "Play / pause", ["Space"]),
 	define("palette", "Anywhere", "app", "Search everything", ["mod+KeyK"], ANYWHERE),
-	define("pageSearch", "Anywhere", "app", "Search this page", ["mod+KeyF"], ANYWHERE),
-	define("sidebar", "Anywhere", "app", "Fold the sidebar", ["mod+Backslash"], ANYWHERE),
+	define("pageSearch", "Anywhere", "app", "Search this page", ["mod+KeyF", "Slash"], ANYWHERE),
+	define("sidebar", "Anywhere", "app", "Fold the sidebar", ["mod+KeyB", "mod+Backslash"], ANYWHERE),
+	define("panel", "Anywhere", "app", "Close or reopen the side panel", ["mod+alt+KeyB"], ANYWHERE),
 	define("undo", "Anywhere", "app", "Undo", ["mod+KeyZ"], ANYWHERE),
 	define("redo", "Anywhere", "app", "Redo", ["mod+shift+KeyZ", "mod+KeyY"], ANYWHERE),
 	define("save", "Anywhere", "app", "Save edits now", ["mod+KeyS"], ANYWHERE),
 	define("prevSong", "Anywhere", "app", "Previous song in the side panel", ["BracketLeft"]),
 	define("nextSong", "Anywhere", "app", "Next song in the side panel", ["BracketRight"]),
+	define("playerPrev", "Anywhere", "app", "Play the previous song", ["mod+ArrowLeft"]),
+	define("playerNext", "Anywhere", "app", "Play the next song", ["mod+ArrowRight"]),
+	define("waveform", "Anywhere", "app", "Show or hide the grid editor", ["KeyE"]),
+	define("addPlaying", "Anywhere", "app", "Add the playing song to a playlist or tag", ["KeyA"]),
+	define("revealPlaying", "Anywhere", "app", "Find the playing song in the list", ["KeyF"]),
+	define("seekBack", "Anywhere", "app", "Skip back 10 seconds", ["mod+shift+ArrowLeft"]),
+	define("seekForward", "Anywhere", "app", "Skip forward 10 seconds", ["mod+shift+ArrowRight"]),
+
+	define("goLibrary", "Go to", "app", "Library", ["mod+Digit1"], ANYWHERE),
+	define("goFiles", "Go to", "app", "Files", ["mod+Digit2"], ANYWHERE),
+	define("goMetadata", "Go to", "app", "Metadata", ["mod+Digit3"], ANYWHERE),
+	define("goImport", "Go to", "app", "Import", ["mod+Digit4"], ANYWHERE),
+	define("goExport", "Go to", "app", "Export", ["mod+Digit5"], ANYWHERE),
+	define("settings", "Go to", "app", "Settings", ["mod+Comma"], ANYWHERE),
+	define("shortcuts", "Go to", "app", "Every shortcut", ["mod+Slash"], ANYWHERE),
+	define("back", "Go to", "app", "Back", ["mod+BracketLeft"], ANYWHERE),
+	define("forward", "Go to", "app", "Forward", ["mod+BracketRight"], ANYWHERE),
+
+	define("listNext", "Song lists", "list", "Next song; in a grid, the row below", [
+		"ArrowDown",
+		"KeyJ",
+	]),
+	define("listPrev", "Song lists", "list", "Previous song; in a grid, the row above", [
+		"ArrowUp",
+		"KeyK",
+	]),
+	define("listExtendNext", "Song lists", "list", "Select down", ["shift+ArrowDown", "shift+KeyJ"]),
+	define("listExtendPrev", "Song lists", "list", "Select up", ["shift+ArrowUp", "shift+KeyK"]),
+	define("listFirst", "Song lists", "list", "First song (g: press twice)", ["Home", "KeyG"]),
+	define("listLast", "Song lists", "list", "Last song", ["End", "shift+KeyG"]),
+	define("listPlay", "Song lists", "list", "Play from this song", ["Enter", "KeyO"]),
+	define("listOpen", "Song lists", "list", "Open in the side panel; in a grid, the next one", [
+		"ArrowRight",
+		"KeyL",
+	]),
+	define("listBack", "Song lists", "list", "In a grid of albums or artists, the previous one", [
+		"ArrowLeft",
+		"KeyH",
+	]),
+	define("listSelect", "Song lists", "list", "Select or unselect", ["Space", "KeyX"]),
+	define("listSelectAll", "Song lists", "list", "Select all", ["mod+KeyA"]),
+	define("listClear", "Song lists", "list", "Clear the selection", ["Escape"]),
+	define("listRename", "Song lists", "list", "Rename", ["F2"]),
+	define("listPlayNext", "Song lists", "list", "Play next", ["KeyP"]),
+	define("listQueue", "Song lists", "list", "Add to the queue", ["shift+KeyP"]),
+	define("listEdit", "Song lists", "list", "Edit metadata", ["mod+KeyE"]),
 
 	define("beatBack", "Move", "deck", "Back one beat", ["Comma"]),
 	define("beatOn", "Move", "deck", "On one beat", ["Period"]),
@@ -418,17 +513,28 @@ export function actionFor(
 	return null;
 }
 
+/** Whether a chord holds ⌘ (Ctrl on Windows). */
+export function hasMod(chord: Chord): boolean {
+	return chord.split("+").includes("mod");
+}
+
 /**
- * Whether two actions can hear the same key press: app and deck keys listen together everywhere;
- * the file browser keeps its keys while focused, where only the app's `anywhere` keys also fire.
+ * Whether two actions can hear the same chord: app and deck keys listen together everywhere; a
+ * focused file browser or song list comes first for its keys, where only the app's `anywhere` ⌘
+ * keys also fire. Only one of them can have focus at a time.
  */
-function overlap(a: ShortcutDef, b: ShortcutDef): boolean {
+function overlap(a: ShortcutDef, b: ShortcutDef, chord: Chord): boolean {
 	if (a.scope === b.scope) {
 		return true;
 	}
-	if (a.scope === "files" || b.scope === "files") {
-		const other = a.scope === "files" ? b : a;
-		return other.scope === "app" && other.anywhere === true;
+	const aFocused = FOCUSED_SCOPES.has(a.scope);
+	const bFocused = FOCUSED_SCOPES.has(b.scope);
+	if (aFocused && bFocused) {
+		return false;
+	}
+	if (aFocused || bFocused) {
+		const other = aFocused ? b : a;
+		return other.scope === "app" && other.anywhere === true && hasMod(chord);
 	}
 	return true;
 }
@@ -437,7 +543,7 @@ function overlap(a: ShortcutDef, b: ShortcutDef): boolean {
 export function conflictsWith(bindings: Bindings, id: ShortcutId, chord: Chord): ShortcutId[] {
 	const def = shortcutDef(id);
 	return SHORTCUTS.filter(
-		(s) => s.id !== id && overlap(def, s) && (bindings.get(s.id) ?? []).includes(chord),
+		(s) => s.id !== id && overlap(def, s, chord) && (bindings.get(s.id) ?? []).includes(chord),
 	).map((s) => s.id);
 }
 
@@ -449,7 +555,6 @@ const RESERVED: ReadonlyMap<Chord, string> = new Map(
 			["mod+KeyW", "Close the window"],
 			["mod+KeyH", "Hide the app"],
 			["mod+KeyM", "Minimise"],
-			["mod+Comma", "Settings"],
 			["Tab", "Moving between controls"],
 			["shift+Tab", "Moving between controls"],
 		] as const
@@ -458,7 +563,8 @@ const RESERVED: ReadonlyMap<Chord, string> = new Map(
 
 /**
  * Text editing keys: taken from fields and the rest of the app by an app or grid shortcut, which
- * listens everywhere. In the file browser they mean the same thing for files, so they are fine.
+ * listens everywhere. In the file browser and song lists they mean the same thing for files and
+ * songs, so they are fine there.
  */
 const TEXT_EDITING: ReadonlyMap<Chord, string> = new Map(
 	(
@@ -473,7 +579,7 @@ const TEXT_EDITING: ReadonlyMap<Chord, string> = new Map(
 
 /** What the system already does with a chord where `id` would listen, or null when nothing. */
 export function reservedFor(chord: Chord, id: ShortcutId): string | null {
-	const textEditing = shortcutDef(id).scope === "files" ? null : TEXT_EDITING.get(chord);
+	const textEditing = FOCUSED_SCOPES.has(shortcutDef(id).scope) ? null : TEXT_EDITING.get(chord);
 	return RESERVED.get(chord) ?? textEditing ?? null;
 }
 

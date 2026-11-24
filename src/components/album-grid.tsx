@@ -8,6 +8,7 @@ import { SyncBadge } from "#/components/sync-badge.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import { type Album, syncState } from "#/lib/albums.ts";
 import { useProgressive } from "#/lib/use-progressive.ts";
+import { GRID_ITEM_ATTRIBUTE, useTileGridKeys } from "#/lib/use-tile-grid-keys.ts";
 
 interface Props {
 	albums: readonly Album[];
@@ -39,6 +40,7 @@ function AlbumTile({
 						onClick={onOpen}
 						onDoubleClick={() => player.play(album.tracks, 0)}
 						aria-label={`Open ${album.album}`}
+						{...{ [GRID_ITEM_ATTRIBUTE]: "" }}
 						data-hint="Click to open, double-click to play"
 					>
 						<AlbumArt
@@ -78,6 +80,7 @@ function AlbumTile({
 
 export function AlbumGrid({ albums, targetCount, onOpen }: Props) {
 	const { shown, more, loadMore } = useProgressive(albums, (a) => a.key);
+	const keys = useTileGridKeys({ more, loadMore });
 	if (albums.length === 0) {
 		return (
 			<EmptyState kind="search" title="No albums">
@@ -87,7 +90,11 @@ export function AlbumGrid({ albums, targetCount, onOpen }: Props) {
 	}
 	return (
 		<>
-			<div className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-x-4 gap-y-6">
+			<div
+				ref={keys.ref}
+				{...keys.props}
+				className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-x-4 gap-y-6"
+			>
 				{shown.map((a) => (
 					<AlbumTile key={a.key} album={a} targetCount={targetCount} onOpen={() => onOpen(a)} />
 				))}

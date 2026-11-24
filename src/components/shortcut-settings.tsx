@@ -1,9 +1,11 @@
 import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import {
+	Compass,
 	Flag,
 	FolderTree,
 	Grid3x3,
 	Keyboard,
+	ListMusic,
 	MoveHorizontal,
 	Plus,
 	RotateCcw,
@@ -60,6 +62,7 @@ const WHEN: Record<ShortcutScope, string> = {
 	app: "Always, except while typing",
 	deck: "The waveform is shown",
 	files: "The file browser has focus",
+	list: "A song list or a grid of albums or artists has focus (J or K from the page goes there)",
 };
 
 const ICON = "size-4 text-muted-foreground";
@@ -68,6 +71,13 @@ const ICON = "size-4 text-muted-foreground";
 const SECTIONS: readonly { scope: ShortcutScope; group: string; title: string; icon: ReactNode }[] =
 	[
 		{ scope: "app", group: "Anywhere", title: "General", icon: <Keyboard className={ICON} /> },
+		{ scope: "app", group: "Go to", title: "Pages", icon: <Compass className={ICON} /> },
+		{
+			scope: "list",
+			group: "Song lists",
+			title: "Lists and grids",
+			icon: <ListMusic className={ICON} />,
+		},
 		{
 			scope: "deck",
 			group: "Move",

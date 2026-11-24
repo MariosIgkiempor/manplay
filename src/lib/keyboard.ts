@@ -31,6 +31,13 @@ const OWNS_KEYS = [
 ].join(", ");
 
 /**
+ * A song list that runs its own keys (`list` shortcuts) and leaves every other key to the app, so
+ * app keys like E or A still work while moving through it with J and K.
+ */
+export const KEY_LIST_ATTRIBUTE = "data-key-list";
+const KEY_LIST = `[${KEY_LIST_ATTRIBUTE}]`;
+
+/**
  * Whether an app-wide shortcut should leave this key press alone: typing, a dialog, something
  * already handled it, or the focused element moves with the keys. Space and Enter also stay with
  * a focused button or link, which they press. (Which modifiers make a shortcut is the binding's
@@ -47,5 +54,7 @@ export function keyTakenElsewhere(e: KeyboardEvent): boolean {
 	if ((e.key === " " || e.key === "Enter") && target.closest("button, a[href]") !== null) {
 		return true;
 	}
-	return target.closest(OWNS_KEYS) !== null;
+	const owner = target.closest(OWNS_KEYS);
+	// A key list has run its own keys already (and marked them handled); the rest are the app's.
+	return owner !== null && owner.closest(KEY_LIST) === null;
 }

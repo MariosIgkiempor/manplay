@@ -30,6 +30,7 @@ import { popup } from "#/lib/menu-styles.ts";
 import { FILE_MANAGER } from "#/lib/platform.ts";
 import { ANALYSIS_KEY, useAnalyze, useRedetect } from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
+import { useShortcutLabel } from "#/lib/use-shortcuts.ts";
 
 interface Props {
 	/** Tracks the menu acts on; read when a menu item is chosen. */
@@ -97,6 +98,10 @@ export function AddToPlaylistMenu({
 	const order = useContext(TrackOrderContext);
 	const player = usePlayer();
 	const queryClient = useQueryClient();
+	const keyOf = (shortcut: string | null) => (shortcut === null ? {} : { shortcut });
+	const playNextKey = keyOf(useShortcutLabel("listPlayNext"));
+	const queueKey = keyOf(useShortcutLabel("listQueue"));
+	const editKey = keyOf(useShortcutLabel("listEdit"));
 	const analyze = useAnalyze();
 	const redetect = useRedetect();
 	const hasEdits = tracks.some((t) => t.edited.bpm || t.edited.key || t.edited.grid);
@@ -119,6 +124,7 @@ export function AddToPlaylistMenu({
 		target && {
 			label: "Edit metadata…",
 			icon: <TextCursorInput />,
+			...editKey,
 			onSelect: () =>
 				song
 					? go({ kind: "song", trackId: song.id, list: order ?? undefined })
@@ -179,12 +185,14 @@ export function AddToPlaylistMenu({
 							label: "Play next",
 							icon: <ListStart />,
 							disabled: tracks.length === 0,
+							...playNextKey,
 							onSelect: () => player.playNext(tracks),
 						},
 						{
 							label: "Add to queue",
 							icon: <ListEnd />,
 							disabled: tracks.length === 0,
+							...queueKey,
 							onSelect: () => player.addToQueue(tracks),
 						},
 					]}

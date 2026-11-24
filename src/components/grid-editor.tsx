@@ -67,7 +67,7 @@ import { formatBpm } from "#/lib/musical-key.ts";
 import { DECK_COLUMNS } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { cuesKey, useAnalyze, useTrackCues } from "#/lib/queries.ts";
-import { chordLabel, type FileShortcutId, SHORTCUTS, type ShortcutId } from "#/lib/shortcuts.ts";
+import { chordLabel, type DeckShortcutId, SHORTCUTS, type ShortcutId } from "#/lib/shortcuts.ts";
 import {
 	addTap,
 	type Milliseconds,
@@ -534,21 +534,6 @@ function DeckButton({
 		</button>
 	);
 }
-
-/** The deck's bindable actions (see `SHORTCUTS`). */
-type DeckShortcutId = Exclude<
-	ShortcutId,
-	| FileShortcutId
-	| "undo"
-	| "redo"
-	| "save"
-	| "play"
-	| "palette"
-	| "pageSearch"
-	| "sidebar"
-	| "prevSong"
-	| "nextSong"
->;
 
 /** What each deck key does; ⌥ held asks for a finer step. Save is ⌘S, fixed. */
 type DeckActions = Record<DeckShortcutId, (alt: boolean) => void> & { save: () => void };

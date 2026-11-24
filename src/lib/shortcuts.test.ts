@@ -144,6 +144,44 @@ describe("actionFor", () => {
 		{ code: "KeyL", more: { shiftKey: true }, scope: "files", id: "fileTags", alt: false },
 		{ code: "Backspace", more: { metaKey: true }, scope: "files", id: "fileDelete", alt: false },
 		{ code: "Escape", more: {}, scope: "files", id: "fileClear", alt: false },
+		{ code: "Slash", more: {}, scope: "app", id: "pageSearch", alt: false },
+		{ code: "KeyF", more: { metaKey: true }, scope: "app", id: "pageSearch", alt: false },
+		{ code: "Comma", more: { metaKey: true }, scope: "app", id: "settings", alt: false },
+		{ code: "Comma", more: { ctrlKey: true }, scope: "app", id: "settings", alt: false },
+		{ code: "KeyE", more: {}, scope: "app", id: "waveform", alt: false },
+		{ code: "KeyA", more: {}, scope: "app", id: "addPlaying", alt: false },
+		{ code: "ArrowRight", more: { metaKey: true }, scope: "app", id: "playerNext", alt: false },
+		{ code: "ArrowLeft", more: { ctrlKey: true }, scope: "app", id: "playerPrev", alt: false },
+		{ code: "BracketLeft", more: { metaKey: true }, scope: "app", id: "back", alt: false },
+		{ code: "KeyJ", more: {}, scope: "list", id: "listNext", alt: false },
+		{ code: "ArrowUp", more: {}, scope: "list", id: "listPrev", alt: false },
+		{ code: "KeyJ", more: { shiftKey: true }, scope: "list", id: "listExtendNext", alt: false },
+		{ code: "KeyG", more: { shiftKey: true }, scope: "list", id: "listLast", alt: false },
+		{ code: "KeyL", more: {}, scope: "list", id: "listOpen", alt: false },
+		{ code: "KeyX", more: {}, scope: "list", id: "listSelect", alt: false },
+		{ code: "KeyA", more: { metaKey: true }, scope: "list", id: "listSelectAll", alt: false },
+		{ code: "KeyB", more: { metaKey: true }, scope: "app", id: "sidebar", alt: false },
+		{ code: "KeyB", more: { metaKey: true, altKey: true }, scope: "app", id: "panel", alt: true },
+		{ code: "KeyP", more: {}, scope: "list", id: "listPlayNext", alt: false },
+		{ code: "KeyP", more: { shiftKey: true }, scope: "list", id: "listQueue", alt: false },
+		{ code: "KeyE", more: { metaKey: true }, scope: "list", id: "listEdit", alt: false },
+		{ code: "KeyF", more: {}, scope: "app", id: "revealPlaying", alt: false },
+		{ code: "Digit1", more: { metaKey: true }, scope: "app", id: "goLibrary", alt: false },
+		{ code: "Digit5", more: { ctrlKey: true }, scope: "app", id: "goExport", alt: false },
+		{
+			code: "ArrowLeft",
+			more: { metaKey: true, shiftKey: true },
+			scope: "app",
+			id: "seekBack",
+			alt: false,
+		},
+		{
+			code: "ArrowRight",
+			more: { ctrlKey: true, shiftKey: true },
+			scope: "app",
+			id: "seekForward",
+			alt: false,
+		},
 	] as const)("reads $code $more in $scope as $id", ({ code, more, scope, id, alt }) => {
 		expect(actionFor(defaults, press(code, more), scope)).toEqual({ id, alt });
 	});
@@ -196,6 +234,9 @@ describe("editing keys", () => {
 		{ text: "mod+KeyQ", id: "fileCut", what: "Quit" },
 		{ text: "Tab", id: "play", what: "Moving between controls" },
 		{ text: "mod+KeyZ", id: "tap", what: null },
+		{ text: "mod+KeyA", id: "listSelectAll", what: null },
+		{ text: "mod+KeyA", id: "waveform", what: "Select all" },
+		{ text: "mod+Comma", id: "settings", what: null },
 	] as const)("warns that $text for $id is $what", ({ text, id, what }) => {
 		expect(reservedFor(chord(text), id)).toBe(what);
 	});
@@ -211,6 +252,18 @@ describe("editing keys", () => {
 		},
 		{ why: "app and grid keys", id: "play", key: "KeyK", others: ["metronome"] },
 		{ why: "two file keys", id: "fileCut", key: "KeyY", others: ["fileCopy"] },
+		{ why: "a bare anywhere key and a file key", id: "fileFilter", key: "Slash", others: [] },
+		{ why: "a bare anywhere key and a list key", id: "listNext", key: "Slash", others: [] },
+		{
+			why: "list keys and ⌘ keys that work anywhere",
+			id: "listNext",
+			key: "mod+KeyF",
+			others: ["pageSearch"],
+		},
+		{ why: "list and grid keys, never heard together", id: "listPrev", key: "KeyK", others: [] },
+		{ why: "list and file keys, never focused together", id: "listNext", key: "KeyN", others: [] },
+		{ why: "two list keys", id: "listPlay", key: "KeyX", others: ["listSelect"] },
+		{ why: "app keys and grid keys", id: "waveform", key: "KeyT", others: ["tap"] },
 	] as const)("finds clashes between $why", ({ id, key, others }) => {
 		expect(conflictsWith(defaults, id, chord(key))).toEqual(others);
 	});

@@ -1,9 +1,11 @@
 import { type ReactNode, useState } from "react";
+import { AppShortcuts } from "#/components/app-shortcuts.tsx";
 import { CommandPalette } from "#/components/command-palette.tsx";
 import { ConfirmHost } from "#/components/confirm-host.tsx";
 import { FilePickerHost } from "#/components/file-picker.tsx";
 import { HintLayer } from "#/components/hint-layer.tsx";
 import { PlayerBar } from "#/components/player-bar.tsx";
+import { PlayingPicker } from "#/components/playing-picker.tsx";
 import { Sidebar } from "#/components/sidebar.tsx";
 import { SplitPane } from "#/components/split-pane.tsx";
 import { SyncRequests } from "#/components/sync-flow.tsx";
@@ -13,6 +15,7 @@ import { useStatusScopeHandlers } from "#/context/status-context.ts";
 import { CARD } from "#/lib/page-layout.ts";
 import { PAGE_MOTION_ATTRIBUTE, usePageDirection } from "#/lib/page-transition.ts";
 import { useAnalysisResults } from "#/lib/queries.ts";
+import { useListEntryKeys } from "#/lib/use-list-entry-keys.ts";
 import { usePageSearchKey } from "#/lib/use-page-search-key.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -21,6 +24,7 @@ export function Shell({ children }: { children: ReactNode }) {
 	const mainScope = useStatusScopeHandlers("main");
 	useAnalysisResults();
 	usePageSearchKey();
+	useListEntryKeys();
 	usePageDirection();
 	const [splitSlot, setSplitSlot] = useState<HTMLElement | null>(null);
 	return (
@@ -49,6 +53,8 @@ export function Shell({ children }: { children: ReactNode }) {
 				</div>
 				<PlayerBar />
 				<CommandPalette />
+				<PlayingPicker />
+				<AppShortcuts />
 				<FilePickerHost />
 				<ConfirmHost />
 				<HintLayer />

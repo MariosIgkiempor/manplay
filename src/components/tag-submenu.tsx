@@ -1,57 +1,19 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Tag as TagIcon } from "lucide-react";
 import { SearchSubmenu } from "#/components/search-submenu.tsx";
-import { useUndo } from "#/context/undo-context.ts";
-import { listTags, type Track, tagTracks } from "#/lib/api.ts";
-import { flattenTagTree } from "#/lib/tag-tree.ts";
-import { undoTagTracks } from "#/lib/undo-entries.ts";
-
-const REFRESH = ["tracks", "playlist-tracks", "tags", "playlists"] as const;
+import type { Track } from "#/lib/api.ts";
+import { useTagTracks } from "#/lib/use-tag-tracks.ts";
 
 /** Right-click "Tag" submenu: search existing tags or create one; stays open for more. */
 export function TagSubmenu({ tracks }: { tracks: readonly Track[] }) {
-	const queryClient = useQueryClient();
-	const tags = useQuery({ queryKey: ["tags"], queryFn: listTags });
-	const { record } = useUndo();
-	const tag = useMutation({
-		mutationFn: async (name: string) => {
-			const lower = name.toLowerCase();
-			const missing = tracks
-				.filter((t) => !t.tags.some((x) => x.toLowerCase() === lower))
-				.map((t) => t.id);
-			await tagTracks(
-				name,
-				tracks.map((t) => t.id),
-			);
-			const entry = undoTagTracks(name, missing);
-			if (entry) {
-				record(entry);
-			}
-		},
-		onSuccess: async () => {
-			for (const key of REFRESH) {
-				await queryClient.invalidateQueries({ queryKey: [key] });
-			}
-		},
-	});
-	const hasAll = (name: string) =>
-		tracks.length > 0 &&
-		tracks.every((t) => t.tags.some((x) => x.toLowerCase() === name.toLowerCase()));
-
+	const { tags, tag } = useTagTracks(tracks);
 	return (
 		<SearchSubmenu
 			label="Tag"
 			icon={TagIcon}
 			placeholder="Search or create tag (a/b nests)…"
 			emptyHint="Type a name to create a tag. Use / to nest, e.g. Genre/House."
-			items={flattenTagTree(tags.data ?? []).map(({ node, depth }) => ({
-				name: node.name,
-				label: node.label,
-				depth,
-				count: node.trackCount,
-				checked: hasAll(node.name),
-			}))}
-			onPick={(name) => tag.mutate(name)}
+			items={tags}
+			onPick={tag}
 		/>
 	);
 }

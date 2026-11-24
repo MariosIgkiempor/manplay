@@ -1,6 +1,7 @@
 import { Search, X } from "lucide-react";
 import { type FocusEvent, type ReactNode, type Ref, type RefObject, useRef, useState } from "react";
 import { escapeSearch, SEARCH_FIELD, searchInputClass } from "#/lib/search-field.ts";
+import { focusListRow } from "#/lib/use-list-entry-keys.ts";
 import { useShortcutLabel } from "#/lib/use-shortcuts.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -152,7 +153,13 @@ export function SearchField({
 						value={value}
 						tabIndex={open ? 0 : -1}
 						onChange={(e) => onChange(e.target.value)}
-						onKeyDown={(e) => escapeSearch(e, value, () => onChange(""))}
+						onKeyDown={(e) => {
+							escapeSearch(e, value, () => onChange(""));
+							// Enter or ↓ goes on to the songs found, to move through with J and K.
+							if ((e.key === "Enter" || e.key === "ArrowDown") && focusListRow()) {
+								e.preventDefault();
+							}
+						}}
 						placeholder={placeholder}
 						aria-label={name}
 						spellCheck={false}

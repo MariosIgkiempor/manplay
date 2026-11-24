@@ -15,11 +15,14 @@ import { TrackOrderContext } from "#/context/track-order.ts";
 import { albumKey, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
+import { KEY_LIST_ATTRIBUTE, typingKey } from "#/lib/keyboard.ts";
 import { camelot, formatBpm, keyName, normalizeKey } from "#/lib/musical-key.ts";
 import { FRAME, WELL_ROWS } from "#/lib/page-layout.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { parseBpm } from "#/lib/track-fields.ts";
+import { useListKeys } from "#/lib/use-list-keys.ts";
 import { useProgressive } from "#/lib/use-progressive.ts";
+import { shortcutFor } from "#/lib/use-shortcuts.ts";
 import type { InlineField } from "#/lib/use-track-edit.ts";
 import type { TrackSelection } from "#/lib/use-track-selection.ts";
 import { cn } from "#/lib/utils.ts";
@@ -492,13 +495,13 @@ function TrackRow({
 	const canRename = onEdit !== undefined;
 	const rename = useRename();
 
+	// The list runs the other keys (`useListKeys`); renaming is the row's own.
 	const onKeyDown = (e: KeyboardEvent) => {
-		if (e.key === "Enter") {
-			onPlay();
-		} else if (e.key === " ") {
-			e.preventDefault();
-			selection?.toggle(track.id);
-		} else if (e.key === "F2" && canRename) {
+		if (
+			canRename &&
+			!typingKey(e.nativeEvent) &&
+			shortcutFor(e.nativeEvent, "list")?.id === "listRename"
+		) {
 			e.preventDefault();
 			rename.start();
 		}
@@ -571,6 +574,15 @@ export function TrackList({ tracks, selection, empty, rowKey, ...rest }: Props) 
 	const inPanel = useContext(PanelScopeContext);
 	// Rows are added a page at a time as the list scrolls; play and select still use every track.
 	const page = useProgressive(tracks, (t) => t.id);
+	const keys = useListKeys({
+		tracks,
+		selection,
+		shownCount: page.shown.length,
+		more: page.more,
+		loadMore: page.loadMore,
+		showUpTo: page.showUpTo,
+		canOpen: rest.rowMenu === undefined,
+	});
 	if (tracks.length === 0) {
 		return empty ?? <EmptyState title="No songs" />;
 	}
@@ -580,24 +592,20 @@ export function TrackList({ tracks, selection, empty, rowKey, ...rest }: Props) 
 		selection?.selected.has(track.id) && selection.selected.size > 1
 			? tracks.filter((t) => selection.selected.has(t.id))
 			: [track];
-	const onKeyDown = (e: KeyboardEvent) => {
-		if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a" && selection) {
-			e.preventDefault();
-			selection.selectAll();
-		}
-	};
 	return (
 		<TrackOrderContext.Provider value={tracks.map((t) => t.id)}>
 			<div className="@container/list select-none">
 				{/* The app's one card, on a page and in the side panel alike: a frame round a well. */}
 				<div className={FRAME}>
 					<div
+						ref={keys.listRef}
 						role="listbox"
 						aria-multiselectable
 						aria-label="Songs"
 						tabIndex={-1}
 						className={cn("outline-none", WELL_ROWS)}
-						onKeyDown={onKeyDown}
+						onKeyDown={keys.onKeyDown}
+						{...{ [KEY_LIST_ATTRIBUTE]: "" }}
 					>
 						{page.shown.map((track, i) => (
 							<TrackRow

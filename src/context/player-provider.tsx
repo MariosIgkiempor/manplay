@@ -2,6 +2,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { type PlayerApi, PlayerContext, PlayerTimeContext } from "#/context/player-context.ts";
 import { playableUrl, type Track } from "#/lib/api.ts";
 import { withAdded, withNext } from "#/lib/queue.ts";
+import { useMediaSession } from "#/lib/use-media-session.ts";
 
 const RESTART_THRESHOLD_SECONDS = 3;
 
@@ -201,6 +202,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			getTime,
 		],
 	);
+
+	useMediaSession(value);
 
 	return (
 		<PlayerContext.Provider value={value}>

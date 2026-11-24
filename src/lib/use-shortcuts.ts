@@ -10,6 +10,7 @@ import {
 	resolveBindings,
 	type ShortcutId,
 	type ShortcutScope,
+	shortcutDef,
 } from "#/lib/shortcuts.ts";
 
 /** Kept on this computer only: keys suit the keyboard in front of you, not the library. */
@@ -116,18 +117,31 @@ export function useShortcutHint(id: ShortcutId, text: string): string {
 }
 
 /**
- * Runs `run` when `id`'s key is pressed anywhere, unless the key is taken there (typing, a dialog,
- * a focused list); `anywhere` also fires while typing, for ⌘ shortcuts like the search palette.
+ * Whether an app shortcut's key press should run here. A key taken elsewhere (typing, a dialog, a
+ * focused list) is left alone, except the ⌘ keys of an `anywhere` action, which work from a field
+ * too, like ⌘K. A bare key of an `anywhere` action (/ for page search) still gives way to a field.
  */
-export function useShortcut(id: ShortcutId, run: () => void, { anywhere = false } = {}) {
+export function appKeyRunsHere(e: KeyboardEvent, id: ShortcutId): boolean {
+	if (e.defaultPrevented) {
+		return false;
+	}
+	const withMod = e.metaKey || e.ctrlKey;
+	if (withMod && shortcutDef(id).anywhere) {
+		return true;
+	}
+	return !keyTakenElsewhere(e);
+}
+
+/**
+ * Runs `run` when `id`'s key is pressed anywhere, unless the key is taken there (typing, a dialog,
+ * a focused list); see `appKeyRunsHere`.
+ */
+export function useShortcut(id: ShortcutId, run: () => void) {
 	const latest = useRef(run);
 	latest.current = run;
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (!isShortcut(e, id) || e.defaultPrevented) {
-				return;
-			}
-			if (!anywhere && keyTakenElsewhere(e)) {
+			if (!isShortcut(e, id) || !appKeyRunsHere(e, id)) {
 				return;
 			}
 			e.preventDefault();
@@ -135,5 +149,5 @@ export function useShortcut(id: ShortcutId, run: () => void, { anywhere = false 
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [id, anywhere]);
+	}, [id]);
 }

@@ -26,5 +26,10 @@ export function useProgressive<T>(
 	}, [identity, pageSize]);
 	const { shown, more } = firstPage(items, limit);
 	const loadMore = useCallback(() => setLimit((n) => n + pageSize), [pageSize]);
-	return { shown, more, loadMore };
+	/** Draws whole pages until item `index` is among them. */
+	const showUpTo = useCallback(
+		(index: number) => setLimit((n) => Math.max(n, (Math.floor(index / pageSize) + 1) * pageSize)),
+		[pageSize],
+	);
+	return { shown, more, loadMore, showUpTo };
 }

@@ -240,7 +240,7 @@ export function Sidebar() {
 		setStoredCollapsed(next);
 	};
 	const toggle = () => setCollapsed(!collapsed);
-	useShortcut("sidebar", toggle, { anywhere: true });
+	useShortcut("sidebar", toggle);
 	const toggleTitle = useShortcutHint("sidebar", collapsed ? "Expand sidebar" : "Collapse sidebar");
 	useCurrentRowInView(asideRef);
 	useWidthVariable(asideRef);

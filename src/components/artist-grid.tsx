@@ -6,6 +6,7 @@ import { EmptyState } from "#/components/page.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import type { Artist } from "#/lib/artists.ts";
 import { useProgressive } from "#/lib/use-progressive.ts";
+import { GRID_ITEM_ATTRIBUTE, useTileGridKeys } from "#/lib/use-tile-grid-keys.ts";
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -24,6 +25,7 @@ function ArtistTile({ artist, onOpen }: { artist: Artist; onOpen: () => void }) 
 						className="block w-full overflow-hidden rounded-full border"
 						onClick={onOpen}
 						aria-label={`Open ${label}`}
+						{...{ [GRID_ITEM_ATTRIBUTE]: "" }}
 					>
 						<AlbumArt
 							trackId={artist.coverTrackId}
@@ -64,6 +66,7 @@ export function ArtistGrid({
 	onOpen: (artist: Artist) => void;
 }) {
 	const { shown, more, loadMore } = useProgressive(artists, (a) => a.name);
+	const keys = useTileGridKeys({ more, loadMore });
 	if (artists.length === 0) {
 		return (
 			<EmptyState kind="search" title="No artists">
@@ -73,7 +76,11 @@ export function ArtistGrid({
 	}
 	return (
 		<>
-			<div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-x-4 gap-y-6">
+			<div
+				ref={keys.ref}
+				{...keys.props}
+				className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-x-4 gap-y-6"
+			>
 				{shown.map((a) => (
 					<ArtistTile key={a.name} artist={a} onOpen={() => onOpen(a)} />
 				))}

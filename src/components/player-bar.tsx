@@ -15,8 +15,9 @@ import { type Cue, START_COLOR } from "#/lib/cues.ts";
 import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
 import { DECK_COLUMNS } from "#/lib/page-layout.ts";
+import { NOW_PLAYING_ATTRIBUTE } from "#/lib/playing-picker.ts";
 import { useTrackCues, useTracks } from "#/lib/queries.ts";
-import { useShortcut } from "#/lib/use-shortcuts.ts";
+import { useShortcut, useShortcutHint } from "#/lib/use-shortcuts.ts";
 import { useTrackAnalysis } from "#/lib/use-track-analysis.ts";
 import { setWaveformShown, useWaveformShown } from "#/lib/use-waveform-shown.ts";
 import { cn } from "#/lib/utils.ts";
@@ -61,7 +62,7 @@ function NowPlaying({ track, error }: { track: Track; error: string | null }) {
 	return (
 		<TrackOrderContext.Provider value={p.queue.map((t) => t.id)}>
 			<AddToPlaylistMenu tracks={[track]} label={track.title}>
-				<div className="flex min-w-0 items-center gap-3">
+				<div className="flex min-w-0 items-center gap-3" {...{ [NOW_PLAYING_ATTRIBUTE]: "" }}>
 					<AlbumArt trackId={track.id} className="size-10 shrink-0 rounded-md" />
 					<div className="min-w-0 flex-1">
 						<Marquee>
@@ -168,16 +169,41 @@ function Transport({
 	const p = usePlayer();
 	const PlayIcon = p.playing ? Pause : Play;
 	const hasNext = p.index + 1 < p.queue.length;
+	const prevHint = useShortcutHint("playerPrev", "Previous");
+	const nextHint = useShortcutHint("playerNext", "Next");
+	const playHint = useShortcutHint("play", p.playing ? "Pause" : "Play");
+	const waveformHint = useShortcutHint(
+		"waveform",
+		waveform ? "Hide the grid editor" : "Show the grid editor",
+	);
 	return (
 		<div className="flex shrink-0 items-center gap-1">
-			<Button variant="ghost" size="icon" aria-label="Previous" onClick={p.prev}>
+			<Button
+				variant="ghost"
+				size="icon"
+				aria-label="Previous"
+				data-hint={prevHint}
+				onClick={p.prev}
+			>
 				<SkipBack />
 			</Button>
-			<Button size="icon" aria-label={p.playing ? "Pause" : "Play"} onClick={p.toggle}>
+			<Button
+				size="icon"
+				aria-label={p.playing ? "Pause" : "Play"}
+				data-hint={playHint}
+				onClick={p.toggle}
+			>
 				<PlayIcon />
 			</Button>
 			{mainCue && <CueButton cue={mainCue} />}
-			<Button variant="ghost" size="icon" aria-label="Next" disabled={!hasNext} onClick={p.next}>
+			<Button
+				variant="ghost"
+				size="icon"
+				aria-label="Next"
+				data-hint={nextHint}
+				disabled={!hasNext}
+				onClick={p.next}
+			>
 				<SkipForward />
 			</Button>
 			<Button
@@ -185,7 +211,7 @@ function Transport({
 				size="icon"
 				aria-label="Show the waveform"
 				aria-pressed={waveform}
-				data-hint={waveform ? "Hide the waveform" : "Show the waveform"}
+				data-hint={waveformHint}
 				className={waveform ? "text-primary" : "text-muted-foreground"}
 				onClick={() => onWaveform(!waveform)}
 			>
