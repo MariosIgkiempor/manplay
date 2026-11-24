@@ -13,10 +13,10 @@ import {
 import { type ReactNode, useId, useState } from "react";
 import { BrandGlyph } from "#/components/brand-icon.tsx";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
-import { DestinationHeader, SettingLabel, UsageBar } from "#/components/destination-header.tsx";
+import { DestinationHeader, SettingLabel, UsageRing } from "#/components/destination-header.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
-import { EmptyState, ErrorLine } from "#/components/page.tsx";
-import { PlaceFrame } from "#/components/place-page.tsx";
+import { EmptyState, ErrorLine, ErrorState } from "#/components/page.tsx";
+import { PlaceFrame, PlaceGone } from "#/components/place-page.tsx";
 import { SearchField } from "#/components/search-field.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -52,9 +52,9 @@ export function UsbDrivePage({ mount }: { mount: string }) {
 	const drive = drives.data?.find((d) => d.mount === mount);
 	if (!drive) {
 		return drives.isPending ? null : (
-			<EmptyState icon={<Usb />} title="Drive unplugged">
+			<PlaceGone section="export" icon={<Usb />} title="Drive unplugged">
 				Plug it back in to see its library.
-			</EmptyState>
+			</PlaceGone>
 		);
 	}
 	return <DriveDetail drive={drive} />;
@@ -86,7 +86,7 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 					actions={<UsbExportButton drive={drive} />}
 					tabs={
 						// The search sits at the tab row's end, as on the Library's page.
-						<div className="flex items-end gap-4">
+						<div className="flex min-w-0 items-end gap-4 overflow-hidden">
 							<Segmented
 								ruled={false}
 								value={tab}
@@ -99,7 +99,7 @@ function DriveDetail({ drive }: { drive: UsbDrive }) {
 							/>
 							{browsing && (
 								<SearchField
-									className="mb-1.5 ml-auto w-full max-w-xs"
+									className="mb-1.5 ml-auto w-full min-w-0 max-w-xs shrink"
 									value={query}
 									onChange={setQuery}
 									placeholder="Search the drive's songs"
@@ -160,10 +160,10 @@ function DriveContents({
 		);
 	}
 	if (library.isError) {
-		return <ErrorLine>{String(library.error)}</ErrorLine>;
+		return <ErrorState error={String(library.error)} onRetry={() => void library.refetch()} />;
 	}
 	if (!library.data) {
-		return <EmptyState title="Reading library…" />;
+		return <EmptyState kind="loading" title="Reading library…" />;
 	}
 	return (
 		<UsbBrowser
@@ -178,9 +178,14 @@ function DriveContents({
 
 function SpaceBar({ drive }: { drive: UsbDrive }) {
 	return (
-		<UsageBar value={drive.totalBytes - drive.freeBytes} total={drive.totalBytes} warnAbove={0.9}>
-			{formatBytes(drive.freeBytes)} free of {formatBytes(drive.totalBytes)}
-		</UsageBar>
+		<UsageRing
+			value={drive.totalBytes - drive.freeBytes}
+			total={drive.totalBytes}
+			warnAbove={0.9}
+			hint={`${formatBytes(drive.freeBytes)} free of ${formatBytes(drive.totalBytes)}`}
+		>
+			{formatBytes(drive.freeBytes)} free
+		</UsageRing>
 	);
 }
 
@@ -398,14 +403,13 @@ function FormatFilter({
 					<Hint
 						key={format.key}
 						side="bottom"
-						label={
-							<span className="block max-w-72 space-y-1">
-								<span className="block">
-									{status.text}. Read by {format.players}.
-								</span>
-								{status.error && <span className="block opacity-80">{status.error}</span>}
-								{warn && <span className="block">{advice}</span>}
-							</span>
+						label={status.text}
+						detail={
+							<>
+								<p>Read by {format.players}.</p>
+								{status.error && <p>{status.error}</p>}
+								{warn && <p>{advice}</p>}
+							</>
 						}
 					>
 						<button

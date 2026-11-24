@@ -16,7 +16,7 @@ import { albumKey, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName, normalizeKey } from "#/lib/musical-key.ts";
-import { WELL_ROWS } from "#/lib/page-layout.ts";
+import { FRAME, WELL_ROWS } from "#/lib/page-layout.ts";
 import { useTracks } from "#/lib/queries.ts";
 import { parseBpm } from "#/lib/track-fields.ts";
 import { useProgressive } from "#/lib/use-progressive.ts";
@@ -133,7 +133,7 @@ function TagChips({
 						label={tag}
 						items={menuFor(tag)}
 						render={<span />}
-						className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
+						className="group/tag inline-flex max-w-full items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
 					>
 						<button
 							type="button"
@@ -149,7 +149,9 @@ function TagChips({
 							<button
 								type="button"
 								aria-label={`Remove tag ${tag}`}
-								className="hover:text-foreground"
+								// Out of sight until the chip is pointed at or reached by keyboard: a list
+								// of songs is not a list of delete buttons.
+								className="opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/tag:opacity-100"
 								onClick={(e) => {
 									e.stopPropagation();
 									onRemoveTag(track, tag);
@@ -587,27 +589,29 @@ export function TrackList({ tracks, selection, empty, rowKey, ...rest }: Props) 
 	return (
 		<TrackOrderContext.Provider value={tracks.map((t) => t.id)}>
 			<div className="@container/list select-none">
-				<div
-					role="listbox"
-					aria-multiselectable
-					aria-label="Songs"
-					tabIndex={-1}
-					// On a page the rows sit in a well; a side panel is already its own surface.
-					className={cn("divide-y divide-hairline outline-none", !inPanel && WELL_ROWS)}
-					onKeyDown={onKeyDown}
-				>
-					{page.shown.map((track, i) => (
-						<TrackRow
-							key={rowKey ? rowKey(track, i) : track.id}
-							track={track}
-							index={i}
-							selection={selection}
-							{...rest}
-							layout={layout}
-							menuTracks={menuTracksFor(track)}
-							onPlay={() => player.play(tracks, i)}
-						/>
-					))}
+				{/* The app's one card, on a page and in the side panel alike: a frame round a well. */}
+				<div className={FRAME}>
+					<div
+						role="listbox"
+						aria-multiselectable
+						aria-label="Songs"
+						tabIndex={-1}
+						className={cn("outline-none", WELL_ROWS)}
+						onKeyDown={onKeyDown}
+					>
+						{page.shown.map((track, i) => (
+							<TrackRow
+								key={rowKey ? rowKey(track, i) : track.id}
+								track={track}
+								index={i}
+								selection={selection}
+								{...rest}
+								layout={layout}
+								menuTracks={menuTracksFor(track)}
+								onPlay={() => player.play(tracks, i)}
+							/>
+						))}
+					</div>
 				</div>
 				<LoadMore more={page.more} onMore={page.loadMore} />
 			</div>

@@ -3,9 +3,9 @@ import { Download, FolderOpen, Power, Trash2, Wand2, Zap } from "lucide-react";
 import { DestinationHeader, SettingLabel } from "#/components/destination-header.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { ImportView } from "#/components/import-view.tsx";
-import { EmptyState, ErrorLine } from "#/components/page.tsx";
+import { ErrorLine } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
-import { PlacePage } from "#/components/place-page.tsx";
+import { PlaceGone, PlacePage } from "#/components/place-page.tsx";
 import { OffBadge, PlaceRow } from "#/components/place-row.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -86,9 +86,9 @@ export function ImportFolderPage({ id }: { id: ImportFolderId }) {
 	const history = useActivity(importActivitySource(id));
 	if (!folder) {
 		return (
-			<EmptyState icon={<FolderOpen />} title="Folder removed">
+			<PlaceGone section="import" icon={<FolderOpen />} title="Folder removed">
 				It is no longer one of your import folders.
-			</EmptyState>
+			</PlaceGone>
 		);
 	}
 	return (
@@ -107,11 +107,18 @@ export function ImportFolderPage({ id }: { id: ImportFolderId }) {
 						titleHint={folder.path}
 						meta={<span>{folder.enabled ? newFigure(s) : "Off"}</span>}
 						toggle={
-							<Switch
-								checked={folder.enabled}
-								onChange={(enabled) => update.mutate({ ...folder, enabled })}
-								label={`Import from ${folderName(folder.path)}`}
-							/>
+							// The switch says what it switches: a bare one in a header reads as nothing.
+							<span
+								className="flex items-center gap-2 text-muted-foreground text-xs"
+								data-hint="Off: manplay stops looking in this folder. Nothing is removed."
+							>
+								{folder.enabled ? "Watching" : "Not watching"}
+								<Switch
+									checked={folder.enabled}
+									onChange={(enabled) => update.mutate({ ...folder, enabled })}
+									label={`Import from ${folderName(folder.path)}`}
+								/>
+							</span>
 						}
 					/>
 					<MutationErrors mutations={[update]} />
@@ -120,7 +127,7 @@ export function ImportFolderPage({ id }: { id: ImportFolderId }) {
 			history={
 				<HistoryList
 					entries={activityEntries(history.data ?? [], "import")}
-					empty="Nothing imported yet."
+					empty="Nothing imported yet"
 					titled
 				/>
 			}

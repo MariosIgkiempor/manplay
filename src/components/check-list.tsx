@@ -1,5 +1,6 @@
 import { ChevronRight, Tag as TagIcon } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { EmptyLine } from "#/components/page.tsx";
 import { SearchField } from "#/components/search-field.tsx";
 import type { Tag } from "#/lib/api.ts";
 import { WELL } from "#/lib/page-layout.ts";
@@ -222,9 +223,7 @@ export function TagTree({
 					flat={needle !== ""}
 					noteFor={noteFor}
 				/>
-				{needle && matches.length === 0 && (
-					<p className="px-3 py-2 text-muted-foreground text-sm">No tag matches.</p>
-				)}
+				{needle && matches.length === 0 && <EmptyLine>No tag matches</EmptyLine>}
 			</CheckList>
 		</>
 	);

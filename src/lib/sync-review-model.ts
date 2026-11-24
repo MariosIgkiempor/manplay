@@ -329,8 +329,11 @@ export function sharedThere(items: readonly ReviewItem[], there: ThereLookup): S
 	return { files, options, value: files.every((f) => there(f) === value) ? value : null };
 }
 
+/** Marks the element whose end a lifted card may hang past: the whole review, not one lane. */
+export const REVIEW_END_ATTRIBUTE = "data-review-end";
+
 /** Height of one row of the album mosaic, in pixels. */
-export const MOSAIC_ROW_PX = 128;
+export const MOSAIC_ROW_PX = 88;
 
 /** The narrowest an open album's file list may be beside its card, and the widest. */
 export const FLOAT_PANEL_MIN_PX = 320;

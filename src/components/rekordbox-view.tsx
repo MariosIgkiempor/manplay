@@ -1,16 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileDown, FolderOpen } from "lucide-react";
 import { useState } from "react";
-import { Drawer } from "#/components/drawer.tsx";
 import {
 	type ChooserTab,
 	ExportChooser,
 	ExportFooter,
 	HeldPlaylists,
 } from "#/components/export-chooser.tsx";
-import { ErrorLine } from "#/components/page.tsx";
+import { EmptyLine, ErrorLine, LoadingLine } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { useDetail } from "#/context/detail-context.ts";
+import { PanelBarTitle } from "#/context/panel-bar.tsx";
 import {
 	type ExportSelection,
 	listPlaylists,
@@ -34,10 +35,10 @@ function InFile() {
 		return <ErrorLine>{String(library.error)}</ErrorLine>;
 	}
 	if (library.isPending) {
-		return <p className="text-muted-foreground text-sm">Reading the file…</p>;
+		return <LoadingLine>Reading the file…</LoadingLine>;
 	}
 	if (library.data === null) {
-		return <p className="text-muted-foreground text-sm">Not exported yet.</p>;
+		return <EmptyLine className="px-0">Not exported yet</EmptyLine>;
 	}
 	return <HeldPlaylists playlists={library.data.playlists} empty="The file has no playlists." />;
 }
@@ -116,6 +117,9 @@ export function RekordboxExport({ onClose }: { onClose: () => void }) {
 
 	return (
 		<div className="flex min-h-full flex-col gap-5">
+			<PanelBarTitle>
+				<span className="truncate font-medium text-sm">Export to rekordbox</span>
+			</PanelBarTitle>
 			<FileTitle
 				path={path}
 				tracks={library.data?.tracks ?? null}
@@ -142,6 +146,7 @@ export function RekordboxExport({ onClose }: { onClose: () => void }) {
 			<MutationErrors mutations={[exportNow, choose]} />
 			{path !== null && (
 				<ExportFooter
+					inPanel
 					text={`${plural(count, "playlist")}${draft === null ? " in the file" : ", not exported yet"}`}
 				>
 					<Button variant="ghost" onClick={onClose} disabled={exportNow.isPending}>
@@ -156,7 +161,13 @@ export function RekordboxExport({ onClose }: { onClose: () => void }) {
 	);
 }
 
-/** Button that opens the export drawer; nothing is written until the drawer's own button is used. */
+/** The rekordbox export in the side panel, beside the page it was opened from. */
+export function RekordboxExportPanel() {
+	const detail = useDetail();
+	return <RekordboxExport onClose={detail.close} />;
+}
+
+/** Button that opens the export in the side panel; nothing is written until its own button is used. */
 export function RekordboxExportButton({
 	size,
 	variant,
@@ -166,20 +177,16 @@ export function RekordboxExportButton({
 	variant?: "default" | "outline";
 	label?: string;
 }) {
-	const [open, setOpen] = useState(false);
+	const detail = useDetail();
+	const open = detail.view?.kind === "rekordboxExport";
 	return (
-		<>
-			<Button size={size} variant={variant} onClick={() => setOpen(true)}>
-				<FileDown /> {label}
-			</Button>
-			<Drawer
-				open={open}
-				onClose={() => setOpen(false)}
-				title="Export to rekordbox"
-				width="w-[44rem]"
-			>
-				{open && <RekordboxExport onClose={() => setOpen(false)} />}
-			</Drawer>
-		</>
+		<Button
+			size={size}
+			variant={open ? "secondary" : variant}
+			aria-pressed={open}
+			onClick={() => (open ? detail.close() : detail.open({ kind: "rekordboxExport" }))}
+		>
+			<FileDown /> {label}
+		</Button>
 	);
 }

@@ -134,7 +134,7 @@ export function PanelBar({
 	onActionsSlot?: (el: HTMLElement | null) => void;
 }) {
 	return (
-		<div className="flex h-12 shrink-0 items-center gap-1 border-hairline border-b px-3">
+		<div className="flex h-9 shrink-0 items-center gap-1 px-2">
 			{canGoBack && (
 				<Button variant="ghost" size="icon-sm" aria-label="Back" data-hint="Back" onClick={onBack}>
 					<ArrowLeft />
@@ -142,7 +142,7 @@ export function PanelBar({
 			)}
 			<div
 				ref={onTitleSlot}
-				className="min-w-0 flex-1 truncate pl-1 font-semibold text-[0.9375rem] tracking-tight"
+				className="min-w-0 flex-1 truncate pl-2 font-medium text-muted-foreground text-sm"
 			/>
 			<div ref={onActionsSlot} className="flex shrink-0 items-center gap-1 empty:hidden" />
 			<Button variant="ghost" size="icon-sm" aria-label={closeLabel} onClick={onClose}>

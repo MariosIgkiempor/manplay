@@ -43,3 +43,14 @@ export const CARD =
  * controls), the rest for the transport and waveforms, lined up with the page above.
  */
 export const DECK_COLUMNS = "grid grid-cols-[max(var(--sidebar-width,15rem),13rem)_minmax(0,1fr)]";
+
+/** The id of the place in the status bar where the sidebar puts its fold button. */
+export const SIDEBAR_TOGGLE_SLOT = "sidebar-toggle-slot";
+
+/**
+ * The frame of a card that floats over the page (`GrowPopup`, the shortcut sheet): the same lip
+ * round a well as a section of a page (`FRAME`), on a solid ground since it lies over other
+ * things, lifted by a deep shadow. Its content sits in a `WELL` inside it.
+ */
+export const FLOATING_FRAME =
+	"rounded-2xl border border-hairline bg-[color-mix(in_oklab,var(--foreground)_2%,var(--background))] p-1 text-foreground shadow-2xl outline-none";

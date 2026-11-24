@@ -1,9 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { X } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Button } from "#/components/ui/button.tsx";
-import { useExitGhost } from "#/lib/exit-ghost.ts";
-import { DIALOG_BACKDROP, DIALOG_FRAME } from "#/lib/page-layout.ts";
+import { FLOATING_FRAME, WELL } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { chordLabel, SHORTCUTS } from "#/lib/shortcuts.ts";
 import { shortcutFor, useBindings, useMacLabels } from "#/lib/use-shortcuts.ts";
@@ -18,9 +17,13 @@ export function Key({ children }: { children: string }) {
 	);
 }
 
-/** Every file browser shortcut on one sheet, with the keys chosen in Settings; its key opens it. */
+/**
+ * Every file browser shortcut on one sheet, with the keys chosen in Settings; its key opens it.
+ * It grows out of the Shortcuts button at the foot of the browser and leaves the page usable: no
+ * backdrop, and a click anywhere else puts it away.
+ */
 export function FileShortcuts({ onClose }: { onClose: () => void }) {
-	const overlay = useExitGhost();
+	const sheet = useRef<HTMLElement>(null);
 	const bindings = useBindings();
 	const mac = useMacLabels();
 	const files = SHORTCUTS.filter((d) => d.scope === "files");
@@ -37,60 +40,74 @@ export function FileShortcuts({ onClose }: { onClose: () => void }) {
 				onClose();
 			}
 		};
+		const onPress = (e: MouseEvent) => {
+			if (
+				e.timeStamp >= openedAt &&
+				e.target instanceof Node &&
+				!sheet.current?.contains(e.target)
+			) {
+				onClose();
+			}
+		};
 		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		window.addEventListener("mousedown", onPress);
+		return () => {
+			window.removeEventListener("keydown", onKey);
+			window.removeEventListener("mousedown", onPress);
+		};
 	}, [onClose]);
 	return (
-		<div ref={overlay} className="fixed inset-0 z-50 flex items-center justify-center">
-			<div aria-hidden="true" onMouseDown={onClose} className={DIALOG_BACKDROP} />
-			<div
-				role="dialog"
-				data-exit
+		<div className="pointer-events-none absolute inset-x-2 top-2 bottom-8 z-30 flex items-end justify-end">
+			{/* A frame round a well, as a section of a page is; its name and ✕ on the frame's lip. */}
+			<section
+				ref={sheet}
 				aria-label="Keyboard shortcuts"
 				className={cn(
-					DIALOG_FRAME,
-					"max-h-[calc(100%-4rem)] w-[44rem] max-w-[calc(100%-2rem)] overflow-y-auto p-5",
+					FLOATING_FRAME,
+					"pointer-events-auto flex max-h-full w-[44rem] max-w-full origin-bottom-right animate-in flex-col duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] fade-in-0 zoom-in-[0.9] slide-in-from-bottom-2 motion-reduce:animate-none",
 				)}
 			>
-				<div className="mb-4 flex items-center justify-between">
-					<h2 className="font-medium text-sm">Keyboard shortcuts</h2>
+				<div className="flex items-center justify-between py-0.5 pr-1 pl-3">
+					<h2 className="font-medium text-[0.9375rem]">Keyboard shortcuts</h2>
 					<Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose}>
 						<X />
 					</Button>
 				</div>
-				<div className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
-					{groups.map((group) => (
-						<section key={group}>
-							<h3 className="mb-1.5 text-muted-foreground text-xs">{group}</h3>
-							<dl className="space-y-1">
-								{files
-									.filter((d) => d.group === group)
-									.map((d) => (
-										<div key={d.id} className="flex items-center justify-between gap-3 text-sm">
-											<dt className="text-foreground/90">{d.label}</dt>
-											<dd className="flex shrink-0 gap-1">
-												{(bindings.get(d.id) ?? []).map((k) => (
-													<Key key={k}>{chordLabel(k, mac)}</Key>
-												))}
-											</dd>
-										</div>
-									))}
-							</dl>
-						</section>
-					))}
+				<div className={cn(WELL, "min-h-0 overflow-y-auto p-4")}>
+					<div className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
+						{groups.map((group) => (
+							<section key={group}>
+								<h3 className="mb-1.5 text-muted-foreground text-xs">{group}</h3>
+								<dl className="space-y-1">
+									{files
+										.filter((d) => d.group === group)
+										.map((d) => (
+											<div key={d.id} className="flex items-center justify-between gap-3 text-sm">
+												<dt className="text-foreground/90">{d.label}</dt>
+												<dd className="flex shrink-0 gap-1">
+													{(bindings.get(d.id) ?? []).map((k) => (
+														<Key key={k}>{chordLabel(k, mac)}</Key>
+													))}
+												</dd>
+											</div>
+										))}
+								</dl>
+							</section>
+						))}
+					</div>
+					<p className="mt-5 flex items-center justify-between gap-3 text-muted-foreground text-xs">
+						Double-click plays a song or opens a folder.
+						<Link
+							to="/settings"
+							search={{ section: "shortcuts" }}
+							onClick={onClose}
+							className="text-foreground underline-offset-2 hover:underline"
+						>
+							Change keys in Settings
+						</Link>
+					</p>
 				</div>
-				<p className="mt-5 flex items-center justify-between gap-3 text-muted-foreground text-xs">
-					Double-click plays a song or opens a folder.
-					<Link
-						to="/settings"
-						search={{ section: "shortcuts" }}
-						onClick={onClose}
-						className="text-foreground underline-offset-2 hover:underline"
-					>
-						Change keys in Settings
-					</Link>
-				</p>
-			</div>
+			</section>
 		</div>
 	);
 }

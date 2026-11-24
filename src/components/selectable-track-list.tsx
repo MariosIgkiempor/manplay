@@ -4,6 +4,7 @@ import { ErrorLine } from "#/components/page.tsx";
 import { SortMenu } from "#/components/sort-menu.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { TrackList } from "#/components/track-list.tsx";
+import { PanelBarActions, useHasPanelBar } from "#/context/panel-bar.tsx";
 import { useUndo } from "#/context/undo-context.ts";
 import { type Track, untagTrack } from "#/lib/api.ts";
 import { duration } from "#/lib/format.ts";
@@ -73,6 +74,7 @@ export function SelectableTrackList({
 	const targets = useSyncTargets();
 	const saveEdit = useTrackEdit();
 	const { record } = useUndo();
+	const inPanel = useHasPanelBar();
 
 	const untag = useMutation({
 		mutationFn: async ({ name, trackId }: { name: string; trackId: number }) => {
@@ -93,11 +95,18 @@ export function SelectableTrackList({
 		<div className="space-y-3">
 			{untag.isError && <ErrorLine>{String(untag.error)}</ErrorLine>}
 			{editError && <ErrorLine>Could not save: {editError}</ErrorLine>}
-			{!hideSortMenu && tracks.length > 1 && (
-				<div className="flex justify-end">
-					<SortMenu options={songSortOptions(listOrder)} value={sort} onChange={setSort} />
-				</div>
-			)}
+			{/* In the side panel the sort goes in its top bar, so the list starts under the tabs. */}
+			{!hideSortMenu &&
+				tracks.length > 1 &&
+				(inPanel ? (
+					<PanelBarActions>
+						<SortMenu options={songSortOptions(listOrder)} value={sort} onChange={setSort} />
+					</PanelBarActions>
+				) : (
+					<div className="flex justify-end">
+						<SortMenu options={songSortOptions(listOrder)} value={sort} onChange={setSort} />
+					</div>
+				))}
 			<TrackList
 				{...rest}
 				tracks={sorted}

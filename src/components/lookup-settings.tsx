@@ -16,6 +16,7 @@ export function LookupSettings() {
 	return (
 		<FrameSection
 			title="Tag lookup"
+			titleHidden
 			description={
 				<Facts label="Find missing tags and covers online, only for songs you choose.">
 					<Fact tone="sent">Only songs you choose</Fact>

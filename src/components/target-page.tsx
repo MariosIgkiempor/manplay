@@ -12,16 +12,16 @@ import {
 	Trash2,
 } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
-import { DestinationHeader, SettingLabel, UsageBar } from "#/components/destination-header.tsx";
+import { DestinationHeader, SettingLabel, UsageRing } from "#/components/destination-header.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { JellyfinSection } from "#/components/jellyfin-section.tsx";
-import { EmptyState, ErrorLine } from "#/components/page.tsx";
-import { PlaceFrame } from "#/components/place-page.tsx";
+import { ErrorLine } from "#/components/page.tsx";
+import { PlaceFrame, PlaceGone } from "#/components/place-page.tsx";
 import { removalConsequence, useRemoveDestination } from "#/components/remove-destination.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
-import { SyncPanel } from "#/components/sync-summary.tsx";
+import { type SyncMode, SyncPanel } from "#/components/sync-summary.tsx";
 import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { Input } from "#/components/ui/input.tsx";
@@ -260,11 +260,43 @@ function RemoveRow({
 
 type Tab = "sync" | "history" | "settings";
 
+/** How much of the library a destination holds: a ring and `1,217/1,218`, the words on hover. */
+function SyncedFigure({ synced, total }: { synced: number; total: number }) {
+	const all = total > 0 && synced >= total;
+	return (
+		<UsageRing
+			value={synced}
+			total={total}
+			tone="progress"
+			hint={`${synced.toLocaleString()} of ${total.toLocaleString()} songs synced`}
+		>
+			{all ? "Synced" : `${synced.toLocaleString()}/${total.toLocaleString()}`}
+		</UsageRing>
+	);
+}
+
+/** A failed action, said at the top of the page; `flush` pages have no padding of their own. */
+function ActionError({ error, flush }: { error: unknown; flush: boolean }) {
+	if (!error) {
+		return null;
+	}
+	return <ErrorLine className={flush ? "px-6 py-3" : undefined}>{String(error)}</ErrorLine>;
+}
+
 /**
  * One machine/folder or bucket/folder: what a sync would do (read in the background, so it shows
  * at once), its own sync history and its settings.
  */
-export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => void }) {
+export function TargetPage({
+	id,
+	mode = "both",
+	onRemoved,
+}: {
+	id: number;
+	/** The direction the review starts ticked in, when a Pull or Push button led here. */
+	mode?: SyncMode | undefined;
+	onRemoved: () => void;
+}) {
 	const navigate = useNavigate();
 	const targets = useSyncTargets();
 	const history = useSyncHistory();
@@ -274,9 +306,9 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 	const target = targets.data?.find((t) => t.id === id);
 	if (!target) {
 		return targets.isPending ? null : (
-			<EmptyState icon={<Network />} title="Destination removed">
-				It is no longer in your destinations.
-			</EmptyState>
+			<PlaceGone section="export" icon={<Network />} title="Destination removed">
+				It is no longer one of your destinations.
+			</PlaceGone>
 		);
 	}
 	const r2 = isR2(target);
@@ -312,11 +344,7 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 						/>
 					}
 					titleHint={`${target.machine}: ${where}`}
-					meta={
-						<UsageBar value={target.syncedTracks} total={total} tone="progress">
-							{target.syncedTracks.toLocaleString()} of {total.toLocaleString()} songs synced
-						</UsageBar>
-					}
+					meta={<SyncedFigure synced={target.syncedTracks} total={total} />}
 					tabs={
 						<Segmented
 							ruled={false}
@@ -333,12 +361,14 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 				/>
 			}
 		>
+			{/* A failed action is said at the top of the page, above what it was done to. */}
+			<ActionError error={removal.error} flush={tab === "sync"} />
 			{tab === "sync" ? (
-				<SyncPanel key={id} ids={[id]} variant="page" />
+				<SyncPanel key={`${id}:${mode}`} ids={[id]} mode={mode} variant="page" />
 			) : tab === "history" ? (
 				<HistoryList
 					entries={syncEntries((history.data ?? []).filter((r) => r.targetId === id))}
-					empty="Never synced."
+					empty="Never synced"
 					titled={false}
 				/>
 			) : (
@@ -354,7 +384,6 @@ export function TargetPage({ id, onRemoved }: { id: number; onRemoved: () => voi
 					<JellyfinSection targetId={id} />
 				</div>
 			)}
-			{removal.error && <ErrorLine>{String(removal.error)}</ErrorLine>}
 			{removal.dialog}
 		</PlaceFrame>
 	);

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
 	addSearchSchema,
 	folderParamsSchema,
+	syncSearchSchema,
 	targetParamsSchema,
+	targetSearchSchema,
 	usbSearchSchema,
 } from "#/lib/place-routes.ts";
 
@@ -51,5 +53,32 @@ describe("addSearchSchema", () => {
 		{ raw: { service: 4 }, service: undefined },
 	])("reads $raw as $service", ({ raw, service }) => {
 		expect(addSearchSchema.parse(raw).service).toBe(service);
+	});
+});
+
+describe("targetSearchSchema", () => {
+	it.each([
+		{ raw: {}, mode: undefined },
+		{ raw: { mode: "both" }, mode: "both" },
+		{ raw: { mode: "pull" }, mode: "pull" },
+		{ raw: { mode: "push" }, mode: "push" },
+		{ raw: { mode: "sideways" }, mode: undefined },
+		{ raw: { mode: 2 }, mode: undefined },
+	])("reads $raw as $mode", ({ raw, mode }) => {
+		expect(targetSearchSchema.parse(raw).mode).toBe(mode);
+	});
+});
+
+describe("syncSearchSchema", () => {
+	it.each([
+		{ raw: {}, expected: { mode: undefined, ids: undefined } },
+		{ raw: { mode: "pull", ids: [1, 2] }, expected: { mode: "pull", ids: [1, 2] } },
+		{ raw: { ids: ["3"] }, expected: { mode: undefined, ids: [3] } },
+		{ raw: { mode: "nope", ids: [1] }, expected: { mode: undefined, ids: [1] } },
+		{ raw: { ids: [0] }, expected: { mode: undefined, ids: undefined } },
+		{ raw: { ids: [1.5] }, expected: { mode: undefined, ids: undefined } },
+		{ raw: { ids: "all" }, expected: { mode: undefined, ids: undefined } },
+	])("reads $raw", ({ raw, expected }) => {
+		expect(syncSearchSchema.parse(raw)).toEqual(expected);
 	});
 });

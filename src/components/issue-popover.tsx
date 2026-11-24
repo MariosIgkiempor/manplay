@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Input } from "#/components/ui/input.tsx";
-import { PopoverPopup } from "#/components/ui/popup.tsx";
+import { GrowPopup } from "#/components/ui/popup.tsx";
 import { cardFor, type IssueIndex, type PlaceDefaults } from "#/lib/audit.ts";
 import { useAuditPlace } from "#/lib/queries.ts";
 
@@ -19,8 +19,7 @@ interface Props {
 	onOpenChange: (open: boolean) => void;
 }
 
-const popup =
-	"z-50 w-72 rounded-lg border bg-popover p-3 text-popover-foreground text-sm shadow-lg outline-none";
+const popup = "z-50 w-72 p-3 text-sm";
 
 /** Warning icon that opens a card: what is wrong here, and how to fix it. */
 export function IssuePopover({ path, isDir, health, fixing, onFix, open, onOpenChange }: Props) {
@@ -41,7 +40,7 @@ export function IssuePopover({ path, isDir, health, fixing, onFix, open, onOpenC
 				{isDir && health.folders.get(path)?.count}
 			</PopoverTrigger>
 			{/* The card lives inside the pane in the React tree; keep its keys (Enter, typing) to itself. */}
-			<PopoverPopup sideOffset={6} className={popup} onKeyDown={(ev) => ev.stopPropagation()}>
+			<GrowPopup overlap={20} className={popup} onKeyDown={(ev) => ev.stopPropagation()}>
 				<div className="space-y-2">
 					{card.title && <p className="font-medium">{card.title}</p>}
 					<ul className="space-y-1 text-muted-foreground text-xs">
@@ -59,7 +58,7 @@ export function IssuePopover({ path, isDir, health, fixing, onFix, open, onOpenC
 						<PlaceForm path={path} defaults={card.form} onDone={() => onOpenChange(false)} />
 					)}
 				</div>
-			</PopoverPopup>
+			</GrowPopup>
 		</Popover>
 	);
 }

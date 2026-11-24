@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { FolderOpen, Plus, Trash2 } from "lucide-react";
+import { FolderOpen, Plus, Trash2, Upload } from "lucide-react";
 import type { ReactNode } from "react";
 import { FrameSection } from "#/components/frame.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
@@ -10,7 +10,6 @@ import { useRemoveDestination } from "#/components/remove-destination.tsx";
 import { LibraryBadge } from "#/components/shared-library.tsx";
 import { SyncButton } from "#/components/sync-flow.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import {
 	isR2,
@@ -113,7 +112,7 @@ function RekordboxRow() {
 	let line: ReactNode =
 		s.exportedAt === null ? "Not exported yet" : `Exported ${timeAgo(s.exportedAt)}`;
 	if (s.error) {
-		line = <span className="text-destructive">{s.error}</span>;
+		line = <ErrorLine compact>{s.error}</ErrorLine>;
 	}
 	return (
 		<PlaceRow
@@ -191,17 +190,34 @@ export function Destinations() {
 	const librarySize = tracks.data?.length ?? 0;
 	const add = () => void navigate({ to: "/export/add", search: {} });
 
+	// Nothing to list: the page's empty state stands alone, as on every other page, not in a frame.
+	if (count === 0) {
+		return (
+			<>
+				{removal.error && <ErrorLine>{String(removal.error)}</ErrorLine>}
+				<EmptyState
+					icon={<Upload />}
+					title="No destinations yet"
+					action={
+						<Button size="sm" onClick={add}>
+							<Plus /> Add destination
+						</Button>
+					}
+				>
+					A Tailscale folder, an R2 bucket, a rekordbox file or a USB drive.
+				</EmptyState>
+				{removal.dialog}
+			</>
+		);
+	}
 	return (
 		<FrameSection
 			title="Destinations"
 			count={count}
 			action={
-				// With no destinations the empty state below carries the button.
-				count > 0 && (
-					<Button size="sm" variant="outline" onClick={add}>
-						<Plus /> Add destination
-					</Button>
-				)
+				<Button size="sm" variant="outline" onClick={add}>
+					<Plus /> Add destination
+				</Button>
 			}
 		>
 			{removal.error && (
@@ -209,43 +225,20 @@ export function Destinations() {
 					<ErrorLine>{String(removal.error)}</ErrorLine>
 				</div>
 			)}
-			{count === 0 ? (
-				<div>
-					<EmptyState
-						title="No destinations yet"
-						action={
-							<Button onClick={add}>
-								<Plus /> Add destination
-							</Button>
-						}
-					>
-						<Facts
-							label="Back up to a Tailscale folder or R2 bucket, write a rekordbox file, or plug in a USB drive."
-							className="justify-center"
-						>
-							<Fact>Tailscale folder</Fact>
-							<Fact>R2 bucket</Fact>
-							<Fact>rekordbox file</Fact>
-							<Fact>CDJ USB drive</Fact>
-						</Facts>
-					</EmptyState>
-				</div>
-			) : (
-				<div className="divide-y divide-hairline">
-					{list.map((t) => (
-						<TargetRow
-							key={t.id}
-							target={t}
-							librarySize={librarySize}
-							onRemove={() => removal.ask(t)}
-						/>
-					))}
-					<RekordboxRow />
-					{plugged.map((d) => (
-						<UsbRow key={d.mount} drive={d} />
-					))}
-				</div>
-			)}
+			<div className="divide-y divide-hairline">
+				{list.map((t) => (
+					<TargetRow
+						key={t.id}
+						target={t}
+						librarySize={librarySize}
+						onRemove={() => removal.ask(t)}
+					/>
+				))}
+				<RekordboxRow />
+				{plugged.map((d) => (
+					<UsbRow key={d.mount} drive={d} />
+				))}
+			</div>
 			{removal.dialog}
 		</FrameSection>
 	);

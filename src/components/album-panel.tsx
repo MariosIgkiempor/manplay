@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
 import { CoverPicker } from "#/components/cover-picker.tsx";
-import { EmptyState } from "#/components/page.tsx";
+import { NotThere } from "#/components/page.tsx";
 import { PANEL_ART, PanelHeader } from "#/components/panel-header.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
@@ -46,10 +46,10 @@ export function AlbumPanel({ albumKey: key }: { albumKey: string }) {
 	}, [album, tracks.data, replace]);
 
 	if (!album) {
-		return <EmptyState title={tracks.isPending ? "Loading album…" : "Album not found"} />;
+		return <NotThere what="album" pending={tracks.isPending} />;
 	}
 	return (
-		<div className="space-y-6 pb-8">
+		<div className="space-y-3 pb-8">
 			<PanelHeader
 				kind={
 					<>

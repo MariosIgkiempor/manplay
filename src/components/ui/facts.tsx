@@ -23,17 +23,18 @@ import { cn } from "#/lib/utils.ts";
 export type FactTone = "kept" | "lost" | "changed" | "sent" | "warn" | "info";
 
 const TONES: Record<FactTone, { icon: LucideIcon | null; className: string }> = {
-	kept: { icon: Check, className: "bg-success/10 text-success" },
-	lost: { icon: X, className: "bg-destructive/10 text-destructive" },
-	changed: { icon: RefreshCw, className: "bg-primary/10 text-primary" },
-	sent: { icon: ArrowUpRight, className: "bg-warning/10 text-warning" },
-	warn: { icon: TriangleAlert, className: "bg-warning/10 text-warning" },
-	info: { icon: null, className: "bg-muted text-muted-foreground" },
+	kept: { icon: Check, className: "[&_svg]:text-success" },
+	lost: { icon: X, className: "[&_svg]:text-destructive" },
+	changed: { icon: RefreshCw, className: "[&_svg]:text-primary" },
+	sent: { icon: ArrowUpRight, className: "[&_svg]:text-warning" },
+	warn: { icon: TriangleAlert, className: "[&_svg]:text-warning" },
+	info: { icon: null, className: "" },
 };
 
 /**
- * One short fact as a chip: a word or two, coloured and marked by what it means. `hint` carries
- * the longer explanation on hover, so nothing is lost by keeping the chip short.
+ * One short fact: a word or two of quiet text behind a small mark coloured by what it means, so
+ * it reads as a note and not as a status or a button. `hint` carries the longer explanation on
+ * hover, so nothing is lost by keeping it short.
  */
 export function Fact({
 	tone = "info",
@@ -52,7 +53,7 @@ export function Fact({
 		<span
 			data-hint={hint}
 			className={cn(
-				"inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full px-2 font-medium text-xs [&_svg]:size-3 [&_svg]:shrink-0",
+				"inline-flex h-5 items-center gap-1 whitespace-nowrap text-muted-foreground text-xs [&_svg]:size-3 [&_svg]:shrink-0",
 				className,
 			)}
 		>
@@ -64,7 +65,7 @@ export function Fact({
 
 /**
  * A row of facts in place of a sentence. `label` reads the row for screen readers and on hover,
- * e.g. the sentence the chips replace.
+ * e.g. the sentence the facts replace.
  */
 export function Facts({
 	label,
@@ -78,7 +79,7 @@ export function Facts({
 	return (
 		<span
 			{...(label === undefined ? {} : { "aria-label": label, "data-hint": label })}
-			className={cn("inline-flex flex-wrap items-center gap-1", className)}
+			className={cn("inline-flex flex-wrap items-center gap-x-3 gap-y-0.5", className)}
 		>
 			{children}
 		</span>

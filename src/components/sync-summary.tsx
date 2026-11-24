@@ -4,9 +4,8 @@ import {
 	ArrowUp,
 	ArrowUpDown,
 	CheckCircle2,
-	Clock,
-	Loader2,
 	RefreshCw,
+	TriangleAlert,
 } from "lucide-react";
 import {
 	type Dispatch,
@@ -18,7 +17,7 @@ import {
 	useState,
 } from "react";
 import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
-import { EmptyState, ErrorLine } from "#/components/page.tsx";
+import { EmptyState, ErrorLine, ErrorState } from "#/components/page.tsx";
 import { SyncResult } from "#/components/sync-result.tsx";
 import { DeleteGuard, KINDS, LABEL } from "#/components/sync-review.tsx";
 import type { ReviewControls } from "#/components/sync-review-item.tsx";
@@ -267,6 +266,7 @@ function ReviewToolbar({
 	onView,
 	showUnchanged,
 	onShowUnchanged,
+	status,
 }: {
 	mode: SyncMode;
 	onMode: (m: SyncMode) => void;
@@ -274,6 +274,8 @@ function ReviewToolbar({
 	onView: (v: ReviewView) => void;
 	showUnchanged: boolean;
 	onShowUnchanged: (on: boolean) => void;
+	/** What a lone destination still needs, said here instead of on a line of its own. */
+	status?: ReactNode;
 }) {
 	return (
 		<div className="sticky top-[var(--pinned-header,0px)] z-30 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background px-[var(--diff-inset)] py-2 text-sm">
@@ -297,6 +299,7 @@ function ReviewToolbar({
 					);
 				})}
 			</fieldset>
+			{status}
 			<div className="ml-auto">
 				<ReviewViewMenu
 					view={view}
@@ -306,6 +309,45 @@ function ReviewToolbar({
 				/>
 			</div>
 		</div>
+	);
+}
+
+/**
+ * What a destination still needs from the user and what it sets aside: files needing a choice
+ * (a warning, not a link), files kept a while, files not compared.
+ */
+function TargetNotes({
+	t,
+	picked,
+	toolbar = false,
+}: {
+	t: Row;
+	picked: (a: SyncAction) => boolean;
+	toolbar?: boolean;
+}) {
+	const needChoice = t.incoming.filter((a) => !picked(a)).length;
+	const notes = [
+		...(t.plan.held.length > 0 ? [`${count(t.plan.held.length)} kept for 7 days`] : []),
+		...(t.plan.unchecked > 0 ? [`${count(t.plan.unchecked)} not compared`] : []),
+	];
+	if (needChoice === 0 && notes.length === 0) {
+		return null;
+	}
+	return (
+		<span className={cn("flex min-w-0 items-center gap-3 text-xs", !toolbar && "ml-auto")}>
+			{needChoice > 0 && (
+				<span
+					className="flex items-center gap-1 font-medium text-warning"
+					data-hint="Edited on both sides. Open the album and choose a copy."
+				>
+					<TriangleAlert className="size-3.5" />
+					{count(needChoice)} to choose
+				</span>
+			)}
+			{notes.length > 0 && (
+				<span className="truncate text-muted-foreground tabular-nums">{notes.join(" · ")}</span>
+			)}
+		</span>
 	);
 }
 
@@ -359,25 +401,12 @@ function TargetBlock({
 		there: (f) => thereChoice(id, f),
 		chooseThere: (files, c) => setThere((m) => chooseAll(m, id, files, c)),
 	};
-	const needChoice = t.incoming.filter((a) => !picked(a)).length;
-	const notes = [
-		...(t.plan.held.length > 0 ? [`${count(t.plan.held.length)} kept for 7 days`] : []),
-		...(t.plan.unchecked > 0 ? [`${count(t.plan.unchecked)} not compared`] : []),
-	];
-	const header = multi || needChoice > 0 || notes.length > 0;
 	return (
 		<section>
-			{header && (
+			{multi && (
 				<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b px-[var(--diff-inset)] py-2">
-					{multi && <h3 className="break-words font-semibold text-sm">{t.plan.name}</h3>}
-					{needChoice > 0 && (
-						<span className="text-sm text-warning">{count(needChoice)} need a choice</span>
-					)}
-					{notes.length > 0 && (
-						<span className="ml-auto text-muted-foreground text-xs tabular-nums">
-							{notes.join(" · ")}
-						</span>
-					)}
+					<h3 className="break-words font-semibold text-sm">{t.plan.name}</h3>
+					<TargetNotes t={t} picked={picked} />
 				</div>
 			)}
 			{[...new Set([t.pullError, t.plan.error])].map(
@@ -547,11 +576,8 @@ function notReady({
 	if (error !== null) {
 		return (
 			<SyncShell variant={variant}>
-				<div className="space-y-3 px-[var(--diff-inset)] py-4">
-					<ErrorLine>{error}</ErrorLine>
-					<Button variant="outline" className="w-full" onClick={onRefresh}>
-						Try again
-					</Button>
+				<div className="px-[var(--diff-inset)] py-6">
+					<ErrorState error={error} onRetry={onRefresh} />
 				</div>
 			</SyncShell>
 		);
@@ -561,13 +587,15 @@ function notReady({
 	}
 	return (
 		<SyncShell variant={variant}>
-			<div className="space-y-3 px-[var(--diff-inset)] py-12 text-center text-sm">
-				<Loader2 className="mx-auto size-5 animate-spin text-muted-foreground motion-reduce:animate-none" />
-				<p>
-					{waiting ? "Waiting for another destination to be read…" : "Reading the destinations…"}
-				</p>
+			<div className="space-y-4 px-[var(--diff-inset)] py-6">
+				<EmptyState
+					kind="loading"
+					title={
+						waiting ? "Waiting for another destination to be read…" : "Reading the destinations…"
+					}
+				/>
 				{!waiting && progress && progress.total > 0 && (
-					<div className="mx-auto max-w-sm">
+					<div className="mx-auto max-w-sm px-[var(--diff-inset)]">
 						<RunProgress done={progress.done} total={progress.total} current={progress.current} />
 					</div>
 				)}
@@ -788,20 +816,14 @@ function Gather({
 			variant={variant}
 			footer={
 				<>
-					<DeleteGuard
-						removing={removing}
-						remoteFiles={remoteFiles}
-						understood={understood}
-						onChange={setUnderstood}
-					/>
 					<div className="space-y-1.5">
 						<div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
 							<Tally
 								items={[
-									{ tone: "add", label: "to copy here", count: pullCount },
+									{ tone: "add", label: "copy here", count: pullCount },
 									{
 										tone: "change",
-										label: "to update your library",
+										label: "update here",
 										count: incomingRun.length,
 									},
 									...KINDS.map((k) => ({
@@ -832,7 +854,7 @@ function Gather({
 						/>
 					</div>
 					<RunStatus phase={phase} pulling={progress} />
-					<div className="flex gap-2">
+					<div className="flex flex-wrap gap-2">
 						<Button variant="outline" onClick={refresh} disabled={busy}>
 							Refresh
 						</Button>
@@ -841,6 +863,12 @@ function Gather({
 								Close
 							</Button>
 						)}
+						<DeleteGuard
+							removing={removing}
+							remoteFiles={remoteFiles}
+							understood={understood}
+							onChange={setUnderstood}
+						/>
 						<SyncButton
 							busy={busy}
 							total={total}
@@ -861,6 +889,9 @@ function Gather({
 					onView={setView}
 					showUnchanged={showUnchanged}
 					onShowUnchanged={setShowUnchanged}
+					status={
+						ids.length === 1 && targets[0] && <TargetNotes t={targets[0]} picked={picked} toolbar />
+					}
 				/>
 				{targets.map((t) => (
 					<TargetBlock
@@ -941,29 +972,23 @@ function UpToDate({
 				)
 			}
 		>
-			<EmptyState
-				className="py-16"
-				icon={<CheckCircle2 className="size-8 text-success" />}
-				title={only ? `${only.plan.name} is up to date` : "Everything is up to date"}
-				action={
-					<Button size="sm" variant="outline" onClick={onRefresh}>
-						<RefreshCw /> Check again
-					</Button>
-				}
-			>
-				<Facts
-					label={`${matching > 0 ? `All ${count(matching)} songs match ${where}.` : `Nothing to sync with ${where}.`} Checked ${timeAgo(scannedAt)}.${held > 0 ? ` ${count(held)} removed songs are kept there for 7 days.` : ""}`}
-					className="justify-center"
+			<div className="px-[var(--diff-inset)] py-6">
+				<EmptyState
+					kind="done"
+					title={only ? `${only.plan.name} is up to date` : "Everything is up to date"}
+					action={
+						<Button size="sm" variant="outline" onClick={onRefresh}>
+							<RefreshCw /> Check again
+						</Button>
+					}
 				>
-					{matching > 0 ? (
-						<Fact tone="kept">{count(matching)} songs match</Fact>
-					) : (
-						<Fact>Nothing to sync</Fact>
-					)}
-					<Fact icon={<Clock />}>Checked {timeAgo(scannedAt)}</Fact>
-					{held > 0 && <Fact tone="kept">{count(held)} removed, kept 7 days</Fact>}
-				</Facts>
-			</EmptyState>
+					{matching > 0
+						? `All ${count(matching)} songs match ${where}.`
+						: `Nothing to sync with ${where}.`}{" "}
+					Checked {timeAgo(scannedAt)}.
+					{held > 0 && ` ${count(held)} removed songs are kept there for 7 days.`}
+				</EmptyState>
+			</div>
 		</SyncShell>
 	);
 }

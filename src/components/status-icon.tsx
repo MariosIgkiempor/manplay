@@ -24,14 +24,7 @@ export function StatusIcon({
 	className?: string | undefined;
 }) {
 	return (
-		<Hint
-			label={
-				<span className="block space-y-0.5">
-					<span className="block font-medium">{label}</span>
-					{detail && <span className="block opacity-80">{detail}</span>}
-				</span>
-			}
-		>
+		<Hint label={label} detail={detail}>
 			<span
 				role="img"
 				aria-label={label}

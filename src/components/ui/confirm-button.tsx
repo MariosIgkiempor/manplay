@@ -1,5 +1,5 @@
 import { type ComponentProps, type ReactNode, useLayoutEffect, useRef } from "react";
-import { Bubble } from "#/components/ui/bubble.tsx";
+import { Bubble, HintCard } from "#/components/ui/bubble.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useTwoPress } from "#/lib/two-press.ts";
 import { cn } from "#/lib/utils.ts";
@@ -82,12 +82,12 @@ function ArmedCard({
 		<Bubble
 			anchor={anchor}
 			role="status"
-			className="max-w-80 whitespace-normal rounded-xl p-0 text-sm shadow-lg"
+			framed={explained}
+			className={cn("max-w-80", !explained && "px-2.5 py-1.5 font-medium text-sm")}
 		>
-			<div className="w-max max-w-80">
-				<p className={cn("px-3.5 pt-2.5 font-medium", explained ? "pb-2" : "pb-2.5")}>{title}</p>
-				{explained && <div className="border-t px-3.5 pt-2.5 pb-3">{consequence}</div>}
-			</div>
+			<HintCard title={title} wide>
+				{explained && consequence}
+			</HintCard>
 		</Bubble>
 	);
 }

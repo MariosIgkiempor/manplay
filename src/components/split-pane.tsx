@@ -6,6 +6,7 @@ import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
 import { IssuesPanel } from "#/components/issues-drawer.tsx";
 import { MissingPanel } from "#/components/missing-files.tsx";
 import { PanelBar } from "#/components/panel-header.tsx";
+import { RekordboxExportPanel } from "#/components/rekordbox-view.tsx";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
 import { SongPanel } from "#/components/song-panel.tsx";
 import { UsbExportPanel } from "#/components/usb-export.tsx";
@@ -13,10 +14,8 @@ import { ValuePanel } from "#/components/value-panel.tsx";
 import { type DetailView, PanelScopeContext, useDetail } from "#/context/detail-context.ts";
 import { PanelBarContext } from "#/context/panel-bar.tsx";
 import { StatusScopeContext, useStatusScopeHandlers } from "#/context/status-context.ts";
-import { CARD } from "#/lib/page-layout.ts";
 import { usePanePresence } from "#/lib/use-pane-presence.ts";
 import { usePaneWidth } from "#/lib/use-pane-width.ts";
-import { cn } from "#/lib/utils.ts";
 
 function Content({ view }: { view: DetailView }) {
 	switch (view.kind) {
@@ -38,6 +37,8 @@ function Content({ view }: { view: DetailView }) {
 			return <DuplicatesPanel />;
 		case "usbExport":
 			return <UsbExportPanel mount={view.mount} />;
+		case "rekordboxExport":
+			return <RekordboxExportPanel />;
 	}
 }
 
@@ -124,7 +125,7 @@ export function SplitPane(): ReactNode {
 			tabIndex={-1}
 			{...scopeHandlers}
 			style={{ width }}
-			className={cn(CARD, "relative flex max-w-[70%] shrink-0 flex-col outline-none")}
+			className="relative flex max-w-[70%] shrink-0 flex-col outline-none"
 		>
 			<ResizeHandle
 				edge="left"
@@ -135,9 +136,9 @@ export function SplitPane(): ReactNode {
 				label="Resize panel"
 				onWidth={setWidth}
 			/>
-			{/* Clips to the card's corners; the handle sits outside it, in the gap. The content keeps
-			    its width while the card opens and shuts, held to the right as if sliding in. */}
-			<div className="flex min-h-0 flex-1 justify-end overflow-hidden rounded-[inherit]">
+			{/* No card of its own: it sits on the canvas as the sidebar does. The content keeps its
+			    width while the panel opens and shuts, held to the right as if sliding in. */}
+			<div className="flex min-h-0 flex-1 justify-end overflow-hidden">
 				<div style={{ width }} className="flex min-h-0 max-w-none shrink-0 flex-col">
 					<PanelBar
 						canGoBack={detail.canGoBack}

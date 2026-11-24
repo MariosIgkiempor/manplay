@@ -2,6 +2,7 @@ import { ArrowLeft, Check, CircleCheck, CircleDashed, RefreshCw, Trash2 } from "
 import type { ReactNode } from "react";
 import { EmptyState } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { FRAME, WELL_ROWS } from "#/lib/page-layout.ts";
 import { cn } from "#/lib/utils.ts";
 
 /**
@@ -35,7 +36,7 @@ export function ActionBar({
 	children: ReactNode;
 }) {
 	return (
-		<div className="sticky -top-5 z-10 -mx-5 -mt-5 flex items-center gap-3 border-hairline border-b bg-background/95 px-5 py-2.5 backdrop-blur-sm">
+		<div className="sticky -top-5 z-10 -mx-5 -mt-5 flex items-center gap-3 border-hairline border-b bg-canvas/95 px-5 py-2.5 backdrop-blur-sm">
 			<div className="min-w-0 flex-1 text-sm">
 				<p className="truncate font-medium tabular-nums">{summary}</p>
 				{detail !== undefined && (
@@ -62,11 +63,9 @@ export function ProblemList({
 	children: ReactNode;
 }) {
 	return (
-		<section
-			aria-label={title}
-			className="overflow-hidden rounded-lg border border-hairline bg-card shadow-xs"
-		>
-			<header className="flex min-h-9 items-center gap-2 border-hairline border-b px-3 py-1.5">
+		// The app's one card: the title on the frame's lip, the rows in its well.
+		<section aria-label={title} className={FRAME}>
+			<header className="flex min-h-8 items-center gap-2 px-3 py-1">
 				<h2 className="flex min-w-0 flex-1 items-baseline gap-2">
 					<span className="truncate font-medium text-sm">{title}</span>
 					{description !== undefined && (
@@ -75,7 +74,7 @@ export function ProblemList({
 				</h2>
 				{action}
 			</header>
-			<ul className="divide-y divide-hairline">{children}</ul>
+			<ul className={WELL_ROWS}>{children}</ul>
 		</section>
 	);
 }
@@ -256,7 +255,7 @@ export function ReviewSheet({
 				<p className="text-pretty text-muted-foreground text-sm leading-relaxed">{summary}</p>
 			</header>
 			<div className="space-y-3">{children}</div>
-			<div className="sticky bottom-0 -mx-5 flex items-center gap-2 border-hairline border-t bg-background px-5 py-3">
+			<div className="sticky bottom-0 -mx-5 flex items-center gap-2 border-hairline border-t bg-canvas px-5 py-3">
 				<Button variant="ghost" size="sm" onClick={onBack}>
 					<ArrowLeft />
 					Back
@@ -270,9 +269,9 @@ export function ReviewSheet({
 /** A group of diff lines under a small heading: one song's copies, one folder's files. */
 export function DiffGroup({ title, children }: { title: ReactNode; children: ReactNode }) {
 	return (
-		<div className="overflow-hidden rounded-lg border border-hairline">
-			<div className="truncate px-3 pt-2 pb-1.5 font-medium text-xs">{title}</div>
-			<div className="divide-y divide-hairline border-hairline border-t">{children}</div>
+		<div className={FRAME}>
+			<div className="truncate px-3 pt-1 pb-1.5 font-medium text-xs">{title}</div>
+			<div className={WELL_ROWS}>{children}</div>
 		</div>
 	);
 }

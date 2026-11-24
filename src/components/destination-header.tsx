@@ -55,41 +55,54 @@ export function DestinationHeader({
 	);
 }
 
-/** Thin bar of how much of something is used or done, beside the words for it. */
-export function UsageBar({
+/** A small ring of how much of something is used or done, beside a short figure for it. */
+export function UsageRing({
 	value,
 	total,
 	children,
+	hint,
 	warnAbove,
 	tone = "neutral",
 }: {
 	value: number;
 	total: number;
+	/** The figure in a few characters, e.g. `1,217/1,218`. */
 	children: ReactNode;
-	/** Turns the bar amber above this share (0 to 1), e.g. a nearly full drive. */
+	/** The figure in words, on hover, e.g. "1,217 of 1,218 songs synced". */
+	hint?: string;
+	/** Turns the ring amber above this share (0 to 1), e.g. a nearly full drive. */
 	warnAbove?: number;
 	/** "progress" fills in the accent colour, for things done rather than space taken. */
 	tone?: "neutral" | "progress";
 }) {
 	const share = total > 0 ? Math.min(1, value / total) : 0;
 	const warn = warnAbove !== undefined && share > warnAbove;
-	let fill = "bg-muted-foreground/60";
+	let stroke = "stroke-muted-foreground/70";
 	if (warn) {
-		fill = "bg-warning";
+		stroke = "stroke-warning";
 	} else if (tone === "progress") {
-		fill = "bg-primary";
+		stroke = "stroke-primary";
 	}
+	// A ring, not a bar: the share at a glance in the room of one letter, the words on hover.
 	return (
-		<span className="flex items-center gap-2">
-			<span aria-hidden="true" className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
-				<span
+		<span className="flex items-center gap-1.5 whitespace-nowrap" data-hint={hint}>
+			<svg aria-hidden="true" viewBox="0 0 16 16" className="size-3.5 shrink-0 -rotate-90">
+				<circle cx="8" cy="8" r="6" fill="none" strokeWidth="3" className="stroke-muted" />
+				<circle
+					cx="8"
+					cy="8"
+					r="6"
+					fill="none"
+					strokeWidth="3"
+					strokeLinecap={share > 0 && share < 1 ? "round" : "butt"}
+					pathLength={100}
+					strokeDasharray={`${share * 100} 100`}
 					className={cn(
-						"block h-full transition-[width] duration-500 ease-out motion-reduce:transition-none",
-						fill,
+						"transition-[stroke-dasharray] duration-500 ease-out motion-reduce:transition-none",
+						stroke,
 					)}
-					style={{ width: `${share * 100}%` }}
 				/>
-			</span>
+			</svg>
 			{children}
 		</span>
 	);

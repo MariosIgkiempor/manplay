@@ -2,7 +2,7 @@ import { FolderOpen, Music, RefreshCw } from "lucide-react";
 import { useMemo } from "react";
 import { AlbumGrid } from "#/components/album-grid.tsx";
 import { ArtistGrid } from "#/components/artist-grid.tsx";
-import { EmptyState, LoadingLine } from "#/components/page.tsx";
+import { EmptyState } from "#/components/page.tsx";
 import { SelectableTrackList } from "#/components/selectable-track-list.tsx";
 import { SortMenu } from "#/components/sort-menu.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
@@ -119,7 +119,7 @@ export function LibraryEmpty({
 	onRescan: () => void;
 }) {
 	if (scanning) {
-		return <LoadingLine className="justify-center py-16">Reading your music folder…</LoadingLine>;
+		return <EmptyState kind="loading" title="Reading your music folder…" />;
 	}
 	if (hasRoot) {
 		return (
@@ -128,7 +128,7 @@ export function LibraryEmpty({
 				title="No songs in this folder yet"
 				action={
 					<div className="flex gap-2">
-						<Button variant="outline" onClick={onRescan}>
+						<Button onClick={onRescan}>
 							<RefreshCw /> Rescan
 						</Button>
 						<Button variant="outline" onClick={onPick}>

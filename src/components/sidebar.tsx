@@ -5,8 +5,7 @@ import {
 	FolderTree,
 	Library,
 	Music,
-	PanelLeftClose,
-	PanelLeftOpen,
+	PanelLeft,
 	Settings,
 	Upload,
 } from "lucide-react";
@@ -17,7 +16,9 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useRef,
+	useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
 import { SidebarRecentlyDeleted } from "#/components/sidebar-deleted.tsx";
 import { SidebarHighlight } from "#/components/sidebar-highlight.tsx";
@@ -28,6 +29,7 @@ import { SidebarSmartPlaylists } from "#/components/sidebar-smart-playlists.tsx"
 import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
+import { SIDEBAR_TOGGLE_SLOT } from "#/lib/page-layout.ts";
 import { useClashes, useTracks } from "#/lib/queries.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
 import { usePaneWidth, useStoredFlag } from "#/lib/use-pane-width.ts";
@@ -181,8 +183,44 @@ function useWidthVariable(aside: React.RefObject<HTMLElement | null>) {
 }
 
 /**
+ * The sidebar's fold button. It lives at the status bar's left end, as the side panel's button
+ * does at its right, lit while the sidebar is open.
+ */
+function SidebarToggle({
+	collapsed,
+	hint,
+	onToggle,
+}: {
+	collapsed: boolean;
+	hint: string;
+	onToggle: () => void;
+}) {
+	const [slot, setSlot] = useState<HTMLElement | null>(null);
+	useEffect(() => setSlot(document.getElementById(SIDEBAR_TOGGLE_SLOT)), []);
+	if (!slot) {
+		return null;
+	}
+	return createPortal(
+		<button
+			type="button"
+			onClick={onToggle}
+			aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+			data-hint={hint}
+			aria-pressed={!collapsed}
+			className={cn(
+				"-ml-1.5 grid size-6 shrink-0 place-items-center rounded-md outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-3.5",
+				collapsed ? "text-muted-foreground" : "text-primary",
+			)}
+		>
+			<PanelLeft />
+		</button>,
+		slot,
+	);
+}
+
+/**
  * The app's left column: pages, sync, playlists and tags. Drag its edge to resize it; fold it to
- * an icon rail with the button at the top, by dragging it narrow, or with ⌘\.
+ * an icon rail with the button in the status bar, by dragging it narrow, or with ⌘\.
  */
 export function Sidebar() {
 	const syncing = useSyncProgress().size > 0;
@@ -207,19 +245,6 @@ export function Sidebar() {
 	useCurrentRowInView(asideRef);
 	useWidthVariable(asideRef);
 
-	const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
-	const toggleButton = (
-		<button
-			type="button"
-			onClick={toggle}
-			aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-			data-hint={toggleTitle}
-			className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-4"
-		>
-			<ToggleIcon />
-		</button>
-	);
-
 	return (
 		<CollapsedContext.Provider value={collapsed}>
 			<aside
@@ -231,15 +256,14 @@ export function Sidebar() {
 				)}
 			>
 				<SidebarHighlight aside={asideRef} />
-				{collapsed ? (
-					toggleButton
-				) : (
-					<div className="flex items-center gap-2 pt-1 pl-2 font-semibold">
-						<Music className="size-5 shrink-0 text-primary" />
-						<span className="flex-1 truncate">manplay</span>
-						{toggleButton}
-					</div>
-				)}
+				<SidebarToggle collapsed={collapsed} hint={toggleTitle} onToggle={toggle} />
+				<div
+					className={cn("flex items-center gap-2 pt-1 font-semibold", !collapsed && "pl-2")}
+					data-hint={collapsed ? "manplay" : undefined}
+				>
+					<Music className="size-5 shrink-0 text-primary" />
+					{!collapsed && <span className="flex-1 truncate">manplay</span>}
+				</div>
 				<nav className={cn("space-y-0.5", collapsed && "flex flex-col items-center")}>
 					<NavLink to="/" label="Library" icon={<Library />} count={songCount} />
 					<NavLink to="/files" label="Files" icon={<FolderTree />} />

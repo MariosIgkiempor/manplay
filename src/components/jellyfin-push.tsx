@@ -1,13 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import { Send } from "lucide-react";
 import { useState } from "react";
 import { SettingLabel } from "#/components/destination-header.tsx";
-import { Drawer } from "#/components/drawer.tsx";
 import { ExportFooter } from "#/components/export-chooser.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { SettingRow } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Fact, Facts } from "#/components/ui/facts.tsx";
+import { GrowPopup } from "#/components/ui/popup.tsx";
 import { type JellyfinPlanRow, jellyfinPlan, pushJellyfin } from "#/lib/api.ts";
 import { plural } from "#/lib/export-selection.ts";
 import { timeAgo } from "#/lib/format.ts";
@@ -156,17 +157,23 @@ export function JellyfinPushRow({ targetId }: { targetId: number }) {
 				/>
 			}
 		>
-			<Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
-				Review and send…
-			</Button>
-			<Drawer
-				open={open}
-				onClose={() => setOpen(false)}
-				title="Send playlists to Jellyfin"
-				width="w-[44rem]"
-			>
-				{open && <Review targetId={targetId} onClose={() => setOpen(false)} />}
-			</Drawer>
+			{/* The step grows out of its button and floats over the settings; nothing moves. */}
+			<Popover open={open} onOpenChange={setOpen}>
+				<PopoverTrigger
+					render={<Button type="button" size="sm" variant={open ? "secondary" : "outline"} />}
+				>
+					Review and send…
+				</PopoverTrigger>
+				<GrowPopup
+					align="end"
+					title="Send playlists to Jellyfin"
+					className="w-[40rem] overflow-hidden"
+				>
+					<div className="max-h-[min(36rem,var(--available-height,70vh))] overflow-y-auto p-4">
+						{open && <Review targetId={targetId} onClose={() => setOpen(false)} />}
+					</div>
+				</GrowPopup>
+			</Popover>
 		</SettingRow>
 	);
 }

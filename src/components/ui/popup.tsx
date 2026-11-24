@@ -1,7 +1,15 @@
 import { Menu, MenuContent, type MenuProps } from "@ui-sdk/react/menu";
 import { PopoverContent } from "@ui-sdk/react/popover";
-import { type ComponentProps, type KeyboardEvent, useLayoutEffect, useState } from "react";
+import {
+	type ComponentProps,
+	type KeyboardEvent,
+	type ReactNode,
+	useLayoutEffect,
+	useState,
+} from "react";
 import { createPortal } from "react-dom";
+import { FLOATING_FRAME, WELL } from "#/lib/page-layout.ts";
+import { cn } from "#/lib/utils.ts";
 
 /**
  * Where every popup renders: on the body, outside the trigger's own markup, so a popup takes no
@@ -141,5 +149,39 @@ export function PopoverPopup({ onKeyDown, ...props }: ComponentProps<typeof Popo
 			}}
 			{...props}
 		/>
+	);
+}
+
+/**
+ * A popover that grows out of the control that opened it: it lies over the control, one corner
+ * on the control's own, and scales up from there, so the control seems to become the card. It
+ * floats above the page and moves nothing around it. Every one looks like a section of a page:
+ * a frame, with `title` on its lip when given, round a well that holds the content. `className`
+ * sizes and pads the well. `overlap` is the control's height.
+ */
+export function GrowPopup({
+	overlap = 32,
+	title,
+	className,
+	children,
+	...props
+}: Omit<ComponentProps<typeof PopoverContent>, "children" | "title"> & {
+	overlap?: number;
+	title?: string;
+	children: ReactNode;
+}) {
+	return (
+		<PopoverPopup
+			sideOffset={-overlap}
+			collisionPadding={12}
+			aria-label={title}
+			className={cn("grows-from-trigger", FLOATING_FRAME)}
+			{...props}
+		>
+			{title !== undefined && (
+				<h2 className="px-3 pt-1.5 pb-2 font-medium text-[0.9375rem]">{title}</h2>
+			)}
+			<div className={cn(WELL, "max-w-[calc(100vw-2rem)]", className)}>{children}</div>
+		</PopoverPopup>
 	);
 }

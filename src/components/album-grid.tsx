@@ -79,7 +79,11 @@ function AlbumTile({
 export function AlbumGrid({ albums, targetCount, onOpen }: Props) {
 	const { shown, more, loadMore } = useProgressive(albums, (a) => a.key);
 	if (albums.length === 0) {
-		return <EmptyState title="No albums">Clear the search to see everything.</EmptyState>;
+		return (
+			<EmptyState kind="search" title="No albums">
+				Clear the search to see everything.
+			</EmptyState>
+		);
 	}
 	return (
 		<>

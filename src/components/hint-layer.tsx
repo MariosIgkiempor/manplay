@@ -1,5 +1,5 @@
 import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
-import { Bubble } from "#/components/ui/bubble.tsx";
+import { Bubble, hintHasDetail, TextHint } from "#/components/ui/bubble.tsx";
 
 /** The attribute an element names its hover hint in. */
 const HINT_ATTRIBUTE = "data-hint";
@@ -116,5 +116,11 @@ export function HintLayer() {
 		return () => follow.disconnect();
 	}, [shown]);
 
-	return shown && <Bubble anchor={shown.anchor}>{shown.text}</Bubble>;
+	return (
+		shown && (
+			<Bubble anchor={shown.anchor} framed={hintHasDetail(shown.text)}>
+				<TextHint text={shown.text} />
+			</Bubble>
+		)
+	);
 }

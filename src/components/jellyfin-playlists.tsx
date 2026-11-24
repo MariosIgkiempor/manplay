@@ -1,13 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import { ListMusic, Send } from "lucide-react";
 import { useState } from "react";
 import { SettingLabel } from "#/components/destination-header.tsx";
-import { Drawer } from "#/components/drawer.tsx";
 import { type ChooserTab, ExportChooser, ExportFooter } from "#/components/export-chooser.tsx";
-import { ErrorLine } from "#/components/page.tsx";
+import { EmptyLine, ErrorLine } from "#/components/page.tsx";
 import { MutationErrors } from "#/components/path-setting.tsx";
 import { SettingRow } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { GrowPopup } from "#/components/ui/popup.tsx";
 import {
 	type ExportSelection,
 	jellyfinServerPlaylists,
@@ -50,7 +51,7 @@ function OnServer({ targetId }: { targetId: number }) {
 		return <p className="text-muted-foreground text-sm">Reading Jellyfin…</p>;
 	}
 	if (playlists.data.length === 0) {
-		return <p className="text-muted-foreground text-sm">No playlists in Jellyfin yet.</p>;
+		return <EmptyLine className="px-0">No playlists in Jellyfin yet</EmptyLine>;
 	}
 	return (
 		<ul className={`${WELL_ROWS} px-4`}>
@@ -141,17 +142,19 @@ export function JellyfinPlaylistsRow({ targetId }: { targetId: number }) {
 				/>
 			}
 		>
-			<Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
-				Choose…
-			</Button>
-			<Drawer
-				open={open}
-				onClose={() => setOpen(false)}
-				title="Playlists for Jellyfin"
-				width="w-[44rem]"
-			>
-				{open && <Chooser targetId={targetId} saved={saved} onClose={() => setOpen(false)} />}
-			</Drawer>
+			{/* The step grows out of its button and floats over the settings; nothing moves. */}
+			<Popover open={open} onOpenChange={setOpen}>
+				<PopoverTrigger
+					render={<Button type="button" size="sm" variant={open ? "secondary" : "outline"} />}
+				>
+					Choose…
+				</PopoverTrigger>
+				<GrowPopup align="end" title="Playlists for Jellyfin" className="w-[40rem] overflow-hidden">
+					<div className="max-h-[min(36rem,var(--available-height,70vh))] overflow-y-auto p-4">
+						{open && <Chooser targetId={targetId} saved={saved} onClose={() => setOpen(false)} />}
+					</div>
+				</GrowPopup>
+			</Popover>
 		</SettingRow>
 	);
 }

@@ -1,7 +1,9 @@
-import { ArrowRight, History, Settings2 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { ArrowLeft, ArrowRight, History, Settings2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import type { PlaceTab } from "#/components/destination-header.tsx";
+import { EmptyState } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
 import { PAGE_BODY } from "#/lib/page-layout.ts";
@@ -31,6 +33,39 @@ export function PlaceFrame({
 			) : (
 				<div className={cn("w-full max-w-5xl space-y-5", PAGE_BODY)}>{children}</div>
 			)}
+		</main>
+	);
+}
+
+/**
+ * A source or destination page whose thing is no longer there (removed, unplugged): what
+ * happened, one sentence, and the way back to the list it was in.
+ */
+export function PlaceGone({
+	section,
+	icon,
+	title,
+	children,
+}: {
+	section: "import" | "export";
+	icon: ReactNode;
+	title: string;
+	children: ReactNode;
+}) {
+	return (
+		<main className={PAGE_BODY}>
+			<EmptyState
+				kind="gone"
+				icon={icon}
+				title={title}
+				action={
+					<Button size="sm" render={<Link to={section === "import" ? "/import" : "/export"} />}>
+						<ArrowLeft /> {section === "import" ? "Back to Import" : "Back to Export"}
+					</Button>
+				}
+			>
+				{children}
+			</EmptyState>
 		</main>
 	);
 }

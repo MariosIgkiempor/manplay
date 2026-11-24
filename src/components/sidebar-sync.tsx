@@ -36,6 +36,7 @@ import { type ImportFolder, isR2, targetShortName, type UsbDrive, usbEject } fro
 import { compactCount as compact, formatBytes } from "#/lib/format.ts";
 import { folderBrand, folderName } from "#/lib/import-folders.ts";
 import { useClashes, useSyncScans, useSyncTargets } from "#/lib/queries.ts";
+import { CLASHES_ANCHOR } from "#/lib/settings-sections.ts";
 import { type DestinationStatus, destinationStatus } from "#/lib/sync-status.ts";
 import { useAddImportFolder, useImportFolders, useImportNewCount } from "#/lib/use-import.ts";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
@@ -402,7 +403,13 @@ function ClashesRow() {
 	}
 	return (
 		<div className={rowClass(false)}>
-			<Link to="/settings" className={cn(rowBase, "text-left outline-none")}>
+			{/* Lands on the clashes themselves, far down the Library settings, not at their top. */}
+			<Link
+				to="/settings"
+				search={{ section: "library" }}
+				hash={CLASHES_ANCHOR}
+				className={cn(rowBase, "text-left outline-none")}
+			>
 				<TriangleAlert className="size-4 shrink-0 text-warning" />
 				<span className="truncate">Clashes</span>
 				<RowTrailing>

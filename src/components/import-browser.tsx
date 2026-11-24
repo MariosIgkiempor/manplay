@@ -8,6 +8,7 @@ import {
 	FileArchive,
 	ImageIcon,
 	Loader2,
+	Mic2,
 	Music,
 	Pause,
 	Play,
@@ -423,7 +424,11 @@ function ReleaseName({ p, single }: { p: ReleaseProps; single: boolean }) {
 					onChange={(v) => p.onEdit({ artist: edit.artist, album: v })}
 					className="max-w-[60%] font-medium text-sm md:text-sm"
 				/>
-				<span className="shrink-0 px-1 text-muted-foreground/50 text-xs">by</span>
+				{/* The artist reads as it does under every title: after a microphone, not the word "by". */}
+				<Mic2
+					aria-hidden="true"
+					className="mx-1 size-3 shrink-0 text-muted-foreground opacity-60"
+				/>
 				<InlineField
 					label="Artist"
 					suggestions={p.artists}

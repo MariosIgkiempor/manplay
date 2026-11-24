@@ -9,6 +9,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { EmptyLine, ErrorLine } from "#/components/page.tsx";
 import { PopoverPopup } from "#/components/ui/popup.tsx";
 import { pickRows } from "#/lib/folder-pick.ts";
 import { joinPath } from "#/lib/fs-path.ts";
@@ -126,11 +127,11 @@ function FolderPicker({
 					<p className="px-2 py-1.5 text-muted-foreground text-sm">Loading…</p>
 				)}
 				{lists[0]?.isError && (
-					<p className="px-2 py-1.5 text-destructive text-sm">{String(lists[0].error)}</p>
+					<ErrorLine compact className="px-3 py-2">
+						{String(lists[0].error)}
+					</ErrorLine>
 				)}
-				{lists[0]?.isSuccess && rows.length === 0 && (
-					<p className="px-2 py-1.5 text-muted-foreground text-sm">No folders</p>
-				)}
+				{lists[0]?.isSuccess && rows.length === 0 && <EmptyLine>No folders</EmptyLine>}
 				{rows.map((r, i) => (
 					<div
 						key={r.path}

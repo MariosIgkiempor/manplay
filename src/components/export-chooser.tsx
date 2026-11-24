@@ -3,7 +3,7 @@ import { ChevronRight, ListMusic, Sparkles, Tag as TagIcon } from "lucide-react"
 import { type ReactNode, useState } from "react";
 import { CheckList, CheckRow, Filter, LinkButton, TagTree } from "#/components/check-list.tsx";
 import { FrameSection } from "#/components/frame.tsx";
-import { ErrorLine } from "#/components/page.tsx";
+import { EmptyLine, ErrorLine } from "#/components/page.tsx";
 import { SmartPicker } from "#/components/smart-playlists.tsx";
 import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
@@ -70,9 +70,7 @@ function PlaylistPicker({
 }) {
 	const [filter, setFilter] = useState("");
 	if (list.length === 0) {
-		return (
-			<p className="py-6 text-center text-muted-foreground text-sm">No playlists with songs yet.</p>
-		);
+		return <EmptyLine>No playlists with songs yet</EmptyLine>;
 	}
 	const on = new Set(chosen);
 	const count = list.filter((p) => on.has(p.id)).length;
@@ -102,9 +100,7 @@ function PlaylistPicker({
 						onChange={(include) => toggle(p.id, include)}
 					/>
 				))}
-				{shown.length === 0 && (
-					<p className="px-3 py-2 text-muted-foreground text-sm">No playlist matches.</p>
-				)}
+				{shown.length === 0 && <EmptyLine>No playlist matches</EmptyLine>}
 			</CheckList>
 		</div>
 	);
@@ -122,7 +118,7 @@ function TagPicker({
 	onChange: (next: string[]) => void;
 }) {
 	if (tags.length === 0) {
-		return <p className="py-6 text-center text-muted-foreground text-sm">No tagged songs yet.</p>;
+		return <EmptyLine>No tagged songs yet</EmptyLine>;
 	}
 	return (
 		<div className="space-y-2">
@@ -319,8 +315,12 @@ export function ExportFooter({
 	return (
 		<div
 			className={cn(
-				"sticky z-10 mt-auto flex items-center gap-3 border-t bg-background/85 py-3 backdrop-blur-md",
-				inPanel ? "-mx-5 bottom-0 px-5" : "-mx-4 -mb-4 -bottom-4 px-4",
+				"sticky z-10 mt-auto flex items-center gap-3 border-t py-3",
+				// The side panel is narrow and sits on the canvas: the words get a line of their own
+				// above the buttons, on a solid ground so the list never shows through them.
+				inPanel
+					? "-mx-5 bottom-0 flex-wrap justify-end bg-canvas px-5 [&>div:first-child]:basis-full"
+					: "-mx-4 -mb-4 -bottom-4 bg-well px-4",
 			)}
 		>
 			<div

@@ -23,7 +23,7 @@ type ValueTab = "songs" | "metadata";
 export function ValuePanel({ field, value }: { field: string; value: string }) {
 	const tracks = useTracks();
 	if (!tracks.data) {
-		return <EmptyState title="Loading songs…" />;
+		return <EmptyState kind="loading" title="Loading songs…" />;
 	}
 	return (
 		<PinnedValuePanel
@@ -61,7 +61,7 @@ function PinnedValuePanel({
 	const editable = !isTag && target !== null;
 
 	return (
-		<div className="space-y-6 pb-8">
+		<div className="space-y-3 pb-8">
 			<PanelHeader
 				kind={
 					<>

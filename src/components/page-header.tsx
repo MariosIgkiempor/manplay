@@ -301,10 +301,87 @@ export function PageHeader({
 	);
 }
 
+/** The start of a page header's line: its mark, where it is, its title and its figures. */
+function Lead({
+	art,
+	kind,
+	title,
+	meta,
+	hasTabs,
+}: {
+	art: ReactNode;
+	kind: ReactNode;
+	title: ReactNode;
+	meta: ReactNode;
+	hasTabs: boolean;
+}) {
+	return (
+		<div
+			className={cn(
+				"flex min-w-0 items-center gap-3",
+				// Beside tabs: lined up with their words, which sit low on the header's edge.
+				hasTabs ? "max-w-[55%] shrink-0 pt-2.5 pb-1" : "flex-1 basis-60 py-2",
+			)}
+		>
+			{art}
+			{shows(kind) && (
+				<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground text-sm [&_svg]:size-3.5">
+					{kind}
+					<ChevronRight aria-hidden="true" />
+				</span>
+			)}
+			<div className="flex min-w-0 items-baseline gap-3 [&>h1]:min-w-12 [&>h1]:shrink [&>h1]:truncate">
+				{title}
+				{shows(meta) && (
+					<div
+						className={cn(
+							"flex min-w-0 shrink-[99] items-center gap-3 truncate text-muted-foreground text-sm tabular-nums",
+							// Beside tabs the figures are the first thing to go in a narrow page.
+							hasTabs && "@max-3xl/main:hidden",
+						)}
+					>
+						{meta}
+					</div>
+				)}
+			</div>
+		</div>
+	);
+}
+
+/** The end of a page header's line: a status or switch, then the buttons. */
+function Side({
+	badge,
+	actions,
+	hasTabs,
+	pushed,
+}: {
+	badge: ReactNode;
+	actions: ReactNode;
+	hasTabs: boolean;
+	/** Nothing before it takes the spare room, so it pushes itself to the right. */
+	pushed: boolean;
+}) {
+	if (!(shows(badge) || shows(actions))) {
+		return null;
+	}
+	return (
+		<div
+			className={cn(
+				"flex shrink-0 items-center gap-2",
+				hasTabs ? "pt-2 pb-1" : "py-2",
+				pushed && "ml-auto",
+			)}
+		>
+			{badge}
+			{shows(actions) && <ButtonGroup>{actions}</ButtonGroup>}
+		</div>
+	);
+}
+
 /**
- * A full page's header, the same on every page (the Library's): one line with a small mark, the
- * title and its figures, and the buttons at the right; tabs under it. Scrolling the page takes the
- * title line away and keeps the tabs at the top, as the Library keeps its tabs and search.
+ * A full page's header, the same on every page: one line with a small mark, the title and its
+ * figures, the tabs on the line's bottom edge, then the search and the buttons at the right. A
+ * header with tabs stays at the top while the page scrolls.
  */
 function CompactHeader({
 	art,
@@ -330,8 +407,6 @@ function CompactHeader({
 	children: ReactNode;
 }) {
 	const ref = useRef<HTMLElement>(null);
-	const tabsRef = useRef<HTMLDivElement>(null);
-	const [top, setTop] = useState(0);
 	const hasTabs = shows(tabs) || shows(search);
 	useLayoutEffect(() => {
 		const header = ref.current;
@@ -339,13 +414,10 @@ function CompactHeader({
 		if (!(header && page)) {
 			return;
 		}
-		// Sticks with only its tabs showing: everything above them scrolls out of sight. What else
-		// the page pins goes under the tabs (`--pinned-header`), within what is left of the page's
-		// height (`--page-height`).
+		// With tabs the whole header is one line and stays put. What else the page pins goes under
+		// it (`--pinned-header`), within what is left of the page's height (`--page-height`).
 		const measure = () => {
-			const pinned = hasTabs ? (tabsRef.current?.offsetHeight ?? 0) : 0;
-			setTop(pinned - header.offsetHeight);
-			page.style.setProperty("--pinned-header", `${pinned}px`);
+			page.style.setProperty("--pinned-header", `${hasTabs ? header.offsetHeight : 0}px`);
 			page.style.setProperty("--page-height", `${page.clientHeight}px`);
 		};
 		measure();
@@ -357,55 +429,34 @@ function CompactHeader({
 	return (
 		<header
 			ref={ref}
-			style={hasTabs ? { top } : undefined}
 			className={cn(
-				"z-10 shrink-0 border-hairline border-b bg-background px-6 pt-5",
-				hasTabs ? "sticky pb-0" : "pb-4",
+				"z-10 shrink-0 border-hairline border-b bg-background px-6",
+				hasTabs && "sticky top-0",
 			)}
 		>
-			<div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2">
-				<div className="flex min-w-0 flex-1 basis-60 items-center gap-3">
-					{art}
-					{shows(kind) && (
-						<span className="flex shrink-0 items-center gap-1.5 text-muted-foreground text-sm [&_svg]:size-3.5">
-							{kind}
-							<ChevronRight aria-hidden="true" />
-						</span>
-					)}
-					<div className="flex min-w-0 items-baseline gap-3 [&>h1]:shrink-0 [&>h1]:truncate">
-						{title}
-						{shows(meta) && (
-							<div className="flex min-w-0 items-center gap-3 truncate text-muted-foreground text-sm tabular-nums">
-								{meta}
-							</div>
-						)}
-					</div>
-				</div>
-				{(shows(badge) || shows(actions)) && (
-					<div className="flex shrink-0 items-center gap-2">
-						{badge}
-						{shows(actions) && <ButtonGroup>{actions}</ButtonGroup>}
+			{/* One line: where and what, its tabs on the bottom edge, then search and buttons. */}
+			<div
+				className={cn(
+					"flex items-stretch gap-x-4",
+					// Without tabs the buttons drop under a long title instead of squeezing it.
+					hasTabs ? "min-h-11" : "min-h-12 flex-wrap",
+				)}
+			>
+				<Lead art={art} kind={kind} title={title} meta={meta} hasTabs={hasTabs} />
+				{/* Without a search of its own the tabs take the spare room, for whatever they bring along. */}
+				{shows(tabs) && (
+					<div className={cn("-mb-px min-w-0 self-end", !shows(search) && "flex-1")}>{tabs}</div>
+				)}
+				{shows(search) && (
+					// Room for typing only while the search is open; folded, the tabs get the space.
+					<div className="ml-auto flex min-w-fit max-w-md flex-1 items-center justify-end has-[[data-search-open]]:min-w-64">
+						{search}
 					</div>
 				)}
+				<Side badge={badge} actions={actions} hasTabs={hasTabs} pushed={!shows(search)} />
 			</div>
-			{shows(children) && <div className="pt-3">{children}</div>}
-			{hasTabs && (
-				<div ref={tabsRef} className="mt-3">
-					{shows(search) ? (
-						// The search keeps its room at the end; tabs that do not fit scroll sideways.
-						<div className="-mb-px flex items-stretch gap-4">
-							<div className="min-w-0">{tabs}</div>
-							{/* Room for typing only while the search is open; folded, the tabs get the space. */}
-							<div className="ml-auto flex max-w-md flex-1 items-center pb-1.5 has-[[data-search-open]]:min-w-64">
-								{search}
-							</div>
-						</div>
-					) : (
-						<div className="-mb-px">{tabs}</div>
-					)}
-					{shows(below) && <div className="pt-1 pb-2">{below}</div>}
-				</div>
-			)}
+			{shows(children) && <div className="pb-3">{children}</div>}
+			{hasTabs && shows(below) && <div className="pt-1 pb-2">{below}</div>}
 		</header>
 	);
 }

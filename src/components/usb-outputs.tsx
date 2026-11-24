@@ -2,6 +2,7 @@ import { ChevronDown } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
 import { BrandGlyph } from "#/components/brand-icon.tsx";
 import { FolderFileNamesEditor, Highlighted } from "#/components/folder-file-names-editor.tsx";
+import { WellCard } from "#/components/frame.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import type { FolderFileNames, RekordboxFormats, UsbOutputs } from "#/lib/api.ts";
 import { formatFolderFileName } from "#/lib/folder-file-names.ts";
@@ -57,7 +58,7 @@ export function UsbOutputsSettings({
 	return (
 		<section aria-label="Formats" className="space-y-1.5">
 			<h3 className="px-1 font-medium text-muted-foreground text-xs">Formats</h3>
-			<div className="divide-y rounded-lg border">
+			<WellCard rows>
 				{USB_OUTPUTS.map((option) => (
 					<OutputRow
 						key={option.key}
@@ -67,7 +68,7 @@ export function UsbOutputsSettings({
 						extra={extras[option.key]}
 					/>
 				))}
-			</div>
+			</WellCard>
 		</section>
 	);
 }

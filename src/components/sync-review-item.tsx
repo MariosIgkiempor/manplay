@@ -1,6 +1,6 @@
-import { Check, Lock } from "lucide-react";
+import { ArrowRight, Check, Lock } from "lucide-react";
 import { type ReactNode, useId } from "react";
-import { PathDiff, TONE, type Tone } from "#/components/diff-view.tsx";
+import { TONE, type Tone } from "#/components/diff-view.tsx";
 import { ConflictChoice, MergeTable } from "#/components/sync-incoming.tsx";
 import { FieldDiffs, TagDiff } from "#/components/tag-diff.tsx";
 import type { Resolution, SyncAction } from "#/lib/api.ts";
@@ -150,6 +150,30 @@ function Verdict({ picked }: { picked: boolean }) {
 	);
 }
 
+const folderOf = (rel: readonly string[]) => rel.slice(0, -1).join(" / ") || "(top level)";
+
+/**
+ * Where a moved file goes, in words: the folder it leaves, an arrow, the folder it lands in. A
+ * rename inside one folder shows the two names instead.
+ */
+function MoveLine({ from, to }: { from: readonly string[]; to: readonly string[] }) {
+	const sameFolder = folderOf(from) === folderOf(to);
+	const was = sameFolder ? (from.at(-1) ?? "") : folderOf(from);
+	const now = sameFolder ? (to.at(-1) ?? "") : folderOf(to);
+	return (
+		<span
+			className="flex min-w-0 flex-wrap items-center gap-x-1.5"
+			data-hint={`${from.join("/")} → ${to.join("/")}`}
+		>
+			<span className="break-words text-muted-foreground line-through decoration-muted-foreground/50">
+				{was}
+			</span>
+			<ArrowRight aria-hidden="true" className={cn("size-3 shrink-0", TONE.move.text)} />
+			<span className="break-words text-foreground">{now}</span>
+		</span>
+	);
+}
+
 /** What a send does, under its name: where it moves from, or the tags it changes there. */
 function SendDetail({
 	action: a,
@@ -164,7 +188,7 @@ function SendDetail({
 		return (
 			<span className="block text-muted-foreground text-xs">
 				{moveAs === "path" ? (
-					<PathDiff from={a.from.join("/")} to={a.rel.join("/")} />
+					<MoveLine from={a.from} to={a.rel} />
 				) : (
 					`from ${a.from.slice(0, -1).join("/") || "(top level)"}`
 				)}

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { REVIEW_END_ATTRIBUTE } from "#/lib/sync-review-model.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** Where a sync screen is shown: the slide-over, or a destination's own page. */
@@ -27,6 +28,7 @@ export function SyncShell({
 			)}
 		>
 			<div
+				{...{ [REVIEW_END_ATTRIBUTE]: "" }}
 				className={cn(
 					"flex-1",
 					variant === "drawer" && "min-h-0 overflow-y-auto overscroll-contain",
@@ -35,7 +37,7 @@ export function SyncShell({
 				{children}
 			</div>
 			{footer && (
-				<div className="sticky bottom-0 z-30 shrink-0 space-y-3 border-t bg-background px-[var(--diff-inset)] py-3">
+				<div className="sticky bottom-0 z-30 shrink-0 space-y-2 border-t bg-background px-[var(--diff-inset)] py-2.5">
 					{footer}
 				</div>
 			)}

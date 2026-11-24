@@ -1,6 +1,7 @@
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
+import { useRouterState } from "@tanstack/react-router";
 import { FileAudio, FolderOpen, Server, Users } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ClashList } from "#/components/clashes.tsx";
 import { ConfirmDialog, Dialog } from "#/components/confirm-dialog.tsx";
 import { DeviceNameRow } from "#/components/device-settings.tsx";
@@ -33,6 +34,7 @@ import {
 	useLibraryRoot,
 	useSyncTargets,
 } from "#/lib/queries.ts";
+import { CLASHES_ANCHOR } from "#/lib/settings-sections.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** What a shared library carries between computers. */
@@ -853,22 +855,39 @@ export function FolderLibraryWatch() {
 /** Clashes, framed for the settings page. Nothing when there are none. */
 function ClashPanel() {
 	const count = useClashes().data?.length ?? 0;
+	const here = useRef<HTMLDivElement>(null);
+	// The sidebar's Clashes row leads here: bring the section into view and light it briefly.
+	const asked = useRouterState({ select: (s) => s.location.hash === CLASHES_ANCHOR });
+	useEffect(() => {
+		if (asked && count > 0) {
+			here.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+		}
+	}, [asked, count]);
 	if (count === 0) {
 		return null;
 	}
 	return (
-		<FrameSection
-			title="Clashes"
-			description={
-				<Facts label="Changes made on two computers at once. Pick which one to keep.">
-					<Fact tone="warn">Edited on two computers</Fact>
-					<Fact>Pick one</Fact>
-				</Facts>
-			}
+		<div
+			ref={here}
+			id={CLASHES_ANCHOR}
+			className={cn(
+				"scroll-mt-16 rounded-2xl",
+				asked && "outline-2 outline-warning/50 outline-offset-4",
+			)}
 		>
-			<div className="[--diff-inset:1rem] [&_section]:border-b-0">
-				<ClashList />
-			</div>
-		</FrameSection>
+			<FrameSection
+				title="Clashes"
+				description={
+					<Facts label="Changes made on two computers at once. Pick which one to keep.">
+						<Fact tone="warn">Edited on two computers</Fact>
+						<Fact>Pick one</Fact>
+					</Facts>
+				}
+			>
+				<div className="[--diff-inset:1rem] [&_section]:border-b-0">
+					<ClashList />
+				</div>
+			</FrameSection>
+		</div>
 	);
 }

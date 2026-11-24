@@ -17,7 +17,9 @@ export type DetailView =
 	| { kind: "issues" }
 	| { kind: "duplicates" }
 	/** Exporting playlists and tags to the USB drive at `mount`. */
-	| { kind: "usbExport"; mount: string };
+	| { kind: "usbExport"; mount: string }
+	/** Choosing what goes into the rekordbox file, and writing it. */
+	| { kind: "rekordboxExport" };
 
 /** The side panel's navigation: the view on show and the history behind it. */
 export interface DetailApi {

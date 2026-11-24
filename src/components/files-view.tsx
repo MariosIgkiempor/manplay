@@ -341,7 +341,7 @@ export function FilesView({
 			onFocusTags={tagNav.focusTags}
 			sort={sort}
 			onSort={setSort}
-			onShowShortcuts={() => setShortcuts(true)}
+			onShowShortcuts={() => setShortcuts((on) => !on)}
 			toolbarEnd={i === 0 ? tools : undefined}
 		/>
 	);
@@ -364,7 +364,7 @@ export function FilesView({
 	};
 
 	return (
-		<main className="flex h-full flex-col overflow-hidden">
+		<main className="relative flex h-full flex-col overflow-hidden">
 			<DragProvider onTransfer={transfer.onTransfer}>
 				<div ref={rootRef} className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
 					<HealthBar

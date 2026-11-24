@@ -5,8 +5,8 @@ import type { PushAction } from "#/lib/sync-choices.ts";
 type Kind = PushAction["kind"];
 
 export const LABEL: Record<Kind, { tone: Tone; label: string }> = {
-	upload: { tone: "add", label: "Push" },
-	replace: { tone: "change", label: "Change" },
+	upload: { tone: "add", label: "Send" },
+	replace: { tone: "change", label: "Replace" },
 	move: { tone: "move", label: "Move" },
 	delete: { tone: "remove", label: "Delete" },
 };
@@ -29,18 +29,22 @@ export function DeleteGuard({
 	}
 	// Deleting most of a destination usually means the wrong folder or library was picked.
 	const drastic = remoteFiles > 0 && removing / remoteFiles > 0.5;
+	// One line beside the Sync button; a drastic delete adds its warning in front.
 	return (
-		<div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+		<div className="flex h-9 shrink-0 items-center gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 text-sm">
 			{drastic && (
-				<p className="flex items-start gap-2 font-medium text-destructive">
-					<ShieldAlert className="mt-0.5 size-4 shrink-0" />
-					Deletes over half the destination. Right folder?
+				<p
+					className="flex items-center gap-1.5 font-medium text-destructive"
+					data-hint="Deletes over half the destination. Right folder?"
+				>
+					<ShieldAlert className="size-4 shrink-0" />
+					Over half the destination
 				</p>
 			)}
-			<label className="flex cursor-pointer items-start gap-2">
+			<label className="flex cursor-pointer items-center gap-2 whitespace-nowrap">
 				<input
 					type="checkbox"
-					className="mt-0.5 size-4 shrink-0 accent-primary"
+					className="size-4 shrink-0 accent-primary"
 					checked={understood}
 					onChange={(e) => onChange(e.target.checked)}
 				/>

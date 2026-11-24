@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { FolderPlus, ImageDown, Rows3 } from "lucide-react";
+import { Download, FolderPlus, ImageDown, Rows3, Settings2 } from "lucide-react";
 import { useState } from "react";
 import { SettingLabel } from "#/components/destination-header.tsx";
 import { FrameSection } from "#/components/frame.tsx";
@@ -9,7 +9,6 @@ import { EmptyState, ErrorLine, Page } from "#/components/page.tsx";
 import { type OverviewTab, OverviewTabs, PlaceSettingsGroup } from "#/components/place-page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import { type ImportFolder, importActivitySource } from "#/lib/api.ts";
 import { activityEntries, mergedHistory } from "#/lib/history.ts";
@@ -29,10 +28,11 @@ function ImportPage() {
 	const add = useAddImportFolder();
 	const navigate = useNavigate();
 	const on = folders.filter((f) => f.enabled).length;
-	const addButton = (
+	// The page's one way forward while it is empty; a quieter button once folders are listed.
+	const addButton = (variant: "default" | "outline") => (
 		<Button
 			size="sm"
-			variant="outline"
+			variant={variant}
 			disabled={add.isPending}
 			onClick={() =>
 				add.mutate(undefined, {
@@ -59,14 +59,15 @@ function ImportPage() {
 			{add.isError && <ErrorLine>{String(add.error)}</ErrorLine>}
 			{tab === "list" &&
 				(folders.length === 0 ? (
-					<EmptyState icon={<FolderPlus />} title="No import folders yet" action={addButton}>
-						<Facts label="Add folders where new music lands.">
-							<Fact>Downloads</Fact>
-							<Fact>iTunes Media</Fact>
-						</Facts>
+					<EmptyState
+						icon={<Download />}
+						title="No import folders yet"
+						action={addButton("default")}
+					>
+						Folders where new music lands, such as Downloads or iTunes Media.
 					</EmptyState>
 				) : (
-					<FrameSection title="Folders" count={folders.length} action={addButton}>
+					<FrameSection title="Folders" count={folders.length} action={addButton("outline")}>
 						{folders.map((f) => (
 							<ImportFolderRow key={f.id} folder={f} />
 						))}
@@ -89,7 +90,7 @@ function ImportHistory({ folders }: { folders: readonly ImportFolder[] }) {
 			})),
 		),
 	);
-	return <HistoryList marked entries={entries} empty="Nothing imported yet." />;
+	return <HistoryList marked entries={entries} empty="Nothing imported yet" />;
 }
 
 /** Settings for every folder: what applies to all of them, then each folder's own. */
@@ -116,6 +117,11 @@ function ImportSettings({ folders }: { folders: readonly ImportFolder[] }) {
 					/>
 				</SettingRow>
 			</SettingRows>
+			{folders.length === 0 && (
+				<EmptyState icon={<Settings2 />} title="No import folders to set up">
+					Each folder's settings show here once it is added.
+				</EmptyState>
+			)}
 			{folders.map((f) => (
 				<PlaceSettingsGroup
 					key={f.id}

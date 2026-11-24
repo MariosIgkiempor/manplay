@@ -1,9 +1,8 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronRight, FolderOpen } from "lucide-react";
+import { ChevronRight, FolderOpen, Usb } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AddR2, AddTailscale } from "#/components/add-destination.tsx";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
-import { Drawer } from "#/components/drawer.tsx";
 import { Framed } from "#/components/frame.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
@@ -12,7 +11,7 @@ import { PlaceFrame } from "#/components/place-page.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
 import { JoinLibraryDialog } from "#/components/shared-library.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { Fact, Facts, MoreInfo } from "#/components/ui/facts.tsx";
+import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { PAGE_ART, WELL_ROWS } from "#/lib/page-layout.ts";
 import type { DestinationService } from "#/lib/places.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
@@ -137,7 +136,17 @@ function SyncTargetStep({ service }: { service: "tailscale" | "r2" }) {
 	const meta = SERVICES.find((s) => s.id === service);
 	return (
 		<PlaceFrame header={<Heading brand={meta?.brand} title={meta?.title ?? ""} />}>
-			{service === "r2" ? <AddR2 onAdded={setAdded} /> : <AddTailscale onAdded={setAdded} />}
+			{/* Once added, the form gives way to the next step in the same place. */}
+			{added !== null && added === asked ? (
+				<section aria-label="Pull existing files" className="space-y-3">
+					<h2 className="font-medium text-[0.9375rem]">Pull existing files</h2>
+					<PullReview targetId={added} onDone={() => openTarget(added)} />
+				</section>
+			) : service === "r2" ? (
+				<AddR2 onAdded={setAdded} />
+			) : (
+				<AddTailscale onAdded={setAdded} />
+			)}
 			{offer && (
 				<JoinLibraryDialog
 					place={{ kind: "target", target: offer }}
@@ -147,14 +156,6 @@ function SyncTargetStep({ service }: { service: "tailscale" | "r2" }) {
 					}}
 				/>
 			)}
-			<Drawer
-				open={added !== null && added === asked}
-				onClose={() => added !== null && openTarget(added)}
-				title="Pull existing files"
-				width="w-[44rem]"
-			>
-				{added !== null && <PullReview targetId={added} onDone={() => openTarget(added)} />}
-			</Drawer>
 		</PlaceFrame>
 	);
 }
@@ -208,12 +209,9 @@ function UsbStep() {
 	return (
 		<PlaceFrame header={<Heading brand="usb" title="CDJ USB drive" />}>
 			{drives.length === 0 ? (
-				<div className="rounded-xl border border-hairline border-dashed">
-					<EmptyState title="Plug in a USB drive">
-						Appears here while plugged in{" "}
-						<MoreInfo hint="Shown here and in destinations while plugged in." />
-					</EmptyState>
-				</div>
+				<EmptyState icon={<Usb />} title="Plug in a USB drive">
+					It shows here, and in your destinations, while it is plugged in.
+				</EmptyState>
 			) : (
 				<Framed>
 					<ul className={WELL_ROWS}>

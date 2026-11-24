@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { FRAME, WELL_ROWS } from "#/lib/page-layout.ts";
+import { FRAME, WELL, WELL_ROWS } from "#/lib/page-layout.ts";
 import { cn } from "#/lib/utils.ts";
 
 /**
@@ -11,6 +11,7 @@ import { cn } from "#/lib/utils.ts";
 /** A framed group: its name and what it is for on the frame, its rows in the well below. */
 export function FrameSection({
 	title,
+	titleHidden = false,
 	icon,
 	count,
 	description,
@@ -21,6 +22,8 @@ export function FrameSection({
 }: {
 	/** Without one, the frame is a thin lip round the well. */
 	title?: string | undefined;
+	/** Name the group for screen readers only, where a tab or heading above already says it. */
+	titleHidden?: boolean;
 	/** A mark before the title, e.g. the logo of the service the group sets up. */
 	icon?: ReactNode;
 	/** How many the group holds, quietly after its title. */
@@ -33,7 +36,13 @@ export function FrameSection({
 }) {
 	return (
 		<section aria-label={title} className={cn(FRAME, className)}>
-			{title !== undefined && (
+			{title !== undefined && titleHidden && (Boolean(description) || Boolean(action)) && (
+				<div className="flex items-center gap-4 px-4 pt-2 pb-2">
+					<p className="min-w-0 flex-1 text-pretty text-muted-foreground text-sm">{description}</p>
+					{action && <div className="flex shrink-0 items-center gap-2">{action}</div>}
+				</div>
+			)}
+			{title !== undefined && !titleHidden && (
 				<div className="flex items-start gap-4 px-4 pt-3 pb-3">
 					<div className="min-w-0 flex-1">
 						<h2 className="flex items-center gap-2 font-medium text-[0.9375rem]">
@@ -125,4 +134,30 @@ export function Framed({
 	className?: string | undefined;
 }) {
 	return <div className={cn(FRAME, className)}>{children}</div>;
+}
+
+/**
+ * The app's one container: a frame's thin lip round a well. Every list, every empty or failed
+ * state and every group of settings sits in one, on pages, in the side panel and in the cards
+ * that float over them, so anything that holds content looks the same. `rows` splits the well's
+ * direct children with hairlines, for a list.
+ */
+export function WellCard({
+	children,
+	rows = false,
+	className,
+	wellClassName,
+}: {
+	children: ReactNode;
+	rows?: boolean;
+	/** For the frame: its place and size in the layout. */
+	className?: string | undefined;
+	/** For the well: its padding and scrolling. */
+	wellClassName?: string | undefined;
+}) {
+	return (
+		<div className={cn(FRAME, className)}>
+			<div className={cn(rows ? WELL_ROWS : WELL, wellClassName)}>{children}</div>
+		</div>
+	);
 }

@@ -1,10 +1,19 @@
-import { LoaderCircle, TriangleAlert } from "lucide-react";
+import {
+	CircleCheck,
+	CircleSlash,
+	Inbox,
+	LoaderCircle,
+	RefreshCw,
+	SearchX,
+	TriangleAlert,
+} from "lucide-react";
 import type { ReactNode } from "react";
+import { WellCard } from "#/components/frame.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { openPrivacySettings } from "#/lib/api.ts";
 import { describeError } from "#/lib/errors.ts";
-import { PAGE_BODY, WELL } from "#/lib/page-layout.ts";
+import { PAGE_BODY } from "#/lib/page-layout.ts";
 import { typeScale } from "#/lib/type-scale.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -82,35 +91,123 @@ export function SectionHeading({
 
 /** A bordered surface for a group of settings or a summary. */
 export function Panel({ children, className }: { children: ReactNode; className?: string }) {
-	return <div className={cn(WELL, "p-4", className)}>{children}</div>;
+	return <WellCard wellClassName={cn("p-4", className)}>{children}</WellCard>;
 }
 
-/** What to show where a list has nothing: what is missing and, when there is one, the way forward. */
+/**
+ * Why a place shows nothing, which picks its mark when the caller gives none:
+ * - `empty`: nothing here yet.
+ * - `search`: things exist, none match the search or filter.
+ * - `gone`: the thing this page was about no longer exists.
+ * - `loading`: still being read.
+ * - `done`: nothing left to do, which is good news.
+ */
+export type EmptyKind = "empty" | "search" | "gone" | "loading" | "done";
+
+const EMPTY_ICON: Record<EmptyKind, ReactNode> = {
+	empty: <Inbox />,
+	search: <SearchX />,
+	gone: <CircleSlash />,
+	loading: <LoaderCircle className="animate-spin motion-reduce:animate-none" />,
+	done: <CircleCheck className="text-success" />,
+};
+
+/**
+ * What to show where a page, panel or list has nothing: always the same shape, a mark, what is
+ * missing in a few words, one plain sentence, and the way forward when there is one, in the app's
+ * one card (`WellCard`).
+ */
 export function EmptyState({
+	kind = "empty",
 	icon,
 	title,
 	children,
 	action,
+	bare = false,
 	className,
 }: {
+	kind?: EmptyKind;
+	/** A mark of the thing itself, in place of the kind's own. */
 	icon?: ReactNode;
 	title: string;
 	children?: ReactNode;
 	action?: ReactNode;
-	className?: string;
+	/** Already inside a well (a list's own, a popup's): no card of its own. */
+	bare?: boolean;
+	className?: string | undefined;
 }) {
-	return (
-		<div className={cn("flex flex-col items-center gap-2 px-4 py-12 text-center", className)}>
-			{icon && (
-				<div className="mb-1 text-muted-foreground/60 [&_svg:not([class*='size-'])]:size-6">
-					{icon}
-				</div>
-			)}
+	const body = (
+		<div
+			role={kind === "loading" ? "status" : undefined}
+			className={cn("flex flex-col items-center gap-2 px-4 py-12 text-center", bare && className)}
+		>
+			<div className="mb-1 text-muted-foreground/60 [&_svg:not([class*='size-'])]:size-6">
+				{icon ?? EMPTY_ICON[kind]}
+			</div>
 			<p className="font-medium text-sm">{title}</p>
 			{children && <p className={cn(typeScale.description, "max-w-sm")}>{children}</p>}
 			{action && <div className="mt-2">{action}</div>}
 		</div>
 	);
+	// In the same card as the list it stands in for, so a page keeps its shape when it is empty.
+	return bare ? body : <WellCard className={cn("w-full", className)}>{body}</WellCard>;
+}
+
+/**
+ * A page or step that could not be shown at all because reading it failed: the same shape as an
+ * empty state, saying what went wrong in plain words (`describeError`), with Try again and any
+ * other way on. A failed action on a page that does show uses `ErrorLine`, at the top of the page.
+ */
+export function ErrorState({
+	error,
+	onRetry,
+	action,
+	className,
+}: {
+	error: string;
+	onRetry?: (() => void) | undefined;
+	/** Another way on, after Try again, e.g. Skip. */
+	action?: ReactNode;
+	className?: string;
+}) {
+	const { title, detail } = describeError(error);
+	return (
+		<div role="alert" data-hint={error}>
+			<EmptyState
+				icon={<TriangleAlert className="text-destructive" />}
+				title={typeof title === "string" ? title : "This could not be read"}
+				className={className}
+				action={
+					(onRetry ?? action) && (
+						<div className="flex items-center gap-2">
+							{onRetry && (
+								<Button size="sm" onClick={onRetry}>
+									<RefreshCw /> Try again
+								</Button>
+							)}
+							{action}
+						</div>
+					)
+				}
+			>
+				{detail}
+			</EmptyState>
+		</div>
+	);
+}
+
+/** A panel whose thing is still being read, or is no longer in the library. */
+export function NotThere({ what, pending }: { what: string; pending: boolean }) {
+	return pending ? (
+		<EmptyState kind="loading" title={`Loading ${what}…`} />
+	) : (
+		<EmptyState kind="gone" title={`${what.charAt(0).toUpperCase()}${what.slice(1)} not found`} />
+	);
+}
+
+/** Nothing to list inside a menu, a picker or a tab of a panel: one quiet line, the same everywhere. */
+export function EmptyLine({ children, className }: { children: ReactNode; className?: string }) {
+	return <p className={cn("px-3 py-2 text-muted-foreground text-sm", className)}>{children}</p>;
 }
 
 /** Start of the backend's message when macOS privacy settings block a folder. */
@@ -128,7 +225,7 @@ export function ErrorLine({
 }: {
 	children: ReactNode;
 	compact?: boolean;
-	className?: string;
+	className?: string | undefined;
 }) {
 	const raw = typeof children === "string" ? children : null;
 	const { title, detail } = raw === null ? { title: children, detail: null } : describeError(raw);

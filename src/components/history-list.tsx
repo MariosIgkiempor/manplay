@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+	ArrowDown,
 	ArrowUp,
 	Check,
 	ChevronRight,
@@ -7,6 +8,7 @@ import {
 	CircleCheck,
 	CircleX,
 	Clock,
+	History,
 	type LucideIcon,
 	Trash2,
 	TriangleAlert,
@@ -14,8 +16,9 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
+import { CreditLine } from "#/components/credit-line.tsx";
 import { FailureList } from "#/components/failure-list.tsx";
-import { FrameSection } from "#/components/frame.tsx";
+import { WellCard } from "#/components/frame.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Fact, Facts } from "#/components/ui/facts.tsx";
@@ -103,7 +106,7 @@ function toneOf(stat: Stat): string {
 const isQuiet = (s: Stat) => toneOf(s) === "text-muted-foreground";
 
 /** An icon for what a count counts, so a row reads at a glance; the words are in the tooltip. */
-function iconOf(stat: Stat): LucideIcon | null {
+function iconOf(stat: Stat, source?: HistorySource): LucideIcon | null {
 	if (stat.bad) {
 		return TriangleAlert;
 	}
@@ -113,36 +116,58 @@ function iconOf(stat: Stat): LucideIcon | null {
 	if (/up to date|skipped|already/.test(stat.label)) {
 		return Check;
 	}
-	return ArrowUp;
+	// Imports come into the library, as the sidebar's ↓ says; everything else goes out.
+	return source === "import" ? ArrowDown : ArrowUp;
 }
 
 /**
  * The counts of a run on one line, zero ones left out. In a row only what changed shows, as an
  * icon and a number; the details list everything with the words, quiet counts included.
  */
-function Figures({ stats, all = false }: { stats: readonly Stat[]; all?: boolean }) {
+function Figures({
+	stats,
+	all = false,
+	source,
+}: {
+	stats: readonly Stat[];
+	all?: boolean;
+	source?: HistorySource;
+}) {
 	const shown = stats.filter((s) => s.n > 0 && (all ? true : !isQuiet(s)));
 	if (shown.length === 0) {
-		return <span className="text-muted-foreground text-xs">Nothing changed</span>;
+		return <span className="text-muted-foreground">Nothing changed</span>;
 	}
 	return (
-		<span className="flex items-center gap-x-3 whitespace-nowrap text-xs tabular-nums">
+		<span className="inline-flex items-center gap-x-3 whitespace-nowrap tabular-nums">
 			{shown.map((s) => {
-				const Icon = iconOf(s);
+				const Icon = iconOf(s, source);
 				return (
-					<span
-						key={s.label}
-						data-hint={`${s.n.toLocaleString()} ${s.label}`}
-						className="inline-flex items-center gap-1"
-					>
+					<span key={s.label} className="inline-flex items-center gap-1">
 						{!all && Icon && <Icon aria-hidden="true" className={cn("size-3.5", toneOf(s))} />}
 						<span className={cn("font-medium", toneOf(s))}>{s.n.toLocaleString()}</span>
-						{all && <span className="text-muted-foreground">{s.label}</span>}
-						{!all && <span className="sr-only">{s.label}</span>}
+						<span className={all ? "text-muted-foreground" : undefined}>{s.label}</span>
 					</span>
 				);
 			})}
 		</span>
+	);
+}
+
+/**
+ * A run's item, which the backend names "Artist — Album": the album as the name and the artist
+ * after it as a credit, as albums read everywhere else. Anything else is shown as it is.
+ */
+function ItemName({ item }: { item: string }) {
+	const [artist, ...rest] = item.split(" — ");
+	const album = rest.join(" — ");
+	if (artist === undefined || album === "") {
+		return <span className="truncate">{item}</span>;
+	}
+	return (
+		<>
+			<span className="min-w-0 shrink truncate">{album}</span>
+			<CreditLine artist={artist} className="shrink-[2]" />
+		</>
 	);
 }
 
@@ -158,16 +183,10 @@ function PartDetail({ part, titled }: { part: Part; titled: boolean }) {
 					</span>
 				</div>
 			)}
-			<Figures stats={part.stats} all />
-			{part.items.length > 0 && (
-				<ul className="max-h-60 space-y-0.5 overflow-auto text-sm">
-					{part.items.map((item) => (
-						<li key={item} className="truncate" data-hint={item}>
-							{item}
-						</li>
-					))}
-				</ul>
-			)}
+			<span className="block text-xs">
+				<Figures stats={part.stats} all />
+			</span>
+			{/* What went wrong comes first: it is what a run is usually opened for. */}
 			{tip && (
 				<Facts label={tip.full} className="text-xs">
 					<Fact tone="warn">{tip.problem}</Fact>
@@ -176,6 +195,16 @@ function PartDetail({ part, titled }: { part: Part; titled: boolean }) {
 			)}
 			{part.errors.length > 0 && (
 				<FailureList messages={part.errors} total={part.failedTotal} heading={false} />
+			)}
+			{part.items.length > 0 && (
+				<ul className="max-h-60 columns-1 gap-x-8 overflow-auto text-sm @2xl/main:columns-2">
+					{part.items.map((item) => (
+						<li key={item} className="flex min-w-0 items-center gap-2 py-0.5" data-hint={item}>
+							<Check aria-hidden="true" className="size-3 shrink-0 text-success" />
+							<ItemName item={item} />
+						</li>
+					))}
+				</ul>
 			)}
 		</div>
 	);
@@ -210,9 +239,9 @@ function dayLabel(unixSeconds: number): string {
 		return "Yesterday";
 	}
 	return day.toLocaleDateString(undefined, {
-		weekday: days < 7 ? "long" : undefined,
+		weekday: "short",
 		day: "numeric",
-		month: "long",
+		month: "short",
 		year: day.getFullYear() === new Date().getFullYear() ? undefined : "numeric",
 	});
 }
@@ -250,7 +279,7 @@ function Row({
 					type="button"
 					aria-expanded={open}
 					onClick={onToggle}
-					className="flex min-w-0 flex-1 items-center gap-3 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+					className="flex min-w-0 flex-1 items-center gap-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 				>
 					<ChevronRight
 						className={cn(
@@ -258,34 +287,25 @@ function Row({
 							open && "rotate-90",
 						)}
 					/>
-					<Icon role="img" aria-label={label} className={cn("size-[18px] shrink-0", tone)} />
+					<Icon role="img" aria-label={label} className={cn("size-4 shrink-0", tone)} />
 					{marked && (
 						<BrandIcon
 							brand={SOURCE_BRAND[entry.source]}
 							className="size-5 shrink-0 rounded-[5px]"
 						/>
 					)}
-					<span
-						className="min-w-0 flex-1"
-						data-hint={new Date(entry.finishedAt * 1000).toLocaleString()}
-					>
-						{titled ? (
-							<>
-								<span className="block truncate font-medium text-sm leading-5">{entry.title}</span>
-								<span className="block truncate text-muted-foreground text-xs leading-5">
-									{finishedLabel(entry.finishedAt)}
-									{took(entry)}
-								</span>
-							</>
-						) : (
-							<span className="block truncate font-medium text-sm leading-5">
-								{finishedLabel(entry.finishedAt)}
-								<span className="font-normal text-muted-foreground">{took(entry)}</span>
-							</span>
+					{/* What the run did leads; where and when follow, quieter. */}
+					<span className="flex min-w-0 flex-1 items-baseline gap-3 text-sm leading-5">
+						<Figures stats={entry.stats} source={entry.source} />
+						{titled && (
+							<span className="min-w-0 truncate text-muted-foreground text-xs">{entry.title}</span>
 						)}
 					</span>
-					<span className="shrink-0">
-						<Figures stats={entry.stats} />
+					<span
+						className="shrink-0 text-muted-foreground text-xs tabular-nums"
+						data-hint={`${new Date(entry.finishedAt * 1000).toLocaleString()}${took(entry)}`}
+					>
+						{finishedLabel(entry.finishedAt)}
 					</span>
 				</button>
 				<Button
@@ -299,7 +319,7 @@ function Row({
 				</Button>
 			</div>
 			{open && (
-				<div className="space-y-4 border-hairline border-t bg-black/10 py-3 [--diff-inset:1rem]">
+				<div className="animate-in space-y-4 border-hairline border-t bg-foreground/[0.03] py-3 pl-7 fade-in-0 slide-in-from-top-1 duration-150 [--diff-inset:1rem] motion-reduce:animate-none">
 					{entry.parts.map((p) => (
 						<PartDetail key={p.id} part={p} titled={entry.parts.length > 1} />
 					))}
@@ -337,7 +357,11 @@ export function HistoryList({
 	const visible = expanded ? entries : entries.slice(0, COLLAPSED_ROWS);
 	const hidden = entries.length - COLLAPSED_ROWS;
 	if (entries.length === 0) {
-		return <EmptyState title={empty} className="py-8" />;
+		return (
+			<EmptyState icon={<History />} title={empty}>
+				Each run is listed here with what it changed.
+			</EmptyState>
+		);
 	}
 	const days: [string, HistoryEntry[]][] = [];
 	for (const e of visible) {
@@ -351,10 +375,14 @@ export function HistoryList({
 	}
 	return (
 		<>
-			<div className="space-y-4">
+			{/* One list, the day named once above its runs, instead of a card for every day. */}
+			<WellCard rows>
 				{days.map(([label, list]) => (
-					<FrameSection key={label} title={label}>
-						<ul className="divide-y divide-hairline">
+					<section key={label} aria-label={label}>
+						<h2 className="bg-foreground/[0.018] px-4 py-1.5 font-medium text-muted-foreground text-xs">
+							{label}
+						</h2>
+						<ul className="divide-y divide-hairline border-hairline border-t">
 							{list.map((e) => (
 								<Row
 									key={e.key}
@@ -367,9 +395,9 @@ export function HistoryList({
 								/>
 							))}
 						</ul>
-					</FrameSection>
+					</section>
 				))}
-			</div>
+			</WellCard>
 			{hidden > 0 && (
 				<button
 					type="button"

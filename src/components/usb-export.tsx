@@ -18,6 +18,7 @@ import {
 	type HeldPlaylist,
 	HeldPlaylists,
 } from "#/components/export-chooser.tsx";
+import { Framed } from "#/components/frame.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { ButtonGroup } from "#/components/ui/button-group.tsx";
@@ -286,56 +287,58 @@ function Summary({ report, drive }: { report: UsbExportReport; drive: UsbDrive }
 					</p>
 				</div>
 			</div>
-			<dl className={`${WELL} grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 p-4 text-sm`}>
-				<dt className="text-muted-foreground">Copied</dt>
-				<dd className="tabular-nums">
-					{plural(report.copied, "song")}, {formatBytes(report.bytesCopied)}
-				</dd>
-				{report.playlistsRemoved > 0 && (
-					<>
-						<dt className="text-muted-foreground">Removed</dt>
-						<dd className="tabular-nums">
-							{plural(report.playlistsRemoved, "playlist or folder", "playlists and folders")}
-						</dd>
-					</>
-				)}
-				{report.songsDeleted > 0 && (
-					<>
-						<dt className="text-muted-foreground">Deleted</dt>
-						<dd className="tabular-nums">
-							{plural(report.songsDeleted, "song")}, {formatBytes(report.bytesFreed)} freed
-						</dd>
-					</>
-				)}
-				<dt className="text-muted-foreground">Already there</dt>
-				<dd className="tabular-nums">{plural(report.alreadyThere, "song")}</dd>
-				{report.analyzed > 0 && (
-					<>
-						<dt className="text-muted-foreground">Analysed</dt>
-						<dd className="tabular-nums">{plural(report.analyzed, "song")}</dd>
-					</>
-				)}
-				{report.regridded > 0 && (
-					<>
-						<dt className="text-muted-foreground">Grids updated</dt>
-						<dd className="tabular-nums">{plural(report.regridded, "song")}</dd>
-					</>
-				)}
-				{outputResults(report).map((result) => (
-					<div key={result.label} className="contents">
-						<dt className="text-muted-foreground">{result.label}</dt>
-						<dd className="tabular-nums">{result.text}</dd>
-					</div>
-				))}
-				{report.backup && (
-					<>
-						<dt className="text-muted-foreground">Previous library</dt>
-						<dd className="min-w-0 truncate" data-hint={report.backup}>
-							<code className="text-xs">{report.backup}</code>
-						</dd>
-					</>
-				)}
-			</dl>
+			<Framed>
+				<dl className={`${WELL} grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 p-4 text-sm`}>
+					<dt className="text-muted-foreground">Copied</dt>
+					<dd className="tabular-nums">
+						{plural(report.copied, "song")}, {formatBytes(report.bytesCopied)}
+					</dd>
+					{report.playlistsRemoved > 0 && (
+						<>
+							<dt className="text-muted-foreground">Removed</dt>
+							<dd className="tabular-nums">
+								{plural(report.playlistsRemoved, "playlist or folder", "playlists and folders")}
+							</dd>
+						</>
+					)}
+					{report.songsDeleted > 0 && (
+						<>
+							<dt className="text-muted-foreground">Deleted</dt>
+							<dd className="tabular-nums">
+								{plural(report.songsDeleted, "song")}, {formatBytes(report.bytesFreed)} freed
+							</dd>
+						</>
+					)}
+					<dt className="text-muted-foreground">Already there</dt>
+					<dd className="tabular-nums">{plural(report.alreadyThere, "song")}</dd>
+					{report.analyzed > 0 && (
+						<>
+							<dt className="text-muted-foreground">Analysed</dt>
+							<dd className="tabular-nums">{plural(report.analyzed, "song")}</dd>
+						</>
+					)}
+					{report.regridded > 0 && (
+						<>
+							<dt className="text-muted-foreground">Grids updated</dt>
+							<dd className="tabular-nums">{plural(report.regridded, "song")}</dd>
+						</>
+					)}
+					{outputResults(report).map((result) => (
+						<div key={result.label} className="contents">
+							<dt className="text-muted-foreground">{result.label}</dt>
+							<dd className="tabular-nums">{result.text}</dd>
+						</div>
+					))}
+					{report.backup && (
+						<>
+							<dt className="text-muted-foreground">Previous library</dt>
+							<dd className="min-w-0 truncate" data-hint={report.backup}>
+								<code className="text-xs">{report.backup}</code>
+							</dd>
+						</>
+					)}
+				</dl>
+			</Framed>
 			{outputProblems(report).map((problem) => (
 				<ErrorLine key={problem}>{problem}</ErrorLine>
 			))}
@@ -769,7 +772,7 @@ export function UsbExportPanel({ mount }: { mount: string }) {
 	const drive = useUsbDrives().data?.find((d) => d.mount === mount);
 	const library = useUsbLibrary(drive?.hasLibrary ? mount : null);
 	if (!drive) {
-		return <EmptyState title="The drive is no longer connected" />;
+		return <EmptyState kind="gone" title="The drive is no longer connected" />;
 	}
 	return <UsbExportBody drive={drive} library={library.data} />;
 }

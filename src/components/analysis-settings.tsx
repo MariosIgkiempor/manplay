@@ -1,6 +1,6 @@
 import { AudioWaveform, FileAudio, RotateCcw, Square } from "lucide-react";
 import { useMemo, useState } from "react";
-import { FrameSection } from "#/components/frame.tsx";
+import { Framed } from "#/components/frame.tsx";
 import { ErrorLine, Section } from "#/components/page.tsx";
 import { SettingRow, SettingRows } from "#/components/setting-row.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -389,33 +389,35 @@ function Failures({
 				</Button>
 			}
 		>
-			<ul className={WELL_ROWS}>
-				{shown.map((f) => {
-					const id = idOf(f.path);
-					return (
-						<li key={f.path} className="flex items-center gap-3 px-3 py-2">
-							<div className="min-w-0 flex-1 text-xs">
-								<div className="truncate" data-hint={f.path}>
-									{relative(f.path, root)}
+			<Framed>
+				<ul className={WELL_ROWS}>
+					{shown.map((f) => {
+						const id = idOf(f.path);
+						return (
+							<li key={f.path} className="flex items-center gap-3 px-3 py-2">
+								<div className="min-w-0 flex-1 text-xs">
+									<div className="truncate" data-hint={f.path}>
+										{relative(f.path, root)}
+									</div>
+									<div className="truncate text-destructive" data-hint={f.error}>
+										{f.error}
+									</div>
 								</div>
-								<div className="truncate text-destructive" data-hint={f.error}>
-									{f.error}
-								</div>
-							</div>
-							<Button
-								variant="ghost"
-								size="icon-sm"
-								aria-label={`Retry ${relative(f.path, root)}`}
-								data-hint="Retry"
-								disabled={running || id === undefined}
-								onClick={() => id !== undefined && onRetry([id])}
-							>
-								<RotateCcw />
-							</Button>
-						</li>
-					);
-				})}
-			</ul>
+								<Button
+									variant="ghost"
+									size="icon-sm"
+									aria-label={`Retry ${relative(f.path, root)}`}
+									data-hint="Retry"
+									disabled={running || id === undefined}
+									onClick={() => id !== undefined && onRetry([id])}
+								>
+									<RotateCcw />
+								</Button>
+							</li>
+						);
+					})}
+				</ul>
+			</Framed>
 			{failures.length > shown.length && (
 				<Button variant="ghost" size="sm" onClick={() => setShowAll(true)}>
 					Show all {failures.length.toLocaleString()}
@@ -484,9 +486,8 @@ function AnalysisBody() {
  */
 export function AnalysisSettings() {
 	return (
-		<FrameSection
-			title="BPM & key"
-			description={
+		<section aria-label="BPM & key" className="space-y-4">
+			<p>
 				<Facts label="New songs are analyzed on import, and BPM and key are written into the files. Hand edits are never replaced.">
 					<Fact tone="changed">Analyzed on arrival</Fact>
 					<Fact tone="changed" hint="So other apps and players see them">
@@ -494,10 +495,8 @@ export function AnalysisSettings() {
 					</Fact>
 					<Fact tone="kept">Hand edits kept</Fact>
 				</Facts>
-			}
-			wellClassName="p-4"
-		>
+			</p>
 			<AnalysisBody />
-		</FrameSection>
+		</section>
 	);
 }

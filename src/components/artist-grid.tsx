@@ -65,7 +65,11 @@ export function ArtistGrid({
 }) {
 	const { shown, more, loadMore } = useProgressive(artists, (a) => a.name);
 	if (artists.length === 0) {
-		return <EmptyState title="No artists">Clear the search to see everything.</EmptyState>;
+		return (
+			<EmptyState kind="search" title="No artists">
+				Clear the search to see everything.
+			</EmptyState>
+		);
 	}
 	return (
 		<>

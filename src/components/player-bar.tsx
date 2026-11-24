@@ -222,7 +222,8 @@ export function PlayerBar() {
 		>
 			<footer className="min-h-0 overflow-hidden bg-canvas">
 				{shown && waveform && <DeckEditor track={shown} />}
-				<div className={cn(DECK_COLUMNS, "h-16 items-center")}>
+				{/* Under the big waveform the bar is a strip: the deck above already takes the room. */}
+				<div className={cn(DECK_COLUMNS, "items-center", waveform ? "h-12" : "h-16")}>
 					<div className="min-w-0 pr-4 pl-3">
 						{shown && <NowPlaying track={shown} error={p.error} />}
 					</div>

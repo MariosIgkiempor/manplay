@@ -15,7 +15,7 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { FrameSection } from "#/components/frame.tsx";
 import { Button } from "#/components/ui/button.tsx";
-import { PopoverPopup } from "#/components/ui/popup.tsx";
+import { GrowPopup } from "#/components/ui/popup.tsx";
 import { keyLabel } from "#/lib/platform.ts";
 import {
 	assign,
@@ -323,11 +323,8 @@ function RecorderCard({
 	return (
 		<Popover open={open} onOpenChange={onOpenChange}>
 			{trigger}
-			<PopoverPopup
-				sideOffset={8}
-				align="end"
-				className="w-80 rounded-xl border bg-popover p-3 text-popover-foreground shadow-2xl outline-none"
-			>
+			{/* Grows out of the keys it changes, over the row, instead of opening beside them. */}
+			<GrowPopup overlap={36} align="end" className="w-80 p-3">
 				{open && (
 					<Recorder
 						def={def}
@@ -336,7 +333,7 @@ function RecorderCard({
 						onClose={() => onOpenChange(false)}
 					/>
 				)}
-			</PopoverPopup>
+			</GrowPopup>
 		</Popover>
 	);
 }

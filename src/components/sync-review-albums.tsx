@@ -10,6 +10,7 @@ import {
 	useState,
 } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
+import { CreditLine } from "#/components/credit-line.tsx";
 import { TONE, type Tone } from "#/components/diff-view.tsx";
 import {
 	ItemRow,
@@ -28,6 +29,7 @@ import {
 	groupByAlbum,
 	itemKey,
 	MOSAIC_ROW_PX,
+	REVIEW_END_ATTRIBUTE,
 	type ReviewItem,
 	type SharedThere,
 	sharedThere,
@@ -62,11 +64,11 @@ const chipCount = (ticked: number, count: number) =>
 
 function Cover({ group }: { group: AlbumGroup }) {
 	if (group.coverTrackId !== null) {
-		return <AlbumArt trackId={group.coverTrackId} className="size-14 shrink-0 rounded-md" />;
+		return <AlbumArt trackId={group.coverTrackId} className="size-10 shrink-0 rounded-md" />;
 	}
 	const Icon = group.other ? FileQuestion : Music;
 	return (
-		<div className="flex size-14 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+		<div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
 			<Icon className="size-5" />
 		</div>
 	);
@@ -168,7 +170,7 @@ function FileList({
 	controls: ReviewControls;
 }) {
 	return (
-		<ul className="max-h-[30rem] min-h-0 min-w-0 flex-1 space-y-2 overflow-y-auto overscroll-contain bg-background/60 p-2.5">
+		<ul className="max-h-[30rem] min-h-0 min-w-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-2.5">
 			{group.items.map((item) => (
 				<li key={itemKey(item)}>
 					<ItemRow item={item} controls={controls} shared={shared !== null} />
@@ -238,26 +240,26 @@ function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, onClose: 
 const SHADOW_ROOM_PX = 24;
 
 /**
- * Reports how far an open card hangs below the mosaic, so the page can make room to scroll to
- * it, and brings it into view.
+ * Brings an open card into view. The card floats over whatever is under it, the lanes below
+ * included, and moves none of it; only where it would hang past the end of the whole review is
+ * room added there, so it can still be scrolled to.
  */
-function useOverhang(
-	cellRef: RefObject<HTMLDivElement | null>,
-	cardRef: RefObject<HTMLElement | null>,
-	open: boolean,
-	onOverhang: (px: number) => void,
-) {
+function useOverhang(cardRef: RefObject<HTMLElement | null>, open: boolean) {
 	useEffect(() => {
-		const cell = cellRef.current;
 		const card = cardRef.current;
-		const grid = cell?.parentElement;
-		if (!(open && cell && card && grid)) {
+		const end = card?.closest<HTMLElement>(`[${REVIEW_END_ATTRIBUTE}]`);
+		if (!(open && card && end)) {
 			return;
 		}
-		const measure = () =>
-			onOverhang(
-				Math.max(0, cell.offsetTop + card.offsetHeight + SHADOW_ROOM_PX - grid.clientHeight),
-			);
+		let room = 0;
+		const measure = () => {
+			const past =
+				card.getBoundingClientRect().bottom +
+				SHADOW_ROOM_PX -
+				(end.getBoundingClientRect().bottom - room);
+			room = Math.max(0, Math.ceil(past));
+			end.style.paddingBottom = `${room}px`;
+		};
 		measure();
 		const observer = new ResizeObserver(measure);
 		observer.observe(card);
@@ -268,9 +270,9 @@ function useOverhang(
 		return () => {
 			observer.disconnect();
 			cancelAnimationFrame(frame);
-			onOverhang(0);
+			end.style.paddingBottom = "";
 		};
-	}, [cellRef, cardRef, open, onOverhang]);
+	}, [cardRef, open]);
 }
 
 const FLEX: Record<FloatPlacement["side"], CSSProperties["flexDirection"]> = {
@@ -340,8 +342,14 @@ function CardHead({
 		>
 			<Cover group={group} />
 			<span className="min-w-0 flex-1">
-				<span className="line-clamp-2 break-words font-medium text-sm">{albumTitle(group)}</span>
-				<span className="block truncate text-muted-foreground text-xs">{subtitle}</span>
+				<span className="block truncate font-medium text-sm" data-hint={albumTitle(group)}>
+					{albumTitle(group)}
+				</span>
+				{group.other ? (
+					<span className="block truncate text-muted-foreground text-xs">{subtitle}</span>
+				) : (
+					<CreditLine artist={subtitle} />
+				)}
 			</span>
 			<ChevronDown
 				aria-hidden="true"
@@ -395,21 +403,19 @@ function AlbumCard({
 	open,
 	onToggle,
 	onClose,
-	onOverhang,
 	controls,
 }: {
 	group: AlbumGroup;
 	open: boolean;
 	onToggle: () => void;
 	onClose: () => void;
-	onOverhang: (px: number) => void;
 	controls: ReviewControls;
 }) {
 	const cellRef = useRef<HTMLDivElement>(null);
 	const cardRef = useRef<HTMLElement>(null);
 	const { cell, revealed, onTransitionEnd } = useLift(cellRef, open);
 	useDismiss(cardRef, open, onClose);
-	useOverhang(cellRef, cardRef, cell !== null, onOverhang);
+	useOverhang(cardRef, cell !== null);
 	const floating = cell !== null;
 	const shared = group.other ? null : sharedThere(group.items, controls.there);
 	const title = albumTitle(group);
@@ -421,7 +427,7 @@ function AlbumCard({
 					"flex h-full min-w-0 overflow-hidden rounded-xl border border-hairline bg-well transition-colors",
 					floating && (open ? "z-20" : "z-10"),
 					floating &&
-						"h-auto border-primary/50 shadow-lg transition-[clip-path] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none",
+						"h-auto shadow-2xl transition-[clip-path] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none",
 				)}
 				style={floating ? floatStyle(cell, revealed) : undefined}
 				onTransitionEnd={onTransitionEnd}
@@ -474,7 +480,6 @@ export function AlbumMosaic({
 }) {
 	const groups = groupByAlbum(items, lookup);
 	const [open, setOpen] = useState<AlbumKey | null>(null);
-	const [overhang, setOverhang] = useState(0);
 	const [shown, setShown] = useState(CARDS_PER_PAGE);
 	const close = useCallback(() => setOpen(null), []);
 	return (
@@ -490,12 +495,10 @@ export function AlbumMosaic({
 						open={open === g.key}
 						onToggle={() => setOpen(open === g.key ? null : g.key)}
 						onClose={close}
-						onOverhang={setOverhang}
 						controls={controls}
 					/>
 				))}
 			</div>
-			<div aria-hidden="true" style={{ height: overhang }} />
 			{groups.length > shown && (
 				<Button
 					variant="ghost"

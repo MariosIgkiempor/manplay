@@ -6,7 +6,7 @@ import { HintLayer } from "#/components/hint-layer.tsx";
 import { PlayerBar } from "#/components/player-bar.tsx";
 import { Sidebar } from "#/components/sidebar.tsx";
 import { SplitPane } from "#/components/split-pane.tsx";
-import { SyncDrawers } from "#/components/sync-flow.tsx";
+import { SyncRequests } from "#/components/sync-flow.tsx";
 import { TextFieldMenu } from "#/components/text-field-menu.tsx";
 import { SplitSlotContext } from "#/context/split-slot.ts";
 import { useStatusScopeHandlers } from "#/context/status-context.ts";
@@ -41,7 +41,7 @@ export function Shell({ children }: { children: ReactNode }) {
 							{...mainScope}
 						>
 							<div className="@container/main h-full overflow-y-auto">{children}</div>
-							<SyncDrawers />
+							<SyncRequests />
 						</div>
 						<div ref={setSplitSlot} className="contents" />
 						<SplitPane />

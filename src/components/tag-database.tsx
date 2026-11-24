@@ -3,6 +3,7 @@ import {
 	AudioLines,
 	Building2,
 	Disc3,
+	Hash,
 	Languages,
 	Layers,
 	ListMusic,
@@ -20,11 +21,10 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
-import { Framed } from "#/components/frame.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
-import { PageHeader } from "#/components/page-header.tsx";
+import { Cover, PageHeader } from "#/components/page-header.tsx";
 import { SearchField } from "#/components/search-field.tsx";
 import { SortMenu } from "#/components/sort-menu.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
@@ -34,8 +34,10 @@ import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Segmented } from "#/components/view-toggle.tsx";
 import { useDetail } from "#/context/detail-context.ts";
 import { usePlayer } from "#/context/player-context.ts";
-import { type FixReport, listTags, tagValues } from "#/lib/api.ts";
-import { PAGE_BODY, WELL_ROWS } from "#/lib/page-layout.ts";
+import { albumKey } from "#/lib/albums.ts";
+import { type FixReport, listTags, type Track, tagValues } from "#/lib/api.ts";
+import { duration } from "#/lib/format.ts";
+import { FRAME, PAGE_BODY, WELL_ROWS } from "#/lib/page-layout.ts";
 import { useTagDatabaseOps, useTracks } from "#/lib/queries.ts";
 import { type ListSort, VALUE_SORTS, type ValueSort } from "#/lib/sorting.ts";
 import { trackHasValue, VALUE_FIELDS, type ValueField } from "#/lib/track-fields.ts";
@@ -58,7 +60,9 @@ const byName = (a: Item, b: Item) => a.value.localeCompare(b.value);
 
 /** One value's row, laid out like a song row, in the list's well. */
 const ROW =
-	"group grid min-h-12 grid-cols-[1.25rem_minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-1.5 text-sm";
+	"group grid min-h-14 grid-cols-[1.25rem_2.5rem_minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-1.5 text-sm";
+
+const NO_SONGS: readonly Track[] = [];
 
 const FIELD_IDS = VALUE_FIELDS.map((f) => f.id);
 const FILE_FIELDS = VALUE_FIELDS.filter((f) => f.id !== "library");
@@ -138,8 +142,14 @@ export function TagDatabase() {
 	const isLibrary = source === "library";
 	const unit = isLibrary ? "songs tagged" : "songs";
 	const label = VALUE_FIELDS.find((f) => f.id === source)?.label ?? "Values";
-	const songsWith = (value: string) =>
-		(tracks.data ?? []).filter((t) => trackHasValue(t, source, value));
+	// Each value's songs, found once for the whole list: a row shows their covers and length.
+	const songsOf = useMemo(() => {
+		const library = tracks.data ?? [];
+		return new Map(
+			items.map((i) => [i.value, library.filter((t) => trackHasValue(t, source, i.value))]),
+		);
+	}, [tracks.data, items, source]);
+	const songsWith = (value: string) => songsOf.get(value) ?? NO_SONGS;
 
 	// A different list starts clean.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the source changes
@@ -271,11 +281,11 @@ export function TagDatabase() {
 						{plural(unused, "value is", "values are")} not used by any song.
 					</p>
 				)}
-				{loading && <EmptyState title="Loading…" />}
+				{loading && <EmptyState kind="loading" title="Loading…" />}
 				{!loading && shown.length === 0 && !creating && (
 					<NoValues label={label} isLibrary={isLibrary} searching={items.length > 0} />
 				)}
-				<Framed className="has-[>div:empty]:hidden">
+				<div className={cn(FRAME, "has-[>div:empty]:hidden")}>
 					<div className={cn(WELL_ROWS, "empty:hidden")}>
 						{creating && (
 							<NewValueRow
@@ -320,6 +330,8 @@ export function TagDatabase() {
 							>
 								<Row
 									item={item}
+									songs={songsWith(item.value)}
+									onPlay={() => player.play(songsWith(item.value), 0)}
 									unit={unit}
 									checked={selected.has(item.value)}
 									selecting={selected.size > 0}
@@ -343,7 +355,7 @@ export function TagDatabase() {
 							</RowMenu>
 						))}
 					</div>
-				</Framed>
+				</div>
 			</div>
 
 			{pending && (
@@ -475,7 +487,11 @@ function NoValues({
 	searching: boolean;
 }) {
 	if (searching) {
-		return <EmptyState title="No match" />;
+		return (
+			<EmptyState kind="search" title="No match">
+				Clear the search to see everything.
+			</EmptyState>
+		);
 	}
 	return (
 		<EmptyState title={`No ${label.toLowerCase()} yet`}>
@@ -618,8 +634,51 @@ function rowTint(checked: boolean, open: boolean): string {
 		: "hover:bg-foreground/[0.03]";
 }
 
+/** What a value's songs come to, under its name: how many albums they span and how long they run. */
+function reach(songs: readonly Track[]): string {
+	const albums = new Set(songs.map((t) => albumKey(t.artist, t.album))).size;
+	const seconds = songs.reduce((sum, t) => sum + (t.durationMs ?? 0), 0) / 1000;
+	return `${plural(albums, "album", "albums")} · ${duration(seconds)}`;
+}
+
+/** A value's mark: the covers of its songs, and the button that plays them. */
+function ValueCover({
+	name,
+	songs,
+	onPlay,
+}: {
+	name: string;
+	songs: readonly Track[];
+	onPlay: () => void;
+}) {
+	const playable = songs.length > 0;
+	return (
+		<button
+			type="button"
+			onClick={onPlay}
+			disabled={!playable}
+			aria-label={`Play ${name}`}
+			data-hint={playable ? "Play" : undefined}
+			className="group/cover relative size-10 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
+		>
+			<Cover
+				tracks={songs}
+				fallback={<Hash className="size-4" />}
+				className="size-10 rounded-md shadow-none"
+			/>
+			{playable && (
+				<span className="absolute inset-0 grid place-items-center rounded-md bg-black/50 text-white opacity-0 transition-opacity group-hover/cover:opacity-100 group-focus-visible/cover:opacity-100 [&_svg]:size-4">
+					<Play />
+				</span>
+			)}
+		</button>
+	);
+}
+
 function Row({
 	item,
+	songs,
+	onPlay,
 	unit,
 	checked,
 	selecting,
@@ -636,6 +695,9 @@ function Row({
 	deletion,
 }: {
 	item: Item;
+	/** The songs holding the value: their covers mark the row, as an album's cover marks its own. */
+	songs: readonly Track[];
+	onPlay: () => void;
 	unit: string;
 	checked: boolean;
 	/** Some value is selected, so every row shows its checkbox. */
@@ -666,6 +728,7 @@ function Row({
 					!(checked || selecting) && "opacity-0",
 				)}
 			/>
+			<ValueCover name={item.value} songs={songs} onPlay={onPlay} />
 			{editing ? (
 				<InlineInput
 					initial={item.value}
@@ -681,11 +744,23 @@ function Row({
 					onDoubleClick={busy ? undefined : onEdit}
 					data-hint={`Show songs with “${item.value}”. Double-click to rename.`}
 					className={cn(
-						"min-w-0 truncate rounded-sm text-left font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60",
-						item.count === 0 && "font-normal text-muted-foreground",
+						"group/name min-w-0 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+						item.count === 0 && "text-muted-foreground",
 					)}
 				>
-					{item.value}
+					<span
+						className={cn(
+							"block truncate group-hover/name:underline",
+							item.count > 0 && "font-medium",
+						)}
+					>
+						{item.value}
+					</span>
+					{songs.length > 0 && (
+						<span className="block truncate text-muted-foreground text-xs tabular-nums">
+							{reach(songs)}
+						</span>
+					)}
 				</button>
 			)}
 			<span

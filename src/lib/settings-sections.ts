@@ -7,3 +7,6 @@ export type SettingsSection = (typeof SECTIONS)[number];
 export function parseSettingsSection(value: unknown): SettingsSection | null {
 	return SECTIONS.find((section) => section === value) ?? null;
 }
+
+/** The clashes' place on the Library settings, as a URL hash: where the sidebar's Clashes row lands. */
+export const CLASHES_ANCHOR = "clashes";

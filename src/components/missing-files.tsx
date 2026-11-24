@@ -1,4 +1,5 @@
 import { FileX, Trash2 } from "lucide-react";
+import { CreditLine } from "#/components/credit-line.tsx";
 import { fileMenuEntries } from "#/components/file-menu.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { ErrorLine, LoadingLine } from "#/components/page.tsx";
@@ -58,7 +59,13 @@ function MissingList({ count }: { count: number }) {
 				>
 					<ProblemText
 						name={t.title}
-						where={[t.artist, t.album].filter((x) => x !== "").join(", ") || baseName(t.path)}
+						where={
+							t.artist === "" && t.album === "" ? (
+								baseName(t.path)
+							) : (
+								<CreditLine artist={t.artist} album={t.album} />
+							)
+						}
 						hint={t.path}
 						notes={[
 							{

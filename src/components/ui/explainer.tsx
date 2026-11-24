@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { PopoverPopup } from "#/components/ui/popup.tsx";
+import { FLOATING_FRAME, WELL } from "#/lib/page-layout.ts";
 import { cn } from "#/lib/utils.ts";
 
 /**
@@ -131,12 +132,13 @@ export function EffectCard({
 	className?: string;
 }) {
 	return (
+		// A frame's lip holds the title and its lead; the effects sit in the well, as in every card.
 		<div className={cn("w-80 max-w-[calc(100vw-2rem)]", className)}>
-			<div className="border-b px-3.5 pt-3 pb-2.5">
+			<div className="px-2.5 pt-1.5 pb-2">
 				<p className="font-medium text-foreground text-sm">{title}</p>
 				{lead && <p className="mt-0.5 text-muted-foreground text-xs leading-snug">{lead}</p>}
 			</div>
-			<div className="px-3.5 pt-2.5 pb-3">
+			<div className={cn(WELL, "px-3 pt-2.5 pb-3")}>
 				<EffectList effects={effects} />
 			</div>
 		</div>
@@ -196,7 +198,7 @@ export function Explainer({
 				side="bottom"
 				align="start"
 				sideOffset={6}
-				className="z-50 rounded-xl border bg-popover text-popover-foreground shadow-lg outline-none"
+				className={cn(FLOATING_FRAME, "floating-card z-50")}
 			>
 				<EffectCard title={title} lead={lead} effects={effects} />
 			</PopoverPopup>

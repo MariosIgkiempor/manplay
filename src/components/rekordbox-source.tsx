@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Copy, FolderOpen, History, Settings2, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { DestinationHeader, SettingLabel } from "#/components/destination-header.tsx";
+import { Framed } from "#/components/frame.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { ErrorLine } from "#/components/page.tsx";
@@ -40,25 +41,27 @@ const STEPS = [
 
 function Setup() {
 	return (
-		<details className={`${WELL} p-3 text-sm`}>
-			<summary className="cursor-pointer font-medium">One-time setup in rekordbox</summary>
-			<ol className="mt-3 list-decimal space-y-2 pl-5">
-				{STEPS.map((step) => (
-					<li key={step.said} aria-label={step.said} data-hint={step.said}>
-						<span className="flex flex-wrap items-center gap-1.5">
-							<UiPath parts={step.path} />
-							<span className="text-muted-foreground text-xs">{step.action}</span>
-						</span>
-					</li>
-				))}
-			</ol>
-			<Facts
-				label="After changing a playlist, export again and re-import it in rekordbox."
-				className="mt-3"
-			>
-				<Fact tone="changed">Playlist changed? Export, then re-import</Fact>
-			</Facts>
-		</details>
+		<Framed>
+			<details className={`${WELL} p-3 text-sm`}>
+				<summary className="cursor-pointer font-medium">One-time setup in rekordbox</summary>
+				<ol className="mt-3 list-decimal space-y-2 pl-5">
+					{STEPS.map((step) => (
+						<li key={step.said} aria-label={step.said} data-hint={step.said}>
+							<span className="flex flex-wrap items-center gap-1.5">
+								<UiPath parts={step.path} />
+								<span className="text-muted-foreground text-xs">{step.action}</span>
+							</span>
+						</li>
+					))}
+				</ol>
+				<Facts
+					label="After changing a playlist, export again and re-import it in rekordbox."
+					className="mt-3"
+				>
+					<Fact tone="changed">Playlist changed? Export, then re-import</Fact>
+				</Facts>
+			</details>
+		</Framed>
 	);
 }
 
@@ -250,7 +253,7 @@ export function RekordboxPage() {
 			{tab === "history" ? (
 				<HistoryList
 					entries={activityEntries(history.data ?? [], "rekordbox")}
-					empty="Not exported yet."
+					empty="Not exported yet"
 				/>
 			) : (
 				<RekordboxSettings

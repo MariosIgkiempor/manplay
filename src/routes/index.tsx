@@ -121,12 +121,14 @@ function Library() {
 				}
 			/>
 			{libraryEmpty ? (
-				<LibraryEmpty
-					hasRoot={hasRoot}
-					scanning={scanning}
-					onPick={() => scan.mutate("pick")}
-					onRescan={() => scan.mutate("saved")}
-				/>
+				<div className={PAGE_BODY}>
+					<LibraryEmpty
+						hasRoot={hasRoot}
+						scanning={scanning}
+						onPick={() => scan.mutate("pick")}
+						onRescan={() => scan.mutate("saved")}
+					/>
+				</div>
 			) : (
 				<>
 					<div className={cn("space-y-5", PAGE_BODY)}>

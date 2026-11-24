@@ -3,7 +3,7 @@ import { type ReactNode, useMemo, useRef } from "react";
 import { AlbumArt } from "#/components/album-art.tsx";
 import { ArtistLinks } from "#/components/artist-links.tsx";
 import { CoverPicker } from "#/components/cover-picker.tsx";
-import { EmptyState } from "#/components/page.tsx";
+import { NotThere } from "#/components/page.tsx";
 import { type Fact, PANEL_ART, PanelHeader } from "#/components/panel-header.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { TagEditor } from "#/components/tag-editor.tsx";
@@ -35,7 +35,7 @@ export function SongPanel({
 	const go = useDetailNav();
 	const track = tracks.data?.find((t) => t.id === trackId);
 	if (!track) {
-		return <EmptyState title={tracks.isPending ? "Loading song…" : "Song not found"} />;
+		return <NotThere what="song" pending={tracks.isPending} />;
 	}
 	const facts = [
 		track.durationMs !== null && {

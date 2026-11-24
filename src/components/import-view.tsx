@@ -1,15 +1,8 @@
-import {
-	CheckCircle2,
-	ListPlus,
-	LoaderCircle,
-	RefreshCw,
-	RotateCcw,
-	Trash2,
-	X,
-} from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { FolderOpen, ListPlus, LoaderCircle, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { Framed } from "#/components/frame.tsx";
 import { BrowserHeader, ReleaseRows } from "#/components/import-browser.tsx";
-import { ErrorLine } from "#/components/page.tsx";
+import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { ProgressPill } from "#/components/progress-pill.tsx";
 import { Stat, StatusBar } from "#/components/status-bar.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -239,34 +232,13 @@ function EmptyList({ s }: { s: ReturnType<typeof useImport> }) {
 	if (s.scan === null) {
 		return <Skeleton />;
 	}
+	if (s.find.isPending) {
+		return <EmptyState bare kind="loading" title="Checking for anything new…" />;
+	}
 	return (
-		<Message icon={<CheckCircle2 />} title="All caught up">
-			{s.find.isPending
-				? "Checking for anything new…"
-				: "Everything in this folder is already in your library."}
-		</Message>
-	);
-}
-
-function Message({
-	icon,
-	title,
-	children,
-}: {
-	icon: React.ReactNode;
-	title: string;
-	children: React.ReactNode;
-}) {
-	return (
-		<div className="flex flex-col items-center px-6 py-14 text-center">
-			<div className="mb-3 grid size-11 place-items-center rounded-full bg-muted text-muted-foreground [&_svg]:size-5">
-				{icon}
-			</div>
-			<p className="font-medium text-sm">{title}</p>
-			<div className="mt-1 flex max-w-sm flex-col items-center text-muted-foreground text-sm">
-				{children}
-			</div>
-		</div>
+		<EmptyState bare kind="done" title="All caught up">
+			Everything in this folder is already in your library.
+		</EmptyState>
 	);
 }
 
@@ -291,9 +263,24 @@ export function ImportView({ s }: { s: ReturnType<typeof useImport> }) {
 		}
 	};
 
+	// Nowhere to import to yet: say so and lead there, instead of an error over an empty list.
+	if (!s.hasRoot) {
+		return (
+			<EmptyState
+				icon={<FolderOpen />}
+				title="Choose your music folder first"
+				action={
+					<Button size="sm" render={<Link to="/" />}>
+						Go to Library
+					</Button>
+				}
+			>
+				Imported songs are filed into it.
+			</EmptyState>
+		);
+	}
 	return (
 		<div className="space-y-3">
-			{!s.hasRoot && <ErrorLine>Choose your library folder first (Library page).</ErrorLine>}
 			{errors.map((e) => (
 				<ErrorLine key={e}>{e}</ErrorLine>
 			))}

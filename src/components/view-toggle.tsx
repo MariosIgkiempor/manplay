@@ -17,7 +17,7 @@ export function Segmented<T extends string>({
 	onChange,
 	label,
 	items,
-	compact = false,
+	compact = true,
 	ruled = true,
 	className,
 }: {
@@ -25,7 +25,7 @@ export function Segmented<T extends string>({
 	onChange: (v: T) => void;
 	label: string;
 	items: readonly { value: T; label: string; icon?: ReactNode; count?: number }[];
-	/** Drop the words, keeping the icons, when the page is narrow. */
+	/** Drop the words, keeping the icons, when the page is narrow (on by default). */
 	compact?: boolean;
 	/** Draw a rule under the tabs; off where they sit on a header's bottom edge, which is the rule. */
 	ruled?: boolean;

@@ -1,7 +1,7 @@
 import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import { Scissors, X } from "lucide-react";
 import { Button } from "#/components/ui/button.tsx";
-import { PopoverPopup } from "#/components/ui/popup.tsx";
+import { GrowPopup } from "#/components/ui/popup.tsx";
 import { applySplit, suggestSplits } from "#/lib/name-split.ts";
 import { useDismissedSplits } from "#/lib/use-dismissed-splits.ts";
 
@@ -48,9 +48,9 @@ export function NameSplitPills({
 						>
 							<X className="size-3" />
 						</PopoverTrigger>
-						<PopoverPopup
-							sideOffset={6}
-							className="z-50 w-64 space-y-2 rounded-lg border bg-popover p-3 text-popover-foreground text-sm shadow-lg outline-none"
+						<GrowPopup
+							overlap={22}
+							className="z-50 w-64 space-y-2 p-3 text-sm"
 							onKeyDown={(ev) => ev.stopPropagation()}
 						>
 							<p>
@@ -62,7 +62,7 @@ export function NameSplitPills({
 							<Button size="sm" className="w-full" onClick={() => dismiss(suggestion.name)}>
 								Don't suggest splitting
 							</Button>
-						</PopoverPopup>
+						</GrowPopup>
 					</Popover>
 				</span>
 			))}

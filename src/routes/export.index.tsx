@@ -1,14 +1,15 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { CloudUpload, Download, Rows3 } from "lucide-react";
+import { CloudUpload, Download, Plus, Rows3, Settings2 } from "lucide-react";
 import { useState } from "react";
 import { Destinations } from "#/components/destinations.tsx";
 import { HeaderMenu } from "#/components/header-menu.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
-import { Page } from "#/components/page.tsx";
+import { EmptyState, Page } from "#/components/page.tsx";
 import { type OverviewTab, OverviewTabs, PlaceSettingsGroup } from "#/components/place-page.tsx";
 import { RekordboxSourceSettings } from "#/components/rekordbox-source.tsx";
 import { SyncButton } from "#/components/sync-flow.tsx";
 import { DestinationSettings } from "#/components/target-page.tsx";
+import { Button } from "#/components/ui/button.tsx";
 import { DriveSettings } from "#/components/usb-drives.tsx";
 import { useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
@@ -93,7 +94,7 @@ function ExportHistory() {
 				syncEntries(syncs.data ?? []),
 				activityEntries(rekordbox.data ?? [], "rekordbox"),
 			)}
-			empty="Nothing exported yet."
+			empty="Nothing exported yet"
 		/>
 	);
 }
@@ -104,6 +105,21 @@ function ExportSettings() {
 	const targets = useSyncTargets().data ?? [];
 	const rekordbox = useRekordbox().status.data;
 	const drives = useUsbDrives().data ?? [];
+	if (targets.length === 0 && !rekordbox?.path && drives.length === 0) {
+		return (
+			<EmptyState
+				icon={<Settings2 />}
+				title="No destinations to set up"
+				action={
+					<Button size="sm" onClick={() => void navigate({ to: "/export/add", search: {} })}>
+						<Plus /> Add destination
+					</Button>
+				}
+			>
+				Each destination's settings show here once it is added.
+			</EmptyState>
+		);
+	}
 	return (
 		<div className="space-y-10">
 			{targets.map((t) => (

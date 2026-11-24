@@ -312,19 +312,47 @@ input[type="range"].slider {
  * Menus and popovers (UI SDK popups) open from their trigger: a short fade and a slight grow
  * from the side they are anchored to, and the same in reverse as they close.
  */
-.bg-popover[data-side] {
+.bg-popover[data-side],
+.floating-card[data-side] {
 	transform-origin: var(--transform-origin);
 	transition:
 		opacity 120ms ease-out,
 		scale 120ms ease-out;
 }
 .bg-popover[data-side][data-starting-style],
-.bg-popover[data-side][data-ending-style] {
+.bg-popover[data-side][data-ending-style],
+.floating-card[data-side][data-starting-style],
+.floating-card[data-side][data-ending-style] {
 	opacity: 0;
 	scale: 0.97;
 }
 @media (prefers-reduced-motion: reduce) {
 	.bg-popover[data-side] {
+		transition: none;
+	}
+}
+
+/*
+ * A card that grows out of the control that opened it (`GrowPopup`): from about the control's own
+ * size, at the corner they share, to its full size.
+ */
+.grows-from-trigger[data-side],
+.bg-popover.grows-from-trigger[data-side] {
+	transform-origin: var(--transform-origin);
+	transition:
+		opacity 160ms ease-out,
+		scale 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.grows-from-trigger[data-side][data-starting-style],
+.grows-from-trigger[data-side][data-ending-style],
+.bg-popover.grows-from-trigger[data-side][data-starting-style],
+.bg-popover.grows-from-trigger[data-side][data-ending-style] {
+	opacity: 0;
+	scale: 0.35;
+}
+@media (prefers-reduced-motion: reduce) {
+	.grows-from-trigger[data-side],
+	.bg-popover.grows-from-trigger[data-side] {
 		transition: none;
 	}
 }

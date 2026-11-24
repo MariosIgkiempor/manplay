@@ -18,6 +18,7 @@ import { Route as ExportIndexRouteImport } from './routes/export.index'
 import { Route as ExportTargetIdRouteImport } from './routes/export.$targetId'
 import { Route as ExportAddRouteImport } from './routes/export.add'
 import { Route as ExportRekordboxRouteImport } from './routes/export.rekordbox'
+import { Route as ExportSyncRouteImport } from './routes/export.sync'
 import { Route as ExportUsbRouteImport } from './routes/export.usb'
 import { Route as ImportIndexRouteImport } from './routes/import.index'
 import { Route as ImportFolderIdRouteImport } from './routes/import.$folderId'
@@ -70,6 +71,11 @@ const ExportRekordboxRoute = ExportRekordboxRouteImport.update({
   path: '/export/rekordbox',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ExportSyncRoute = ExportSyncRouteImport.update({
+  id: '/export/sync',
+  path: '/export/sync',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ExportUsbRoute = ExportUsbRouteImport.update({
   id: '/export/usb',
   path: '/export/usb',
@@ -110,6 +116,7 @@ export interface FileRoutesByFullPath {
   '/export/$targetId': typeof ExportTargetIdRoute
   '/export/add': typeof ExportAddRoute
   '/export/rekordbox': typeof ExportRekordboxRoute
+  '/export/sync': typeof ExportSyncRoute
   '/export/usb': typeof ExportUsbRoute
   '/import/$folderId': typeof ImportFolderIdRoute
   '/playlists/$id': typeof PlaylistsIdRoute
@@ -127,6 +134,7 @@ export interface FileRoutesByTo {
   '/export/$targetId': typeof ExportTargetIdRoute
   '/export/add': typeof ExportAddRoute
   '/export/rekordbox': typeof ExportRekordboxRoute
+  '/export/sync': typeof ExportSyncRoute
   '/export/usb': typeof ExportUsbRoute
   '/import/$folderId': typeof ImportFolderIdRoute
   '/playlists/$id': typeof PlaylistsIdRoute
@@ -145,6 +153,7 @@ export interface FileRoutesById {
   '/export/$targetId': typeof ExportTargetIdRoute
   '/export/add': typeof ExportAddRoute
   '/export/rekordbox': typeof ExportRekordboxRoute
+  '/export/sync': typeof ExportSyncRoute
   '/export/usb': typeof ExportUsbRoute
   '/import/$folderId': typeof ImportFolderIdRoute
   '/playlists/$id': typeof PlaylistsIdRoute
@@ -164,6 +173,7 @@ export interface FileRouteTypes {
     | '/export/$targetId'
     | '/export/add'
     | '/export/rekordbox'
+    | '/export/sync'
     | '/export/usb'
     | '/import/$folderId'
     | '/playlists/$id'
@@ -181,6 +191,7 @@ export interface FileRouteTypes {
     | '/export/$targetId'
     | '/export/add'
     | '/export/rekordbox'
+    | '/export/sync'
     | '/export/usb'
     | '/import/$folderId'
     | '/playlists/$id'
@@ -198,6 +209,7 @@ export interface FileRouteTypes {
     | '/export/$targetId'
     | '/export/add'
     | '/export/rekordbox'
+    | '/export/sync'
     | '/export/usb'
     | '/import/$folderId'
     | '/playlists/$id'
@@ -216,6 +228,7 @@ export interface RootRouteChildren {
   ExportTargetIdRoute: typeof ExportTargetIdRoute
   ExportAddRoute: typeof ExportAddRoute
   ExportRekordboxRoute: typeof ExportRekordboxRoute
+  ExportSyncRoute: typeof ExportSyncRoute
   ExportUsbRoute: typeof ExportUsbRoute
   ImportFolderIdRoute: typeof ImportFolderIdRoute
   PlaylistsIdRoute: typeof PlaylistsIdRoute
@@ -290,6 +303,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ExportRekordboxRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/export/sync': {
+      id: '/export/sync'
+      path: '/export/sync'
+      fullPath: '/export/sync'
+      preLoaderRoute: typeof ExportSyncRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/export/usb': {
       id: '/export/usb'
       path: '/export/usb'
@@ -344,6 +364,7 @@ const rootRouteChildren: RootRouteChildren = {
   ExportTargetIdRoute: ExportTargetIdRoute,
   ExportAddRoute: ExportAddRoute,
   ExportRekordboxRoute: ExportRekordboxRoute,
+  ExportSyncRoute: ExportSyncRoute,
   ExportUsbRoute: ExportUsbRoute,
   ImportFolderIdRoute: ImportFolderIdRoute,
   PlaylistsIdRoute: PlaylistsIdRoute,

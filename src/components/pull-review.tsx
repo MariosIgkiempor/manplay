@@ -11,7 +11,7 @@ import {
 	type Tone,
 } from "#/components/diff-view.tsx";
 import { FailureList } from "#/components/failure-list.tsx";
-import { ErrorLine } from "#/components/page.tsx";
+import { EmptyState, ErrorLine, ErrorState } from "#/components/page.tsx";
 import { SearchField } from "#/components/search-field.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import {
@@ -120,16 +120,19 @@ export function PullReview({ targetId, onDone }: { targetId: number; onDone: () 
 	const read = useTargetScan(targetId);
 	const error = read.isError ? String(read.error) : (read.data?.pull.error ?? null);
 	if (error === null && !read.data) {
-		return <p className="py-6 text-center text-muted-foreground text-sm">Checking the folder…</p>;
+		return <EmptyState kind="loading" title="Checking the folder…" />;
 	}
 	if (error !== null || !read.data) {
 		return (
-			<div className="space-y-3">
-				<ErrorLine>{error}</ErrorLine>
-				<Button variant="outline" className="w-full" onClick={onDone}>
-					Skip
-				</Button>
-			</div>
+			<ErrorState
+				error={error ?? "The folder could not be read."}
+				onRetry={() => void read.refetch()}
+				action={
+					<Button size="sm" variant="outline" onClick={onDone}>
+						Skip
+					</Button>
+				}
+			/>
 		);
 	}
 	const scan = read.data.pull;

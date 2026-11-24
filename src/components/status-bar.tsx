@@ -13,6 +13,7 @@ import {
 	StatusScopeContext,
 } from "#/context/status-context.ts";
 import { useUndo } from "#/context/undo-context.ts";
+import { SIDEBAR_TOGGLE_SLOT } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { SCAN_KEY, SYNC_KEY } from "#/lib/queries.ts";
 import { cn } from "#/lib/utils.ts";
@@ -124,7 +125,7 @@ function PanelToggle() {
 }
 
 /**
- * The window's status bar. Left: undo, errors and notices. Middle: sync and analysis progress.
+ * The window's status bar. Left: the sidebar's button, undo, errors and notices. Middle: sync and analysis progress.
  * Right: whether edits are saved, the figures of the area last used, and the side panel's button.
  */
 export function StatusBarHost({
@@ -139,6 +140,8 @@ export function StatusBarHost({
 	return (
 		<footer className="grid h-9 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-4 overflow-hidden whitespace-nowrap bg-canvas px-4 text-muted-foreground text-xs">
 			<div className="flex min-w-0 items-center gap-4">
+				{/* The sidebar puts its fold button here (`Sidebar`). */}
+				<div id={SIDEBAR_TOGGLE_SLOT} className="contents" />
 				<UndoPill />
 				<StatusErrors />
 				{notices}

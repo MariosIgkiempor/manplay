@@ -19,7 +19,7 @@ const OPTIONS: {
 export function AppearanceSettings() {
 	const choice = useThemeChoice();
 	return (
-		<FrameSection title="Appearance">
+		<FrameSection title="Appearance" titleHidden>
 			<FieldRow
 				label="Theme"
 				description={

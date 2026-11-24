@@ -25,7 +25,7 @@ import {
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
 import { type MenuEntry, RowMenu } from "#/components/menu.tsx";
-import { EmptyState, ErrorLine } from "#/components/page.tsx";
+import { EmptyLine, EmptyState, ErrorLine } from "#/components/page.tsx";
 import { Cover } from "#/components/page-header.tsx";
 import { PanelHeader } from "#/components/panel-header.tsx";
 import { TrackList } from "#/components/track-list.tsx";
@@ -348,9 +348,7 @@ function PlaylistNav({
 					actions={actions}
 				/>
 			))}
-			{tree.length === 0 && (
-				<p className="px-2 py-1.5 text-muted-foreground text-xs">No playlists yet</p>
-			)}
+			{tree.length === 0 && <EmptyLine>No playlists yet</EmptyLine>}
 		</nav>
 	);
 }
@@ -571,7 +569,12 @@ function SongsView({
 						</Button>
 					))
 				}
-				empty={<EmptyState title={songs.length === 0 ? "No songs" : "No songs match"} />}
+				empty={
+					<EmptyState
+						kind={songs.length === 0 ? "empty" : "search"}
+						title={songs.length === 0 ? "No songs" : "No songs match"}
+					/>
+				}
 			/>
 		</div>
 	);
