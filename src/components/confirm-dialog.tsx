@@ -8,8 +8,13 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "#/components/ui/button.tsx";
-import { type ActionAnchor, currentActionAnchor, showLeaving } from "#/lib/action-anchor.ts";
-import { type BubblePosition, bubblePosition } from "#/lib/bubble-position.ts";
+import {
+	type ActionAnchor,
+	currentActionAnchor,
+	litBoxes,
+	showLeaving,
+} from "#/lib/action-anchor.ts";
+import { type Box, type BubblePosition, bubblePosition } from "#/lib/bubble-position.ts";
 import { useExitGhost } from "#/lib/exit-ghost.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME, WELL } from "#/lib/page-layout.ts";
 import { cn } from "#/lib/utils.ts";
@@ -17,13 +22,13 @@ import { cn } from "#/lib/utils.ts";
 /** The space kept clear round the thing a question is about, so its own edge still shows. */
 const SPOTLIGHT_PAD = 3;
 
-/** A backdrop with a hole over `box`, so the thing being asked about stays lit. */
-function spotlightClip(box: ActionAnchor["box"]): string {
+/** The outline of one hole, starting and ending at its top-left corner. */
+function holePoints(box: Box): string {
 	const left = box.left - SPOTLIGHT_PAD;
 	const top = box.top - SPOTLIGHT_PAD;
 	const right = box.left + box.width + SPOTLIGHT_PAD;
 	const bottom = box.top + box.height + SPOTLIGHT_PAD;
-	const hole = [
+	return [
 		[left, top],
 		[right, top],
 		[right, bottom],
@@ -32,7 +37,15 @@ function spotlightClip(box: ActionAnchor["box"]): string {
 	]
 		.map(([x, y]) => `${x}px ${y}px`)
 		.join(", ");
-	return `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${hole})`;
+}
+
+/**
+ * A backdrop with a hole over each of `boxes`, so the things being asked about stay lit. Each
+ * hole is reached from the corner and left back to it, so the joining lines enclose nothing.
+ */
+function spotlightClip(boxes: readonly Box[]): string {
+	const holes = boxes.map((box) => `${holePoints(box)}, 0 0`).join(", ");
+	return `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${holes})`;
 }
 
 /** Where the card goes beside `anchor`, and the point it grows out of. */
@@ -110,6 +123,7 @@ export function Dialog({
 	}, [anchor]);
 
 	const anchored = anchor !== null;
+	const lit = anchor ? litBoxes(anchor) : [];
 	return createPortal(
 		<div
 			ref={overlay}
@@ -119,23 +133,25 @@ export function Dialog({
 				aria-hidden="true"
 				onMouseDown={onCancel}
 				className={cn(DIALOG_BACKDROP, anchored && "bg-canvas/45 backdrop-blur-[2px]")}
-				style={anchor?.element ? { clipPath: spotlightClip(anchor.box) } : undefined}
+				style={lit.length > 0 ? { clipPath: spotlightClip(lit) } : undefined}
 			/>
-			{anchor?.element && placed && (
-				<div
-					aria-hidden="true"
-					className={cn(
-						"pointer-events-none fixed animate-in rounded-lg ring-2 fade-in-0 duration-200 motion-reduce:animate-none",
-						destructive ? "ring-destructive/70" : "ring-primary/70",
-					)}
-					style={{
-						left: anchor.box.left - SPOTLIGHT_PAD,
-						top: anchor.box.top - SPOTLIGHT_PAD,
-						width: anchor.box.width + SPOTLIGHT_PAD * 2,
-						height: anchor.box.height + SPOTLIGHT_PAD * 2,
-					}}
-				/>
-			)}
+			{placed &&
+				lit.map((box) => (
+					<div
+						key={`${box.left},${box.top}`}
+						aria-hidden="true"
+						className={cn(
+							"pointer-events-none fixed animate-in rounded-lg ring-2 fade-in-0 duration-200 motion-reduce:animate-none",
+							destructive ? "ring-destructive/70" : "ring-primary/70",
+						)}
+						style={{
+							left: box.left - SPOTLIGHT_PAD,
+							top: box.top - SPOTLIGHT_PAD,
+							width: box.width + SPOTLIGHT_PAD * 2,
+							height: box.height + SPOTLIGHT_PAD * 2,
+						}}
+					/>
+				))}
 			{/* The question sits in a well; its answers sit on the frame below it. */}
 			<div
 				ref={card}

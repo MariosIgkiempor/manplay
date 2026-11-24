@@ -11,7 +11,15 @@ export interface ActionAnchor {
 	element: boolean;
 	/** That control or row, while it is on screen. */
 	target: Element | null;
+	/** The other rows selected with `target`, which the action takes along with it. */
+	alsoSelected: readonly SelectedItem[];
 	at: number;
+}
+
+/** A selected row on screen, and where it was when the user acted. */
+export interface SelectedItem {
+	box: Box;
+	target: Element;
 }
 
 /** An anchor older than this belongs to some earlier action; the question opens centred. */
@@ -28,6 +36,8 @@ const OPENED_LIST = "[role=menu], [role=listbox]";
 const ITEM = "a, li, [data-row-path], [role=row], [role=treeitem], [role=option]";
 /** A selected row inside a focused list: what a keyboard shortcut acts on. */
 const SELECTED = '[aria-selected="true"], [data-selected="true"]';
+/** The list a selection lives in; another list's selection (the other Files pane) is its own. */
+const SELECTION_SCOPE = "[role=listbox], [role=grid], [role=tree], [role=list], [data-file-pane]";
 
 let last: ActionAnchor | null = null;
 
@@ -36,12 +46,34 @@ function boxOf(element: Element): Box {
 	return { left, top, width, height };
 }
 
+function anchorable(box: Box): boolean {
+	return box.width > 0 && box.height > 0 && box.height <= MAX_ANCHOR_HEIGHT;
+}
+
+/**
+ * The rows selected alongside `item`, when `item` is itself selected: a press or key on one row
+ * of a selection acts on all of it.
+ */
+function selectedAlongside(item: Element): SelectedItem[] {
+	if (!(item.matches(ITEM) && item.matches(SELECTED))) {
+		return [];
+	}
+	const scope = item.closest(SELECTION_SCOPE) ?? item.parentElement;
+	if (!scope) {
+		return [];
+	}
+	return [...scope.querySelectorAll(SELECTED)]
+		.filter((other) => other !== item && other.matches(ITEM))
+		.map((other) => ({ box: boxOf(other), target: other }))
+		.filter((other) => anchorable(other.box));
+}
+
 function elementAnchor(element: Element, at: number): ActionAnchor | null {
 	const box = boxOf(element);
-	if (box.width === 0 || box.height === 0 || box.height > MAX_ANCHOR_HEIGHT) {
+	if (!anchorable(box)) {
 		return null;
 	}
-	return { box, element: true, target: element, at };
+	return { box, element: true, target: element, alsoSelected: selectedAlongside(element), at };
 }
 
 /** The anchor for a press at (`x`, `y`) on `target`. */
@@ -52,6 +84,7 @@ function pressAnchor(target: Element | null, x: number, y: number, at: number): 
 			box: { left: x, top: y, width: 0, height: 0 },
 			element: false,
 			target: null,
+			alsoSelected: [],
 			at,
 		}
 	);
@@ -122,20 +155,26 @@ const LEAVE_GIVE_UP_MS = 3000;
  * catches up. If it is still there a few seconds on (the removal failed), it comes back.
  */
 export function showLeaving(anchor: ActionAnchor | null): void {
-	const target = anchor?.target;
-	// Only an item in a list goes away; a button that asked (Leave…, Reset) stays put.
-	if (!(target instanceof HTMLElement && target.isConnected && target.matches(ITEM))) {
+	if (!anchor?.target || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
 		return;
 	}
-	if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-		return;
+	for (const target of [anchor.target, ...anchor.alsoSelected.map((item) => item.target)]) {
+		// Only an item in a list goes away; a button that asked (Leave…, Reset) stays put.
+		if (!(target instanceof HTMLElement && target.isConnected && target.matches(ITEM))) {
+			continue;
+		}
+		const leaving = target.animate(
+			[
+				{ opacity: 1, filter: "saturate(1)" },
+				{ opacity: 0.35, filter: "saturate(0)" },
+			],
+			{ duration: LEAVE_MS, easing: "ease-out", fill: "forwards" },
+		);
+		setTimeout(() => leaving.cancel(), LEAVE_GIVE_UP_MS);
 	}
-	const leaving = target.animate(
-		[
-			{ opacity: 1, filter: "saturate(1)" },
-			{ opacity: 0.35, filter: "saturate(0)" },
-		],
-		{ duration: LEAVE_MS, easing: "ease-out", fill: "forwards" },
-	);
-	setTimeout(() => leaving.cancel(), LEAVE_GIVE_UP_MS);
+}
+
+/** Every box the question points out: the thing acted on and the rows selected with it. */
+export function litBoxes(anchor: ActionAnchor): Box[] {
+	return anchor.element ? [anchor.box, ...anchor.alsoSelected.map((item) => item.box)] : [];
 }
