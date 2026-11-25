@@ -39,7 +39,16 @@ export function Segmented<T extends string>({
 		}
 		// Not passive, so the page does not scroll as well.
 		list.addEventListener("wheel", scrollSidewaysOnWheel, { passive: false });
-		return () => list.removeEventListener("wheel", scrollSidewaysOnWheel);
+		const markEdges = () => markOverflowEdges(list);
+		markEdges();
+		list.addEventListener("scroll", markEdges, { passive: true });
+		const watch = new ResizeObserver(markEdges);
+		watch.observe(list);
+		return () => {
+			list.removeEventListener("wheel", scrollSidewaysOnWheel);
+			list.removeEventListener("scroll", markEdges);
+			watch.disconnect();
+		};
 	}, []);
 	return (
 		<Tabs<T>
@@ -57,7 +66,7 @@ export function Segmented<T extends string>({
 				className={cn(
 					// The underline hangs 1px below the tabs, over the rule; the padding keeps it inside the
 					// scroller, which would clip it.
-					"no-scrollbar relative flex min-w-0 gap-1 overflow-x-auto overflow-y-hidden pb-px",
+					"no-scrollbar fades-at-overflow relative flex min-w-0 gap-1 overflow-x-auto overflow-y-hidden pb-px",
 					ruled ? "shadow-[inset_0_-1px_0_var(--color-border)]" : "-mb-px",
 					className,
 				)}
@@ -88,6 +97,17 @@ export function Segmented<T extends string>({
 			</TabsList>
 		</Tabs>
 	);
+}
+
+/**
+ * Marks which ends of a sideways scroller have more tabs past them, so those ends fade out
+ * (`.fades-at-overflow` in `styles.css`) instead of cutting a tab's word in half.
+ */
+function markOverflowEdges(list: HTMLElement) {
+	const hiddenBefore = list.scrollLeft > 1;
+	const hiddenAfter = list.scrollLeft + list.clientWidth < list.scrollWidth - 1;
+	list.toggleAttribute("data-more-before", hiddenBefore);
+	list.toggleAttribute("data-more-after", hiddenAfter);
 }
 
 /** A mouse wheel only scrolls up and down; turn that into sideways scrolling on a tab row. */

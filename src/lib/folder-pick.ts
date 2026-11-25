@@ -1,3 +1,4 @@
+import { compareText } from "#/lib/compare-text.ts";
 import { joinPath } from "#/lib/fs-path.ts";
 
 /** One folder in the picker's tree. */
@@ -9,7 +10,7 @@ export interface PickRow {
 	open: boolean;
 }
 
-const byName = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+const byName = compareText;
 
 /**
  * The folders in `dir` (and in any folder expanded under it) as visible rows, depth first.

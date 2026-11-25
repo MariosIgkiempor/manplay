@@ -46,10 +46,10 @@ describe("passedPagesToShow", () => {
 
 describe("scrollMsFor", () => {
 	it.each<[string, number, ScrollMs]>([
-		["the next page", 0, 420],
-		["passing one page", 1, 460],
-		["passing five pages", 5, 620],
-		["passing many pages, capped", 40, 720],
+		["the next page", 0, 380],
+		["passing one page", 1, 410],
+		["passing five pages", 5, 530],
+		["passing many pages, capped", 40, 560],
 	])("%s", (_, passed, expected) => {
 		expect(scrollMsFor(passed)).toBe(expected);
 	});

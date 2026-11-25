@@ -164,6 +164,23 @@
 	display: none;
 }
 
+/* A tab row with more tabs past an end fades out at that end (`markOverflowEdges`). */
+.fades-at-overflow[data-more-after] {
+	mask-image: linear-gradient(to right, black calc(100% - 3rem), transparent);
+}
+.fades-at-overflow[data-more-before] {
+	mask-image: linear-gradient(to right, transparent, black 3rem);
+}
+.fades-at-overflow[data-more-before][data-more-after] {
+	mask-image: linear-gradient(
+		to right,
+		transparent,
+		black 3rem,
+		black calc(100% - 3rem),
+		transparent
+	);
+}
+
 /*
  * Sliders (seek, volume): a thin track, filled up to a small round thumb, the same in WebKit
  * and WebView2. `--fill` is how far along the value is, 0 to 1.
@@ -309,25 +326,47 @@ input[type="range"].slider {
 }
 
 /*
+ * The look of everything that floats over the page: menus, lists, popovers and hints. It is the
+ * floating card (`FLOATING_FRAME` round a `WELL`, as `GrowPopup` draws it) on one element: the
+ * well is the element itself, and the frame's lip and outer hairline are drawn round it as
+ * shadows, so any popup gets the card without another wrapper inside it.
+ */
+.card-surface {
+	--card-lip: color-mix(in oklab, var(--foreground) 2%, var(--background));
+	border: 1px solid var(--hairline);
+	border-radius: var(--radius-lg, 0.5rem);
+	background-color: var(--well);
+	color: var(--foreground);
+	box-shadow:
+		0 0 0 3px var(--card-lip),
+		0 0 0 4px var(--hairline),
+		0 18px 40px -12px oklch(0 0 0 / 30%),
+		0 4px 10px -4px oklch(0 0 0 / 18%);
+}
+
+/*
  * Menus and popovers (UI SDK popups) open from their trigger: a short fade and a slight grow
  * from the side they are anchored to, and the same in reverse as they close.
  */
-.bg-popover[data-side],
+.card-surface[data-side],
 .floating-card[data-side] {
 	transform-origin: var(--transform-origin);
 	transition:
 		opacity 120ms ease-out,
 		scale 120ms ease-out;
+	/* Drawn once at full size and scaled on the compositor, so text does not re-raster each frame. */
+	will-change: opacity, scale;
 }
-.bg-popover[data-side][data-starting-style],
-.bg-popover[data-side][data-ending-style],
+.card-surface[data-side][data-starting-style],
+.card-surface[data-side][data-ending-style],
 .floating-card[data-side][data-starting-style],
 .floating-card[data-side][data-ending-style] {
 	opacity: 0;
 	scale: 0.97;
 }
 @media (prefers-reduced-motion: reduce) {
-	.bg-popover[data-side] {
+	.card-surface[data-side],
+	.floating-card[data-side] {
 		transition: none;
 	}
 }
@@ -337,22 +376,23 @@ input[type="range"].slider {
  * size, at the corner they share, to its full size.
  */
 .grows-from-trigger[data-side],
-.bg-popover.grows-from-trigger[data-side] {
+.card-surface.grows-from-trigger[data-side] {
 	transform-origin: var(--transform-origin);
 	transition:
 		opacity 160ms ease-out,
 		scale 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+	will-change: opacity, scale;
 }
 .grows-from-trigger[data-side][data-starting-style],
 .grows-from-trigger[data-side][data-ending-style],
-.bg-popover.grows-from-trigger[data-side][data-starting-style],
-.bg-popover.grows-from-trigger[data-side][data-ending-style] {
+.card-surface.grows-from-trigger[data-side][data-starting-style],
+.card-surface.grows-from-trigger[data-side][data-ending-style] {
 	opacity: 0;
 	scale: 0.35;
 }
 @media (prefers-reduced-motion: reduce) {
 	.grows-from-trigger[data-side],
-	.bg-popover.grows-from-trigger[data-side] {
+	.card-surface.grows-from-trigger[data-side] {
 		transition: none;
 	}
 }
@@ -378,10 +418,15 @@ input[type="range"].slider {
 }
 
 /*
- * Page changes (`page-transition.ts`). The old card leaves as a snapshot while the live new card
- * moves in from script, one after the other with the canvas's 0.5rem gap between them. Only the
- * page's card and the Files page's second pane take part; the rest of the window is not captured,
- * so the sidebar and player keep running and stay clickable.
+ * Page changes (`page-transition.ts`). Pages scroll past each other: the old card leaves as a
+ * snapshot while the live new card, and a placeholder for each page passed on the way, move in
+ * from script with the same timing, one card after the other with the canvas's 0.5rem gap between
+ * them. Only the page's card and the Files page's second pane take part; the rest of the window is
+ * not captured, so the sidebar and player keep running and stay clickable.
+ *
+ * Everything moves by `transform` alone, which the compositor runs without the page: the snapshot
+ * is drawn above the window, so its group holds a fixed clip at the canvas's edge (0.5rem past the
+ * card) instead of a clip animated against its travel, which would repaint every frame.
  */
 /* biome-ignore-start lint/correctness/noUnknownTypeSelector: Biome reads a view transition's name as an element name */
 :root {
@@ -390,58 +435,52 @@ input[type="range"].slider {
 ::view-transition {
 	pointer-events: none;
 }
+::view-transition-group(page),
+::view-transition-group(pane) {
+	animation: none;
+	clip-path: inset(-0.5rem 0);
+}
 ::view-transition-old(page),
 ::view-transition-old(pane) {
-	animation-duration: 160ms;
-	animation-timing-function: ease-out;
+	animation: page-leave 140ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+::view-transition-new(page),
+::view-transition-new(pane) {
+	animation: none;
+	opacity: 0;
 }
 @media (prefers-reduced-motion: no-preference) {
 	:root[data-page-move]::view-transition-old(page),
 	:root[data-page-move]::view-transition-old(pane) {
-		animation-duration: var(--page-scroll-ms, 420ms);
-		animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+		animation: page-scroll var(--page-scroll-ms, 380ms) cubic-bezier(0.32, 0.72, 0, 1) both;
+		will-change: transform;
 	}
 	:root[data-page-move="down"]::view-transition-old(page),
 	:root[data-page-move="down"]::view-transition-old(pane) {
-		animation-name: page-to-top;
+		--page-scroll-to: calc(var(--page-steps, 1) * (-100% - 0.5rem));
 	}
 	:root[data-page-move="up"]::view-transition-old(page),
 	:root[data-page-move="up"]::view-transition-old(pane) {
-		animation-name: page-to-bottom;
+		--page-scroll-to: calc(var(--page-steps, 1) * (100% + 0.5rem));
 	}
 }
 @media (prefers-reduced-motion: reduce) {
-	::view-transition-group(page),
-	::view-transition-group(pane),
 	::view-transition-old(page),
 	::view-transition-old(pane) {
 		animation: none;
+		opacity: 0;
 	}
 }
 /* biome-ignore-end lint/correctness/noUnknownTypeSelector: Biome reads a view transition's name as an element name */
-/*
- * The snapshot is drawn above the window, so nothing clips it; its clip moves against its travel
- * to keep it cut at the canvas's edge, 0.5rem past the card, where the live cards are cut too. It
- * travels `--page-steps` cards: one, and one more for each page passed on the way.
- */
-@keyframes page-to-top {
-	from {
-		translate: 0 0;
-		clip-path: inset(-0.5rem 0 0 0);
-	}
+/* A page with no row in the sidebar: the old card only fades. */
+@keyframes page-leave {
 	to {
-		translate: 0 calc(var(--page-steps, 1) * (-100% - 0.5rem));
-		clip-path: inset(calc(var(--page-steps, 1) * (100% + 0.5rem) - 0.5rem) 0 0 0);
+		opacity: 0;
 	}
 }
-@keyframes page-to-bottom {
-	from {
-		translate: 0 0;
-		clip-path: inset(0 0 -0.5rem 0);
-	}
+@keyframes page-scroll {
 	to {
-		translate: 0 calc(var(--page-steps, 1) * (100% + 0.5rem));
-		clip-path: inset(0 0 calc(var(--page-steps, 1) * (100% + 0.5rem) - 0.5rem) 0);
+		transform: translateY(var(--page-scroll-to, 0));
 	}
 }
 

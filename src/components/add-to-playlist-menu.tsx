@@ -15,7 +15,7 @@ import {
 	Undo2,
 	UserRound,
 } from "lucide-react";
-import { type ReactNode, useContext } from "react";
+import { type ReactNode, useContext, useState } from "react";
 import { type MenuEntry, MenuItems, MenuLabel, MenuSeparator } from "#/components/menu.tsx";
 import { PlaylistSubmenu } from "#/components/playlist-submenu.tsx";
 import { TagSubmenu } from "#/components/tag-submenu.tsx";
@@ -62,10 +62,6 @@ function shared(tracks: readonly Track[]) {
 	};
 }
 
-/**
- * Wraps `children` so a right-click offers what can be done to `tracks`: play, add to a playlist,
- * tag, rename, edit metadata, analyze, and go to their album or artist.
- */
 /** For one song: find its file, and copy its name to paste elsewhere (a set list, a search). */
 function fileEntries(song: Track): MenuEntry[] {
 	return [
@@ -85,15 +81,38 @@ function fileEntries(song: Track): MenuEntry[] {
 	];
 }
 
-export function AddToPlaylistMenu({
+/**
+ * Wraps `children` so a right-click offers what can be done to `tracks`: play, add to a playlist,
+ * tag, rename, edit metadata, analyze, and go to their album or artist.
+ *
+ * Grids and lists wrap hundreds of rows in one each, so the menu's items (and the hooks they read)
+ * are built only once the menu first opens, not as the page draws.
+ */
+export function AddToPlaylistMenu({ children, ...menu }: Props) {
+	const [opened, setOpened] = useState(false);
+	return (
+		<MenuRoot
+			onOpenChange={(next) => {
+				if (next) {
+					setOpened(true);
+				}
+			}}
+		>
+			<MenuContextTrigger>{children}</MenuContextTrigger>
+			{opened && <TrackMenuPopup {...menu} />}
+		</MenuRoot>
+	);
+}
+
+/** The menu itself, drawn from the first time it opens. */
+function TrackMenuPopup({
 	tracks,
 	label,
 	onPlay,
 	onRename,
 	extra,
 	noGoTo = false,
-	children,
-}: Props) {
+}: Omit<Props, "children">) {
 	const go = useDetailNav();
 	const order = useContext(TrackOrderContext);
 	const player = usePlayer();
@@ -168,41 +187,38 @@ export function AddToPlaylistMenu({
 		...(extra ?? []),
 	];
 	return (
-		<MenuRoot>
-			<MenuContextTrigger>{children}</MenuContextTrigger>
-			{/* Focus stays where the chosen item put it, e.g. in a rename field it opened. */}
-			<ContextMenuPopup className={popup} finalFocus="none">
-				<MenuLabel>{label}</MenuLabel>
-				<MenuItems
-					items={[
-						{
-							label: "Play",
-							icon: <Play />,
-							disabled: tracks.length === 0,
-							onSelect: onPlay ?? (() => player.play(tracks, 0)),
-						},
-						{
-							label: "Play next",
-							icon: <ListStart />,
-							disabled: tracks.length === 0,
-							...playNextKey,
-							onSelect: () => player.playNext(tracks),
-						},
-						{
-							label: "Add to queue",
-							icon: <ListEnd />,
-							disabled: tracks.length === 0,
-							...queueKey,
-							onSelect: () => player.addToQueue(tracks),
-						},
-					]}
-				/>
-				<MenuSeparator />
-				<PlaylistSubmenu tracks={tracks} />
-				<TagSubmenu tracks={tracks} />
-				<MenuSeparator />
-				<MenuItems items={edits} />
-			</ContextMenuPopup>
-		</MenuRoot>
+		// Focus stays where the chosen item put it, e.g. in a rename field it opened.
+		<ContextMenuPopup className={popup} finalFocus="none">
+			<MenuLabel>{label}</MenuLabel>
+			<MenuItems
+				items={[
+					{
+						label: "Play",
+						icon: <Play />,
+						disabled: tracks.length === 0,
+						onSelect: onPlay ?? (() => player.play(tracks, 0)),
+					},
+					{
+						label: "Play next",
+						icon: <ListStart />,
+						disabled: tracks.length === 0,
+						...playNextKey,
+						onSelect: () => player.playNext(tracks),
+					},
+					{
+						label: "Add to queue",
+						icon: <ListEnd />,
+						disabled: tracks.length === 0,
+						...queueKey,
+						onSelect: () => player.addToQueue(tracks),
+					},
+				]}
+			/>
+			<MenuSeparator />
+			<PlaylistSubmenu tracks={tracks} />
+			<TagSubmenu tracks={tracks} />
+			<MenuSeparator />
+			<MenuItems items={edits} />
+		</ContextMenuPopup>
 	);
 }

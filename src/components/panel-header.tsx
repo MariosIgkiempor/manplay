@@ -101,7 +101,6 @@ export function PanelHeader({
 						<Button
 							size="icon"
 							aria-label="Play"
-							data-hint="Play"
 							disabled={tracks.length === 0}
 							onClick={() => player.play(tracks, 0)}
 						>
@@ -136,7 +135,7 @@ export function PanelBar({
 	return (
 		<div className="flex h-9 shrink-0 items-center gap-1 px-2">
 			{canGoBack && (
-				<Button variant="ghost" size="icon-sm" aria-label="Back" data-hint="Back" onClick={onBack}>
+				<Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
 					<ArrowLeft />
 				</Button>
 			)}

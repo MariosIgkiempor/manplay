@@ -675,7 +675,7 @@ function ShortcutHelp({
 				sideOffset={6}
 				align="end"
 				data-deck-popup
-				className="w-[34rem] rounded-lg border bg-popover p-4 text-popover-foreground text-sm shadow-lg outline-none"
+				className="card-surface w-[34rem] p-4 text-sm outline-none"
 			>
 				<div className="grid grid-cols-2 gap-x-6 gap-y-4">
 					{groups.map((group) => (
@@ -758,7 +758,7 @@ function DownbeatButton({ onDownbeat, children }: { onDownbeat: () => void; chil
 					sideOffset={6}
 					align="end"
 					data-deck-popup
-					className="w-80 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg outline-none"
+					className="card-surface w-80 p-3 outline-none"
 				>
 					{children}
 				</PopoverPopup>

@@ -80,11 +80,7 @@ export function SortMenu<K extends string>({
 				<Arrow />
 				{current.label}
 			</MenuTrigger>
-			<MenuPopup
-				sideOffset={4}
-				align="end"
-				className="w-60 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
-			>
+			<MenuPopup sideOffset={4} align="end" className="card-surface w-60 p-1 outline-none">
 				<MenuRadioGroup
 					value={value.key}
 					onValueChange={(key: K) => {

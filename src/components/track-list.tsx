@@ -226,7 +226,6 @@ function SongCell({
 		title = (
 			<button
 				type="button"
-				data-hint={`Open ${track.title}`}
 				className="max-w-full truncate text-left hover:underline"
 				onClick={(e) => {
 					e.stopPropagation();
@@ -269,7 +268,7 @@ function SongCell({
 					</div>
 				)}
 				<div className="mt-0.5 flex h-5 items-center gap-3 text-muted-foreground text-xs tabular-nums">
-					<span className="flex items-center gap-1" data-hint="Length">
+					<span className="flex items-center gap-1">
 						<Clock aria-hidden="true" className="size-3 opacity-60" />
 						{track.durationMs === null ? "–" : clock(track.durationMs / 1000)}
 					</span>
@@ -525,6 +524,9 @@ function TrackRow({
 				className={cn(
 					"group grid min-h-16 cursor-default items-center gap-3 px-3 py-1.5 text-sm outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-ring/70 focus-visible:ring-inset",
 					rowColumns(layout),
+					// Rows out of view skip layout and paint, so a long list opens and scrolls without
+					// drawing hundreds of rows nobody sees.
+					"[contain-intrinsic-size:auto_4rem] [content-visibility:auto]",
 					// Like a highlighted line in a code listing: chosen rows take a cue tint, and the
 					// playing song a cue rule down its left edge.
 					isSelected ? "bg-primary/[0.09]" : "hover:bg-foreground/[0.03]",

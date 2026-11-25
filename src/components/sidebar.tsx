@@ -33,6 +33,7 @@ import { SIDEBAR_TOGGLE_SLOT } from "#/lib/page-layout.ts";
 import { useClashes, useTracks } from "#/lib/queries.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
 import { usePaneWidth, useStoredFlag } from "#/lib/use-pane-width.ts";
+import { usePressNavigation } from "#/lib/use-press-navigation.ts";
 import { useShortcut, useShortcutHint } from "#/lib/use-shortcuts.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -244,6 +245,7 @@ export function Sidebar() {
 	const toggleTitle = useShortcutHint("sidebar", collapsed ? "Expand sidebar" : "Collapse sidebar");
 	useCurrentRowInView(asideRef);
 	useWidthVariable(asideRef);
+	usePressNavigation(asideRef);
 
 	return (
 		<CollapsedContext.Provider value={collapsed}>

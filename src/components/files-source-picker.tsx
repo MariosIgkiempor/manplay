@@ -128,11 +128,7 @@ export function FilesSourcePicker({
 				<span className="min-w-0 truncate font-medium">{name}</span>
 				<ChevronsUpDown className="size-3 shrink-0 text-muted-foreground" />
 			</MenuTrigger>
-			<MenuPopup
-				sideOffset={6}
-				align="start"
-				className="w-80 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg outline-none"
-			>
+			<MenuPopup sideOffset={6} align="start" className="card-surface w-80 p-1.5 outline-none">
 				<MenuRadioGroup
 					value={selected}
 					onValueChange={(value: string) => onChange(value === LIBRARY ? undefined : Number(value))}

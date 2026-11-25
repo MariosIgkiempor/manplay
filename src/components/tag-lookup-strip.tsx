@@ -456,7 +456,7 @@ function MatchChoice({ song, found }: { song: MatchedSong; found: TagSuggestions
 			<MenuPopup
 				sideOffset={4}
 				align="start"
-				className="w-80 max-w-[calc(100vw-2rem)] rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
+				className="card-surface w-80 max-w-[calc(100vw-2rem)] p-1 outline-none"
 			>
 				<MenuRadioGroup
 					value={String(chosen)}

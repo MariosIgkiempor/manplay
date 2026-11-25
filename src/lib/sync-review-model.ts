@@ -1,4 +1,5 @@
 import type { Resolution, SyncAction, TargetPlan } from "#/lib/api.ts";
+import { compareText } from "#/lib/compare-text.ts";
 import { isAudioName } from "#/lib/fs-path.ts";
 import {
 	type IncomingAction,
@@ -169,7 +170,7 @@ export const albumFromPath = (rel: readonly string[]): AlbumInfo => ({
 });
 
 const fold = (s: string) => s.normalize("NFC").trim().toLowerCase();
-const compare = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+const compare = compareText;
 
 /** Where one file belongs in the album view. */
 function albumOf(
@@ -344,14 +345,17 @@ export type FloatSide = "right" | "left" | "below";
 
 export interface FloatPlacement {
 	side: FloatSide;
-	/** Width of the file list in pixels; under the card it is as wide as the card. */
+	/** Width of the file list in pixels; under the card it is as wide as the whole mosaic. */
 	panel: number;
+	/** How far the card sits from the mosaic's left edge, where a list under it starts. */
+	offset: number;
 }
 
 /**
  * Where an open album floats its file list, given the card's place in the mosaic. The card
  * stays where it is; the list goes on its right, or on its left when the card is too close to
- * the right edge, and is about two cards wide where there is room.
+ * the right edge, and is about two cards wide where there is room. When neither side has room
+ * it goes under the card, across the whole mosaic, so it is never as cramped as one card.
  */
 export function floatPlacement(
 	cardLeft: number,
@@ -361,12 +365,12 @@ export function floatPlacement(
 	const wanted = Math.min(FLOAT_PANEL_MAX_PX, Math.max(FLOAT_PANEL_MIN_PX, cardWidth * 2));
 	const right = gridWidth - cardLeft - cardWidth;
 	if (right >= FLOAT_PANEL_MIN_PX) {
-		return { side: "right", panel: Math.min(wanted, right) };
+		return { side: "right", panel: Math.min(wanted, right), offset: 0 };
 	}
 	if (cardLeft >= FLOAT_PANEL_MIN_PX) {
-		return { side: "left", panel: Math.min(wanted, cardLeft) };
+		return { side: "left", panel: Math.min(wanted, cardLeft), offset: 0 };
 	}
-	return { side: "below", panel: cardWidth };
+	return { side: "below", panel: gridWidth, offset: cardLeft };
 }
 
 // ---- Folders --------------------------------------------------------------

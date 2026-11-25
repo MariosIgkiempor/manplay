@@ -261,34 +261,45 @@ describe("floatPlacement", () => {
 		{
 			name: "first column: two cards wide on the right",
 			left: 0,
-			expected: { side: "right", panel: 480 },
+			expected: { side: "right", panel: 480, offset: 0 },
 		},
 		{
 			name: "middle: right, limited by the space left",
 			left: 252,
-			expected: { side: "right", panel: 456 },
+			expected: { side: "right", panel: 456, offset: 0 },
 		},
-		{ name: "last column: flips to the left", left: 708, expected: { side: "left", panel: 480 } },
+		{
+			name: "last column: flips to the left",
+			left: 708,
+			expected: { side: "left", panel: 480, offset: 0 },
+		},
 		{
 			name: "wide cards stop at the widest list",
 			left: 0,
 			width: 400,
 			grid: 1400,
-			expected: { side: "right", panel: 720 },
+			expected: { side: "right", panel: 720, offset: 0 },
 		},
 		{
 			name: "one column: under the card",
 			left: 0,
 			width: 300,
 			grid: 300,
-			expected: { side: "below", panel: 300 },
+			expected: { side: "below", panel: 300, offset: 0 },
 		},
 		{
-			name: "neither side wide enough: under the card",
+			name: "neither side wide enough: under the card, across the mosaic",
 			left: 200,
 			width: 240,
 			grid: 700,
-			expected: { side: "below", panel: 240 },
+			expected: { side: "below", panel: 700, offset: 200 },
+		},
+		{
+			name: "two columns, second card: across the mosaic from its left",
+			left: 302,
+			width: 290,
+			grid: 592,
+			expected: { side: "below", panel: 592, offset: 302 },
 		},
 	])("$name", ({ left, width = 240, grid = 948, expected }) => {
 		expect(floatPlacement(left, width, grid)).toEqual(expected);

@@ -16,6 +16,7 @@ import {
 	Pencil,
 	Play,
 	Scissors,
+	Search,
 	Tags,
 	Trash2,
 	Wrench,
@@ -667,8 +668,8 @@ export function PaneFooter({
 }
 
 /**
- * Where the pane is and the filter, in one borderless field: the breadcrumbs show until the field
- * is clicked (anywhere but a crumb) or `/` is pressed, then step aside for the filter while it is
+ * Where the pane is and the filter, in one borderless field: the breadcrumbs, with the filter's
+ * magnifier at the far end, show until the field is clicked (anywhere but a crumb) or `/` is pressed, then step aside for the filter while it is
  * in use. Enter goes back to the list, Escape clears it and brings the breadcrumbs back.
  */
 export function LocationBar({
@@ -706,7 +707,7 @@ export function LocationBar({
 				}
 			}}
 		>
-			<SearchGlyph active={on} />
+			{searching && <SearchGlyph active={on} />}
 			{!searching && <div className="flex min-w-0 flex-1 items-center">{children}</div>}
 			<input
 				ref={inputRef}
@@ -741,7 +742,6 @@ export function LocationBar({
 					<button
 						type="button"
 						aria-label="Clear filter"
-						data-hint="Clear filter (Esc)"
 						onClick={() => onDone(false)}
 						className="-mr-0.5 grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
 					>
@@ -749,10 +749,20 @@ export function LocationBar({
 					</button>
 				</>
 			)}
-			{!searching && filterKey && (
-				<span className="hidden @sm/pane:inline">
-					<KeyCap>{filterKey}</KeyCap>
-				</span>
+			{!searching && (
+				<button
+					type="button"
+					aria-label={filterKey ? `Filter by name (${filterKey})` : "Filter by name"}
+					className="-mr-1 flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-muted-foreground hover:bg-muted hover:text-foreground"
+					onClick={() => inputRef.current?.focus()}
+				>
+					<Search className="size-4" />
+					{filterKey && (
+						<span className="hidden @sm/pane:flex">
+							<KeyCap>{filterKey}</KeyCap>
+						</span>
+					)}
+				</button>
 			)}
 		</div>
 	);
@@ -779,7 +789,6 @@ export function ColumnHeader({ sort, onSort }: { sort: FileSort; onSort: (s: Fil
 					<button
 						key={c.key}
 						type="button"
-						data-hint={`Sort by ${c.label.toLowerCase()}`}
 						aria-pressed={on}
 						onClick={() =>
 							onSort(on ? { key: c.key, desc: !sort.desc } : { key: c.key, desc: c.desc })
@@ -869,11 +878,14 @@ export function Banners({ error, listError }: { error: string | null; listError:
 /** An icon button whose tooltip names the shortcut. */
 function Tool({
 	label,
+	plain = false,
 	disabled,
 	onClick,
 	children,
 }: {
 	label: string;
+	/** Its icon says what it does (scissors, a bin), so it shows no hint; it still has a name. */
+	plain?: boolean;
 	disabled?: boolean;
 	onClick: () => void;
 	children: React.ReactNode;
@@ -883,7 +895,7 @@ function Tool({
 			variant="ghost"
 			size="icon-sm"
 			aria-label={label}
-			data-hint={label}
+			data-hint={plain ? undefined : label}
 			disabled={disabled}
 			onClick={onClick}
 		>
@@ -931,47 +943,51 @@ function PaneActions({
 	onTrash: () => void;
 	onMove: () => void;
 }) {
-	const none = busy || count === 0;
+	// Tools for a selection show only while there is one; the keys and the menu always work.
+	const picked = count > 0;
 	return (
 		<div className="flex shrink-0 items-center">
+			{picked && (
+				<>
+					<Tool label="Rename (F2)" plain disabled={busy || count !== 1} onClick={onRename}>
+						<Pencil />
+					</Tool>
+					<div className="hidden items-center @xl/pane:flex">
+						<Tool label={`Cut (${keyLabel("⌘X")})`} plain disabled={busy} onClick={onCut}>
+							<Scissors />
+						</Tool>
+						<Tool label={`Copy (${keyLabel("⌘C")})`} plain disabled={busy} onClick={onCopy}>
+							<Copy />
+						</Tool>
+					</div>
+					<Tool
+						label={`Move to ${TRASH} (${keyLabel("⌘⌫")})`}
+						plain
+						disabled={busy}
+						onClick={onTrash}
+					>
+						<Trash2 />
+					</Tool>
+					{split && (
+						<Tool
+							label="Move selection to the other pane"
+							disabled={busy || !canMove}
+							onClick={onMove}
+						>
+							<ArrowRight />
+						</Tool>
+					)}
+					<Divider />
+				</>
+			)}
+			{hasClipboard && (
+				<Tool label={`Paste (${keyLabel("⌘V")})`} plain disabled={busy} onClick={onPaste}>
+					<ClipboardPaste />
+				</Tool>
+			)}
 			<Tool label={`New folder (${keyLabel("⌘N")})`} disabled={busy} onClick={onNewFolder}>
 				<FolderPlus />
 			</Tool>
-			<Tool label="Rename (F2)" disabled={busy || count !== 1} onClick={onRename}>
-				<Pencil />
-			</Tool>
-			{/* Clipboard tools fold away when the pane is narrow; the keys and menu still work. */}
-			<div className="hidden items-center @xl/pane:flex">
-				<Divider />
-				<Tool label={`Cut (${keyLabel("⌘X")})`} disabled={none} onClick={onCut}>
-					<Scissors />
-				</Tool>
-				<Tool label={`Copy (${keyLabel("⌘C")})`} disabled={none} onClick={onCopy}>
-					<Copy />
-				</Tool>
-				<Tool
-					label={`Paste (${keyLabel("⌘V")})`}
-					disabled={busy || !hasClipboard}
-					onClick={onPaste}
-				>
-					<ClipboardPaste />
-				</Tool>
-			</div>
-			<Tool label={`Move to ${TRASH} (${keyLabel("⌘⌫")})`} disabled={none} onClick={onTrash}>
-				<Trash2 />
-			</Tool>
-			{split && (
-				<>
-					<Divider />
-					<Tool
-						label="Move selection to the other pane"
-						disabled={none || !canMove}
-						onClick={onMove}
-					>
-						<ArrowRight />
-					</Tool>
-				</>
-			)}
 		</div>
 	);
 }
@@ -1520,8 +1536,7 @@ export interface MenuItem {
 	detail?: string[];
 }
 
-const popup =
-	"z-50 min-w-44 rounded-lg border bg-popover p-1 text-popover-foreground text-sm shadow-lg outline-none";
+const popup = "card-surface z-50 min-w-44 p-1 text-sm outline-none";
 const menuItem =
 	"flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-muted";
 

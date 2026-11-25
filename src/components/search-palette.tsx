@@ -233,7 +233,7 @@ function SuggestionList({
 		<div
 			id={id}
 			role="listbox"
-			className="absolute top-full right-0 left-0 z-30 mt-1 max-h-80 origin-top animate-in overflow-y-auto rounded-lg border bg-popover p-1 fade-in-0 zoom-in-[0.98] duration-150 motion-reduce:animate-none text-popover-foreground text-sm shadow-lg"
+			className="card-surface absolute top-full right-0 left-0 z-30 mt-1 max-h-80 origin-top animate-in overflow-y-auto p-1 fade-in-0 zoom-in-[0.98] duration-150 motion-reduce:animate-none text-sm"
 		>
 			{groups.map((g) => (
 				<div key={g.title}>

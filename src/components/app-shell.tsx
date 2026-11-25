@@ -4,6 +4,7 @@ import { CommandPalette } from "#/components/command-palette.tsx";
 import { ConfirmHost } from "#/components/confirm-host.tsx";
 import { FilePickerHost } from "#/components/file-picker.tsx";
 import { HintLayer } from "#/components/hint-layer.tsx";
+import { HistorySwipe } from "#/components/history-swipe.tsx";
 import { PlayerBar } from "#/components/player-bar.tsx";
 import { PlayingPicker } from "#/components/playing-picker.tsx";
 import { Sidebar } from "#/components/sidebar.tsx";
@@ -44,7 +45,10 @@ export function Shell({ children }: { children: ReactNode }) {
 							{...{ [PAGE_MOTION_ATTRIBUTE]: "page" }}
 							{...mainScope}
 						>
-							<div className="@container/main h-full overflow-y-auto">{children}</div>
+							{/* The scrollbar's lane is kept on every page, so the page's right edge never shifts. */}
+							<div className="@container/main h-full overflow-y-auto [scrollbar-gutter:stable]">
+								{children}
+							</div>
 							<SyncRequests />
 						</div>
 						<div ref={setSplitSlot} className="contents" />
@@ -55,6 +59,7 @@ export function Shell({ children }: { children: ReactNode }) {
 				<CommandPalette />
 				<PlayingPicker />
 				<AppShortcuts />
+				<HistorySwipe />
 				<FilePickerHost />
 				<ConfirmHost />
 				<HintLayer />

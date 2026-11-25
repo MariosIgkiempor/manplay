@@ -66,12 +66,7 @@ export function HeaderMenu({
 		<MenuRoot>
 			<MenuTrigger
 				render={
-					<Button
-						variant="outline"
-						size={size === "sm" ? "icon-sm" : "icon"}
-						aria-label={label}
-						data-hint={label}
-					/>
+					<Button variant="outline" size={size === "sm" ? "icon-sm" : "icon"} aria-label={label} />
 				}
 			>
 				<Ellipsis />

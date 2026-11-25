@@ -6,11 +6,10 @@ import { FLOATING_FRAME, WELL } from "#/lib/page-layout.ts";
 import { cn } from "#/lib/utils.ts";
 
 /**
- * How a hint of a few words looks: one small well, e.g. "Artist". Anything with more to say is a
- * `HintCard` in a frame, as the app's sections and popups are.
+ * How a hint of a few words looks: the floating card at its smallest, e.g. "Artist". Anything with
+ * more to say is a `HintCard`, its title on the frame's lip over a well.
  */
-export const HINT_SURFACE =
-	"max-w-64 rounded-lg border border-hairline bg-well px-2 py-1 text-foreground text-xs shadow-md";
+export const HINT_SURFACE = "card-surface max-w-64 px-2 py-1 text-xs";
 
 /** The frame of a hint with detail: the floating frame at a hint's size. */
 export const HINT_FRAME = cn(FLOATING_FRAME, "max-w-72 rounded-xl p-0.5 text-xs shadow-lg");

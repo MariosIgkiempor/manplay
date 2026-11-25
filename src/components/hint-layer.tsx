@@ -1,5 +1,6 @@
 import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 import { Bubble, hintHasDetail, TextHint } from "#/components/ui/bubble.tsx";
+import { repeatsVisibleText } from "#/lib/hint-format.ts";
 
 /** The attribute an element names its hover hint in. */
 const HINT_ATTRIBUTE = "data-hint";
@@ -17,6 +18,20 @@ function hintAnchor(target: EventTarget | null): Element | null {
 	return target instanceof Element ? target.closest(`[${HINT_ATTRIBUTE}]`) : null;
 }
 
+/** Whether some text in `el` is cut off, e.g. by `truncate`. */
+function isCutOff(el: Element): boolean {
+	return [el, ...el.querySelectorAll("*")].some((node) => node.scrollWidth > node.clientWidth + 1);
+}
+
+/** A hint worth showing: not one that only repeats text the element already shows in full. */
+function hintFor(anchor: Element): string | null {
+	const text = anchor.getAttribute(HINT_ATTRIBUTE)?.trim();
+	if (!text || !anchor.isConnected) {
+		return null;
+	}
+	return repeatsVisibleText(text, anchor.textContent ?? "") && !isCutOff(anchor) ? null : text;
+}
+
 /**
  * Listens across the whole document for what to hint at, calling `setShown` as hints open and
  * close. Returns what stops the listening.
@@ -27,8 +42,8 @@ function watchForHints(setShown: Dispatch<SetStateAction<ShownHint | null>>): ()
 	let closedAt = Number.NEGATIVE_INFINITY;
 
 	const show = (anchor: Element) => {
-		const text = anchor.getAttribute(HINT_ATTRIBUTE)?.trim();
-		setShown(text && anchor.isConnected ? { anchor, text } : null);
+		const text = hintFor(anchor);
+		setShown(text ? { anchor, text } : null);
 	};
 	const hide = () => {
 		clearTimeout(waiting);

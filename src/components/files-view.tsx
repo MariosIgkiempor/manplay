@@ -38,7 +38,6 @@ import { type TagConfirmRequest, useTagConfirm } from "#/lib/use-tag-confirm.tsx
 import { useTagPanelNav } from "#/lib/use-tag-panel-nav.ts";
 import { useTransfer } from "#/lib/use-transfer.tsx";
 
-const AUTO_KEY = "manplay.tags.autoOpen";
 const VIEW_KEY = "manplay.files.view";
 
 /** Where each pane was, whether the view was split, and the sort, so coming back resumes there. */
@@ -83,22 +82,6 @@ function saveView(v: SavedView) {
 		localStorage.setItem(VIEW_KEY, JSON.stringify(v));
 	} catch {
 		// Resuming where you were is a convenience only.
-	}
-}
-
-function loadAutoOpen(): boolean {
-	try {
-		return localStorage.getItem(AUTO_KEY) !== "0";
-	} catch {
-		return true;
-	}
-}
-
-function saveAutoOpen(on: boolean) {
-	try {
-		localStorage.setItem(AUTO_KEY, on ? "1" : "0");
-	} catch {
-		// Remembering the choice is a convenience only.
 	}
 }
 
@@ -199,18 +182,15 @@ export function FilesView({
 	const tagConfirm = useTagConfirm();
 	const [copying, setCopying] = useState<TagTarget | null>(null);
 	const tagWriter = useTagsWrite();
-	const [autoOpen, setAutoOpen] = useState(loadAutoOpen);
 	const fsUndo = useUndo();
-	const selectTarget = useCallback(
-		(t: TagTarget) => {
-			setTagTarget(t);
-			const { view, open } = detailRef.current;
-			if (autoOpen || view?.kind === "edit") {
-				open({ kind: "edit", target: t });
-			}
-		},
-		[autoOpen],
-	);
+	const selectTarget = useCallback((t: TagTarget) => {
+		setTagTarget(t);
+		// An open editor follows the selection; the Metadata button opens it.
+		const { view, open } = detailRef.current;
+		if (view?.kind === "edit") {
+			open({ kind: "edit", target: t });
+		}
+	}, []);
 	const editTags = useCallback((t: TagTarget) => {
 		setTagTarget(t);
 		detailRef.current.open({ kind: "edit", target: t });
@@ -260,17 +240,9 @@ export function FilesView({
 			split={split}
 			onToggleSplit={toggleSplit}
 			hasLocal={hasLocal}
-			canUndo={fsUndo.canUndo}
-			undoLabel={fsUndo.label}
-			onUndo={() => void fsUndo.undo()}
 			tagsOpen={tagsOpen}
 			canOpenTags={tagTarget !== null}
 			onToggleTags={() => (tagsOpen ? detail.close() : openTags())}
-			autoOpen={autoOpen}
-			onAutoOpen={(on) => {
-				setAutoOpen(on);
-				saveAutoOpen(on);
-			}}
 		/>
 	);
 

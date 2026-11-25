@@ -33,11 +33,7 @@ export function PlaceCrumb({ section, current }: { section: PlaceSection; curren
 					<span className="truncate">{title}</span>
 					<ChevronsUpDown className="size-3.5 shrink-0" />
 				</MenuTrigger>
-				<MenuPopup
-					sideOffset={4}
-					align="start"
-					className="min-w-48 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
-				>
+				<MenuPopup sideOffset={4} align="start" className="card-surface min-w-48 p-1 outline-none">
 					<MenuItem
 						className={item}
 						onSelect={() => void navigate({ to: section === "export" ? "/export" : "/import" })}

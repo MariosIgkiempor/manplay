@@ -664,7 +664,7 @@ function ReviewSplitButton({ x }: { x: ExportState }) {
 					side="top"
 					align="end"
 					sideOffset={6}
-					className="w-80 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg outline-none"
+					className="card-surface w-80 p-1.5 outline-none"
 				>
 					<MenuRadioGroup
 						value={x.selection.usbMode}

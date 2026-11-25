@@ -43,11 +43,7 @@ export function ReviewViewMenu({
 				{VIEWS[view].label}
 				<ChevronDown />
 			</MenuTrigger>
-			<MenuPopup
-				sideOffset={4}
-				align="end"
-				className="w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
-			>
+			<MenuPopup sideOffset={4} align="end" className="card-surface w-56 p-1 outline-none">
 				<MenuRadioGroup value={view} onValueChange={(v: ReviewView) => onView(v)}>
 					{(Object.keys(VIEWS) as ReviewView[]).map((v) => (
 						<MenuRadioItem key={v} value={v} className={item} closeOnSelect>

@@ -25,6 +25,7 @@ import {
 	type UsbMode,
 	type UsbOutputs,
 } from "#/lib/api.ts";
+import { compareText } from "#/lib/compare-text.ts";
 import { plural } from "#/lib/export-selection.ts";
 import { clock, formatBytes } from "#/lib/format.ts";
 import { WELL_ROWS } from "#/lib/page-layout.ts";
@@ -56,8 +57,7 @@ const SOURCE: Record<PlaylistSource, { icon: LucideIcon; hint: string }> = {
 };
 
 const byArtist = (a: SongRef, b: SongRef) =>
-	a.artist.localeCompare(b.artist, undefined, { sensitivity: "base" }) ||
-	a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+	compareText(a.artist, b.artist) || compareText(a.title, b.title);
 
 function SongArt({ song }: { song: SongRef }) {
 	const [failed, setFailed] = useState(false);

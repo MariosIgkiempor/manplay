@@ -5,7 +5,7 @@ import { LoadMore } from "#/components/load-more.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import type { Artist } from "#/lib/artists.ts";
-import { useProgressive } from "#/lib/use-progressive.ts";
+import { GRID_PAGE_SIZE, useProgressive } from "#/lib/use-progressive.ts";
 import { GRID_ITEM_ATTRIBUTE, useTileGridKeys } from "#/lib/use-tile-grid-keys.ts";
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -65,7 +65,7 @@ export function ArtistGrid({
 	artists: readonly Artist[];
 	onOpen: (artist: Artist) => void;
 }) {
-	const { shown, more, loadMore } = useProgressive(artists, (a) => a.name);
+	const { shown, more, loadMore } = useProgressive(artists, (a) => a.name, GRID_PAGE_SIZE);
 	const keys = useTileGridKeys({ more, loadMore });
 	if (artists.length === 0) {
 		return (

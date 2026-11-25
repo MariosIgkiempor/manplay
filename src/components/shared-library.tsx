@@ -563,7 +563,7 @@ function FoundDialog({
 
 function FloatingError({ error }: { error: unknown }): ReactNode {
 	return (
-		<div className="fixed inset-x-0 bottom-6 z-[60] mx-auto w-[28rem] max-w-[calc(100%-2rem)] rounded-lg border bg-background p-3 shadow-lg">
+		<div className="card-surface fixed inset-x-0 bottom-6 z-[60] mx-auto w-[28rem] max-w-[calc(100%-2rem)] p-3">
 			<ErrorLine>{String(error)}</ErrorLine>
 		</div>
 	);

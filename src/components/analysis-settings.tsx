@@ -407,7 +407,6 @@ function Failures({
 									variant="ghost"
 									size="icon-sm"
 									aria-label={`Retry ${relative(f.path, root)}`}
-									data-hint="Retry"
 									disabled={running || id === undefined}
 									onClick={() => id !== undefined && onRetry([id])}
 								>

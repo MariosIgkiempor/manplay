@@ -397,7 +397,7 @@ function RuleTags({
 				<div
 					id={listId}
 					role="listbox"
-					className="absolute inset-x-0 top-full z-20 mt-1 rounded-lg border bg-popover p-1 shadow-md"
+					className="card-surface absolute inset-x-0 top-full z-20 mt-1 p-1"
 				>
 					{matches.map((t, i) => {
 						const from = roleOf(rules, t.name);

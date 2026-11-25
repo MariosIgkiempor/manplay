@@ -32,7 +32,7 @@ function TempoKey({ track }: { track: Track }) {
 	return (
 		<div className="mr-3 flex items-baseline gap-3 text-xs tabular-nums">
 			{bpm !== "" && (
-				<span data-hint="Tempo">
+				<span>
 					<span className="font-semibold text-foreground text-sm">{bpm}</span>{" "}
 					<span className="text-muted-foreground">BPM</span>
 				</span>
@@ -169,41 +169,20 @@ function Transport({
 	const p = usePlayer();
 	const PlayIcon = p.playing ? Pause : Play;
 	const hasNext = p.index + 1 < p.queue.length;
-	const prevHint = useShortcutHint("playerPrev", "Previous");
-	const nextHint = useShortcutHint("playerNext", "Next");
-	const playHint = useShortcutHint("play", p.playing ? "Pause" : "Play");
 	const waveformHint = useShortcutHint(
 		"waveform",
 		waveform ? "Hide the grid editor" : "Show the grid editor",
 	);
 	return (
 		<div className="flex shrink-0 items-center gap-1">
-			<Button
-				variant="ghost"
-				size="icon"
-				aria-label="Previous"
-				data-hint={prevHint}
-				onClick={p.prev}
-			>
+			<Button variant="ghost" size="icon" aria-label="Previous" onClick={p.prev}>
 				<SkipBack />
 			</Button>
-			<Button
-				size="icon"
-				aria-label={p.playing ? "Pause" : "Play"}
-				data-hint={playHint}
-				onClick={p.toggle}
-			>
+			<Button size="icon" aria-label={p.playing ? "Pause" : "Play"} onClick={p.toggle}>
 				<PlayIcon />
 			</Button>
 			{mainCue && <CueButton cue={mainCue} />}
-			<Button
-				variant="ghost"
-				size="icon"
-				aria-label="Next"
-				data-hint={nextHint}
-				disabled={!hasNext}
-				onClick={p.next}
-			>
+			<Button variant="ghost" size="icon" aria-label="Next" disabled={!hasNext} onClick={p.next}>
 				<SkipForward />
 			</Button>
 			<Button

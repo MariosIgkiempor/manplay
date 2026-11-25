@@ -7,7 +7,7 @@ import { EmptyState } from "#/components/page.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import { type Album, syncState } from "#/lib/albums.ts";
-import { useProgressive } from "#/lib/use-progressive.ts";
+import { GRID_PAGE_SIZE, useProgressive } from "#/lib/use-progressive.ts";
 import { GRID_ITEM_ATTRIBUTE, useTileGridKeys } from "#/lib/use-tile-grid-keys.ts";
 
 interface Props {
@@ -41,7 +41,6 @@ function AlbumTile({
 						onDoubleClick={() => player.play(album.tracks, 0)}
 						aria-label={`Open ${album.album}`}
 						{...{ [GRID_ITEM_ATTRIBUTE]: "" }}
-						data-hint="Click to open, double-click to play"
 					>
 						<AlbumArt
 							trackId={album.coverTrackId}
@@ -79,7 +78,7 @@ function AlbumTile({
 }
 
 export function AlbumGrid({ albums, targetCount, onOpen }: Props) {
-	const { shown, more, loadMore } = useProgressive(albums, (a) => a.key);
+	const { shown, more, loadMore } = useProgressive(albums, (a) => a.key, GRID_PAGE_SIZE);
 	const keys = useTileGridKeys({ more, loadMore });
 	if (albums.length === 0) {
 		return (

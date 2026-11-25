@@ -65,7 +65,7 @@ export function DateField({
 				sideOffset={4}
 				align="start"
 				aria-label={label}
-				className="w-64 rounded-lg border bg-popover p-2 text-popover-foreground text-sm shadow-lg outline-none"
+				className="card-surface w-64 p-2 text-sm outline-none"
 			>
 				<MonthCalendar
 					chosen={chosen}

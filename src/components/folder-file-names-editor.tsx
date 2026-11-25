@@ -222,7 +222,7 @@ export function FolderFileNamesEditor({
 						<FloatingList
 							anchor={anchor}
 							id={listId}
-							className="grid min-w-72 grid-cols-3 gap-0.5 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg"
+							className="card-surface grid min-w-72 grid-cols-3 gap-0.5 p-1"
 						>
 							{options.map((tag, i) => (
 								<div
@@ -254,11 +254,7 @@ export function FolderFileNamesEditor({
 						Presets
 						<ChevronDown />
 					</MenuTrigger>
-					<MenuPopup
-						sideOffset={4}
-						align="end"
-						className="w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
-					>
+					<MenuPopup sideOffset={4} align="end" className="card-surface w-56 p-1 outline-none">
 						{FOLDER_NAME_PRESETS.map((preset) => (
 							<MenuItem
 								key={preset.label}

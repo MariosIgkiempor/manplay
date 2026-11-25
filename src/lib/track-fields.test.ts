@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Track } from "#/lib/api.ts";
-import { keyRank, nextSort, parseBpm, sortTracks, trackHasValue } from "#/lib/track-fields.ts";
+import {
+	keyRank,
+	nextSort,
+	parseBpm,
+	songsByValue,
+	songsWithValue,
+	sortTracks,
+	trackHasValue,
+} from "#/lib/track-fields.ts";
 
 const track = (id: number, fields: Record<string, string>, extra: Partial<Track> = {}): Track => ({
 	id,
@@ -72,5 +80,30 @@ describe("parseBpm", () => {
 		expect(parseBpm("")).toBe("");
 		expect(parseBpm("fast")).toBeNull();
 		expect(parseBpm("0")).toBeNull();
+	});
+});
+
+describe("songsByValue", () => {
+	const library = [
+		track(1, { genre: "House; Deep House", artist: "A; B" }, { tags: ["Mood/Dark/Heavy"] }),
+		track(2, { genre: "house" }, { artist: "C", tags: ["Mood"] }),
+		track(3, {}, { artist: "A; C", tags: ["Moodboard"] }),
+		track(4, { genre: "Deep House; deep house" }, { tags: [] }),
+	];
+	// The index must find exactly the songs `trackHasValue` matches, for every kind of field.
+	it.each([
+		{ field: "genre", value: "House" },
+		{ field: "genre", value: "deep house " },
+		{ field: "genre", value: "Techno" },
+		{ field: "artist", value: "a" },
+		{ field: "artist", value: "C" },
+		{ field: "library", value: "Mood" },
+		{ field: "library", value: "mood/dark" },
+		{ field: "library", value: "Mood/Dark/Heavy" },
+		{ field: "library", value: "Moodboard" },
+	])("$field “$value” finds what trackHasValue matches", ({ field, value }) => {
+		const expected = library.filter((t) => trackHasValue(t, field, value)).map((t) => t.id);
+		const found = songsWithValue(songsByValue(library, field), value).map((t) => t.id);
+		expect(found).toEqual(expected);
 	});
 });

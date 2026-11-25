@@ -59,3 +59,14 @@ export function parseHint(text: string): HintParts {
 	const { title, rest: after } = splitTitle(rest);
 	return { title, detail: [...(after ? [after] : []), ...more], keys };
 }
+
+const words = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * Whether a hint only repeats what its element already shows in full (a title, a button's own
+ * label). Such a hint says nothing new, so it is left out unless the text is cut off.
+ */
+export function repeatsVisibleText(hint: string, visible: string): boolean {
+	const said = words(hint);
+	return said !== "" && said === words(visible);
+}

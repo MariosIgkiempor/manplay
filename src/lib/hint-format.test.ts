@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseHint } from "#/lib/hint-format.ts";
+import { parseHint, repeatsVisibleText } from "#/lib/hint-format.ts";
 
 describe("parseHint", () => {
 	it.each([
@@ -82,5 +82,17 @@ describe("parseHint", () => {
 		},
 	])("splits $text into a title and its detail", ({ text, expected }) => {
 		expect(parseHint(text)).toEqual(expected);
+	});
+});
+
+describe("repeatsVisibleText", () => {
+	it.each([
+		{ hint: "Balearic Letters", visible: "Balearic Letters", expected: true },
+		{ hint: "Balearic  Letters", visible: " balearic letters\n", expected: true },
+		{ hint: "Open Balearic Letters", visible: "Balearic Letters", expected: false },
+		{ hint: "Metadata", visible: "", expected: false },
+		{ hint: "", visible: "", expected: false },
+	])("$hint over $visible: $expected", ({ hint, visible, expected }) => {
+		expect(repeatsVisibleText(hint, visible)).toBe(expected);
 	});
 });

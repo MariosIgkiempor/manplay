@@ -210,7 +210,7 @@ function Crumb({
 			<PopoverPopup
 				sideOffset={4}
 				align="start"
-				className="overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg outline-none"
+				className="card-surface overflow-hidden outline-none"
 			>
 				<FolderPicker
 					dir={dir}

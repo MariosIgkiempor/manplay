@@ -290,7 +290,7 @@ export function TagCombobox({
 				<div
 					id={listId}
 					role="listbox"
-					className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border bg-popover p-1 text-popover-foreground shadow-md"
+					className="card-surface absolute z-20 mt-1 max-h-56 w-full overflow-y-auto p-1"
 				>
 					{rows.map((o, i) => (
 						<div

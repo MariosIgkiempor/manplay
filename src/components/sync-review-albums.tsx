@@ -286,18 +286,18 @@ const FLEX: Record<FloatPlacement["side"], CSSProperties["flexDirection"]> = {
  * opens out from it, revealed from the card's edge.
  */
 function floatStyle(cell: Cell, revealed: boolean): CSSProperties {
-	const { side, panel } = cell.placement;
+	const { side, panel, offset } = cell.placement;
 	const rest = `calc(100% - ${cell.height}px)`;
 	const start = {
 		right: `inset(0 ${panel}px ${rest} 0 round 0.5rem)`,
 		left: `inset(0 0 ${rest} ${panel}px round 0.5rem)`,
-		below: `inset(0 0 ${rest} 0 round 0.5rem)`,
+		below: `inset(0 ${panel - offset - cell.width}px ${rest} ${offset}px round 0.5rem)`,
 	}[side];
 	return {
 		position: "absolute",
 		top: 0,
-		left: side === "left" ? -panel : 0,
-		width: side === "below" ? cell.width : cell.width + panel,
+		left: side === "left" ? -panel : -offset,
+		width: side === "below" ? panel : cell.width + panel,
 		minHeight: cell.height,
 		flexDirection: FLEX[side],
 		// The room around the card is for its shadow, which the clip would otherwise cut.
@@ -434,8 +434,15 @@ function AlbumCard({
 			>
 				<div
 					className="flex min-w-0 shrink-0 flex-col p-2.5"
+					// Under a list across the mosaic, the head stays over its own cell.
 					style={
-						floating ? { width: cell.width - 2, minHeight: cell.height - 2 } : { width: "100%" }
+						floating
+							? {
+									width: cell.width - 2,
+									minHeight: cell.height - 2,
+									marginLeft: cell.placement.offset,
+								}
+							: { width: "100%" }
 					}
 				>
 					<CardHead

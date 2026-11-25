@@ -16,6 +16,9 @@ import { CARD } from "#/lib/page-layout.ts";
  * snapshot. The page's card and the Files page's second pane move whole, one card after the other
  * with the canvas's gap between them, cut off at the canvas's edge; the sidebar and player keep
  * running.
+ *
+ * Everything moves by `transform` only, so the compositor runs it even while the new page is still
+ * busy drawing; the placeholders are plain boxes with nothing to lay out, and the trip is short.
  */
 export type PageDirection = "up" | "down";
 
@@ -44,11 +47,11 @@ export function directionBetween(
 /** Milliseconds a page change takes. */
 export type ScrollMs = number;
 
-const BASE_SCROLL_MS: ScrollMs = 420;
-const SCROLL_MS_PER_PASSED_PAGE: ScrollMs = 40;
-const LONGEST_SCROLL_MS: ScrollMs = 720;
-/** More pages than this between the two would only blur; every other one is left out instead. */
-export const MOST_PASSED_PAGES = 10;
+const BASE_SCROLL_MS: ScrollMs = 380;
+const SCROLL_MS_PER_PASSED_PAGE: ScrollMs = 30;
+const LONGEST_SCROLL_MS: ScrollMs = 560;
+/** More pages than this between the two would only blur; the rest are left out, spread evenly. */
+export const MOST_PASSED_PAGES = 6;
 
 /** A longer trip takes a little longer, but never so long that the app feels slow. */
 export function scrollMsFor(passedPages: number): ScrollMs {
@@ -69,8 +72,8 @@ export function passedPagesToShow(count: number, most: number = MOST_PASSED_PAGE
 	return Array.from({ length: most }, (_, i) => Math.round((i * (count - 1)) / (most - 1)));
 }
 
-/** A card's height and the canvas's gap, `n` times over, as a CSS length. */
-const cards = (n: number) => `calc(${n} * (100% + 0.5rem))`;
+/** A card's height and the canvas's gap, `n` times over, as a vertical move. */
+const cards = (n: number) => `translateY(calc(${n} * (100% + 0.5rem)))`;
 const SCROLL_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
 
 /** The sidebar rows that open a page, top to bottom; rows inside folded groups are not drawn. */
@@ -93,18 +96,25 @@ function rowsBetween(from: Element, to: Element): HTMLElement[] {
 	return start < end ? rows.slice(start + 1, end) : rows.slice(end + 1, start).reverse();
 }
 
-/** A placeholder for a page passed on the way: its card, with the sidebar row's icon and name. */
+/** How wide each faint line of a placeholder's body is, so it reads as a page of rows. */
+const PLACEHOLDER_LINES = ["38%", "72%", "64%", "80%", "56%", "70%", "48%", "76%"];
+
+/**
+ * A placeholder for a page passed on the way: its card, headed by the sidebar row's icon and name
+ * where the page's own title sits, over a few faint lines in place of its rows.
+ */
 function placeholderFor(row: HTMLElement, card: HTMLElement): HTMLElement {
 	const ghost = document.createElement("div");
 	ghost.setAttribute("aria-hidden", "true");
-	ghost.className = `${CARD} pointer-events-none absolute overflow-hidden`;
+	ghost.className = `${CARD} pointer-events-none absolute overflow-hidden [contain:strict]`;
 	ghost.style.left = `${card.offsetLeft}px`;
 	ghost.style.top = `${card.offsetTop}px`;
 	ghost.style.width = `${card.offsetWidth}px`;
 	ghost.style.height = `${card.offsetHeight}px`;
+	ghost.style.willChange = "transform";
 	const heading = document.createElement("div");
 	heading.className =
-		"flex items-center gap-2.5 px-6 pt-6 font-semibold text-muted-foreground text-xl tracking-tight [&_svg]:size-5";
+		"flex min-h-12 items-center gap-2.5 border-hairline border-b px-6 font-semibold text-lg text-muted-foreground tracking-tight [&_svg]:size-4";
 	const icon = row.querySelector("[role=img], svg");
 	if (icon) {
 		heading.append(icon.cloneNode(true));
@@ -113,7 +123,15 @@ function placeholderFor(row: HTMLElement, card: HTMLElement): HTMLElement {
 	name.className = "truncate";
 	name.textContent = row.getAttribute(PAGE_ROW_ATTRIBUTE);
 	heading.append(name);
-	ghost.append(heading);
+	const body = document.createElement("div");
+	body.className = "space-y-4 px-6 pt-6";
+	for (const width of PLACEHOLDER_LINES) {
+		const line = document.createElement("div");
+		line.className = "h-2.5 rounded-full bg-foreground/[0.05]";
+		line.style.width = width;
+		body.append(line);
+	}
+	ghost.append(heading, body);
 	return ghost;
 }
 
@@ -157,10 +175,7 @@ function sendPlaceholders(
 		const ghost = placeholderFor(passedRow, card);
 		canvas.append(ghost);
 		const place = sign * (i + 1);
-		const travel = [
-			{ translate: `0 ${cards(place)}` },
-			{ translate: `0 ${cards(place - sign * steps)}` },
-		];
+		const travel = [{ transform: cards(place) }, { transform: cards(place - sign * steps) }];
 		const remove = () => ghost.remove();
 		ghost.animate(travel, timing).finished.then(remove, remove);
 		return ghost;
@@ -201,7 +216,7 @@ export function usePageDirection() {
 			if (direction === null) {
 				return null;
 			}
-			return el.animate([{ translate: `0 ${cards(sign * steps)}` }, { translate: "0 0" }], timing);
+			return el.animate([{ transform: cards(sign * steps) }, { transform: "none" }], timing);
 		});
 		const card = moving.find((el) => el.getAttribute(PAGE_MOTION_ATTRIBUTE) === "page");
 		const ghosts = sendPlaceholders(passed, card, sign, timing);

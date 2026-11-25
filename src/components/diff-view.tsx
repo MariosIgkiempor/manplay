@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { compareText } from "#/lib/compare-text.ts";
 import { WELL } from "#/lib/page-layout.ts";
 
 /** The look of one kind of change in a diff: add, change, move or remove. */
@@ -157,7 +158,7 @@ export function ProgressBar({ done, total }: { done: number; total: number }) {
 			className="h-1 overflow-hidden rounded-full bg-muted"
 		>
 			<div
-				className="h-full bg-primary transition-all"
+				className="h-full bg-primary transition-[width] duration-300 ease-out motion-reduce:transition-none"
 				style={{ width: `${total === 0 ? 0 : (done / total) * 100}%` }}
 			/>
 		</div>
@@ -309,7 +310,7 @@ export function groupByDir<T>(
 		const dir = dirOf(item);
 		groups.set(dir, [...(groups.get(dir) ?? []), item]);
 	}
-	const cmp = (x: string, y: string) => x.localeCompare(y, undefined, { sensitivity: "base" });
+	const cmp = compareText;
 	return [...groups]
 		.sort(([x], [y]) => cmp(x, y))
 		.map(([dir, list]) => [dir, list.toSorted((x, y) => cmp(nameOf(x), nameOf(y)))]);

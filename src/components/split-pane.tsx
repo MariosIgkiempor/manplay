@@ -80,7 +80,7 @@ export function SplitPane(): ReactNode {
 	const [scroller, setScroller] = useState<HTMLElement | null>(null);
 	// Slides open and shut; while shutting it keeps showing the last view.
 	const paneRef = useRef<HTMLElement>(null);
-	const view = usePanePresence(detail.view, paneRef, width);
+	const view = usePanePresence(detail.view, paneRef);
 	const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
 	const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
 	const barSlots = useMemo(
@@ -136,8 +136,7 @@ export function SplitPane(): ReactNode {
 				label="Resize panel"
 				onWidth={setWidth}
 			/>
-			{/* No card of its own: it sits on the canvas as the sidebar does. The content keeps its
-			    width while the panel opens and shuts, held to the right as if sliding in. */}
+			{/* No card of its own: it sits on the canvas as the sidebar does. */}
 			<div className="flex min-h-0 flex-1 justify-end overflow-hidden">
 				<div style={{ width }} className="flex min-h-0 max-w-none shrink-0 flex-col">
 					<PanelBar

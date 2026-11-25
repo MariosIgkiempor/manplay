@@ -294,7 +294,6 @@ export function RemotePane({
 					variant="ghost"
 					size="icon-sm"
 					aria-label="Up one folder"
-					data-hint="Up one folder"
 					disabled={path === ROOT}
 					onClick={() => setPath(parentPath(path))}
 				>

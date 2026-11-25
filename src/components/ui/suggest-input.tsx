@@ -69,7 +69,7 @@ export function SuggestInput({
 				onClick={(e) => e.stopPropagation()}
 				onDoubleClick={(e) => e.stopPropagation()}
 				onContextMenu={(e) => e.stopPropagation()}
-				className="max-w-(--available-width) min-w-(--anchor-width) rounded-lg border bg-popover p-0 text-popover-foreground shadow-md has-[[data-empty]]:hidden"
+				className="card-surface max-w-(--available-width) min-w-(--anchor-width) p-0 has-[[data-empty]]:hidden"
 			>
 				<AutocompleteEmpty />
 				<AutocompleteList className="max-h-56 overflow-y-auto p-1 outline-none">

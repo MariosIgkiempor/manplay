@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 
-/** Items shown at first, and added each time the end of the list comes near. */
-export const PAGE_SIZE = 200;
+/**
+ * Items shown at first, and added each time the end of the list comes near: about five screens of
+ * song rows, so a list opens without drawing thousands of rows out of sight.
+ */
+export const PAGE_SIZE = 60;
+/**
+ * The same for a grid of covers: each tile costs far more to draw than a list row, so a page is
+ * about two screens of them, and the page opens without drawing hundreds out of sight.
+ */
+export const GRID_PAGE_SIZE = 48;
 
 /** The first `limit` items, and whether more are left: one page of a progressively shown list. */
 export function firstPage<T>(items: readonly T[], limit: number): { shown: T[]; more: boolean } {

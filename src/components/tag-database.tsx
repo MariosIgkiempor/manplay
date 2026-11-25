@@ -22,6 +22,7 @@ import {
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
+import { LoadMore } from "#/components/load-more.tsx";
 import { RowMenu } from "#/components/menu.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { Cover, PageHeader } from "#/components/page-header.tsx";
@@ -40,7 +41,8 @@ import { duration } from "#/lib/format.ts";
 import { FRAME, PAGE_BODY, WELL_ROWS } from "#/lib/page-layout.ts";
 import { useTagDatabaseOps, useTracks } from "#/lib/queries.ts";
 import { type ListSort, VALUE_SORTS, type ValueSort } from "#/lib/sorting.ts";
-import { trackHasValue, VALUE_FIELDS, type ValueField } from "#/lib/track-fields.ts";
+import { songsByValue, songsWithValue, VALUE_FIELDS, type ValueField } from "#/lib/track-fields.ts";
+import { useProgressive } from "#/lib/use-progressive.ts";
 import { cn } from "#/lib/utils.ts";
 
 interface Item {
@@ -143,13 +145,11 @@ export function TagDatabase() {
 	const unit = isLibrary ? "songs tagged" : "songs";
 	const label = VALUE_FIELDS.find((f) => f.id === source)?.label ?? "Values";
 	// Each value's songs, found once for the whole list: a row shows their covers and length.
-	const songsOf = useMemo(() => {
-		const library = tracks.data ?? [];
-		return new Map(
-			items.map((i) => [i.value, library.filter((t) => trackHasValue(t, source, i.value))]),
-		);
-	}, [tracks.data, items, source]);
-	const songsWith = (value: string) => songsOf.get(value) ?? NO_SONGS;
+	const songsOf = useMemo(() => songsByValue(tracks.data ?? [], source), [tracks.data, source]);
+	const songsWith = (value: string) => {
+		const songs = songsWithValue(songsOf, value);
+		return songs.length === 0 ? NO_SONGS : songs;
+	};
 
 	// A different list starts clean.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the source changes
@@ -168,6 +168,8 @@ export function TagDatabase() {
 	}, [all, query]);
 
 	const shown = useMemo(() => sorted(matching(items, query), sort), [items, query, sort]);
+	// Rows are drawn a page at a time as the list scrolls; counts and search use every value.
+	const page = useProgressive(shown, (i) => i.value);
 	const countOf = (names: string[]) =>
 		items.filter((i) => names.some((n) => same(n, i.value))).reduce((sum, i) => sum + i.count, 0);
 	const openValue = detail.view?.kind === "value" ? detail.view : null;
@@ -295,7 +297,7 @@ export function TagDatabase() {
 								onCancel={() => setCreating(false)}
 							/>
 						)}
-						{shown.map((item) => (
+						{page.shown.map((item) => (
 							<RowMenu
 								key={item.value}
 								label={item.value}
@@ -356,6 +358,7 @@ export function TagDatabase() {
 						))}
 					</div>
 				</div>
+				<LoadMore more={page.more} onMore={page.loadMore} />
 			</div>
 
 			{pending && (
@@ -578,13 +581,7 @@ function MigrateBar({
 	return (
 		<div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 p-1.5 pl-2">
 			<span className="font-medium text-sm tabular-nums">{selected.length} selected</span>
-			<Button
-				size="icon-xs"
-				variant="ghost"
-				aria-label="Clear selection"
-				data-hint="Clear selection"
-				onClick={onClear}
-			>
+			<Button size="icon-xs" variant="ghost" aria-label="Clear selection" onClick={onClear}>
 				<X />
 			</Button>
 			<div className="ml-auto flex flex-wrap items-center gap-2">
@@ -658,7 +655,6 @@ function ValueCover({
 			onClick={onPlay}
 			disabled={!playable}
 			aria-label={`Play ${name}`}
-			data-hint={playable ? "Play" : undefined}
 			className="group/cover relative size-10 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-50"
 		>
 			<Cover
@@ -784,7 +780,6 @@ function Row({
 					size="icon-xs"
 					variant="ghost"
 					aria-label={`Rename ${item.value}`}
-					data-hint="Rename"
 					onClick={onEdit}
 					disabled={busy || editing}
 				>
@@ -794,7 +789,6 @@ function Row({
 					size="icon-xs"
 					variant="ghost"
 					aria-label={`Delete ${item.value}`}
-					data-hint="Delete"
 					className="hover:text-destructive"
 					destructive
 					confirmLabel={deletion.action}

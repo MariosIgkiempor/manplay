@@ -1,6 +1,7 @@
 import type { Album } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import type { Artist } from "#/lib/artists.ts";
+import { compareText } from "#/lib/compare-text.ts";
 import { type SortKey, sortTracks } from "#/lib/track-fields.ts";
 
 /** One way a list can be ordered, with the direction it starts in and what each direction reads as. */
@@ -63,7 +64,7 @@ export const VALUE_SORTS: readonly SortOption<ValueSort>[] = [
 	{ key: "songs", label: "Number of songs", desc: true, directions: FEW },
 ];
 
-const text = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+const text = compareText;
 
 /** When the newest of these songs came in, as a number that orders like `addedOrder`. */
 function newest(tracks: readonly Track[]): number {

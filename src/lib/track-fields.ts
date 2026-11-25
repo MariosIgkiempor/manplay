@@ -1,7 +1,8 @@
 import type { Track } from "#/lib/api.ts";
+import { compareText } from "#/lib/compare-text.ts";
 import { camelot } from "#/lib/musical-key.ts";
 import { splitNames } from "#/lib/names.ts";
-import { trackHasTag } from "#/lib/tag-tree.ts";
+import { TAG_SEP, trackHasTag } from "#/lib/tag-tree.ts";
 
 /** Fields that hold several names (`A; B`). Matches `MULTI` in `src-tauri/src/tags.rs`. */
 const MULTI = new Set(["artist", "albumArtist", "genre", "composer", "remixer"]);
@@ -36,6 +37,49 @@ export function trackHasValue(track: Track, field: string, value: string): boole
 	return names.some((n) => n.toLowerCase() === want);
 }
 
+/** The keys a song is filed under in `songsByValue`: what `trackHasValue` would match, lowercased. */
+function valueKeys(track: Track, field: string): string[] {
+	if (field === "library") {
+		// A tag counts for itself and for every tag above it: `a/b/c` files under `a`, `a/b`, `a/b/c`.
+		return track.tags.flatMap((tag) => {
+			const parts = tag.toLowerCase().split(TAG_SEP);
+			return parts.map((_, i) => parts.slice(0, i + 1).join(TAG_SEP));
+		});
+	}
+	const names = fieldNames(track, field);
+	if (field === "artist" && names.length === 0) {
+		names.push(...splitNames(track.artist));
+	}
+	return names.map((n) => n.trim().toLowerCase());
+}
+
+/**
+ * Every value of `field` with the songs that hold it, in library order, keyed by the value in
+ * lowercase. One pass over the library, so a list of thousands of values does not search the
+ * whole library once per value; `songsWithValue` reads it the way `trackHasValue` matches.
+ */
+export type SongsByValue = ReadonlyMap<string, readonly Track[]>;
+
+export function songsByValue(tracks: readonly Track[], field: string): SongsByValue {
+	const index = new Map<string, Track[]>();
+	for (const track of tracks) {
+		for (const key of new Set(valueKeys(track, field))) {
+			const songs = index.get(key);
+			if (songs) {
+				songs.push(track);
+			} else {
+				index.set(key, [track]);
+			}
+		}
+	}
+	return index;
+}
+
+/** The songs holding `value`, from an index made by `songsByValue`. */
+export function songsWithValue(index: SongsByValue, value: string): readonly Track[] {
+	return index.get(value.trim().toLowerCase()) ?? [];
+}
+
 /** Position of a key on the Camelot wheel (1A, 1B, 2A, ...) for harmonic sorting. */
 export function keyRank(key: string | null): number | null {
 	const code = key === null ? null : /^(\d{1,2})([AB])$/.exec(camelot(key) ?? "");
@@ -51,7 +95,7 @@ export interface Sort {
 	desc: boolean;
 }
 
-const text = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" });
+const text = compareText;
 
 /** Compares two possibly-missing numbers; missing ones go last in either direction. */
 function numeric(a: number | null, b: number | null, desc: boolean): number {

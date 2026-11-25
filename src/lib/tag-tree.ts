@@ -1,4 +1,5 @@
 import type { Scope, Tag, Track } from "#/lib/api.ts";
+import { compareText } from "#/lib/compare-text.ts";
 
 /** Library tags are paths: `Genre/Electronic/House` sits under `Genre/Electronic` and `Genre`. */
 export const TAG_SEP = "/";
@@ -68,7 +69,7 @@ export function buildTagTree(tags: readonly Tag[]): TagNode[] {
 		node.held = t.held ?? false;
 	}
 	const sort = (nodes: TagNode[]) => {
-		nodes.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
+		nodes.sort((a, b) => compareText(a.label, b.label));
 		for (const n of nodes) {
 			sort(n.children);
 		}

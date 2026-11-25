@@ -568,7 +568,6 @@ function PlainControl({ id, field, shared, draft, onChange }: FieldProps & { id:
 				<button
 					type="button"
 					aria-label={`Clear ${field.label}`}
-					data-hint="Clear this field"
 					onClick={() => onChange("")}
 					className="absolute inset-y-0 right-1 my-auto flex size-5 items-center justify-center rounded-md text-muted-foreground/70 opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/field:opacity-100"
 				>

@@ -17,7 +17,7 @@ export function SearchGlyph({ active }: { active: boolean }) {
 /** A key written as a small cap, e.g. the shortcut that opens a search. */
 export function KeyCap({ children }: { children: ReactNode }) {
 	return (
-		<kbd className="shrink-0 rounded border px-1.5 font-sans text-[11px] text-muted-foreground/70">
+		<kbd className="flex h-4 shrink-0 items-center rounded border px-1.5 font-sans text-[11px] text-muted-foreground/70 leading-none">
 			{children}
 		</kbd>
 	);
@@ -92,7 +92,6 @@ export function SearchShell({
 						ref={foldButton}
 						type="button"
 						aria-label={shortcut ? `${label} (${shortcut})` : label}
-						data-hint={shortcut ? `${label} (${shortcut})` : label}
 						className="flex h-full items-center gap-1.5 rounded-md px-2 text-muted-foreground hover:bg-muted hover:text-foreground"
 						onClick={() => inputRef.current?.focus()}
 					>
@@ -169,7 +168,6 @@ export function SearchField({
 						<button
 							type="button"
 							aria-label="Clear search"
-							data-hint="Clear search"
 							className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
 							onClick={() => {
 								onChange("");

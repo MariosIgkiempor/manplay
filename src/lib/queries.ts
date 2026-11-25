@@ -97,8 +97,19 @@ import { bumpArt } from "#/lib/art-version.ts";
 import type { CoverWrite, LookupWrite } from "#/lib/tag-lookup.ts";
 import { undoCoverChange, undoTagWrite } from "#/lib/undo-entries.ts";
 
+/**
+ * Every song in the library. It is read once and kept: each change the app makes (an edit, a
+ * scan, a sync, an import) marks it stale, and only then is it read again. Reading it on every
+ * page that shows songs meant moving and checking the whole library again each time. It is still
+ * read again when the window comes back, for changes made to the files outside the app.
+ */
 export function useTracks() {
-	return useQuery({ queryKey: ["tracks"], queryFn: listTracks });
+	return useQuery({
+		queryKey: ["tracks"],
+		queryFn: listTracks,
+		staleTime: Number.POSITIVE_INFINITY,
+		refetchOnWindowFocus: "always",
+	});
 }
 
 export const cuesKey = (trackId: number) => ["track-cues", trackId] as const;

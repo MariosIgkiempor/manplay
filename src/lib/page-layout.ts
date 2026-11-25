@@ -4,7 +4,7 @@
  * the content below it.
  */
 export const PAGE_TOOLBAR =
-	"sticky top-0 z-10 space-y-2 border-hairline border-b bg-background px-6 py-2";
+	"sticky top-0 z-30 space-y-2 border-hairline border-b bg-background px-6 py-2";
 export const PAGE_BODY = "px-6 pt-6 pb-10";
 /**
  * The small square that starts a page header's line (a cover or a brand): one size and one
