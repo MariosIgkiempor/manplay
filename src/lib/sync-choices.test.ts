@@ -3,6 +3,7 @@ import type { RemoteFile, SyncAction } from "#/lib/api.ts";
 import {
 	chooseAll,
 	type IncomingAction,
+	ignoreAlbum,
 	isIncoming,
 	isPicked,
 	isPush,
@@ -259,5 +260,35 @@ describe("isPicked", () => {
 	])("$name", ({ a, direction, flipped, keep, expected }) => {
 		const choice = keep ? { keep, fields: {} } : undefined;
 		expect(isPicked(a, direction, flipped, choice)).toBe(expected);
+	});
+});
+
+describe("ignoreAlbum", () => {
+	const at = (path: string) => ({ rel: path.split("/") });
+	it.each([
+		{
+			name: "one folder for an album's files",
+			files: ["A/Live/01.flac", "A/Live/02.flac"],
+			rules: [{ rel: ["A", "Live"], scope: "folder" }],
+		},
+		{
+			name: "each disc folder of a multi-disc album",
+			files: ["A/Live/CD1/01.flac", "A/Live/CD2/01.flac"],
+			rules: [
+				{ rel: ["A", "Live", "CD1"], scope: "folder" },
+				{ rel: ["A", "Live", "CD2"], scope: "folder" },
+			],
+		},
+		{
+			name: "a file at the top on its own",
+			files: ["loose.mp3", "A/Live/01.flac"],
+			rules: [
+				{ rel: ["loose.mp3"], scope: "file" },
+				{ rel: ["A", "Live"], scope: "folder" },
+			],
+		},
+		{ name: "nothing for no files", files: [], rules: [] },
+	])("$name", ({ files, rules }) => {
+		expect(ignoreAlbum(files.map(at))).toEqual(rules);
 	});
 });

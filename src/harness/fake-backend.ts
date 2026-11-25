@@ -1,6 +1,7 @@
 import type {
 	ExportSelection,
 	FsEntry,
+	IgnoreRule,
 	Scope,
 	SmartPlaylist,
 	SmartRules,
@@ -78,6 +79,8 @@ interface State {
 	selections: Map<string, ExportSelection>;
 	deviceName: string;
 	defaultScope: Scope;
+	/** Destination-only files ignored, by destination. */
+	ignored: Map<number, IgnoreRule[]>;
 	analysis: { keyFormat: "musical" | "camelot"; replaceEdits: boolean };
 }
 
@@ -96,6 +99,7 @@ function createState(scenario: Scenario): State {
 		selections: new Map(),
 		deviceName: "booth-macbook",
 		defaultScope: "shared",
+		ignored: new Map(),
 		analysis: { keyFormat: "camelot", replaceEdits: false },
 	};
 }
@@ -661,8 +665,16 @@ function syncCommands(state: State): Record<string, Command> {
 			return null;
 		}
 		const busy = targetId === NAS_TARGET_ID;
-		const actions = busy ? buildNasActions(state.tracks) : [];
-		const missing = busy
+		const rules = state.ignored.get(target.id) ?? [];
+		const covers = (rule: IgnoreRule, rel: readonly string[]) => {
+			const own = rule.rel.join("/").toLowerCase();
+			const path = rel.join("/").toLowerCase();
+			return rule.scope === "file" ? path === own : path.startsWith(`${own}/`);
+		};
+		const hidden = (rel: readonly string[]) => rules.some((rule) => covers(rule, rel));
+		const allActions = busy ? buildNasActions(state.tracks) : [];
+		const actions = allActions.filter((a) => !(a.kind === "delete" && hidden(a.rel)));
+		const allMissing = busy
 			? [
 					{
 						rel: ["Odessa Vale", "Paper Lanterns", "08 Quiet Harbour (Live).mp3"],
@@ -676,6 +688,19 @@ function syncCommands(state: State): Record<string, Command> {
 					},
 				]
 			: [];
+		const missing = allMissing.filter((m) => !hidden(m.rel));
+		const hiddenPaths = new Set(
+			[
+				...allMissing.map((m) => m.rel),
+				...allActions.filter((a) => a.kind === "delete").map((a) => a.rel),
+			]
+				.filter(hidden)
+				.map((rel) => rel.join("/")),
+		);
+		const ignored = rules.map((rule) => ({
+			...rule,
+			files: [...hiddenPaths].filter((path) => covers(rule, path.split("/"))).length,
+		}));
 		return {
 			targetId,
 			planId: `plan-${String(targetId)}`,
@@ -694,8 +719,23 @@ function syncCommands(state: State): Record<string, Command> {
 				folders: listFolder(state.tracks, []).map((entry) => ({ rel: [entry.name], files: 0 })),
 			},
 			pull: { total: target.syncedTracks + missing.length, missing, error: null },
+			ignored,
 		};
 	};
+	const ruleKey = (rule: IgnoreRule) => `${rule.scope}:${rule.rel.join("/")}`;
+	const rulesOf = (value: unknown): IgnoreRule[] =>
+		Array.isArray(value)
+			? value.flatMap((item) =>
+					item && typeof item === "object" && "rel" in item && "scope" in item
+						? [
+								{
+									rel: strings(item.rel),
+									scope: item.scope === "folder" ? "folder" : "file",
+								} as const,
+							]
+						: [],
+				)
+			: [];
 	return {
 		list_sync_targets: targets,
 		add_sync_target: () => NAS_TARGET_ID,
@@ -719,6 +759,25 @@ function syncCommands(state: State): Record<string, Command> {
 			scanning: null,
 		}),
 		sync_scan: (args) => scanOf(args.get("targetId")),
+		sync_ignore: (args) => {
+			const id = count(args.get("targetId"));
+			const now = state.ignored.get(id) ?? [];
+			const known = new Set(now.map(ruleKey));
+			state.ignored.set(id, [
+				...now,
+				...rulesOf(args.get("rules")).filter((r) => !known.has(ruleKey(r))),
+			]);
+			return null;
+		},
+		sync_unignore: (args) => {
+			const id = count(args.get("targetId"));
+			const gone = new Set(rulesOf(args.get("rules")).map(ruleKey));
+			state.ignored.set(
+				id,
+				(state.ignored.get(id) ?? []).filter((r) => !gone.has(ruleKey(r))),
+			);
+			return null;
+		},
 		sync_apply: () => [],
 		remote_verify: () => [],
 		remote_pull: () => PULLED_NOTHING,

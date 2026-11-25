@@ -18,6 +18,7 @@ import {
 } from "react";
 import { ChangeBar, RunProgress, Tally } from "#/components/diff-view.tsx";
 import { EmptyState, ErrorLine, ErrorState } from "#/components/page.tsx";
+import { SyncIgnoredList } from "#/components/sync-ignored.tsx";
 import { SyncResult } from "#/components/sync-result.tsx";
 import { DeleteGuard, KINDS, LABEL } from "#/components/sync-review.tsx";
 import type { ReviewControls } from "#/components/sync-review-item.tsx";
@@ -30,6 +31,7 @@ import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import {
 	type ApplySummary,
+	type Ignored,
 	type LibraryOutcome,
 	libsyncRun,
 	onPullProgress,
@@ -48,6 +50,7 @@ import { formatBytes, timeAgo } from "#/lib/format.ts";
 import {
 	DELETED_KEY,
 	useSyncApply,
+	useSyncIgnore,
 	useSyncRescan,
 	useSyncScans,
 	useSyncTargets,
@@ -173,6 +176,8 @@ interface Row {
 	/** What the there-choices come to. */
 	pulls: RemoteFile[];
 	deletes: PushAction[];
+	/** What the user ignored on the destination: left out of `there`. */
+	ignored: Ignored[];
 }
 
 /** The state setters and lookups a destination's block works through. */
@@ -329,6 +334,7 @@ function TargetNotes({
 	const notes = [
 		...(t.plan.held.length > 0 ? [`${count(t.plan.held.length)} kept for 7 days`] : []),
 		...(t.plan.unchecked > 0 ? [`${count(t.plan.unchecked)} not compared`] : []),
+		...(t.ignored.length > 0 ? [`${count(t.ignored.length)} ignored`] : []),
 	];
 	if (needChoice === 0 && notes.length === 0) {
 		return null;
@@ -374,6 +380,7 @@ function TargetBlock({
 }) {
 	const { setFlips, setThere, setChoices, choices, picked, thereChoice } = ui;
 	const id = t.plan.targetId;
+	const ignore = useSyncIgnore();
 	const items = reviewItems(t.send, t.incoming, t.there);
 	const controls: ReviewControls = {
 		picked,
@@ -400,6 +407,7 @@ function TargetBlock({
 		resolve: (a, next) => setChoices((m) => new Map(m).set(a.id, next)),
 		there: (f) => thereChoice(id, f),
 		chooseThere: (files, c) => setThere((m) => chooseAll(m, id, files, c)),
+		ignore: (rules) => ignore.mutate({ targetId: id, rules, ignored: true }),
 	};
 	return (
 		<section>
@@ -454,6 +462,14 @@ function TargetBlock({
 					</ul>
 				</details>
 			)}
+			{ignore.isError && (
+				<ErrorLine className="px-[var(--diff-inset)] py-2">{String(ignore.error)}</ErrorLine>
+			)}
+			<SyncIgnoredList
+				ignored={t.ignored}
+				busy={ignore.isPending}
+				onUnignore={(rules) => ignore.mutate({ targetId: id, rules, ignored: false })}
+			/>
 		</section>
 	);
 }
@@ -655,7 +671,7 @@ function toRows(
 	picked: (a: SyncAction) => boolean,
 	thereChoice: (id: number, f: ThereFile) => ThereChoice,
 ): Row[] {
-	return reviewed.map(({ plan: t, pull }) => {
+	return reviewed.map(({ plan: t, pull, ignored }) => {
 		const pushes = t.actions.filter(isPush);
 		const send = pushes.filter(isSend);
 		const incoming = t.actions.filter(isIncoming);
@@ -671,6 +687,7 @@ function toRows(
 			there: thereFiles,
 			pulls: chosen("pull").flatMap((f) => (f.pull ? [f.pull] : [])),
 			deletes: chosen("delete").flatMap((f) => (f.remove ? [f.remove] : [])),
+			ignored,
 		};
 	});
 }

@@ -1,4 +1,4 @@
-import { ChevronDown, FileQuestion, Music } from "lucide-react";
+import { ChevronDown, EyeOff, FileQuestion, Music } from "lucide-react";
 import {
 	type CSSProperties,
 	type RefObject,
@@ -19,6 +19,7 @@ import {
 	TickAll,
 } from "#/components/sync-review-item.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ignoreAlbum } from "#/lib/sync-choices.ts";
 import {
 	type AlbumGroup,
 	type AlbumKey,
@@ -152,7 +153,18 @@ function AlbumControls({
 					<div className="text-muted-foreground">
 						All {shared.files.length.toLocaleString()} only on the destination
 					</div>
-					<AlbumChoice shared={shared} controls={controls} album={title} />
+					<div className="flex flex-wrap items-center gap-2">
+						<AlbumChoice shared={shared} controls={controls} album={title} />
+						<Button
+							variant="ghost"
+							size="xs"
+							data-hint="Stop offering this album, and songs added to it later. Undo under Ignored."
+							onClick={() => controls.ignore(ignoreAlbum(shared.files))}
+						>
+							<EyeOff />
+							Ignore album
+						</Button>
+					</div>
 				</div>
 			)}
 		</div>

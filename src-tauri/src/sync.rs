@@ -801,7 +801,7 @@ pub struct Action {
 }
 
 impl Action {
-    fn new(target_id: i64, kind: Kind, rel: &[String]) -> Self {
+    pub(crate) fn new(target_id: i64, kind: Kind, rel: &[String]) -> Self {
         Self {
             id: 0,
             target_id,
@@ -945,7 +945,7 @@ struct Diff<'a> {
 /// A path as a case-insensitive, normalisation-insensitive destination sees it: Taildrive on a
 /// Mac or Windows machine treats `Pão` typed composed and decomposed, or `Western` and
 /// `western`, as one folder.
-fn folded(rel: &[String]) -> Vec<String> {
+pub(crate) fn folded(rel: &[String]) -> Vec<String> {
     rel.iter()
         .map(|segment| segment.nfc().collect::<String>().to_lowercase())
         .collect()
@@ -2935,7 +2935,7 @@ struct PullProgress<'a> {
 }
 
 /// A remote path is only trusted if every segment is a plain file or folder name.
-fn safe_rel(rel: &[String]) -> bool {
+pub(crate) fn safe_rel(rel: &[String]) -> bool {
     !rel.is_empty()
         && rel
             .iter()

@@ -29,6 +29,7 @@ mod serato;
 mod smart;
 mod stream;
 mod sync;
+mod sync_ignore;
 mod sync_scans;
 mod tag_region;
 mod tags;
@@ -3232,21 +3233,60 @@ async fn remember_read(
 /// What the background reads found for each destination, and which are queued or being read.
 #[tauri::command]
 fn sync_scans(state: State<'_, AppState>) -> Result<sync_scans::ScanStatus, Error> {
-    Ok(state.scans.lock().map_err(|_| Error::Lock)?.status())
+    let ignores = with_db!(state, |c| db::sync_ignores(c))?;
+    Ok(state
+        .scans
+        .lock()
+        .map_err(|_| Error::Lock)?
+        .status(&ignores))
 }
 
-/// The latest read of one destination in full, if it has been read yet.
+/// The latest read of one destination in full, if it has been read yet, without the files the
+/// user ignored there.
 #[tauri::command]
 fn sync_scan(
     state: State<'_, AppState>,
     target_id: i64,
-) -> Result<Option<sync_scans::TargetScan>, Error> {
+) -> Result<Option<sync_ignore::ShownScan>, Error> {
+    let ignores = with_db!(state, |c| db::sync_ignores(c))?;
+    let list = ignores.get(&target_id).cloned().unwrap_or_default();
     Ok(state
         .scans
         .lock()
         .map_err(|_| Error::Lock)?
         .latest(target_id)
-        .cloned())
+        .map(|scan| sync_ignore::shown(scan, &list)))
+}
+
+/// Leaves destination-only files or folders out of a destination's review from now on.
+#[tauri::command]
+fn sync_ignore(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: i64,
+    rules: Vec<sync_ignore::IgnoreRule>,
+) -> Result<(), Error> {
+    with_db!(state, |c| db::add_sync_ignores(
+        c,
+        target_id,
+        &rules,
+        unix_now()
+    ))?;
+    let _ = app.emit("sync-scan", ());
+    Ok(())
+}
+
+/// Shows ignored files or folders in a destination's review again.
+#[tauri::command]
+fn sync_unignore(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target_id: i64,
+    rules: Vec<sync_ignore::IgnoreRule>,
+) -> Result<(), Error> {
+    with_db!(state, |c| db::remove_sync_ignores(c, target_id, &rules))?;
+    let _ = app.emit("sync-scan", ());
+    Ok(())
 }
 
 /// Reads the given destinations again, before any other waiting.
@@ -5429,6 +5469,8 @@ pub fn run() {
             dismiss_sync_runs,
             sync_scans,
             sync_scan,
+            sync_ignore,
+            sync_unignore,
             sync_rescan,
             sync_apply,
             remote_list,

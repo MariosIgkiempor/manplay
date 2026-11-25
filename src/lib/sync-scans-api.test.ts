@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { IgnoreRule } from "#/lib/api.ts";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke, convertFileSrc: (p: string) => p }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
-const { syncScan, syncScans } = await import("#/lib/api.ts");
+const { syncIgnore, syncScan, syncScans, syncUnignore } = await import("#/lib/api.ts");
 
 const upload = {
 	id: 1,
@@ -41,6 +42,7 @@ const scan = {
 	scannedAt: 1_700_000_000,
 	plan,
 	pull: { total: 5, missing: [{ rel: ["a", "b.mp3"], size: 10, otherFormat: null }], error: null },
+	ignored: [{ rel: ["Them", "Live"], scope: "folder", files: 3 }],
 };
 
 const status = {
@@ -58,6 +60,7 @@ describe("syncScan", () => {
 		expect(read?.pull.missing).toHaveLength(1);
 		expect(read?.plan.actions[0]?.trackId).toBe(7);
 		expect(read?.plan.folders).toEqual([{ rel: ["a"], files: 4 }]);
+		expect(read?.ignored).toEqual([{ rel: ["Them", "Live"], scope: "folder", files: 3 }]);
 		invoke.mockResolvedValueOnce(null);
 		expect(await syncScan(1)).toBeNull();
 	});
@@ -80,6 +83,19 @@ describe("syncScan", () => {
 			name: "a duplicate names its song as text",
 			value: { ...scan, plan: { ...plan, actions: [{ ...upload, duplicateOf: "7" }] } },
 		},
+		{ name: "the ignored list is absent", value: { ...scan, ignored: undefined } },
+		{
+			name: "an ignored rule has an unknown scope",
+			value: { ...scan, ignored: [{ rel: ["a"], scope: "everything", files: 1 }] },
+		},
+		{
+			name: "an ignored rule has an empty path",
+			value: { ...scan, ignored: [{ rel: [], scope: "folder", files: 1 }] },
+		},
+		{
+			name: "an ignored rule has no count",
+			value: { ...scan, ignored: [{ rel: ["a"], scope: "file" }] },
+		},
 	])("rejects a read when $name", async ({ value }) => {
 		invoke.mockResolvedValueOnce(value);
 		await expect(syncScan(1)).rejects.toThrow();
@@ -99,5 +115,27 @@ describe("syncScans", () => {
 	])("rejects the status when $name", async ({ value }) => {
 		invoke.mockResolvedValueOnce(value);
 		await expect(syncScans()).rejects.toThrow();
+	});
+});
+
+describe("syncIgnore and syncUnignore", () => {
+	const rule: IgnoreRule = { rel: ["Them", "Live"], scope: "folder" };
+
+	it.each([
+		{ name: "ignore", call: syncIgnore, command: "sync_ignore" },
+		{ name: "unignore", call: syncUnignore, command: "sync_unignore" },
+	])("$name sends the destination and its rules", async ({ call, command }) => {
+		invoke.mockResolvedValueOnce(null);
+		await call(1, [rule]);
+		expect(invoke).toHaveBeenCalledWith(command, { targetId: 1, rules: [rule] });
+	});
+
+	it.each([
+		{ name: "an empty path", rule: { rel: [], scope: "file" } },
+		{ name: "an empty name in the path", rule: { rel: ["Them", ""], scope: "file" } },
+		{ name: "an unknown scope", rule: { rel: ["Them"], scope: "everything" } },
+	])("refuses to send a rule with $name", async ({ rule: bad }) => {
+		await expect(syncIgnore(1, [bad as never])).rejects.toThrow();
+		expect(invoke).not.toHaveBeenCalled();
 	});
 });

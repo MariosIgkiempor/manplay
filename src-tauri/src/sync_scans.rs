@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Error;
 use crate::scan;
 use crate::sync::{Item, Kind, Known, Remote, TargetPlan};
+use crate::sync_ignore::{IgnoreList, Ignores};
 
 /// Database id of a sync destination.
 pub type TargetId = i64;
@@ -218,7 +219,9 @@ pub struct ScanSummary {
 }
 
 impl ScanSummary {
-    fn of(scan: &TargetScan) -> Self {
+    /// The counts of a read, without the destination-only files `ignored` hides.
+    fn of(scan: &TargetScan, ignored: &IgnoreList) -> Self {
+        let (missing, actions) = ignored.counts(scan);
         let incoming = scan
             .plan
             .actions
@@ -230,8 +233,8 @@ impl ScanSummary {
             plan_id: scan.plan_id.clone(),
             scanned_at: scan.scanned_at,
             error: scan.plan.error.clone().or_else(|| scan.pull.error.clone()),
-            to_pull: scan.pull.missing.len() + incoming,
-            to_push: scan.plan.actions.len() - incoming,
+            to_pull: missing + incoming,
+            to_push: actions - incoming,
         }
     }
 }
@@ -361,8 +364,14 @@ impl ScanStore {
         self.latest.get(&id)
     }
 
-    pub fn status(&self) -> ScanStatus {
-        let mut scans: Vec<ScanSummary> = self.latest.values().map(ScanSummary::of).collect();
+    /// What every latest read comes to, counted without the files `ignores` hides.
+    pub fn status(&self, ignores: &Ignores) -> ScanStatus {
+        let none = IgnoreList::default();
+        let mut scans: Vec<ScanSummary> = self
+            .latest
+            .values()
+            .map(|scan| ScanSummary::of(scan, ignores.get(&scan.target_id).unwrap_or(&none)))
+            .collect();
         scans.sort_by_key(|s| s.target_id);
         ScanStatus {
             scans,
@@ -716,7 +725,7 @@ mod tests {
         store.forget(1);
         assert!(store.latest(1).is_none());
         assert!(store.take(&[id], 100).is_err());
-        assert_eq!(store.status().scanning, None);
+        assert_eq!(store.status(&Ignores::default()).scanning, None);
     }
 
     #[test]
@@ -725,7 +734,7 @@ mod tests {
         store.enqueue(&[1, 2, 3], false, ReadDepth::Quick);
         store.enqueue(&[2], false, ReadDepth::Quick);
         store.enqueue(&[3], true, ReadDepth::Quick);
-        assert_eq!(store.status().queued, vec![3, 1, 2]);
+        assert_eq!(store.status(&Ignores::default()).queued, vec![3, 1, 2]);
     }
 
     #[test]
@@ -800,11 +809,21 @@ mod tests {
                     "{}",
                     case.name
                 );
-                assert_eq!(store.status().scanning, None, "{}", case.name);
+                assert_eq!(
+                    store.status(&Ignores::default()).scanning,
+                    None,
+                    "{}",
+                    case.name
+                );
                 // Still applicable after the original read would have expired.
                 assert!(store.take(&[id], now + 1).is_ok(), "{}", case.name);
             } else {
-                assert_eq!(store.status().scanning, Some(1), "{}", case.name);
+                assert_eq!(
+                    store.status(&Ignores::default()).scanning,
+                    Some(1),
+                    "{}",
+                    case.name
+                );
             }
         }
     }
@@ -909,7 +928,7 @@ mod tests {
     fn summary_splits_pull_and_push() {
         let mut store = ScanStore::default();
         stored(&mut store, 1, 100);
-        let summary = &store.status().scans[0];
+        let summary = &store.status(&Ignores::default()).scans[0];
         assert_eq!((summary.to_pull, summary.to_push), (0, 0));
     }
 }

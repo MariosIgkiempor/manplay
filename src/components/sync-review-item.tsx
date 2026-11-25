@@ -1,13 +1,15 @@
-import { ArrowRight, Check, Lock } from "lucide-react";
+import { ArrowRight, Check, EyeOff, Lock } from "lucide-react";
 import { type ReactNode, useId } from "react";
 import { TONE, type Tone } from "#/components/diff-view.tsx";
 import { ConflictChoice, MergeTable } from "#/components/sync-incoming.tsx";
 import { FieldDiffs, TagDiff } from "#/components/tag-diff.tsx";
-import type { Resolution, SyncAction } from "#/lib/api.ts";
+import { Button } from "#/components/ui/button.tsx";
+import type { IgnoreRule, Resolution, SyncAction } from "#/lib/api.ts";
 import { formatBytes } from "#/lib/format.ts";
 import { TRASH } from "#/lib/platform.ts";
 import {
 	type IncomingAction,
+	ignoreFile,
 	isSettled,
 	type ThereChoice,
 	type ThereFile,
@@ -35,6 +37,8 @@ export interface ReviewControls {
 	resolve: (a: IncomingAction, next: Resolution) => void;
 	there: ThereLookup;
 	chooseThere: (files: readonly ThereFile[], c: ThereChoice) => void;
+	/** Leaves destination-only files out of this destination's reviews until unignored. */
+	ignore: (rules: IgnoreRule[]) => void;
 }
 
 /**
@@ -306,6 +310,15 @@ function ThereRow({
 						onChange={(c) => controls.chooseThere([file], c)}
 					/>
 				)}
+				<Button
+					variant="ghost"
+					size="icon-xs"
+					aria-label={`Ignore ${file.key}`}
+					data-hint="Ignore: stop offering it. Undo under Ignored."
+					onClick={() => controls.ignore([ignoreFile(file)])}
+				>
+					<EyeOff />
+				</Button>
 			</div>
 			{file.note && (
 				<span className="block pl-[2.75rem] text-muted-foreground text-xs">{file.note}</span>

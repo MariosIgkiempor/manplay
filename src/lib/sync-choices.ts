@@ -1,4 +1,4 @@
-import type { RemoteFile, Resolution, SyncAction, TargetPlan } from "#/lib/api.ts";
+import type { IgnoreRule, RemoteFile, Resolution, SyncAction, TargetPlan } from "#/lib/api.ts";
 
 /** Actions that take the destination's version into the library; they live in the Pull list. */
 export type IncomingKind = "update" | "merge" | "conflict";
@@ -148,4 +148,25 @@ export function isPicked(
 		return isSettled(a, choice) && (a.kind === "conflict" || (direction !== "push") !== flipped);
 	}
 	return (!a.optional && direction !== "pull") !== flipped;
+}
+
+/** The rule that ignores one destination-only file. */
+export const ignoreFile = (f: Pick<ThereFile, "rel">): IgnoreRule => ({
+	rel: f.rel,
+	scope: "file",
+});
+
+/**
+ * The rules that ignore an album's destination-only files: each folder that holds them, so files
+ * added there later stay ignored too. A file at the top of the destination has no album folder
+ * and is ignored on its own.
+ */
+export function ignoreAlbum(files: readonly Pick<ThereFile, "rel">[]): IgnoreRule[] {
+	const rules = new Map<string, IgnoreRule>();
+	for (const f of files) {
+		const folder = f.rel.slice(0, -1);
+		const rule: IgnoreRule = folder.length > 0 ? { rel: folder, scope: "folder" } : ignoreFile(f);
+		rules.set(`${rule.scope}:${rule.rel.join("/")}`, rule);
+	}
+	return [...rules.values()];
 }

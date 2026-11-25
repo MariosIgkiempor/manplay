@@ -922,7 +922,97 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     crate::libsync::clashes::migrate(&conn)?;
     retry_unnamed_waveforms(&conn)?;
     create_jellyfin(&conn)?;
+    create_sync_ignored(&conn)?;
     Ok(conn)
+}
+
+// ---- Ignored destination files -----------------------------------------------------------------
+
+/// Destination files and folders the review leaves out (`sync_ignore`). `rel` is the path as a
+/// JSON array of names, relative to the destination folder; `added_at` is Unix seconds, UTC.
+fn create_sync_ignored(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS sync_ignored (
+             target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
+             rel       TEXT NOT NULL,
+             scope     TEXT NOT NULL CHECK (scope IN ('file', 'folder')),
+             added_at  INTEGER NOT NULL,
+             PRIMARY KEY (target_id, rel, scope)
+         );",
+    )?;
+    Ok(())
+}
+
+/// Every destination's ignore rules, oldest first. A row that no longer parses is skipped.
+pub fn sync_ignores(conn: &Connection) -> Result<crate::sync_ignore::Ignores, Error> {
+    use crate::sync_ignore::{IgnoreList, IgnoreRule, IgnoreScope, RemotePath};
+    let mut stmt = conn.prepare(
+        "SELECT target_id, rel, scope FROM sync_ignored ORDER BY target_id, added_at, rel",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut by_target: std::collections::HashMap<i64, Vec<IgnoreRule>> =
+        std::collections::HashMap::new();
+    for (target_id, rel, scope) in rows {
+        let rel = RemotePath::try_from(parse_path(&rel)).ok();
+        if let (Some(rel), Some(scope)) = (rel, IgnoreScope::parse(&scope)) {
+            by_target
+                .entry(target_id)
+                .or_default()
+                .push(IgnoreRule { rel, scope });
+        }
+    }
+    Ok(by_target
+        .into_iter()
+        .map(|(id, rules)| (id, IgnoreList::new(rules)))
+        .collect())
+}
+
+/// Ignores `rules` on a destination; one already there keeps when it was first ignored.
+pub fn add_sync_ignores(
+    conn: &mut Connection,
+    target_id: i64,
+    rules: &[crate::sync_ignore::IgnoreRule],
+    now: i64,
+) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    for rule in rules {
+        let rel =
+            serde_json::to_string(rule.rel.segments()).map_err(|e| Error::Msg(e.to_string()))?;
+        tx.execute(
+            "INSERT OR IGNORE INTO sync_ignored (target_id, rel, scope, added_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![target_id, rel, rule.scope.as_str(), now],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Stops ignoring `rules` on a destination.
+pub fn remove_sync_ignores(
+    conn: &mut Connection,
+    target_id: i64,
+    rules: &[crate::sync_ignore::IgnoreRule],
+) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    for rule in rules {
+        let rel =
+            serde_json::to_string(rule.rel.segments()).map_err(|e| Error::Msg(e.to_string()))?;
+        tx.execute(
+            "DELETE FROM sync_ignored WHERE target_id = ?1 AND rel = ?2 AND scope = ?3",
+            params![target_id, rel, rule.scope.as_str()],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 // ---- Jellyfin ----------------------------------------------------------------------------------
@@ -2731,6 +2821,8 @@ pub fn set_target_path(conn: &mut Connection, id: i64, path: &[String]) -> Resul
         crate::libsync::membership::detach_target(&tx, id)?;
         tx.execute("DELETE FROM synced_files WHERE target_id = ?1", params![id])?;
         tx.execute("DELETE FROM stale_remote WHERE target_id = ?1", params![id])?;
+        // Ignored paths were relative to the old folder.
+        tx.execute("DELETE FROM sync_ignored WHERE target_id = ?1", params![id])?;
     }
     tx.commit()?;
     Ok(())

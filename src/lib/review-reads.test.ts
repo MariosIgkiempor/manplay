@@ -41,6 +41,11 @@ describe("shownReads", () => {
 		expect(shownReads([1], [latest], pinned, frozen)[0]?.planId).toBe(shown);
 	});
 
+	it("frozen takes the same read shown again, e.g. with files ignored", () => {
+		const again = { ...read(1, "a"), ignored: 1 };
+		expect(shownReads([1], [again], pinned, true)).toEqual([again]);
+	});
+
 	it("frozen shows the latest where nothing is pinned yet", () => {
 		expect(shownReads([2], [read(2, "c")], pinned, true)).toEqual([read(2, "c")]);
 	});

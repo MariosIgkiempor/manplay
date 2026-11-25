@@ -16,7 +16,9 @@ export function latestReads<R extends ReadRef>(
 
 /**
  * The read shown for each destination: while `frozen` (the user ticked something, or a run is
- * going) the pinned one stays; otherwise the latest, falling back to the pinned one.
+ * going) the pinned one stays; otherwise the latest, falling back to the pinned one. The same read
+ * shown again (e.g. after ignoring some of its files) replaces the pinned copy even while frozen:
+ * its plan and choices stay valid.
  */
 export function shownReads<R extends ReadRef>(
 	ids: readonly number[],
@@ -24,7 +26,14 @@ export function shownReads<R extends ReadRef>(
 	pinned: ReadonlyMap<number, R>,
 	frozen: boolean,
 ): (R | null)[] {
-	return ids.map((id, i) => (frozen && pinned.get(id)) || latest[i] || pinned.get(id) || null);
+	return ids.map((id, i) => {
+		const pin = pinned.get(id);
+		const next = latest[i] ?? null;
+		if (frozen && pin) {
+			return next?.planId === pin.planId ? next : pin;
+		}
+		return next ?? pin ?? null;
+	});
 }
 
 /** Whether a destination has a read newer than the one pinned on screen. */

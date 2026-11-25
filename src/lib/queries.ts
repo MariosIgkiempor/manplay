@@ -31,6 +31,7 @@ import {
 	getPanelTabs,
 	getTagClipboard,
 	getUiSetting,
+	type IgnoreRule,
 	type ItemKind,
 	type JoinChoice,
 	jellyfinDestinations,
@@ -74,9 +75,11 @@ import {
 	setUiSetting,
 	syncApply,
 	syncHistory,
+	syncIgnore,
 	syncRescan,
 	syncScan,
 	syncScans,
+	syncUnignore,
 	type TagPaths,
 	type TrashGroup,
 	tagsLookup,
@@ -338,6 +341,23 @@ export function useTargetScan(targetId: number) {
 /** The latest reads of several destinations, in the order given. */
 export function useTargetScans(targetIds: readonly number[]) {
 	return useQueries({ queries: targetIds.map(targetScanQuery) });
+}
+
+/** Ignores or unignores destination-only files of one destination, then shows its read again. */
+export function useSyncIgnore() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			targetId,
+			rules,
+			ignored,
+		}: {
+			targetId: number;
+			rules: IgnoreRule[];
+			ignored: boolean;
+		}) => (ignored ? syncIgnore(targetId, rules) : syncUnignore(targetId, rules)),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: SYNC_SCANS_KEY }),
+	});
 }
 
 /** Reads destinations again ahead of anything else waiting, e.g. on Refresh. */

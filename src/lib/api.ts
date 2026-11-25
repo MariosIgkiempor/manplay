@@ -923,13 +923,33 @@ const pullScanSchema = z.object({
 	error: z.string().nullable(),
 });
 
-/** One background read of one destination: what a push would do and what a pull would bring. */
+/** A path on a destination, one name per segment, relative to the destination folder. */
+const remotePathSchema = z.array(z.string().min(1)).min(1);
+export type RemotePath = z.infer<typeof remotePathSchema>;
+
+/** What an ignore rule covers: one file, or everything under a folder (an album). */
+const ignoreScopeSchema = z.enum(["file", "folder"]);
+export type IgnoreScope = z.infer<typeof ignoreScopeSchema>;
+
+/** Destination-only files the review leaves out: never copied here, never deleted there. */
+export const ignoreRuleSchema = z.object({ rel: remotePathSchema, scope: ignoreScopeSchema });
+export type IgnoreRule = z.infer<typeof ignoreRuleSchema>;
+
+/** An ignore rule with how many files of the shown read it hides. */
+const ignoredSchema = ignoreRuleSchema.extend({ files: int });
+export type Ignored = z.infer<typeof ignoredSchema>;
+
+/**
+ * One background read of one destination: what a push would do and what a pull would bring,
+ * without the files the user ignored there, and the ignore rules themselves.
+ */
 const targetScanSchema = z.object({
 	targetId: int,
 	planId: planIdSchema,
 	scannedAt: int,
 	plan: targetPlanSchema,
 	pull: pullScanSchema,
+	ignored: z.array(ignoredSchema),
 });
 export type TargetScan = z.infer<typeof targetScanSchema>;
 
@@ -958,6 +978,16 @@ export async function syncScans(): Promise<ScanStatus> {
 /** The latest read of one destination, or null before its first read. */
 export async function syncScan(targetId: number): Promise<TargetScan | null> {
 	return targetScanSchema.nullable().parse(await invoke("sync_scan", { targetId }));
+}
+
+/** Leaves destination-only files or folders out of a destination's review from now on. */
+export async function syncIgnore(targetId: number, rules: IgnoreRule[]): Promise<void> {
+	await invoke("sync_ignore", { targetId, rules: z.array(ignoreRuleSchema).parse(rules) });
+}
+
+/** Shows ignored files or folders in a destination's review again. */
+export async function syncUnignore(targetId: number, rules: IgnoreRule[]): Promise<void> {
+	await invoke("sync_unignore", { targetId, rules: z.array(ignoreRuleSchema).parse(rules) });
 }
 
 /** Reads the given destinations again, ahead of anything else waiting. */
