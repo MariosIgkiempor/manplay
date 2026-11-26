@@ -178,7 +178,13 @@ async fn clean_up<S: ChunkStore>(
     if wrote {
         out.chunks_deleted += clean_abandoned(store, &me, &covers, listed, now_ms).await?;
         out.waveforms_deleted += clean_waveforms(db, store).await?;
-        out.covers_deleted += super::covers::clean(db, store, now_ms).await?;
+        let aging = {
+            let conn = lock(db)?;
+            super::skew::old_things_may_go(&conn, now_ms)?
+        };
+        if aging {
+            out.covers_deleted += super::covers::clean(db, store, now_ms).await?;
+        }
     }
     Ok(())
 }

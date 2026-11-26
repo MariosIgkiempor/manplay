@@ -7,9 +7,9 @@ use rusqlite::{Connection, params};
 
 use super::{Memory, open, replace_library_file, run_both, share};
 use crate::libsync::covers::{self, Transfer};
-use crate::libsync::{clock, journal};
 use crate::libsync::membership::{self, LIBRARY_FILE, LIBRARY_FORMAT, LibraryFile};
 use crate::libsync::song_tags::{self, COVER, TagWrite};
+use crate::libsync::{clock, journal};
 use crate::tags;
 use crate::tags::tests::{picture, silent_wav};
 
@@ -188,11 +188,7 @@ async fn a_cover_set_on_one_device_ends_up_in_the_other_devices_file() {
     assert_eq!(b.wanted().len(), 0, "B only followed");
     assert_eq!(b.transfer(&store).await, Transfer::default());
 
-    assert_eq!(
-        changes(&b),
-        [("covers".to_owned(), 1)],
-        "a line of its own"
-    );
+    assert_eq!(changes(&b), [("covers".to_owned(), 1)], "a line of its own");
     let batch = journal::list(&b.db.lock().expect("lock"), clock::now_ms()).expect("list")[0].id;
     journal::undo(&mut b.db.lock().expect("lock"), batch, clock::now_ms()).expect("undo");
     let back = b.wanted();
@@ -288,7 +284,12 @@ async fn a_picture_no_song_has_any_more_is_removed_after_thirty_days() {
         ("first seen unused", now, 0, 2),
         ("a day short", now + covers::UNUSED_KEPT_MS - 1, 0, 2),
         ("thirty days on", now + covers::UNUSED_KEPT_MS, 1, 1),
-        ("nothing left to remove", now + 2 * covers::UNUSED_KEPT_MS, 0, 1),
+        (
+            "nothing left to remove",
+            now + 2 * covers::UNUSED_KEPT_MS,
+            0,
+            1,
+        ),
     ];
     for (what, at, removed, left) in cases {
         let did = covers::clean(&a.db, &store, at).await.expect("clean");
@@ -393,4 +394,92 @@ async fn a_library_of_the_format_before_is_moved_to_this_one() {
             .error
             .is_some()
     );
+}
+
+#[tokio::test]
+async fn a_cover_change_taken_back_restores_the_picture_even_when_the_destination_lost_it() {
+    let store = Memory::default();
+    let (a, b) = two("lost", &store).await;
+    let (first, second) = (picture(60), picture(61));
+    let backups = b.dir.join("backups");
+    for art in [&first, &second] {
+        a.set_cover(Some(art));
+        a.look();
+        assert!(run_both(&a.db, &b.db, &store).await);
+        a.transfer(&store).await;
+        b.transfer(&store).await;
+        b.wanted()[0]
+            .carry_out(&backups, &b.cache())
+            .expect("write");
+        b.look();
+    }
+    assert_eq!(b.cover(), Some(second));
+    assert_eq!(
+        tags::front_cover(&backups.join("1.wav")),
+        None,
+        "the copy from before the first write is not replaced by a later one"
+    );
+    // The first picture is no longer on the destination, and no song file has it.
+    let (now_on_song, _) = tags::front_cover(&a.song()).expect("cover");
+    store
+        .meta
+        .lock()
+        .expect("lock")
+        .retain(|path, _| !path.starts_with("covers/") || path.ends_with(now_on_song.as_str()));
+
+    let newest = journal::list(&b.db.lock().expect("lock"), clock::now_ms()).expect("list")[0].id;
+    journal::undo(&mut b.db.lock().expect("lock"), newest, clock::now_ms()).expect("undo");
+    assert_eq!(
+        b.transfer(&store).await,
+        Transfer {
+            sent: 1,
+            ..Transfer::default()
+        },
+        "sent from the pictures B kept"
+    );
+    b.wanted()[0]
+        .carry_out(&backups, &b.cache())
+        .expect("write");
+    assert_eq!(b.cover(), Some(first.clone()));
+    assert!(run_both(&a.db, &b.db, &store).await);
+    a.transfer(&store).await;
+    a.wanted()[0]
+        .carry_out(&a.dir.join("backups"), &a.cache())
+        .expect("write");
+    assert_eq!(a.cover(), Some(first));
+}
+
+#[tokio::test]
+async fn a_picture_used_again_is_kept_thirty_days_from_when_it_is_next_unused() {
+    let store = Memory::default();
+    let (a, b) = two("again", &store).await;
+    let set = |seed: u8| {
+        a.set_cover(Some(&picture(seed)));
+        a.look();
+    };
+    let now = clock::now_ms();
+    let kept = covers::UNUSED_KEPT_MS;
+    for seed in [70, 71] {
+        set(seed);
+        assert!(run_both(&a.db, &b.db, &store).await);
+        a.transfer(&store).await;
+    }
+    assert_eq!(covers::clean(&a.db, &store, now).await.expect("clean"), 0);
+    // The first picture is a song's cover again for a while, then not.
+    for seed in [70, 71] {
+        set(seed);
+        assert!(run_both(&a.db, &b.db, &store).await);
+        a.transfer(&store).await;
+    }
+    let cases = [
+        ("thirty days from the first time", now + kept, 0),
+        ("thirty days from the second", now + 2 * kept, 1),
+    ];
+    for (what, at, removed) in cases {
+        assert_eq!(
+            covers::clean(&a.db, &store, at).await.expect("clean"),
+            removed,
+            "{what}"
+        );
+    }
 }

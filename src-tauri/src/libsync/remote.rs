@@ -405,7 +405,9 @@ async fn run_inner<S: ChunkStore>(
     {
         let conn = lock(db)?;
         brake::clear(&conn)?;
-        journal::prune(&conn, now_ms)?;
+        if skew::old_things_may_go(&conn, now_ms)? {
+            journal::prune(&conn, now_ms)?;
+        }
         if failure.is_none() {
             snapshot::set_last_sync(&conn, now_ms)?;
         }

@@ -711,10 +711,7 @@ pub struct CoverReport {
 }
 
 /// Saves the song's front cover into `backups`, unless that picture is there already.
-pub(crate) fn back_up_cover(
-    file: &Path,
-    backups: &Path,
-) -> Result<Option<CoverBackupName>, Error> {
+pub(crate) fn back_up_cover(file: &Path, backups: &Path) -> Result<Option<CoverBackupName>, Error> {
     let tagged = read_from_path(file).map_err(|e| err(format!("unreadable tags: {e}")))?;
     let Some(picture) = tagged
         .primary_tag()
@@ -724,9 +721,16 @@ pub(crate) fn back_up_cover(
     };
     let name = CoverBackupName::of(picture);
     let saved = backups.join(&name.0);
-    if !saved.exists() {
+    let whole = std::fs::read(&saved).is_ok_and(|bytes| bytes == picture.data());
+    if whole {
+        // Kept from now on, not from when the picture first got here.
+        let file = std::fs::File::options().write(true).open(&saved)?;
+        file.set_modified(std::time::SystemTime::now())?;
+    } else {
         std::fs::create_dir_all(backups)?;
-        std::fs::write(&saved, picture.data())?;
+        let part = backups.join(format!("{}.part", name.0));
+        std::fs::write(&part, picture.data())?;
+        std::fs::rename(&part, &saved)?;
     }
     Ok(Some(name))
 }

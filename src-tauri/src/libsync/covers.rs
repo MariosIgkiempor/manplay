@@ -16,7 +16,7 @@ use rusqlite::{Connection, params};
 use super::journal;
 use super::remote::ChunkStore;
 use super::song_tags::{self, COVER, E_SONG_TAGS};
-use super::write::{active, is_early};
+use super::write::{active, device_id, is_early};
 use crate::error::Error;
 use crate::tags::CoverBackupName;
 
@@ -64,14 +64,36 @@ fn lock(db: &Mutex<Connection>) -> Result<std::sync::MutexGuard<'_, Connection>,
     db.lock().map_err(|_| Error::Lock)
 }
 
-/// The pictures to send, each with a file of this library to take it from: covers someone set
-/// (not what a file simply had) that are not known to be on the destination, and the pictures
-/// in `asked` (another device waits for them).
+/// Where this device has a picture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Held {
+    /// As the cover of this song file.
+    InFile(PathBuf),
+    /// As a file of its own among the pictures kept on this device.
+    Kept(PathBuf),
+}
+
+impl Held {
+    /// The picture, when it is still the one called `name`.
+    fn read(&self, name: &CoverBackupName) -> Option<Vec<u8>> {
+        match self {
+            Self::InFile(file) => crate::tags::front_cover(file)
+                .filter(|(found, _)| found == name)
+                .map(|(_, bytes)| bytes),
+            Self::Kept(file) => std::fs::read(file).ok().filter(|bytes| name.names(bytes)),
+        }
+    }
+}
+
+/// The pictures to send, each with where this device has it: covers someone set (not what a
+/// file simply had) that are not known to be on the destination, and the pictures in `asked`
+/// (another device waits for them). A picture no file here has any more is taken from `cache`.
 pub fn to_send(
     conn: &Connection,
     root: &Path,
+    cache: &Path,
     asked: &BTreeSet<String>,
-) -> Result<Vec<(CoverBackupName, PathBuf)>, Error> {
+) -> Result<Vec<(CoverBackupName, Held)>, Error> {
     if !active(conn)? {
         return Ok(Vec::new());
     }
@@ -99,9 +121,15 @@ pub fn to_send(
     }
     Ok(names
         .iter()
-        .filter_map(|name| {
-            let file = holders.get(name.as_str())?;
-            Some((song_tags::cover_named(name)?, file.to_path_buf()))
+        .filter_map(|text| {
+            let name = song_tags::cover_named(text)?;
+            let held = match holders.get(text.as_str()) {
+                Some(file) => Held::InFile(file.to_path_buf()),
+                None => Some(cache.join(text))
+                    .filter(|kept| kept.is_file())
+                    .map(Held::Kept)?,
+            };
+            Some((name, held))
         })
         .collect())
 }
@@ -147,8 +175,9 @@ pub async fn transfer<S: ChunkStore>(
     let asked = listed(store, WANTED_DIR).await?;
     let (send, fetch) = {
         let conn = lock(db)?;
+        back_in_use(&conn)?;
         (
-            to_send(&conn, root, &asked)?,
+            to_send(&conn, root, cache, &asked)?,
             to_fetch(&conn, root, cache)?,
         )
     };
@@ -157,16 +186,17 @@ pub async fn transfer<S: ChunkStore>(
         return Ok(out);
     }
     let mut there = listed(store, DIR).await?;
-    for (name, file) in send.into_iter().take(limit) {
+    for (name, held) in send.into_iter().take(limit) {
         if there.contains(name.as_str()) {
             sent(db, &name)?;
             continue;
         }
-        let read = tokio::task::spawn_blocking(move || crate::tags::front_cover(&file))
+        let wanted = name.clone();
+        let read = tokio::task::spawn_blocking(move || held.read(&wanted))
             .await
             .map_err(|e| Error::Msg(e.to_string()))?;
         // The file changed since it was read: its new cover goes after the next look at it.
-        let Some((_, bytes)) = read.filter(|(found, _)| *found == name) else {
+        let Some(bytes) = read else {
             continue;
         };
         if bytes.len() <= MAX_BYTES && crate::tags::is_cover(&bytes) {
@@ -219,9 +249,21 @@ fn named(conn: &Connection) -> Result<BTreeSet<String>, Error> {
     Ok(out)
 }
 
+/// Forgets that a picture was seen unused once a song has it again, so the time it is kept
+/// starts over when it is next unused.
+fn back_in_use(conn: &Connection) -> Result<(), Error> {
+    conn.execute(
+        "DELETE FROM covers_unused WHERE name IN
+             (SELECT json_extract(val, '$') FROM op_state WHERE e = ?1 AND f = ?2)",
+        params![E_SONG_TAGS, COVER],
+    )?;
+    Ok(())
+}
+
 /// Removes from the destination the pictures no song has had for [`UNUSED_KEPT_MS`], counted
 /// from when this device first saw them unused, and the requests for pictures no song has.
-/// Returns how many pictures it removed.
+/// Returns how many pictures it removed. Nothing while this device has not read everything the
+/// others wrote.
 pub async fn clean<S: ChunkStore>(
     db: &Mutex<Connection>,
     store: &S,
@@ -229,6 +271,16 @@ pub async fn clean<S: ChunkStore>(
 ) -> Result<usize, Error> {
     let there = listed(store, DIR).await?;
     let asked = listed(store, WANTED_DIR).await?;
+    // Chunks of other devices not applied here yet may name a picture: this device cannot tell
+    // an unused picture from a new one, and leaves them all.
+    for c in store.list_chunks().await? {
+        let conn = lock(db)?;
+        if c.chunk.dev != device_id(&conn)?
+            && c.chunk.seq > super::state::cursor(&conn, &c.chunk.dev)?
+        {
+            return Ok(0);
+        }
+    }
     let (named, overdue) = {
         let conn = lock(db)?;
         let named = named(&conn)?;
@@ -237,7 +289,10 @@ pub async fn clean<S: ChunkStore>(
             .prepare("SELECT name FROM covers_unused")?
             .query_map([], |r| r.get(0))?
             .collect::<Result<_, _>>()?;
-        for name in seen.iter().filter(|n| named.contains(*n) || !there.contains(*n)) {
+        for name in seen
+            .iter()
+            .filter(|n| named.contains(*n) || !there.contains(*n))
+        {
             conn.execute("DELETE FROM covers_unused WHERE name = ?1", [name])?;
         }
         for name in there.difference(&named) {

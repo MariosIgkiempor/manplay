@@ -360,13 +360,18 @@ pub async fn write<S: ChunkStore>(store: &S, draft: &Draft) -> Result<(), Error>
 fn apply_loaded(conn: &Connection, loaded: &Loaded, stale: bool) -> Result<(), Error> {
     let horizon = clock::before_ms(loaded.header.horizon);
     if stale {
+        // What this device wrote about its files (where they are, their tags) is kept and sent:
+        // nothing there is a deletion that could come back, and dropping it would let the
+        // snapshot's older word be written over the files.
         conn.execute(
             "DELETE FROM op_state WHERE clock IN
-                 (SELECT clock FROM oplog WHERE uploaded = 0 AND clock < ?1)",
+                 (SELECT clock FROM oplog WHERE uploaded = 0 AND clock < ?1
+                    AND e NOT IN ('file', 'song_tags'))",
             params![horizon],
         )?;
         conn.execute(
-            "DELETE FROM oplog WHERE uploaded = 0 AND clock < ?1",
+            "DELETE FROM oplog WHERE uploaded = 0 AND clock < ?1
+               AND e NOT IN ('file', 'song_tags')",
             params![horizon],
         )?;
     }
@@ -404,7 +409,7 @@ fn forget_aged_out(conn: &Connection, loaded: &Loaded, horizon: &str) -> Result<
         }
     }
     conn.execute(
-        "DELETE FROM op_state WHERE clock < ?1 AND NOT EXISTS
+        "DELETE FROM op_state WHERE clock < ?1 AND e NOT IN ('file', 'song_tags') AND NOT EXISTS
              (SELECT 1 FROM snapshot_keys k
               WHERE k.e = op_state.e AND k.id = op_state.id AND k.f = op_state.f)",
         params![horizon],

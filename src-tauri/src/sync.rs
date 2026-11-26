@@ -3045,8 +3045,9 @@ async fn pull_file(
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
+    // A name no song has, so the download cannot land on a file of the user's.
     let mut tmp_name = dest.as_os_str().to_owned();
-    tmp_name.push(".part");
+    tmp_name.push(".manplay-part");
     let tmp = PathBuf::from(tmp_name);
     let src: Vec<String> = base.iter().chain(file.rel.iter()).cloned().collect();
     let result = async {
@@ -3058,14 +3059,26 @@ async fn pull_file(
                 file.size
             )));
         }
-        tokio::fs::rename(&tmp, dest).await?;
-        Ok(())
+        // A file that appeared at `dest` while this one came down stays.
+        let (from, to) = (tmp.clone(), dest.to_path_buf());
+        let placed =
+            tokio::task::spawn_blocking(move || crate::fsops::move_to_free_place(&from, &to))
+                .await
+                .map_err(|e| Error::Msg(e.to_string()))?;
+        match placed {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                tokio::fs::remove_file(&tmp).await?;
+                Ok(false)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
     .await;
     if result.is_err() {
         let _ = tokio::fs::remove_file(&tmp).await;
     }
-    result.map(|()| true)
+    result
 }
 
 /// What fetching songs from a destination did.

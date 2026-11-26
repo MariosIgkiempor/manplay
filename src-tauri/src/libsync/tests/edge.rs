@@ -657,3 +657,51 @@ async fn a_shared_tag_under_a_private_parent_stays_private() {
     assert_eq!(scope("Mood"), "shared");
     assert_eq!(scope("Mood/Calm"), "shared");
 }
+
+#[test]
+fn nothing_is_removed_for_being_old_while_the_clock_may_be_wrong() {
+    const HOUR: i64 = 60 * 60 * 1000;
+    const DAY: i64 = 24 * HOUR;
+    let start = 1_700_000_000_000_i64;
+    // (what happens, the device's time, whether others say its clock is wrong, may old things go)
+    let steps = [
+        ("the first look", start, false, true),
+        ("an hour on", start + HOUR, false, true),
+        ("time steps 40 days ahead", start + 40 * DAY, false, false),
+        (
+            "still within a day of the step",
+            start + 40 * DAY + 23 * HOUR,
+            false,
+            false,
+        ),
+        ("a day after the step", start + 41 * DAY + HOUR, false, true),
+        ("another step ahead", start + 90 * DAY, false, false),
+        (
+            "the clock is put back",
+            start + 41 * DAY + 2 * HOUR,
+            false,
+            true,
+        ),
+        (
+            "others say the clock is wrong",
+            start + 41 * DAY + 3 * HOUR,
+            true,
+            false,
+        ),
+        (
+            "and then that it is right",
+            start + 41 * DAY + 4 * HOUR,
+            false,
+            true,
+        ),
+    ];
+    let conn = super::open();
+    for (what, now_ms, said_wrong, may) in steps {
+        crate::libsync::skew::set_clock_wrong(&conn, said_wrong).expect("set");
+        assert_eq!(
+            crate::libsync::skew::old_things_may_go(&conn, now_ms).expect("ask"),
+            may,
+            "{what}"
+        );
+    }
+}

@@ -500,7 +500,17 @@ impl Move {
         if let Some(folder) = to.parent() {
             std::fs::create_dir_all(folder).map_err(|_| Stayed::Refused)?;
         }
-        std::fs::rename(&from, &to).map_err(|_| Stayed::Refused)
+        if respelled {
+            return std::fs::rename(&from, &to).map_err(|_| Stayed::Refused);
+        }
+        // Not a rename: that would replace a file that appeared since the look above.
+        crate::fsops::move_to_free_place(&from, &to).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Stayed::Taken
+            } else {
+                Stayed::Refused
+            }
+        })
     }
 }
 
@@ -514,10 +524,14 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Windows folders ignore case, so two spellings of one name are one file.
+/// Windows folders ignore case but not every way of writing an accented letter, so two
+/// spellings can be one file or two: they are one when both lead to the same real path.
 #[cfg(not(unix))]
-fn same_file(_a: &Path, _b: &Path) -> bool {
-    true
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// A song this library has that another device removed: it waits for the user to remove it here

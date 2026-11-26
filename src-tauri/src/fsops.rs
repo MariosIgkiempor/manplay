@@ -17,6 +17,30 @@ pub struct FsEntry {
     pub modified: Option<i64>,
 }
 
+/// Moves a file to `to` on the same drive, and fails with `AlreadyExists` when something is
+/// there: unlike a rename, it cannot replace a file that appeared since the caller looked.
+pub fn move_to_free_place(from: &Path, to: &Path) -> std::io::Result<()> {
+    match std::fs::hard_link(from, to) {
+        Ok(()) => std::fs::remove_file(from),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e),
+        // A drive without hard links (exFAT, some network shares): copy into a new file.
+        Err(_) => {
+            let mut source = std::fs::File::open(from)?;
+            let mut copy = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(to)?;
+            let copied = std::io::copy(&mut source, &mut copy).and_then(|_| copy.sync_all());
+            drop(copy);
+            if let Err(e) = copied {
+                let _ = std::fs::remove_file(to);
+                return Err(e);
+            }
+            std::fs::remove_file(from)
+        }
+    }
+}
+
 fn err(msg: impl Into<String>) -> Error {
     Error::Msg(msg.into())
 }
@@ -570,6 +594,22 @@ mod tests {
         let left = std::fs::read_dir(root.join("dest")).expect("read").count();
         assert_eq!(left, 0, "partial copies removed");
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+    }
+
+    #[test]
+    fn a_file_is_moved_to_a_free_place_and_never_over_another_file() {
+        let root = tmp("freeplace");
+        let (song, other) = (root.join("song.mp3"), root.join("other.mp3"));
+        std::fs::write(&song, b"song").expect("write");
+        std::fs::write(&other, b"other").expect("write");
+        let taken = move_to_free_place(&song, &other).expect_err("taken");
+        assert_eq!(taken.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&song).expect("read"), b"song");
+        assert_eq!(std::fs::read(&other).expect("read"), b"other");
+        let free = root.join("moved.mp3");
+        move_to_free_place(&song, &free).expect("move");
+        assert!(!song.exists());
+        assert_eq!(std::fs::read(&free).expect("read"), b"song");
     }
 
     #[test]

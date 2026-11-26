@@ -161,6 +161,36 @@ pub fn release(conn: &Connection, dev: &str, above_ms: i64) -> Result<(), Error>
     Ok(())
 }
 
+/// A step forward in this device's time, between two looks, that is treated as a clock that may
+/// have been set wrong rather than time that passed.
+const JUMP_MS: i64 = 24 * 60 * 60 * 1000;
+/// How long after such a step nothing is removed for being old: time for the clock to be put
+/// right, or for another device to say it is wrong.
+const HOLD_MS: i64 = 24 * 60 * 60 * 1000;
+const SETTING_TIME_SEEN: &str = "libsync_time_seen";
+const SETTING_AGING_HELD: &str = "libsync_aging_held_until";
+
+fn setting_ms(conn: &Connection, key: &str) -> Result<Option<i64>, Error> {
+    Ok(db::get_setting(conn, key)?.and_then(|text| text.parse().ok()))
+}
+
+/// Whether things may be removed for being old (backups, the list of changes, unused cover
+/// pictures) at `now_ms`. Not while other devices say this device's clock is wrong, and not in
+/// the day after its time stepped forward by more than a day since the last look: a clock set a
+/// month ahead would otherwise remove everything kept for a month.
+pub fn old_things_may_go(conn: &Connection, now_ms: i64) -> Result<bool, Error> {
+    let seen = setting_ms(conn, SETTING_TIME_SEEN)?;
+    let mut held_until = setting_ms(conn, SETTING_AGING_HELD)?.unwrap_or(0);
+    if seen.is_some_and(|seen| now_ms - seen > JUMP_MS) {
+        held_until = now_ms + HOLD_MS;
+        db::set_setting(conn, SETTING_AGING_HELD, Some(&held_until.to_string()))?;
+    }
+    db::set_setting(conn, SETTING_TIME_SEEN, Some(&now_ms.to_string()))?;
+    // A hold that ends further away than a hold lasts was set by a clock since put back.
+    let held = now_ms < held_until && held_until - now_ms <= HOLD_MS;
+    Ok(!held && !clock_wrong(conn)?)
+}
+
 /// Whether other devices have said this device's clock is wrong.
 pub fn clock_wrong(conn: &Connection) -> Result<bool, Error> {
     Ok(db::get_setting(conn, SETTING_CLOCK_WRONG)?.is_some())

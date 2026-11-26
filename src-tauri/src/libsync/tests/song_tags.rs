@@ -433,3 +433,47 @@ fn a_new_audio_fingerprint_keeps_what_was_written_about_the_tags() {
         Some(json!("One"))
     );
 }
+
+#[tokio::test]
+async fn taking_back_an_edit_that_came_before_this_file_was_read_puts_back_what_the_file_had() {
+    let store = Memory::default();
+    let (a, b) = (device(1), device(1));
+    retag(&a, 1, &[("title", "One")]);
+    record(&a);
+    retag(&a, 1, &[("title", "Uno")]);
+    record(&a);
+    assert!(run_both(&a, &b, &store).await);
+    // Only now is B's file read: it had a title of its own all along.
+    retag(&b, 1, &[("title", "Mine")]);
+    record(&b);
+    let batch = journal::list(&b.lock().expect("lock"), clock::now_ms()).expect("list")[0].id;
+    journal::undo(&mut b.lock().expect("lock"), batch, clock::now_ms()).expect("undo");
+    assert_eq!(
+        register(&b, 1, "title"),
+        Some(json!("Mine")),
+        "not cleared: the file's own title comes back"
+    );
+}
+
+#[tokio::test]
+async fn a_tag_edited_while_away_for_over_90_days_is_sent_not_written_over() {
+    let store = Memory::default();
+    let (a, b) = two(&store).await;
+    retag(&b, 1, &[("title", "Solo"), ("genre", "House")]);
+    record(&b);
+    super::tag(&a, "Filler", &[1]);
+    super::sync(&a, &store).await;
+    let later = clock::now_ms() + 100 * super::DAY_MS;
+    let snapshot = crate::libsync::compact::maybe(&a, &store, later, 1)
+        .await
+        .expect("compact");
+    assert!(snapshot.snapshot.is_some());
+
+    let back = super::run_at(&b, &store, later).await;
+    assert!(back.error.is_none(), "{:?}", back.error);
+    assert!(back.sent > 0, "the edit made while away goes out");
+    assert_eq!(register(&b, 1, "title"), Some(json!("Solo")));
+    assert_eq!(wanted(&b), [], "B's file keeps the title it was given");
+    assert!(super::run_at(&a, &store, later).await.error.is_none());
+    assert_eq!(register(&a, 1, "title"), Some(json!("Solo")));
+}

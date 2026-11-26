@@ -227,6 +227,24 @@ pub fn record(conn: &Connection, root: &Path) -> Result<usize, Error> {
             if changed || !value.is_empty() {
                 pending.field(&registers, fp, field, json!(value), changed);
             }
+            // Another device wrote this field before this file was first looked at: its edit
+            // was listed as filling an empty field. What the file has is what taking the edit
+            // back must restore.
+            let overruled = registers
+                .get(&(fp.clone(), field.to_owned()))
+                .is_some_and(|known| known.as_str() != Some(value));
+            if before.is_none() && !value.is_empty() && overruled {
+                tx.prepare_cached(
+                    "UPDATE op_journal SET prev = ?4
+                     WHERE e = ?1 AND id = ?2 AND f = ?3 AND prev IS NULL AND undone = 0",
+                )?
+                .execute(params![
+                    E_SONG_TAGS,
+                    fp,
+                    field,
+                    json!(value).to_string()
+                ])?;
+            }
         }
         if before != Some(&now.fields) {
             let fields =
@@ -283,10 +301,16 @@ impl TagWrite {
         if let Some(folder) = copy.parent() {
             std::fs::create_dir_all(folder)?;
         }
-        std::fs::copy(&self.path, &copy)?;
+        // A copy already there is the file from before an earlier write: it stays.
+        let copied = !copy.exists();
+        if copied {
+            std::fs::copy(&self.path, &copy)?;
+        }
         let written = crate::tags::write_file(&self.path, &text);
         if written.is_err() {
-            let _ = std::fs::remove_file(&copy);
+            if copied {
+                let _ = std::fs::remove_file(&copy);
+            }
             return written;
         }
         if cover.is_some() {

@@ -523,6 +523,29 @@ fn shared_covers(state: &AppState) -> PathBuf {
     state.data_dir.join("shared-covers")
 }
 
+/// Whether things kept for a while may be removed for being old at `now` (Unix seconds): not
+/// when this device's clock may be wrong (see [`libsync::skew::old_things_may_go`]), and not
+/// when that cannot be told.
+fn old_things_may_go(state: &AppState, now: i64) -> bool {
+    state
+        .db
+        .lock()
+        .ok()
+        .and_then(|conn| libsync::skew::old_things_may_go(&conn, now * 1000).ok())
+        .unwrap_or(false)
+}
+
+/// Removes the copies under `sync-backups` that are older than 30 days.
+fn prune_sync_backups(state: &AppState, now: i64) {
+    if old_things_may_go(state, now) {
+        sync::prune_backups(
+            &state.data_dir.join("sync-backups"),
+            now,
+            SYNC_BACKUP_KEEP_SECS,
+        );
+    }
+}
+
 /// Sends the cover pictures other devices need and fetches the ones this device waits for,
 /// after a sync, in the background. One run at a time; what is left goes after the next sync.
 async fn transfer_covers(app: AppHandle, place: SharedPlace) {
@@ -536,7 +559,9 @@ async fn transfer_covers(app: AppHandle, place: SharedPlace) {
         return;
     };
     let cache = shared_covers(&state);
-    tags::prune_cover_backups(&cache);
+    if old_things_may_go(&state, unix_now()) {
+        tags::prune_cover_backups(&cache);
+    }
     let moved = match &place {
         SharedPlace::Target(target) => {
             sync::transfer_covers(&state.http, target, &state.db, &root, &cache).await
@@ -646,7 +671,7 @@ async fn keep_song_tags(state: &AppState) -> Result<(), Error> {
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))?;
-    sync::prune_backups(&backups, batch, SYNC_BACKUP_KEEP_SECS);
+    prune_sync_backups(state, batch);
     if written > 0 {
         log::info!("tags from other devices: {written} files written");
         scan_and_store(state, root, ScanDepth::Changed).await?;
@@ -2452,7 +2477,9 @@ async fn jellyfin_send(
     with_db!(state, |c| db::record_jellyfin_push(
         c, target_id, now, &json
     ))?;
-    sync::prune_backups(&backups, now, SYNC_BACKUP_KEEP_SECS);
+    if old_things_may_go(state, now) {
+        sync::prune_backups(&backups, now, SYNC_BACKUP_KEEP_SECS);
+    }
     Ok(summary)
 }
 
@@ -3762,7 +3789,9 @@ async fn apply_plans(
     }
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     purge_expired(&conn, &state.data_dir.join("backups"), unix_now())?;
-    sync::prune_backups(&backups, unix_now(), SYNC_BACKUP_KEEP_SECS);
+    if libsync::skew::old_things_may_go(&conn, unix_now() * 1000)? {
+        sync::prune_backups(&backups, unix_now(), SYNC_BACKUP_KEEP_SECS);
+    }
     Ok(summaries)
 }
 
