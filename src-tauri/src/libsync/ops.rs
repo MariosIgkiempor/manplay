@@ -54,6 +54,8 @@ pub enum Entity {
     /// A song's file, by `audio_fp`: where it is (`path`) and whether the library still has it
     /// (`present`). See `files.rs`.
     File,
+    /// The tags written in a song's file, by `audio_fp`, one field each. See `song_tags.rs`.
+    SongTags,
     Other(String),
 }
 
@@ -68,6 +70,7 @@ impl Entity {
             "tag_custom" => Self::TagCustom,
             "analysis" => Self::Analysis,
             "file" => Self::File,
+            "song_tags" => Self::SongTags,
             other => Self::Other(other.to_owned()),
         }
     }

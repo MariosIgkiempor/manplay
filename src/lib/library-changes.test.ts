@@ -27,6 +27,7 @@ describe("changeFacts", () => {
 		["new rules", { kind: "smart_playlist", rulesChanged: true }, ["Rules changed"]],
 		["analysis", { kind: "analysis", name: "", count: 1200 }, ["1,200 songs"]],
 		["one value", { kind: "tag_custom", name: "", count: 1 }, ["1 value"]],
+		["retagged songs", { kind: "song_tags", name: "", count: 2 }, ["2 songs"]],
 		["nothing worth a fact", {}, []],
 	])("%s", (_name, change, facts) => {
 		expect(changeFacts({ ...PLAIN, ...change })).toEqual(facts);
@@ -39,6 +40,7 @@ describe("changeTitle", () => {
 		[{ name: "" }, "Unnamed"],
 		[{ kind: "analysis", name: "" }, "BPM, key and beat grids"],
 		[{ kind: "tag_custom", name: "" }, "Tag Database values"],
+		[{ kind: "song_tags", name: "" }, "Tags in the songs' files"],
 	])("%o", (change, title) => {
 		expect(changeTitle({ ...PLAIN, ...change })).toBe(title);
 	});

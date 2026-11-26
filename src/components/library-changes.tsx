@@ -1,4 +1,12 @@
-import { ArrowDownToLine, AudioWaveform, Database, ListMusic, Sparkles, Tag } from "lucide-react";
+import {
+	ArrowDownToLine,
+	AudioWaveform,
+	Database,
+	FileAudio,
+	ListMusic,
+	Sparkles,
+	Tag,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { WellCard } from "#/components/frame.tsx";
 import { EmptyState, ErrorLine, Page } from "#/components/page.tsx";
@@ -23,6 +31,7 @@ const ICON: Record<LibraryChange["kind"], ReactNode> = {
 	smart_playlist: <Sparkles />,
 	analysis: <AudioWaveform />,
 	tag_custom: <Database />,
+	song_tags: <FileAudio />,
 };
 
 /** How many changes of a sync are listed before the rest becomes a count. */

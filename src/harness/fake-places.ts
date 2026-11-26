@@ -632,6 +632,7 @@ export const LIBRARY_CHANGES: LibraryChangeBatch[] = [
 			{ ...NO_CHANGE, kind: "tag", name: "Genre/House", songsAdded: 6, songsRemoved: 1 },
 			{ ...NO_CHANGE, kind: "smart_playlist", name: "Peak 126+", rulesChanged: true },
 			{ ...NO_CHANGE, kind: "analysis", name: "", count: 31 },
+			{ ...NO_CHANGE, kind: "song_tags", name: "", count: 12 },
 		],
 	},
 	{

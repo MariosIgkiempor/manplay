@@ -11,6 +11,8 @@ export function changeTitle(change: LibraryChange): string {
 			return "BPM, key and beat grids";
 		case "tag_custom":
 			return "Tag Database values";
+		case "song_tags":
+			return "Tags in the songs' files";
 		default:
 			return change.name || "Unnamed";
 	}
@@ -18,7 +20,7 @@ export function changeTitle(change: LibraryChange): string {
 
 /** What a sync did to one item, as short facts in the order they matter. */
 export function changeFacts(change: LibraryChange): string[] {
-	if (change.kind === "analysis") {
+	if (change.kind === "analysis" || change.kind === "song_tags") {
 		return [songs(change.count)];
 	}
 	if (change.kind === "tag_custom") {

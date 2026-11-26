@@ -28,7 +28,7 @@ pub fn local_version(conn: &Connection) -> Result<i64, Error> {
 }
 
 /// Entities whose id is the `audio_fp` itself.
-const SONG_ENTITIES: &str = "('analysis', 'file')";
+const SONG_ENTITIES: &str = "('analysis', 'file', 'song_tags')";
 
 /// Memberships whose `ref` is `old`, with the parent they belong to.
 const MEMBER_ENTITIES: &str = "('track_tag', 'playlist_track')";
@@ -82,6 +82,10 @@ pub fn apply_pair(
     )?;
     conn.execute(
         "UPDATE OR REPLACE file_local SET audio_fp = ?2 WHERE audio_fp = ?1",
+        params![old, new],
+    )?;
+    conn.execute(
+        "UPDATE OR REPLACE song_tags_local SET audio_fp = ?2 WHERE audio_fp = ?1",
         params![old, new],
     )?;
     // What this device has not sent yet names the new audio too.

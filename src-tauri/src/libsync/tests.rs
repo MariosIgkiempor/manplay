@@ -3209,6 +3209,7 @@ mod changes;
 mod edge;
 mod files;
 mod folder;
+mod song_tags;
 
 #[test]
 fn real_audio_prints_name_waveform_files() {

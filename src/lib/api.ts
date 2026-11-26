@@ -705,7 +705,7 @@ export function onLibrarySynced(handler: (last: LastLibrarySync) => void) {
 }
 
 const libraryChangeSchema = z.object({
-	kind: z.enum(["tag", "playlist", "smart_playlist", "analysis", "tag_custom"]),
+	kind: z.enum(["tag", "playlist", "smart_playlist", "analysis", "tag_custom", "song_tags"]),
 	/** The item's name now; empty for `analysis` and `tag_custom`. */
 	name: z.string(),
 	/** Whether the sync made the item, removed it or brought it back. */

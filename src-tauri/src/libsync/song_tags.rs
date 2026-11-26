@@ -1,0 +1,280 @@
+//! The tags written in each song's file (title, artist, genre, ...), as ops, one field at a time.
+//!
+//! A `song_tags` entity is one audio (`audio_fp`); each of its fields is a tag field
+//! (`tags::is_field`) and holds the text the file has there, or `""` when it has none. This
+//! device writes an op when a file's tags changed here since it last looked (`song_tags_local`
+//! remembers what they were), and an early one (`write::stamp_early`) for what a file simply has
+//! and no device has written about. A field another device wrote, and that was not changed
+//! here, is to be written into the file ([`wanted`]).
+//!
+//! BPM and key are left out: the analysis is shared on its own, and each device writes it into
+//! its files the way it is set to.
+//!
+//! Reading a file's tags takes a while, so what was read is kept (`tags_read`) and a file is read
+//! again only when it changed ([`unread`], [`store`]). Only [`TagWrite::carry_out`] touches a
+//! file, and it saves a copy first. Of several copies of one audio only the one `files.rs`
+//! writes about is looked at.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+
+use rusqlite::{Connection, params};
+use serde_json::{Value, json};
+
+use super::files::{self, Pending, RelPath};
+use super::write::active;
+use crate::error::Error;
+
+pub const E_SONG_TAGS: &str = "song_tags";
+
+/// Tag fields the analysis decides, so they are not shared as tags.
+const LEFT_OUT: &[&str] = &["bpm", "key"];
+
+/// The longest text a field from another device may hold, in bytes.
+const LONGEST_VALUE: usize = 64 * 1024;
+
+/// A file's tag fields by their id (`tags::field_values`); a field it lacks is left out.
+pub type Fields = BTreeMap<String, String>;
+
+fn shared_field(field: &str) -> bool {
+    crate::tags::is_field(field) && !LEFT_OUT.contains(&field)
+}
+
+/// The text another device wrote for `field`, when it is one that can go into a file's tags.
+pub fn shared_value<'a>(field: &str, val: &'a Value) -> Option<&'a str> {
+    val.as_str()
+        .filter(|text| shared_field(field) && text.len() <= LONGEST_VALUE && !text.contains('\0'))
+}
+
+/// A song file whose tags have not been read since it last changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unread {
+    pub track_id: i64,
+    pub path: String,
+    /// The file's modification time and size when it was found unread, to tell later whether it
+    /// changed again.
+    pub mtime_ms: Option<i64>,
+    pub size: i64,
+}
+
+/// Up to `limit` song files to read the tags of; none while library data is not shared.
+pub fn unread(conn: &Connection, limit: usize) -> Result<Vec<Unread>, Error> {
+    if !active(conn)? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.path, t.mtime_ms, t.size FROM tracks t
+         LEFT JOIN tags_read r ON r.track_id = t.id
+         WHERE t.missing_since IS NULL AND t.audio_fp IS NOT NULL AND t.audio_fp <> ''
+           AND (r.track_id IS NULL OR r.size <> t.size OR r.mtime_ms IS NOT t.mtime_ms)
+         ORDER BY t.id LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![i64::try_from(limit).unwrap_or(i64::MAX)], |r| {
+        Ok(Unread {
+            track_id: r.get(0)?,
+            path: r.get(1)?,
+            mtime_ms: r.get(2)?,
+            size: r.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// Keeps what was read from each file (`None`: its tags cannot be read), and forgets files the
+/// library no longer has.
+pub fn store(conn: &Connection, read: &[(Unread, Option<Fields>)]) -> Result<(), Error> {
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut insert = tx.prepare_cached(
+            "INSERT INTO tags_read (track_id, mtime_ms, size, fields) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(track_id) DO UPDATE SET
+                 mtime_ms = excluded.mtime_ms, size = excluded.size, fields = excluded.fields",
+        )?;
+        for (file, fields) in read {
+            let fields = fields
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| Error::Msg(e.to_string()))?;
+            insert.execute(params![file.track_id, file.mtime_ms, file.size, fields])?;
+        }
+    }
+    tx.execute(
+        "DELETE FROM tags_read WHERE track_id NOT IN (SELECT id FROM tracks)",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// The copy of one audio whose tags are written about, with its tags as last read.
+struct Tracked {
+    path: PathBuf,
+    rel: RelPath,
+    fields: Fields,
+}
+
+/// For each audio, the copy `files.rs` writes about (or, when it has not written yet, the first
+/// one below the library folder), when its tags were read since the file last changed.
+fn tracked(conn: &Connection, root: &Path) -> Result<BTreeMap<String, Tracked>, Error> {
+    let written_about = files::tracked_paths(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT t.audio_fp, t.path, r.fields FROM tracks t
+         JOIN tags_read r ON r.track_id = t.id
+         WHERE t.missing_since IS NULL AND t.audio_fp IS NOT NULL AND t.audio_fp <> ''
+           AND r.fields IS NOT NULL AND r.size = t.size AND r.mtime_ms IS t.mtime_ms",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut out: BTreeMap<String, Tracked> = BTreeMap::new();
+    for row in rows {
+        let (fp, path, fields) = row?;
+        let path = PathBuf::from(path);
+        let Some(rel) = RelPath::below(root, &path) else {
+            continue;
+        };
+        let Ok(fields) = serde_json::from_str::<Fields>(&fields) else {
+            continue;
+        };
+        let is_the_one = match written_about.get(&fp) {
+            Some(the_one) => *the_one == rel,
+            None => out.get(&fp).is_none_or(|other| rel < other.rel),
+        };
+        if is_the_one {
+            out.insert(fp, Tracked { path, rel, fields });
+        }
+    }
+    Ok(out)
+}
+
+/// The tags each audio's file had when this device last wrote ops about them.
+fn had(conn: &Connection) -> Result<HashMap<String, Fields>, Error> {
+    let mut stmt = conn.prepare("SELECT audio_fp, fields FROM song_tags_local")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (fp, fields) = row?;
+        if let Ok(fields) = serde_json::from_str(&fields) {
+            out.insert(fp, fields);
+        }
+    }
+    Ok(out)
+}
+
+fn text<'a>(fields: &'a Fields, field: &str) -> &'a str {
+    fields.get(field).map_or("", String::as_str)
+}
+
+/// Looks at the tags read from the library's files and writes an op for every field that
+/// changed here since the last look, or that no device has written about. Returns how many ops
+/// it wrote. Does nothing while library data is not shared.
+pub fn record(conn: &Connection, root: &Path) -> Result<usize, Error> {
+    if !active(conn)? {
+        return Ok(0);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let tracked = tracked(&tx, root)?;
+    let had = had(&tx)?;
+    let registers = files::registers(&tx, E_SONG_TAGS)?;
+    let mut pending = Pending::of(E_SONG_TAGS);
+    for (fp, now) in &tracked {
+        let before = had.get(fp);
+        let names: BTreeSet<&str> = now
+            .fields
+            .keys()
+            .chain(before.into_iter().flat_map(Fields::keys))
+            .map(String::as_str)
+            .filter(|field| shared_field(field))
+            .collect();
+        for field in names {
+            let value = text(&now.fields, field);
+            let changed = before.is_some_and(|before| text(before, field) != value);
+            // A field the file never had says nothing.
+            if changed || !value.is_empty() {
+                pending.field(&registers, fp, field, json!(value), changed);
+            }
+        }
+        if before != Some(&now.fields) {
+            let fields =
+                serde_json::to_string(&now.fields).map_err(|e| Error::Msg(e.to_string()))?;
+            tx.prepare_cached(
+                "INSERT INTO song_tags_local (audio_fp, fields) VALUES (?1, ?2)
+                 ON CONFLICT(audio_fp) DO UPDATE SET fields = excluded.fields",
+            )?
+            .execute(params![fp, fields])?;
+        }
+    }
+    let written = pending.write(&tx)?;
+    tx.commit()?;
+    Ok(written)
+}
+
+/// Tags another device wrote that one of this library's files does not have yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagWrite {
+    pub audio_fp: String,
+    pub path: PathBuf,
+    /// The file's place below the library folder.
+    pub rel: RelPath,
+    /// The fields to write; an empty text clears the field.
+    pub edits: Fields,
+}
+
+impl TagWrite {
+    /// Writes the fields into the file, after saving the file as it was under `backups` at the
+    /// same place it has below the library folder. A file that cannot be written is left as it
+    /// was, and its copy is not kept.
+    pub fn carry_out(&self, backups: &Path) -> Result<(), Error> {
+        let copy = self.rel.under(backups);
+        if let Some(folder) = copy.parent() {
+            std::fs::create_dir_all(folder)?;
+        }
+        std::fs::copy(&self.path, &copy)?;
+        let written = crate::tags::write_file(&self.path, &self.edits);
+        if written.is_err() {
+            let _ = std::fs::remove_file(&copy);
+        }
+        written
+    }
+}
+
+/// What other devices wrote about the tags of songs this library has, where the file says
+/// something else and was not changed here since the last [`record`]. Call it after `record`,
+/// so what changed here went out first. Nothing while library data is not shared.
+pub fn wanted(conn: &Connection, root: &Path) -> Result<Vec<TagWrite>, Error> {
+    if !active(conn)? {
+        return Ok(Vec::new());
+    }
+    let tracked = tracked(conn, root)?;
+    let had = had(conn)?;
+    let mut edits: BTreeMap<String, Fields> = BTreeMap::new();
+    for ((fp, field), val) in files::registers(conn, E_SONG_TAGS)? {
+        let (Some(now), Some(before)) = (tracked.get(&fp), had.get(&fp)) else {
+            continue;
+        };
+        let Some(value) = shared_value(&field, &val) else {
+            continue;
+        };
+        let here = text(&now.fields, &field);
+        if here != value && text(before, &field) == here {
+            edits.entry(fp).or_default().insert(field, value.to_owned());
+        }
+    }
+    Ok(edits
+        .into_iter()
+        .filter_map(|(audio_fp, edits)| {
+            let file = tracked.get(&audio_fp)?;
+            Some(TagWrite {
+                path: file.path.clone(),
+                rel: file.rel.clone(),
+                audio_fp,
+                edits,
+            })
+        })
+        .collect())
+}

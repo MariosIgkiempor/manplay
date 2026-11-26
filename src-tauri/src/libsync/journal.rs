@@ -63,6 +63,11 @@ pub fn note(conn: &Connection, batch: BatchId, ops: &[Op]) -> Result<usize, Erro
         {
             continue;
         }
+        // The first word about a file's tag is what that device's file has, not a change;
+        // taking it back would clear the field for everyone.
+        if current.is_none() && op.entity() == Entity::SongTags {
+            continue;
+        }
         let prev = current
             .map(|(_, val)| serde_json::to_string(&val))
             .transpose()
@@ -114,7 +119,7 @@ pub enum Standing {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {
-    /// `tag`, `playlist`, `smart_playlist`, `analysis` or `tag_custom`.
+    /// `tag`, `playlist`, `smart_playlist`, `analysis`, `tag_custom` or `song_tags`.
     pub kind: String,
     /// The item's name now; empty for `analysis` and `tag_custom`.
     pub name: String,
@@ -127,6 +132,7 @@ pub struct Change {
     pub songs_removed: usize,
     pub songs_moved: usize,
     /// `analysis`: songs whose tempo, key or grid changed. `tag_custom`: values added or removed.
+    /// `song_tags`: songs whose file tags changed.
     pub count: usize,
 }
 
@@ -196,6 +202,7 @@ fn changes_of(conn: &Connection, batch: &[&Line]) -> Result<Vec<Change>, Error> 
     let mut items: BTreeMap<(&str, &str), Change> = BTreeMap::new();
     let mut analysed: BTreeSet<&str> = BTreeSet::new();
     let mut values: BTreeSet<&str> = BTreeSet::new();
+    let mut retagged: BTreeSet<&str> = BTreeSet::new();
     // A song added to or taken out of a list also gets a position: that is not a move.
     let came_or_went: BTreeSet<&str> = batch
         .iter()
@@ -209,6 +216,9 @@ fn changes_of(conn: &Connection, batch: &[&Line]) -> Result<Vec<Change>, Error> 
             }
             "tag_custom" => {
                 values.insert(&line.id);
+            }
+            "song_tags" => {
+                retagged.insert(&line.id);
             }
             "tag" | "playlist" | "smart_playlist" => {
                 let kind: &str = &line.e;
@@ -271,6 +281,13 @@ fn changes_of(conn: &Connection, batch: &[&Line]) -> Result<Vec<Change>, Error> 
         out.push(Change {
             kind: "tag_custom".to_owned(),
             count: values.len(),
+            ..Change::default()
+        });
+    }
+    if !retagged.is_empty() {
+        out.push(Change {
+            kind: "song_tags".to_owned(),
+            count: retagged.len(),
             ..Change::default()
         });
     }

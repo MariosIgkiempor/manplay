@@ -160,6 +160,16 @@ fn had(conn: &Connection) -> Result<HashMap<String, Had>, Error> {
     Ok(out)
 }
 
+/// Where the copy of each audio that is written about was when this device last looked, for
+/// the audio it had then.
+pub(super) fn tracked_paths(conn: &Connection) -> Result<HashMap<String, RelPath>, Error> {
+    Ok(had(conn)?
+        .into_iter()
+        .filter(|(_, had)| had.present)
+        .map(|(fp, had)| (fp, had.path))
+        .collect())
+}
+
 fn remember(conn: &Connection, fp: &str, had: &Had) -> Result<(), Error> {
     conn.prepare_cached(
         "INSERT INTO file_local (audio_fp, path, present) VALUES (?1, ?2, ?3)
@@ -169,10 +179,13 @@ fn remember(conn: &Connection, fp: &str, had: &Had) -> Result<(), Error> {
     Ok(())
 }
 
-/// The value every device agrees on for each field of each file: `(audio_fp, field)`.
-fn registers(conn: &Connection) -> Result<HashMap<(String, String), Value>, Error> {
+/// The value every device agrees on for each field of each `entity`: `(id, field)`.
+pub(super) fn registers(
+    conn: &Connection,
+    entity: &str,
+) -> Result<HashMap<(String, String), Value>, Error> {
     let mut stmt = conn.prepare("SELECT id, f, val FROM op_state WHERE e = ?1")?;
-    let rows = stmt.query_map(params![E_FILE], |r| {
+    let rows = stmt.query_map(params![entity], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
@@ -189,9 +202,9 @@ fn registers(conn: &Connection) -> Result<HashMap<(String, String), Value>, Erro
     Ok(out)
 }
 
-/// The ops one look at the library gives rise to.
-#[derive(Default)]
-struct Pending {
+/// The ops one look at the library gives rise to, about one kind of entity.
+pub(super) struct Pending {
+    entity: &'static str,
     /// What changed here since the last look.
     edits: Vec<Field>,
     /// What the library has that no device has written about.
@@ -199,14 +212,22 @@ struct Pending {
 }
 
 impl Pending {
+    pub(super) fn of(entity: &'static str) -> Self {
+        Self {
+            entity,
+            edits: Vec::new(),
+            early: Vec::new(),
+        }
+    }
+
     /// Decides about one field: nothing when everyone already has `val`, an edit when it
     /// `changed` here, an early op when nobody has written the field at all. A value another
     /// device wrote that differs from an unchanged library is left alone.
-    fn field(
+    pub(super) fn field(
         &mut self,
         registers: &HashMap<(String, String), Value>,
         fp: &str,
-        f: &'static str,
+        f: &str,
         val: Value,
         changed: bool,
     ) {
@@ -215,7 +236,7 @@ impl Pending {
             return;
         }
         let field = Field {
-            e: E_FILE.to_owned(),
+            e: self.entity.to_owned(),
             id: fp.to_owned(),
             f: f.to_owned(),
             val,
@@ -227,7 +248,7 @@ impl Pending {
         }
     }
 
-    fn write(self, conn: &Connection) -> Result<usize, Error> {
+    pub(super) fn write(self, conn: &Connection) -> Result<usize, Error> {
         let written = self.edits.len() + self.early.len();
         if !self.early.is_empty() {
             write::stamp_early(conn, &self.early)?;
@@ -249,8 +270,8 @@ pub fn record(conn: &Connection, root: &Path, expired_before: UnixSeconds) -> Re
     let tx = conn.unchecked_transaction()?;
     let copies = copies(&tx, root, expired_before)?;
     let had = had(&tx)?;
-    let registers = registers(&tx)?;
-    let mut pending = Pending::default();
+    let registers = registers(&tx, E_FILE)?;
+    let mut pending = Pending::of(E_FILE);
     for (fp, of) in &copies {
         let before = had.get(fp);
         // The copy written about stays the one, while it is there.
@@ -333,8 +354,8 @@ pub fn deleted_here(
         return Ok(0);
     }
     let had = had(&tx)?;
-    let registers = registers(&tx)?;
-    let mut pending = Pending::default();
+    let registers = registers(&tx, E_FILE)?;
+    let mut pending = Pending::of(E_FILE);
     for (fp, path) in gone {
         let copy_left: bool = tx.query_row(
             "SELECT EXISTS (SELECT 1 FROM tracks WHERE audio_fp = ?1 AND missing_since IS NULL)",
@@ -377,7 +398,7 @@ pub fn moves_wanted(conn: &Connection) -> Result<Vec<Move>, Error> {
     if !active(conn)? {
         return Ok(Vec::new());
     }
-    let registers = registers(conn)?;
+    let registers = registers(conn, E_FILE)?;
     let mut out = Vec::new();
     for (fp, had) in had(conn)? {
         let field = |f: &str| registers.get(&(fp.clone(), f.to_owned()));
@@ -421,7 +442,7 @@ pub fn arrivals_wanted(conn: &Connection) -> Result<Vec<Arrival>, Error> {
     if !active(conn)? {
         return Ok(Vec::new());
     }
-    let registers = registers(conn)?;
+    let registers = registers(conn, E_FILE)?;
     let had = had(conn)?;
     let mut known = conn.prepare_cached(
         "SELECT COUNT(*), COALESCE(SUM(missing_since IS NULL), 0) FROM tracks WHERE audio_fp = ?1",

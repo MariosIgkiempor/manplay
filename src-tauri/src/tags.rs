@@ -100,6 +100,11 @@ pub fn split_names(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether `field` is the id of a tag field the app reads and writes.
+pub fn is_field(field: &str) -> bool {
+    item_key(field).is_some()
+}
+
 fn item_key(field: &str) -> Option<ItemKey> {
     FIELDS.iter().find(|(id, _)| *id == field).map(|(_, k)| *k)
 }

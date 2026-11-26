@@ -91,14 +91,36 @@ pub fn create(conn: &Connection) -> Result<(), Error> {
              prev   TEXT,
              undone INTEGER NOT NULL DEFAULT 0
          );
-         CREATE INDEX IF NOT EXISTS op_journal_batch ON op_journal(batch);
-         -- What this device's library had for each audio when it last wrote `file` ops, so a
+         CREATE INDEX IF NOT EXISTS op_journal_batch ON op_journal(batch);",
+    )?;
+    create_for_files(conn)
+}
+
+/// The tables about the songs' files: where they are and what their tags say.
+fn create_for_files(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch(
+        "-- What this device's library had for each audio when it last wrote `file` ops, so a
          -- change made here can be told from one another device made (see `files.rs`). `path` is
          -- a JSON list of the names below the library folder.
          CREATE TABLE IF NOT EXISTS file_local (
              audio_fp TEXT PRIMARY KEY,
              path     TEXT NOT NULL,
              present  INTEGER NOT NULL
+         );
+         -- The tag fields read from each song file (a JSON object; NULL when they cannot be
+         -- read), with the file's modification time and size then, so a file is read again only
+         -- when it changed (see `song_tags.rs`).
+         CREATE TABLE IF NOT EXISTS tags_read (
+             track_id INTEGER PRIMARY KEY,
+             mtime_ms INTEGER,
+             size     INTEGER NOT NULL,
+             fields   TEXT
+         );
+         -- The tags each audio's file had when this device last wrote `song_tags` ops, so a
+         -- change made here can be told from one another device made.
+         CREATE TABLE IF NOT EXISTS song_tags_local (
+             audio_fp TEXT PRIMARY KEY,
+             fields   TEXT NOT NULL
          );",
     )?;
     Ok(())

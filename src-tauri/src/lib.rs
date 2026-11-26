@@ -518,6 +518,87 @@ async fn fetch_shared_songs(app: AppHandle, target: db::SyncTarget) {
     report(sync::FetchProgress::default());
 }
 
+/// How many song files have their tags read in one go for the shared library.
+const TAGS_READ_AT_ONCE: usize = 2000;
+
+/// Raised when the shared library may say something new about the files' tags (a sync, an
+/// Undo), so [`keep_song_tags`] compares the two again. Up at launch.
+static SONG_TAGS_TO_COMPARE: AtomicBool = AtomicBool::new(true);
+
+/// Keeps the tags in the library's files and the shared library's word about them the same:
+/// reads the tags of files that changed, writes what changed here to the shared library, and
+/// writes what other devices changed into the files, after saving each file as it was under
+/// `sync-backups`. A file that could not be written is not tried again until the app restarts.
+async fn keep_song_tags(state: &AppState) -> Result<(), Error> {
+    static REFUSED: Mutex<Vec<libsync::song_tags::TagWrite>> = Mutex::new(Vec::new());
+    let Ok(root) = library_root(state) else {
+        return Ok(());
+    };
+    let unread = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        libsync::song_tags::unread(&conn, TAGS_READ_AT_ONCE)?
+    };
+    if !unread.is_empty() {
+        let read = tauri::async_runtime::spawn_blocking(move || {
+            unread
+                .into_iter()
+                .map(|file| {
+                    let fields = tags::file_fields(Path::new(&file.path));
+                    (file, fields)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?;
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        libsync::song_tags::store(&conn, &read)?;
+    } else if !SONG_TAGS_TO_COMPARE.swap(false, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let wanted = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        libsync::song_tags::record(&conn, &root)?;
+        let refused = REFUSED.lock().map_err(|_| Error::Lock)?;
+        let mut wanted = libsync::song_tags::wanted(&conn, &root)?;
+        wanted.retain(|write| !refused.contains(write));
+        wanted
+    };
+    // Not beside a tag edit of the user's: both write the same files.
+    if wanted.is_empty() || state.fixing.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let _guard = SyncGuard(&state.fixing);
+    let backups = state.data_dir.join("sync-backups");
+    let batch = unix_now();
+    let folder = backups.join(format!("{batch:012}")).join("shared-tags");
+    let written = tauri::async_runtime::spawn_blocking(move || {
+        let mut written = 0_usize;
+        for write in wanted {
+            match write.carry_out(&folder) {
+                Ok(()) => written += 1,
+                Err(e) => {
+                    log::warn!(
+                        "could not write another device's tags to {}: {e}",
+                        write.path.display()
+                    );
+                    if let Ok(mut refused) = REFUSED.lock() {
+                        refused.push(write);
+                    }
+                }
+            }
+        }
+        written
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?;
+    sync::prune_backups(&backups, batch, SYNC_BACKUP_KEEP_SECS);
+    if written > 0 {
+        log::info!("tags from other devices: {written} files written");
+        scan_and_store(state, root, ScanDepth::Changed).await?;
+    }
+    Ok(())
+}
+
 /// [`follow_file_moves`] after a sync of the shared library; a problem is only logged, the sync
 /// itself went through.
 async fn follow_shared_files(state: &AppState) {
@@ -4058,6 +4139,7 @@ impl LastLibrarySync {
 /// Keeps how a sync of the shared library went and tells the window (`libsync-synced`), which
 /// shows what arrived.
 fn remember_library_sync(app: &AppHandle, state: &AppState, last: LastLibrarySync) {
+    SONG_TAGS_TO_COMPARE.store(true, Ordering::SeqCst);
     let _ = app.emit("libsync-synced", &last);
     if let Ok(mut slot) = state.libsync_last.lock() {
         *slot = Some(last);
@@ -4138,6 +4220,7 @@ fn undo_library_changes(
         batch,
         libsync::clock::now_ms()
     ))?;
+    SONG_TAGS_TO_COMPARE.store(true, Ordering::SeqCst);
     ask_library_sync(&state);
     Ok(undone)
 }
@@ -4149,6 +4232,10 @@ async fn libsync_worker(app: AppHandle) {
     let mut pace = libsync::auto::Pace::default();
     let mut last_try: Option<std::time::Instant> = None;
     loop {
+        // Before the look at what is unsent, so a tag edited in a file goes out with this sync.
+        if let Err(e) = keep_song_tags(&state).await {
+            log::warn!("could not keep the files' tags and the shared library the same: {e}");
+        }
         let asked = state.libsync_asked.swap(false, Ordering::SeqCst);
         let focused = state.libsync_focused.swap(false, Ordering::SeqCst);
         match due_library_sync(&state, pace, last_try, asked, focused) {
