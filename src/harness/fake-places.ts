@@ -644,6 +644,8 @@ export const LIBRARY_CHANGES: LibraryChangeBatch[] = [
 			{ ...NO_CHANGE, kind: "playlist", name: "Closing", renamedFrom: "Last hour", songsMoved: 3 },
 			{ ...NO_CHANGE, kind: "tag", name: "Energy/Low", standing: "deleted" },
 			{ ...NO_CHANGE, kind: "covers", name: "", count: 3 },
+			{ ...NO_CHANGE, kind: "songs_moved", name: "", count: 4 },
+			{ ...NO_CHANGE, kind: "songs_added", name: "", count: 2 },
 		],
 	},
 	{

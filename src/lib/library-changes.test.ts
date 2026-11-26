@@ -29,6 +29,8 @@ describe("changeFacts", () => {
 		["one value", { kind: "tag_custom", name: "", count: 1 }, ["1 value"]],
 		["retagged songs", { kind: "song_tags", name: "", count: 2 }, ["2 songs"]],
 		["songs with another cover", { kind: "covers", name: "", count: 1 }, ["1 song"]],
+		["songs moved", { kind: "songs_moved", name: "", count: 4 }, ["4 songs"]],
+		["songs added", { kind: "songs_added", name: "", count: 1 }, ["1 song"]],
 		["nothing worth a fact", {}, []],
 	])("%s", (_name, change, facts) => {
 		expect(changeFacts({ ...PLAIN, ...change })).toEqual(facts);
@@ -43,6 +45,8 @@ describe("changeTitle", () => {
 		[{ kind: "tag_custom", name: "" }, "Tag Database values"],
 		[{ kind: "song_tags", name: "" }, "Tags in the songs' files"],
 		[{ kind: "covers", name: "" }, "Covers"],
+		[{ kind: "songs_moved", name: "" }, "Songs moved or renamed"],
+		[{ kind: "songs_added", name: "" }, "Songs added"],
 	])("%o", (change, title) => {
 		expect(changeTitle({ ...PLAIN, ...change })).toBe(title);
 	});

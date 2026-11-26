@@ -713,6 +713,8 @@ const libraryChangeSchema = z.object({
 		"tag_custom",
 		"song_tags",
 		"covers",
+		"songs_moved",
+		"songs_added",
 	]),
 	/** The item's name now; empty for `analysis` and `tag_custom`. */
 	name: z.string(),

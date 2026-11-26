@@ -13,7 +13,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::apply;
-use super::ops::{Entity, F_DELETE, F_MERGE, F_NAME, F_POS, F_PRESENT, F_RULES, FORMAT, Op};
+use super::ops::{
+    Entity, F_DELETE, F_MERGE, F_NAME, F_PATH, F_POS, F_PRESENT, F_RULES, FORMAT, Op,
+};
 use super::recent;
 use super::song_tags::{COVER, E_SONG_TAGS};
 use super::state;
@@ -45,7 +47,7 @@ struct Noted {
 pub fn note(conn: &Connection, batch: BatchId, ops: &[Op]) -> Result<usize, Error> {
     let mut noted: BTreeMap<FieldKey, Noted> = BTreeMap::new();
     for op in ops {
-        if op.v > FORMAT || matches!(op.entity(), Entity::File | Entity::Other(_)) {
+        if op.v > FORMAT || matches!(op.entity(), Entity::Other(_)) {
             continue;
         }
         let key = (op.e.clone(), op.id.clone(), op.f.clone());
@@ -62,6 +64,9 @@ pub fn note(conn: &Connection, batch: BatchId, ops: &[Op]) -> Result<usize, Erro
             .as_ref()
             .is_some_and(|(clock, _)| *clock >= op.clock)
         {
+            continue;
+        }
+        if op.entity() == Entity::File && !file_change(conn, op, current.as_ref())? {
             continue;
         }
         // The first word about a file's tag, when it says what that device's file simply had,
@@ -94,6 +99,28 @@ pub fn note(conn: &Connection, batch: BatchId, ops: &[Op]) -> Result<usize, Erro
     Ok(noted.len())
 }
 
+/// Whether an op about a song's file is a change to list: the song is somewhere else than it
+/// was (moved or renamed), or it is new to this library. That a song was removed is not listed:
+/// it waits in its own review (`files::removals_waiting`).
+fn file_change(
+    conn: &Connection,
+    op: &Op,
+    current: Option<&(String, Value)>,
+) -> Result<bool, Error> {
+    match op.f.as_str() {
+        F_PATH => Ok(current.is_some_and(|(_, path)| *path != op.val)),
+        F_PRESENT if op.val == Value::Bool(true) && current.is_none() => {
+            let here: bool = conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM tracks WHERE audio_fp = ?1)",
+                params![op.id],
+                |r| r.get(0),
+            )?;
+            Ok(!here)
+        }
+        _ => Ok(false),
+    }
+}
+
 /// Forgets batches older than [`KEEP_MS`].
 pub fn prune(conn: &Connection, now_ms: i64) -> Result<(), Error> {
     conn.execute(
@@ -120,7 +147,8 @@ pub enum Standing {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {
-    /// `tag`, `playlist`, `smart_playlist`, `analysis`, `tag_custom`, `song_tags` or `covers`.
+    /// `tag`, `playlist`, `smart_playlist`, `analysis`, `tag_custom`, `song_tags`, `covers`,
+    /// `songs_moved` or `songs_added`.
     pub kind: String,
     /// The item's name now; empty for `analysis` and `tag_custom`.
     pub name: String,
@@ -134,6 +162,7 @@ pub struct Change {
     pub songs_moved: usize,
     /// `analysis`: songs whose tempo, key or grid changed. `tag_custom`: values added or removed.
     /// `song_tags`: songs whose file tags changed. `covers`: songs whose cover changed.
+    /// `songs_moved`: songs moved or renamed. `songs_added`: songs new to this library.
     pub count: usize,
 }
 
@@ -205,6 +234,8 @@ fn changes_of(conn: &Connection, batch: &[&Line]) -> Result<Vec<Change>, Error> 
     let mut values: BTreeSet<&str> = BTreeSet::new();
     let mut retagged: BTreeSet<&str> = BTreeSet::new();
     let mut recovered: BTreeSet<&str> = BTreeSet::new();
+    let mut moved: BTreeSet<&str> = BTreeSet::new();
+    let mut added: BTreeSet<&str> = BTreeSet::new();
     // A song added to or taken out of a list also gets a position: that is not a move.
     let came_or_went: BTreeSet<&str> = batch
         .iter()
@@ -218,6 +249,12 @@ fn changes_of(conn: &Connection, batch: &[&Line]) -> Result<Vec<Change>, Error> 
             }
             "tag_custom" => {
                 values.insert(&line.id);
+            }
+            "file" if line.f == F_PATH => {
+                moved.insert(&line.id);
+            }
+            "file" => {
+                added.insert(&line.id);
             }
             "song_tags" if line.f == COVER => {
                 recovered.insert(&line.id);
@@ -280,6 +317,8 @@ fn changes_of(conn: &Connection, batch: &[&Line]) -> Result<Vec<Change>, Error> 
         ("tag_custom", values.len()),
         ("song_tags", retagged.len()),
         ("covers", recovered.len()),
+        ("songs_moved", moved.len()),
+        ("songs_added", added.len()),
     ];
     for (kind, count) in whole {
         if count > 0 {

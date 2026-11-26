@@ -15,14 +15,27 @@ export function changeTitle(change: LibraryChange): string {
 			return "Tags in the songs' files";
 		case "covers":
 			return "Covers";
+		case "songs_moved":
+			return "Songs moved or renamed";
+		case "songs_added":
+			return "Songs added";
 		default:
 			return change.name || "Unnamed";
 	}
 }
 
+/** The changes that are about the songs as a whole and say how many. */
+const COUNTED_IN_SONGS: ReadonlySet<LibraryChange["kind"]> = new Set([
+	"analysis",
+	"song_tags",
+	"covers",
+	"songs_moved",
+	"songs_added",
+]);
+
 /** What a sync did to one item, as short facts in the order they matter. */
 export function changeFacts(change: LibraryChange): string[] {
-	if (change.kind === "analysis" || change.kind === "song_tags" || change.kind === "covers") {
+	if (COUNTED_IN_SONGS.has(change.kind)) {
 		return [songs(change.count)];
 	}
 	if (change.kind === "tag_custom") {

@@ -3,6 +3,7 @@ import {
 	AudioWaveform,
 	Database,
 	FileAudio,
+	FolderInput,
 	Image,
 	ListMusic,
 	Sparkles,
@@ -34,6 +35,8 @@ const ICON: Record<LibraryChange["kind"], ReactNode> = {
 	tag_custom: <Database />,
 	song_tags: <FileAudio />,
 	covers: <Image />,
+	songs_moved: <FolderInput />,
+	songs_added: <ArrowDownToLine />,
 };
 
 /** How many changes of a sync are listed before the rest becomes a count. */

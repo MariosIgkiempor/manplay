@@ -7,8 +7,8 @@ use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 
 use super::{Memory, device, library, open, run_both, track};
-use crate::libsync::clock;
 use crate::libsync::files::{self, Move, RelPath, Stayed, UnixSeconds};
+use crate::libsync::{clock, journal};
 use crate::libsync::{remap, state};
 
 const ROOT: &str = "/music";
@@ -757,4 +757,73 @@ async fn a_song_removed_here_and_kept_elsewhere_comes_back() {
     .expect("keep");
     assert!(run_both(&a, &b, &store).await);
     assert_eq!(arrivals(&a), ["fp1 at 1.mp3"]);
+}
+
+/// What the Changes page lists on this device: `(kind, how many songs)`.
+fn listed(db: &Mutex<Connection>) -> Vec<(String, usize)> {
+    journal::list(&db.lock().expect("lock"), clock::now_ms())
+        .expect("list")
+        .iter()
+        .flat_map(|batch| &batch.changes)
+        .map(|change| (change.kind.clone(), change.count))
+        .collect()
+}
+
+fn undo_newest(db: &Mutex<Connection>) {
+    let mut conn = db.lock().expect("lock");
+    let newest = journal::list(&conn, clock::now_ms()).expect("list")[0].id;
+    journal::undo(&mut conn, newest, clock::now_ms()).expect("undo");
+}
+
+#[tokio::test]
+async fn a_song_moved_elsewhere_is_listed_and_taking_it_back_moves_it_back_for_everyone() {
+    let store = Memory::default();
+    let (a, b) = two(&store).await;
+    assert_eq!(listed(&b), [], "songs both libraries had are not changes");
+    let renamed = "UPDATE tracks SET path = '/music/House/One.mp3' WHERE audio_fp = ?1";
+    sql(&a, renamed, 1);
+    record(&a);
+    assert!(run_both(&a, &b, &store).await);
+    assert_eq!(listed(&b), [("songs_moved".to_owned(), 1)]);
+    assert_eq!(listed(&a), [], "not on the device that moved it");
+    sql(&b, renamed, 1);
+    assert_eq!(wanted(&b).len(), 0);
+
+    undo_newest(&b);
+    let back = [(
+        "fp1".to_owned(),
+        r#"["House","One.mp3"]"#.to_owned(),
+        r#"["1.mp3"]"#.to_owned(),
+    )];
+    assert_eq!(wanted(&b), back);
+    assert!(run_both(&a, &b, &store).await);
+    assert_eq!(wanted(&a), back);
+}
+
+#[tokio::test]
+async fn a_song_added_elsewhere_is_listed_and_taking_it_back_puts_it_up_for_removal() {
+    let store = Memory::default();
+    let (a, b) = one_more(&store).await;
+    assert_eq!(listed(&b), [("songs_added".to_owned(), 1)]);
+    assert_eq!(listed(&a), [], "the songs B has are not new to A");
+    b.lock()
+        .expect("lock")
+        .execute(
+            "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
+             VALUES ('/music/3.mp3', 'a', 'b', 's3', 1, 'fp3')",
+            [],
+        )
+        .expect("arrived");
+    record(&b);
+
+    undo_newest(&b);
+    assert_eq!(register(&b, 3, "present"), Some(json!(false)));
+    assert_eq!(
+        waiting(&b).len(),
+        1,
+        "its file is not removed: it waits for the user here"
+    );
+    assert_eq!(arrivals(&b).len(), 0);
+    assert!(run_both(&a, &b, &store).await);
+    assert_eq!(waiting(&a).len(), 1, "and on the device that added it");
 }
