@@ -3049,6 +3049,92 @@ async fn pull_file(
     result.map(|()| true)
 }
 
+/// What fetching songs from a destination did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Fetched {
+    /// Songs downloaded.
+    pub downloaded: usize,
+    /// Songs the destination does not have (yet), or a file is already at their place here.
+    pub waiting: usize,
+    pub failed: usize,
+}
+
+/// How far the download of songs other devices added is: `done` of the `total` songs the
+/// destination has. A `total` of 0 says no download is running.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct FetchProgress {
+    pub done: usize,
+    pub total: usize,
+}
+
+/// More songs than this and the destination is listed once instead of asked about each.
+const LIST_ABOVE: usize = 20;
+
+/// Downloads the songs at `wanted` (paths below the destination folder) to the same paths in
+/// the library folder `root`, telling `report` before each one and once at the end. Never writes
+/// over a file; a song the destination does not have is left for another time.
+pub async fn fetch_songs(
+    client: &Client,
+    target: &SyncTarget,
+    root: &Path,
+    wanted: &[Vec<String>],
+    report: impl Fn(FetchProgress),
+) -> Result<Fetched, Error> {
+    let base = base_of(target);
+    let backend = Backend::for_target(client, target)?;
+    let listed: Option<HashMap<Vec<String>, u64>> = if wanted.len() > LIST_ABOVE {
+        Some(
+            backend
+                .list(&base)
+                .await?
+                .into_iter()
+                .map(|file| (file.rel, file.size))
+                .collect(),
+        )
+    } else {
+        None
+    };
+    let mut out = Fetched::default();
+    let mut there: Vec<Remote> = Vec::new();
+    for rel in wanted.iter().filter(|rel| safe_rel(rel)) {
+        let size = match &listed {
+            Some(listed) => listed.get(rel).copied(),
+            None => backend
+                .remote_size(&dest_of(&base, rel))
+                .await
+                .unwrap_or(None),
+        };
+        match size {
+            Some(size) => there.push(Remote {
+                rel: rel.clone(),
+                size,
+                version: None,
+            }),
+            None => out.waiting += 1,
+        }
+    }
+    let total = there.len();
+    for (done, file) in there.iter().enumerate() {
+        report(FetchProgress { done, total });
+        let dest = file
+            .rel
+            .iter()
+            .fold(root.to_path_buf(), |at, part| at.join(part));
+        match pull_file(&backend, &base, file, &dest).await {
+            Ok(true) => out.downloaded += 1,
+            Ok(false) => out.waiting += 1,
+            Err(e) => {
+                log::warn!("could not fetch {}: {e}", file.rel.join("/"));
+                out.failed += 1;
+            }
+        }
+    }
+    if total > 0 {
+        report(FetchProgress { done: total, total });
+    }
+    Ok(out)
+}
+
 /// Fingerprints of remote files, fetched with small range reads (never the whole file).
 /// Each entry is `None` when that file could not be sampled.
 pub async fn fingerprint_remote(

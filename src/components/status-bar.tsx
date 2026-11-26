@@ -3,6 +3,7 @@ import { CircleAlert, PanelRight, Undo2 } from "lucide-react";
 import { type ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnalysisStatusPill } from "#/components/analysis-status-pill.tsx";
+import { SongFetchStatusPill } from "#/components/song-fetch-status-pill.tsx";
 import { SyncStatusPill } from "#/components/sync-status-pill.tsx";
 import { WaveformStatusPill } from "#/components/waveform-status-pill.tsx";
 import { type DetailView, StatusSlotContext, useDetail } from "#/context/detail-context.ts";
@@ -149,6 +150,7 @@ export function StatusBarHost({
 			<div className="flex items-center justify-center gap-4">
 				<SyncStatusPill />
 				<AnalysisStatusPill />
+				<SongFetchStatusPill />
 				<WaveformStatusPill />
 			</div>
 			<div className="flex min-w-0 items-center justify-end gap-4">

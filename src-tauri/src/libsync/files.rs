@@ -399,6 +399,58 @@ pub fn moves_wanted(conn: &Connection) -> Result<Vec<Move>, Error> {
     Ok(out)
 }
 
+/// A song the shared library has that this library does not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Arrival {
+    pub audio_fp: String,
+    pub path: RelPath,
+}
+
+impl RelPath {
+    /// The folder names and the file name, in order.
+    pub fn parts(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// The songs to fetch so the library has what the shared library has: present there, with a
+/// path a file can have, and nothing of them here. A song this library has a record of is not
+/// fetched while that record may still find its file (a drive that is unplugged), unless the
+/// song was removed here and another device kept it.
+pub fn arrivals_wanted(conn: &Connection) -> Result<Vec<Arrival>, Error> {
+    if !active(conn)? {
+        return Ok(Vec::new());
+    }
+    let registers = registers(conn)?;
+    let had = had(conn)?;
+    let mut known = conn.prepare_cached(
+        "SELECT COUNT(*), COALESCE(SUM(missing_since IS NULL), 0) FROM tracks WHERE audio_fp = ?1",
+    )?;
+    let mut out = Vec::new();
+    for ((fp, f), val) in &registers {
+        if f != F_PRESENT || *val != json!(true) {
+            continue;
+        }
+        let Some(path) = registers
+            .get(&(fp.clone(), F_PATH.to_owned()))
+            .and_then(RelPath::from_value)
+        else {
+            continue;
+        };
+        let (records, there): (i64, i64) =
+            known.query_row(params![fp], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let removed_here = had.get(fp).is_some_and(|h| !h.present);
+        if there == 0 && (records == 0 || removed_here) {
+            out.push(Arrival {
+                audio_fp: fp.clone(),
+                path,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
 /// Why a song was not moved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stayed {

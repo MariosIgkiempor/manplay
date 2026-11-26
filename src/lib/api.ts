@@ -577,6 +577,16 @@ export function onWaveformProgress(onProgress: (p: WaveformProgress) => void) {
 	return listen("waveform-progress", (e) => onProgress(waveformProgressSchema.parse(e.payload)));
 }
 
+export const songFetchProgressSchema = z.object({ done: int, total: int });
+
+/** How far the download of songs other devices added is; a `total` of 0 says none is running. */
+export type SongFetchProgress = z.infer<typeof songFetchProgressSchema>;
+
+/** Calls `onProgress` as songs other devices added come down after a sync. Returns the unsubscribe. */
+export function onSongFetchProgress(onProgress: (p: SongFetchProgress) => void) {
+	return listen("song-fetch-progress", (e) => onProgress(songFetchProgressSchema.parse(e.payload)));
+}
+
 /**
  * Sends this device's library edits to the destinations that share them and applies
  * everyone else's. Run before the files.

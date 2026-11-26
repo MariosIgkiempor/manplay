@@ -463,6 +463,61 @@ async fn follow_file_moves(state: &AppState) -> Result<usize, Error> {
     Ok(moved)
 }
 
+/// Downloads the songs other devices added to the shared library from the destination it is
+/// kept on, in the background, then reads the library again; the status bar shows how far it
+/// is. One run at a time; what a run
+/// could not get (the destination does not have it yet) is tried after the next sync.
+async fn fetch_shared_songs(app: AppHandle, target: db::SyncTarget) {
+    static FETCHING: AtomicBool = AtomicBool::new(false);
+    if FETCHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _guard = SyncGuard(&FETCHING);
+    let state = app.state::<AppState>();
+    let Ok(root) = library_root(&state) else {
+        return;
+    };
+    let wanted = match state.db.lock().map_err(|_| Error::Lock) {
+        Ok(conn) => libsync::files::arrivals_wanted(&conn),
+        Err(e) => Err(e),
+    };
+    let wanted: Vec<Vec<String>> = match wanted {
+        Ok(wanted) => wanted
+            .into_iter()
+            .map(|w| w.path.parts().to_vec())
+            .collect(),
+        Err(e) => {
+            log::warn!("could not tell which songs to fetch: {e}");
+            return;
+        }
+    };
+    if wanted.is_empty() {
+        return;
+    }
+    let report = |progress: sync::FetchProgress| {
+        let _ = app.emit("song-fetch-progress", progress);
+    };
+    let fetched = sync::fetch_songs(&state.http, &target, &root, &wanted, report).await;
+    match &fetched {
+        Ok(got) => {
+            log::info!(
+                "songs from other devices: {} fetched, {} not there yet, {} failed",
+                got.downloaded,
+                got.waiting,
+                got.failed
+            );
+            if got.downloaded > 0
+                && let Err(e) = scan_and_store(&state, root, ScanDepth::Changed).await
+            {
+                log::warn!("could not read the library after fetching songs: {e}");
+            }
+        }
+        Err(e) => log::warn!("could not fetch songs other devices added: {e}"),
+    }
+    // After the library was read again, so the songs are in the lists when the bar goes.
+    report(sync::FetchProgress::default());
+}
+
 /// [`follow_file_moves`] after a sync of the shared library; a problem is only logged, the sync
 /// itself went through.
 async fn follow_shared_files(state: &AppState) {
@@ -3916,6 +3971,7 @@ async fn sync_shared_target(
     held.release().await;
     if outcome.error.is_none() {
         follow_shared_files(state).await;
+        tauri::async_runtime::spawn(fetch_shared_songs(app.clone(), target.clone()));
         tauri::async_runtime::spawn(transfer_waveforms(app.clone(), SharedPlace::Target(target)));
     }
     outcome

@@ -665,3 +665,96 @@ async fn removing_it_here_too_settles_it() {
     assert!(run_both(&a, &b, &store).await);
     assert_eq!(register(&a, 1, "present"), Some(json!(false)));
 }
+
+fn arrivals(db: &Mutex<Connection>) -> Vec<String> {
+    record(db);
+    files::arrivals_wanted(&db.lock().expect("lock"))
+        .expect("arrivals")
+        .into_iter()
+        .map(|a| format!("{} at {}", a.audio_fp, a.path.parts().join("/")))
+        .collect()
+}
+
+/// `a` has three songs and `b` the first two; they are in one library and have synced.
+async fn one_more(store: &Memory) -> (Mutex<Connection>, Mutex<Connection>) {
+    let a = device(3);
+    let b = device(2);
+    record(&a);
+    record(&b);
+    assert!(run_both(&a, &b, store).await);
+    (a, b)
+}
+
+#[tokio::test]
+async fn a_song_only_another_device_has_is_to_be_fetched() {
+    let store = Memory::default();
+    let (a, b) = one_more(&store).await;
+    assert_eq!(arrivals(&b), ["fp3 at 3.mp3"]);
+    assert_eq!(arrivals(&a).len(), 0);
+    // It arrives and the scan finds it.
+    b.lock()
+        .expect("lock")
+        .execute(
+            "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
+             VALUES ('/music/3.mp3', 'a', 'b', 's3', 1, 'fp3')",
+            [],
+        )
+        .expect("arrived");
+    assert_eq!(arrivals(&b).len(), 0);
+    assert_eq!(record(&b), 0, "having fetched a song is not an edit");
+}
+
+#[tokio::test]
+async fn what_is_not_fetched() {
+    struct Case {
+        what: &'static str,
+        /// Run on the device that has the third song, before the other hears of it.
+        elsewhere: &'static str,
+        /// Run on the device that lacks it.
+        here: &'static str,
+    }
+    let nothing = "UPDATE tracks SET size = size WHERE audio_fp = ?1";
+    let cases = [
+        Case {
+            what: "a song that was removed again",
+            elsewhere: "UPDATE tracks SET missing_since = 0 WHERE audio_fp = ?1",
+            here: nothing,
+        },
+        Case {
+            what: "a song whose file is only missing here, like on an unplugged drive",
+            elsewhere: nothing,
+            here: "INSERT INTO tracks (path, artist, album, title, size, audio_fp, missing_since)
+                   VALUES ('/music/3.mp3', 'a', 'b', 's3', 1, ?1, 2000)",
+        },
+        Case {
+            what: "a song this library has under another path",
+            elsewhere: nothing,
+            here: "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
+                   VALUES ('/music/Other name.mp3', 'a', 'b', 's3', 1, ?1)",
+        },
+    ];
+    for case in cases {
+        let store = Memory::default();
+        let (a, b) = one_more(&store).await;
+        sql(&a, case.elsewhere, 3);
+        record(&a);
+        sql(&b, case.here, 3);
+        assert!(run_both(&a, &b, &store).await);
+        assert_eq!(arrivals(&b).len(), 0, "{}", case.what);
+    }
+}
+
+#[tokio::test]
+async fn a_song_removed_here_and_kept_elsewhere_comes_back() {
+    let store = Memory::default();
+    let (a, b) = one_removed(&store).await;
+    assert_eq!(arrivals(&a).len(), 0, "removed here, and nobody objected");
+    files::keep(
+        &b.lock().expect("lock"),
+        Path::new(ROOT),
+        &["fp1".to_owned()],
+    )
+    .expect("keep");
+    assert!(run_both(&a, &b, &store).await);
+    assert_eq!(arrivals(&a), ["fp1 at 1.mp3"]);
+}
