@@ -1,7 +1,9 @@
 import type {
+	DeleteHold,
 	ExportSelection,
 	FsEntry,
 	IgnoreRule,
+	LibraryChangeBatch,
 	Scope,
 	SmartPlaylist,
 	SmartRules,
@@ -32,8 +34,10 @@ import {
 	buildUsbLibrary,
 	CLASHES,
 	DEFAULT_SELECTION,
+	DELETE_HOLD,
 	DOWNLOADS_FOLDER,
 	IMPORT_FOLDERS,
+	LIBRARY_CHANGES,
 	NAS_TARGET_ID,
 	PICKER_FOLDERS,
 	PICKER_PLACES,
@@ -78,6 +82,11 @@ interface State {
 	discogsToken: boolean;
 	selections: Map<string, ExportSelection>;
 	deviceName: string;
+	/** Whether the shared library syncs on its own. */
+	libraryAuto: boolean;
+	/** Deletions from another device waiting for a choice, until one is made. */
+	deleteHold: DeleteHold | null;
+	libraryChanges: LibraryChangeBatch[];
 	defaultScope: Scope;
 	/** Destination-only files ignored, by destination. */
 	ignored: Map<number, IgnoreRule[]>;
@@ -98,6 +107,9 @@ function createState(scenario: Scenario): State {
 		discogsToken: false,
 		selections: new Map(),
 		deviceName: "booth-macbook",
+		libraryAuto: true,
+		deleteHold: DELETE_HOLD,
+		libraryChanges: LIBRARY_CHANGES,
 		defaultScope: "shared",
 		ignored: new Map(),
 		analysis: { keyFormat: "camelot", replaceEdits: false },
@@ -805,7 +817,6 @@ function syncCommands(state: State): Record<string, Command> {
 			],
 			lastChange: NOW - 2 * DAY,
 		}),
-		libsync_replace_count: () => state.tags.length + state.playlists.length + state.smart.length,
 		libsync_join: () => ({
 			targetId: NAS_TARGET_ID,
 			name: "Booth Library",
@@ -828,7 +839,25 @@ function syncCommands(state: State): Record<string, Command> {
 			newDeviceId: false,
 			error: null,
 		}),
-		libsync_run_folder: () => null,
+		libsync_status: () => ({
+			auto: state.libraryAuto,
+			last: { at: NOW - 140, sent: 2, received: 14, error: null },
+			hold: state.deleteHold,
+		}),
+		libsync_set_auto: (args) => {
+			state.libraryAuto = args.get("on") === true;
+		},
+		libsync_sync_now: () => undefined,
+		libsync_decide_deletes: () => {
+			state.deleteHold = null;
+		},
+		list_library_changes: () => (state.tracks.length > 0 ? state.libraryChanges : []),
+		undo_library_changes: (args) => {
+			state.libraryChanges = state.libraryChanges.map((batch) =>
+				batch.id === args.get("batch") ? { ...batch, undone: true } : batch,
+			);
+			return { reverted: 3, skipped: 0 };
+		},
 		get_device_name: () => state.deviceName,
 		set_device_name: (args) => {
 			state.deviceName = text(args.get("name")) || "booth-macbook";

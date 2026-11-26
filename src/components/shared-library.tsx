@@ -1,9 +1,9 @@
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
 import { FileAudio, FolderOpen, Server, Users } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ClashList } from "#/components/clashes.tsx";
-import { ConfirmDialog, Dialog } from "#/components/confirm-dialog.tsx";
+import { Dialog } from "#/components/confirm-dialog.tsx";
 import { DeviceNameRow } from "#/components/device-settings.tsx";
 import { FieldRow, FrameSection } from "#/components/frame.tsx";
 import { ScopeSwitch } from "#/components/item-sharing.tsx";
@@ -11,14 +11,15 @@ import { ErrorLine, LoadingLine } from "#/components/page.tsx";
 import { StatusIcon } from "#/components/status-icon.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Fact, Facts, MoreInfo } from "#/components/ui/facts.tsx";
+import { Switch } from "#/components/ui/switch.tsx";
 import {
 	type FoundLibrary,
 	type JoinChoice,
+	type LastLibrarySync,
 	type LeaveChoice,
 	type LibraryHome,
 	libsyncInspect,
 	libsyncInspectFolder,
-	libsyncReplaceCount,
 	type SyncTarget,
 	targetName,
 } from "#/lib/api.ts";
@@ -27,11 +28,14 @@ import {
 	type LibraryPlace,
 	useClashes,
 	useDefaultScope,
-	useFolderLibrarySync,
 	useJoinLibrary,
 	useLeaveLibrary,
 	useLibraryHome,
 	useLibraryRoot,
+	useLibrarySyncStatus,
+	useLibrarySyncWatch,
+	useSetLibraryAuto,
+	useSyncLibraryNow,
 	useSyncTargets,
 } from "#/lib/queries.ts";
 import { CLASHES_ANCHOR } from "#/lib/settings-sections.ts";
@@ -235,47 +239,11 @@ function Members({ found }: { found: FoundLibrary }) {
 	);
 }
 
-/** "Replace mine" drops everything this device has: ask once more with the count. */
-function ReplaceConfirm({
-	busy,
-	onCancel,
-	onConfirm,
-}: {
-	busy: boolean;
-	onCancel: () => void;
-	onConfirm: () => void;
-}) {
-	const count = useQuery({ queryKey: ["library-replace-count"], queryFn: libsyncReplaceCount });
-	const n = count.data;
-	return (
-		<ConfirmDialog
-			title="Replace your tags and playlists?"
-			confirmLabel="Replace mine"
-			destructive
-			busy={busy || n === undefined}
-			onCancel={onCancel}
-			onConfirm={onConfirm}
-		>
-			{n === undefined ? (
-				"Counting…"
-			) : (
-				<Facts
-					label={`${n.toLocaleString()} of your tags, playlists and smart playlists are removed from this device and replaced by the shared ones. Songs and files are not touched.`}
-				>
-					<Fact tone="lost">{n.toLocaleString()} tags, playlists and smart playlists</Fact>
-					<Fact tone="changed">Shared ones instead</Fact>
-					<Fact tone="kept">Songs and files</Fact>
-				</Facts>
-			)}
-		</ConfirmDialog>
-	);
-}
-
-type Stage = "leave" | "look" | "replace";
+type Stage = "leave" | "look";
 
 /**
  * Reads what a destination (or the library folder) holds and asks what to do about it: join
- * (three ways), start a library, or leave it be. A device is in one library at a time, so a device
+ * (two ways), start a library, or leave it be. A device is in one library at a time, so a device
  * that is in another one is asked to leave it first.
  */
 export function JoinLibraryDialog({
@@ -332,28 +300,7 @@ export function JoinLibraryDialog({
 			</Dialog>
 		);
 	}
-	if (stage === "replace") {
-		return (
-			<>
-				<ReplaceConfirm
-					busy={join.isPending}
-					onCancel={() => setStage("look")}
-					onConfirm={() => go("replace")}
-				/>
-				{join.isError && <FloatingError error={join.error} />}
-			</>
-		);
-	}
-	return (
-		<LookDialog
-			place={place}
-			found={found}
-			join={join}
-			onChoose={go}
-			onReplace={() => setStage("replace")}
-			onClose={onClose}
-		/>
-	);
+	return <LookDialog place={place} found={found} join={join} onChoose={go} onClose={onClose} />;
 }
 
 type Inspect = UseQueryResult<FoundLibrary | null>;
@@ -394,14 +341,12 @@ function LookDialog({
 	found,
 	join,
 	onChoose,
-	onReplace,
 	onClose,
 }: {
 	place: LibraryPlace;
 	found: Inspect;
 	join: Join;
 	onChoose: (choice: JoinChoice) => void;
-	onReplace: () => void;
 	onClose: () => void;
 }) {
 	const where = placeName(place);
@@ -440,7 +385,6 @@ function LookDialog({
 			library={found.data}
 			join={join}
 			onChoose={onChoose}
-			onReplace={onReplace}
 			onClose={onClose}
 		/>
 	);
@@ -502,20 +446,18 @@ function StartDialog({
 	);
 }
 
-/** A library is at the place: who is in it, and the three ways to join. */
+/** A library is at the place: who is in it, and the two ways to join. */
 function FoundDialog({
 	place,
 	library,
 	join,
 	onChoose,
-	onReplace,
 	onClose,
 }: {
 	place: LibraryPlace;
 	library: FoundLibrary;
 	join: Join;
 	onChoose: (choice: JoinChoice) => void;
-	onReplace: () => void;
 	onClose: () => void;
 }) {
 	const words = WORDING[place.kind];
@@ -539,13 +481,6 @@ function FoundDialog({
 						onClick={() => onChoose("keepLocal")}
 					/>
 					<Choice
-						tone="danger"
-						label="Join and replace mine"
-						hint="Drops your tags and playlists and takes theirs."
-						disabled={join.isPending}
-						onClick={() => onReplace()}
-					/>
-					<Choice
 						label={words.dontJoin}
 						hint={words.dontJoinHint}
 						disabled={join.isPending}
@@ -558,14 +493,6 @@ function FoundDialog({
 		>
 			<Members found={library} />
 		</Dialog>
-	);
-}
-
-function FloatingError({ error }: { error: unknown }): ReactNode {
-	return (
-		<div className="card-surface fixed inset-x-0 bottom-6 z-[60] mx-auto w-[28rem] max-w-[calc(100%-2rem)] p-3">
-			<ErrorLine>{String(error)}</ErrorLine>
-		</div>
 	);
 }
 
@@ -621,11 +548,52 @@ function DefaultScope() {
 	);
 }
 
-/** The last sync of the library kept in the library folder, when it went wrong. */
-function FolderSyncStatus() {
-	const run = useFolderLibrarySync();
-	const error = run.data?.error ?? (run.isError ? String(run.error) : null);
-	return error ? <ErrorLine>{error}</ErrorLine> : null;
+/** How the last sync went, in a few words. */
+function lastSyncText(last: LastLibrarySync | null): string {
+	if (last === null) {
+		return "Not synced yet since manplay opened.";
+	}
+	const moved = [
+		last.sent > 0 ? `${last.sent.toLocaleString()} sent` : null,
+		last.received > 0 ? `${last.received.toLocaleString()} received` : null,
+	].filter((part) => part !== null);
+	return [`Synced ${timeAgo(last.at)}`, ...moved].join(" · ");
+}
+
+/**
+ * Whether the library syncs on its own, how the last sync went, and a button to sync now. On, it
+ * syncs when manplay opens, when its window comes back, shortly after an edit and every 5 minutes.
+ */
+function AutoSync() {
+	const status = useLibrarySyncStatus().data;
+	const setAuto = useSetLibraryAuto();
+	const syncNow = useSyncLibraryNow();
+	const last = status?.last ?? null;
+	return (
+		<FieldRow
+			label="Syncs on its own"
+			description={
+				<>
+					{lastSyncText(last)}{" "}
+					<MoreInfo hint="On: when manplay opens, when you come back to it, 30 seconds after an edit and every 5 minutes. Off: only with Sync now or a sync of its destination. Songs are never copied this way." />
+					{last?.error && <ErrorLine>{last.error}</ErrorLine>}
+				</>
+			}
+			align="center"
+		>
+			<div className="flex items-center gap-3">
+				<Switch
+					label="The shared library syncs on its own"
+					checked={status?.auto ?? true}
+					disabled={status === undefined || setAuto.isPending}
+					onChange={(on) => setAuto.mutate(on)}
+				/>
+				<Button variant="outline" disabled={syncNow.isPending} onClick={() => syncNow.mutate()}>
+					Sync now
+				</Button>
+			</div>
+		</FieldRow>
+	);
 }
 
 /** The library this device is in: where it is kept, who else is in it, what new items start as. */
@@ -653,16 +621,10 @@ function JoinedRows({
 				}
 				description={
 					home.kind === "folder" ? (
-						<>
-							<Facts
-								label={`Kept in your library folder, ${home.root}. It syncs every minute while manplay is open. Cues stay on this computer.`}
-							>
-								<Fact icon={<FolderOpen />}>{home.root}</Fact>
-								<Fact tone="changed">Every minute</Fact>
-								<Fact tone="kept">Cues stay here</Fact>
-							</Facts>
-							<FolderSyncStatus />
-						</>
+						<Facts label={`Kept in your library folder, ${home.root}. Cues stay on this computer.`}>
+							<Fact icon={<FolderOpen />}>{home.root}</Fact>
+							<Fact tone="kept">Cues stay here</Fact>
+						</Facts>
 					) : (
 						<Facts
 							label={`Kept on ${target ? targetName(target) : "a destination"}. Cues stay on this computer.`}
@@ -683,6 +645,7 @@ function JoinedRows({
 					<MemberList place={place} />
 				</div>
 			</FieldRow>
+			<AutoSync />
 			<DefaultScope />
 		</>
 	);
@@ -815,13 +778,13 @@ function dismissLibrary(libraryId: string) {
 
 /**
  * Notices a shared library that other computers keep in the library folder (a network share, a
- * synced folder) and offers to join it, once per library. Inside a library kept in the folder it
- * keeps that library in sync instead.
+ * synced folder) and offers to join it, once per library. It also follows the syncs the shared
+ * library runs on its own, wherever it is kept, so what arrives shows.
  */
 export function FolderLibraryWatch() {
 	const home = useLibraryHome().data;
 	const root = useLibraryRoot().data ?? null;
-	useFolderLibrarySync();
+	useLibrarySyncWatch();
 	const outside = home?.kind === "none" && root !== null;
 	const found = useQuery({
 		queryKey: ["library-inspect", "folder", root],

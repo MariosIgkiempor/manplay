@@ -15,8 +15,10 @@ use rusqlite::{Connection, params};
 use serde::Serialize;
 
 use super::apply::apply_ops;
+use super::brake;
 use super::clock;
 use super::identity;
+use super::journal;
 use super::ops::Op;
 use super::skew;
 use super::snapshot;
@@ -147,6 +149,9 @@ pub struct RunSummary {
     pub clock_wrong: bool,
     /// This install found a second copy of itself and took a new device ID.
     pub new_device_id: bool,
+    /// Deletions another device made that are not applied until the user decides (see
+    /// `brake.rs`). Nothing was read from the other devices in this run.
+    pub delete_hold: Option<brake::Hold>,
     /// Set when something stopped the run part-way; what was done before it stays done.
     pub error: Option<String>,
 }
@@ -249,7 +254,19 @@ async fn run_inner<S: ChunkStore>(
         let conn = lock(db)?;
         skew::restamp(&conn, now_ms)?;
     }
-    let known = snapshot::sync_in(db, store).await?;
+    // Deletions waiting for the user: nothing is read from the others until they decide.
+    let mut hold = {
+        let conn = lock(db)?;
+        brake::waiting(&conn)?
+    };
+    let known = if hold.is_some() {
+        let conn = lock(db)?;
+        snapshot::known(&conn)?
+    } else {
+        let read = snapshot::sync_in(db, store, now_ms).await?;
+        hold = read.hold;
+        read.known
+    };
     let mut own = {
         let conn = lock(db)?;
         device_id(&conn)?
@@ -281,6 +298,11 @@ async fn run_inner<S: ChunkStore>(
             .unwrap_or(0);
         upload(db, store, &own, &pending, &listed, covered).await?;
         summary.sent = pending.len();
+    }
+
+    if hold.is_some() {
+        summary.delete_hold = hold;
+        return Ok(());
     }
 
     // 2. Download what other devices wrote since the last run, in order, without gaps.
@@ -342,6 +364,7 @@ async fn run_inner<S: ChunkStore>(
             let tx = conn.transaction()?;
             let screened = skew::screen(&tx, Vec::new(), now_ms)?;
             summary.held = screened.held;
+            journal::note(&tx, now_ms, &screened.accepted)?;
             apply_ops(&tx, &screened.accepted)?;
             summary.received += screened.accepted.len();
             tx.commit()?;
@@ -354,6 +377,16 @@ async fn run_inner<S: ChunkStore>(
         // Ops from a device whose clock is far ahead are held, not applied, and do not move this
         // device's own clock.
         let screened = skew::screen(&tx, all.into_iter().cloned().collect(), now_ms)?;
+        let restore = match brake::judge(&tx, &screened.accepted, now_ms)? {
+            brake::Verdict::Apply { restore } => restore,
+            brake::Verdict::Hold(hold) => {
+                // Nothing of this run's reading is kept: the cursors stay, so it is read again.
+                drop(tx);
+                brake::set_hold(&conn, &hold)?;
+                summary.delete_hold = Some(hold);
+                return failure.map_or(Ok(()), Err);
+            }
+        };
         summary.held = screened.held;
         let mut hlc = clock::load(&tx)?;
         for op in &screened.accepted {
@@ -361,15 +394,21 @@ async fn run_inner<S: ChunkStore>(
         }
         clock::save(&tx, hlc)?;
         summary.received = screened.accepted.len();
+        journal::note(&tx, now_ms, &screened.accepted)?;
         apply_ops(&tx, &screened.accepted)?;
+        brake::keep(&tx, &restore, now_ms)?;
         for (dev, seq, _) in &fetched {
             state::set_cursor(&tx, dev, *seq)?;
         }
         tx.commit()?;
     }
-    if failure.is_none() {
+    {
         let conn = lock(db)?;
-        snapshot::set_last_sync(&conn, now_ms)?;
+        brake::clear(&conn)?;
+        journal::prune(&conn, now_ms)?;
+        if failure.is_none() {
+            snapshot::set_last_sync(&conn, now_ms)?;
+        }
     }
     failure.map_or(Ok(()), Err)
 }

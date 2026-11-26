@@ -2182,31 +2182,6 @@ async fn joining_and_keeping_mine_local_makes_mine_local_and_receives_theirs() {
 }
 
 #[tokio::test]
-async fn joining_and_replacing_mine_drops_mine_and_takes_theirs() {
-    let store = Memory::default();
-    let (a, _) = started(&store).await;
-    let (b, id) = unjoined(3);
-    tag(&b, "Mine", &[3]);
-    playlist(&b, "Warmup", &[1]);
-    assert!(membership::replace_count(&b.lock().expect("lock")).expect("count") >= 2);
-    let sum = membership::join(
-        &b,
-        membership::Home::Target(id),
-        &store,
-        JoinChoice::Replace,
-        "",
-    )
-    .await
-    .expect("join");
-    assert!(sum.error.is_none(), "{:?}", sum.error);
-    assert!(run_both(&a, &b, &store).await);
-    assert_eq!(scopes(&b, "tags"), "House:shared,Peak:shared");
-    assert_eq!(scopes(&b, "playlists"), "");
-    assert_eq!(clashes::count(&b.lock().expect("lock")).expect("count"), 0);
-    assert_eq!(shown(&a), shown(&b));
-}
-
-#[tokio::test]
 async fn files_only_never_touches_the_destination() {
     let store = Memory::default();
     let (a, _) = unjoined(2);
@@ -3230,6 +3205,7 @@ async fn years_of_edits_leave_about_one_snapshot_on_the_destination() {
     assert_eq!(everything(&a), everything(&b));
 }
 
+mod changes;
 mod edge;
 mod folder;
 

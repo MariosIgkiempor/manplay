@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ChangesRouteImport } from './routes/changes'
 import { Route as DeletedRouteImport } from './routes/deleted'
 import { Route as FilesRouteImport } from './routes/files'
 import { Route as MetadataRouteImport } from './routes/metadata'
@@ -29,6 +30,11 @@ import { Route as TagsSplatRouteImport } from './routes/tags.$'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChangesRoute = ChangesRouteImport.update({
+  id: '/changes',
+  path: '/changes',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeletedRoute = DeletedRouteImport.update({
@@ -109,6 +115,7 @@ const TagsSplatRoute = TagsSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/changes': typeof ChangesRoute
   '/deleted': typeof DeletedRoute
   '/files': typeof FilesRoute
   '/metadata': typeof MetadataRoute
@@ -127,6 +134,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/changes': typeof ChangesRoute
   '/deleted': typeof DeletedRoute
   '/files': typeof FilesRoute
   '/metadata': typeof MetadataRoute
@@ -146,6 +154,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/changes': typeof ChangesRoute
   '/deleted': typeof DeletedRoute
   '/files': typeof FilesRoute
   '/metadata': typeof MetadataRoute
@@ -166,6 +175,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/changes'
     | '/deleted'
     | '/files'
     | '/metadata'
@@ -184,6 +194,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/changes'
     | '/deleted'
     | '/files'
     | '/metadata'
@@ -202,6 +213,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/changes'
     | '/deleted'
     | '/files'
     | '/metadata'
@@ -221,6 +233,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ChangesRoute: typeof ChangesRoute
   DeletedRoute: typeof DeletedRoute
   FilesRoute: typeof FilesRoute
   MetadataRoute: typeof MetadataRoute
@@ -245,6 +258,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/changes': {
+      id: '/changes'
+      path: '/changes'
+      fullPath: '/changes'
+      preLoaderRoute: typeof ChangesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/deleted': {
@@ -357,6 +377,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ChangesRoute: ChangesRoute,
   DeletedRoute: DeletedRoute,
   FilesRoute: FilesRoute,
   MetadataRoute: MetadataRoute,

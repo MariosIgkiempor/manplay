@@ -20,7 +20,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
-import { SidebarRecentlyDeleted } from "#/components/sidebar-deleted.tsx";
+import { SidebarLibraryChanges, SidebarRecentlyDeleted } from "#/components/sidebar-deleted.tsx";
 import { SidebarHighlight } from "#/components/sidebar-highlight.tsx";
 import { RowCount, SectionLabel } from "#/components/sidebar-parts.tsx";
 import { SidebarPlaylists } from "#/components/sidebar-playlists.tsx";
@@ -282,6 +282,7 @@ export function Sidebar() {
 							<SidebarPlaylists />
 							<SidebarSmartPlaylists />
 							<SidebarTagTree />
+							<SidebarLibraryChanges />
 							<SidebarRecentlyDeleted />
 						</section>
 					</div>

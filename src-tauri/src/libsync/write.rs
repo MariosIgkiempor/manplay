@@ -219,30 +219,59 @@ impl Batch {
 }
 
 /// Stamps `ops`, appends them to the local log and applies them to the register store, in the
-/// caller's transaction. The only place an op is made.
+/// caller's transaction.
 pub fn record(conn: &Connection, ops: &[NewOp]) -> Result<(), Error> {
+    let fields: Vec<Field> = ops
+        .iter()
+        .map(|new| Field {
+            e: new.e.to_owned(),
+            id: new.id.clone(),
+            f: new.f.to_owned(),
+            val: new.val.clone(),
+        })
+        .collect();
+    stamp(conn, &fields).map(|_| ())
+}
+
+/// A value for one field of one entity, before it has a clock. Unlike [`NewOp`] its entity and
+/// field can be ones read from another device's op.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    pub e: String,
+    pub id: String,
+    pub f: String,
+    pub val: Value,
+}
+
+/// Stamps `fields` as this device's ops, appends them to the local log and the register store,
+/// and returns them. The only place an op is made. Rows are not touched: the caller changes them
+/// itself, or rebuilds them with `apply::materialize`.
+pub fn stamp(conn: &Connection, fields: &[Field]) -> Result<Vec<Op>, Error> {
     let dev = device_id(conn)?;
     let mut hlc = clock::load(conn)?;
     let now = clock::now_ms();
+    let mut stamped = Vec::with_capacity(fields.len());
     {
         let mut insert = conn.prepare_cached(
             "INSERT INTO oplog (clock, dev, e, id, f, val, uploaded) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
         )?;
-        for new in ops {
+        for field in fields {
             let (ms, counter) = hlc.tick(now);
             let op = Op {
                 v: FORMAT,
                 clock: clock::format(ms, counter, &dev),
                 dev: dev.clone(),
-                e: new.e.to_owned(),
-                id: new.id.clone(),
-                f: new.f.to_owned(),
-                val: new.val.clone(),
+                e: field.e.clone(),
+                id: field.id.clone(),
+                f: field.f.clone(),
+                val: field.val.clone(),
             };
             let val = serde_json::to_string(&op.val).map_err(|e| Error::Msg(e.to_string()))?;
             insert.execute(params![op.clock, op.dev, op.e, op.id, op.f, val])?;
             state::put(conn, &op)?;
+            stamped.push(op);
         }
     }
-    clock::save(conn, hlc)
+    clock::save(conn, hlc)?;
+    Ok(stamped)
 }

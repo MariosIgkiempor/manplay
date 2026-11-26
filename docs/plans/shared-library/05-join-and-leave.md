@@ -111,6 +111,9 @@ Differences from the plan above:
 - **A destination that now holds another library** (different `libraryId` than the one this
   device joined) stops the sync with an error asking to leave and join again.
 
+- **"Join and replace mine" is gone** (2026-11-26): joining is Merge or Keep mine local. The
+  `Replace` choice, its count and its confirm were removed.
+
 Breaking changes to stored data: none to old formats. New settings keys `library_id`,
 `library_name`, `device_name` (additive); a destination's `library.json` and `devices/` are new
 files under `.manplay/`. Old builds ignore them. The user-visible change is that the Library data
@@ -136,8 +139,9 @@ sync app copies around.
   `library.json` and `devices/` when the device is in no library. If another computer is a
   member it opens the join dialog once per library (dismissal kept in `localStorage`).
 - **Sharing**: Settings → Shared library → Library folder → "Share or join…" (Start).
-- **Syncing**: `libsync_run_folder` at launch, every minute and when the window comes back
-  (`useFolderLibrarySync`). Waveforms move after each run like after a destination sync.
+- **Syncing**: by `libsync_worker` (`lib.rs`), the same as a library kept on a destination: at
+  launch, when the window comes back, 30 seconds after an edit and every 5 minutes
+  (`libsync/auto.rs`). Waveforms move after each run like after a destination sync.
 - **Changing the library folder** leaves the old folder's library with a copy, like removing a
   destination.
 

@@ -539,6 +539,8 @@ pub struct LibraryOutcome {
     pub clock_wrong: bool,
     /// This install found a second copy of itself and took a new device ID.
     pub new_device_id: bool,
+    /// Deletions another device made that wait for the user's word (`libsync::brake`).
+    pub delete_hold: Option<libsync::brake::Hold>,
     pub error: Option<String>,
 }
 
@@ -553,6 +555,7 @@ impl LibraryOutcome {
             held: 0,
             clock_wrong: false,
             new_device_id: false,
+            delete_hold: None,
             error: None,
         }
     }
@@ -609,6 +612,7 @@ pub async fn run_library_data(
     out.held = summary.held;
     out.clock_wrong = summary.clock_wrong;
     out.new_device_id = summary.new_device_id;
+    out.delete_hold = summary.delete_hold;
     out.error = summary.error;
     out
 }
@@ -671,6 +675,7 @@ pub async fn join_library(
         held: summary.held,
         clock_wrong: summary.clock_wrong,
         new_device_id: summary.new_device_id,
+        delete_hold: summary.delete_hold,
         error: summary.error,
     };
     Ok(out)

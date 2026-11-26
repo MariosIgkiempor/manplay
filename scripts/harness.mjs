@@ -42,6 +42,7 @@ const TOUR = [
 	["export-rekordbox", "/export/rekordbox"],
 	["export-usb", "/export/usb?mount=%2FVolumes%2FDJ%20STICK"],
 	["deleted", "/deleted"],
+	["changes", "/changes"],
 	["settings", "/settings"],
 ];
 

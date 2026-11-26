@@ -38,20 +38,25 @@ import {
 	jellyfinSettings,
 	type LeaveChoice,
 	libraryStatus,
+	libsyncDecideDeletes,
 	libsyncHome,
 	libsyncJoin,
 	libsyncJoinFolder,
 	libsyncLeave,
-	libsyncRunFolder,
+	libsyncSetAuto,
+	libsyncStatus,
+	libsyncSyncNow,
 	listCarryCandidates,
 	listClashes,
 	listDuplicates,
+	listLibraryChanges,
 	listMissing,
 	listRecentlyDeleted,
 	listSyncTargets,
 	listTracks,
 	migrateLibraryTags,
 	onAnalysisFinished,
+	onLibrarySynced,
 	type PanelTabs,
 	type PlanId,
 	pickAndScan,
@@ -95,6 +100,7 @@ import {
 	tagValuesMigrate,
 	trackCues,
 	trashDuplicates,
+	undoLibraryChanges,
 } from "#/lib/api.ts";
 import { bumpArt } from "#/lib/art-version.ts";
 import type { CoverWrite, LookupWrite } from "#/lib/tag-lookup.ts";
@@ -249,36 +255,85 @@ export function useJoinLibrary() {
 	});
 }
 
-export const FOLDER_RUN_KEY = ["library-folder-run"] as const;
+export const LIBRARY_SYNC_KEY = ["library-sync-status"] as const;
+export const LIBRARY_CHANGES_KEY = ["library-changes"] as const;
 
-/** How often the library kept in the library folder syncs while the app is open. */
-const FOLDER_SYNC_EVERY_MS = 60_000;
+/** The shared library's syncing: on its own or not, how the last one went, what it holds back. */
+export function useLibrarySyncStatus() {
+	return useQuery({
+		queryKey: LIBRARY_SYNC_KEY,
+		queryFn: libsyncStatus,
+		enabled: useSharingOn(),
+	});
+}
 
 /**
- * Keeps the shared library in the library folder in sync while the app is open: once at start,
- * then every minute and when the window comes back. The lists refresh when something arrived.
+ * Follows the shared library's syncs, which the backend runs on its own: the sync status and the
+ * list of changes refresh after each one, and the lists when something arrived. Mount it once.
  */
-export function useFolderLibrarySync() {
-	const home = useLibraryHome().data;
+export function useLibrarySyncWatch() {
+	const queryClient = useQueryClient();
 	const refresh = useRefreshItems();
-	const run = useQuery({
-		queryKey: FOLDER_RUN_KEY,
-		queryFn: libsyncRunFolder,
-		enabled: home?.kind === "folder",
-		refetchInterval: FOLDER_SYNC_EVERY_MS,
-		retry: false,
-	});
-	// `refresh` is a new function every render; only a new run's result should call it.
+	// `refresh` is a new function every render; the subscription must not follow it.
 	const refreshRef = useRef(refresh);
 	refreshRef.current = refresh;
-	const received = run.data?.received ?? 0;
-	const at = run.dataUpdatedAt;
 	useEffect(() => {
-		if (received > 0 && at > 0) {
-			void refreshRef.current();
-		}
-	}, [received, at]);
-	return run;
+		const stop = onLibrarySynced((last) => {
+			void queryClient.invalidateQueries({ queryKey: LIBRARY_SYNC_KEY });
+			if (last.received > 0) {
+				void queryClient.invalidateQueries({ queryKey: LIBRARY_CHANGES_KEY });
+				void refreshRef.current();
+			}
+		});
+		return () => {
+			void stop.then((unlisten) => unlisten());
+		};
+	}, [queryClient]);
+}
+
+/** Switches the shared library's own syncing on or off. */
+export function useSetLibraryAuto() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: libsyncSetAuto,
+		onSettled: () => queryClient.invalidateQueries({ queryKey: LIBRARY_SYNC_KEY }),
+	});
+}
+
+/** Asks for a sync of the shared library now; `useLibrarySyncWatch` shows what it did. */
+export function useSyncLibraryNow() {
+	return useMutation({ mutationFn: libsyncSyncNow });
+}
+
+/** Settles held deletions: let them through, or keep the items. */
+export function useDecideDeletes() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: libsyncDecideDeletes,
+		onSettled: () => queryClient.invalidateQueries({ queryKey: LIBRARY_SYNC_KEY }),
+	});
+}
+
+/** What other devices' edits changed here in the last 30 days, one entry per sync. */
+export function useLibraryChanges() {
+	return useQuery({
+		queryKey: LIBRARY_CHANGES_KEY,
+		queryFn: listLibraryChanges,
+		enabled: useSharingOn(),
+	});
+}
+
+/** Takes one sync's changes back for everyone; the lists and the list of changes refresh. */
+export function useUndoLibraryChanges() {
+	const queryClient = useQueryClient();
+	const refresh = useRefreshItems();
+	return useMutation({
+		mutationFn: undoLibraryChanges,
+		onSettled: async () => {
+			await queryClient.invalidateQueries({ queryKey: LIBRARY_CHANGES_KEY });
+			await refresh();
+		},
+	});
 }
 
 /** Leaves the shared library; the lists drop or keep the shared items. */

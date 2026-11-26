@@ -16,6 +16,8 @@ mod gemini;
 mod import;
 mod jellyfin;
 mod libsync;
+#[cfg(test)]
+mod libsync_worker_tests;
 mod lookup;
 mod onelib;
 mod pdb;
@@ -94,6 +96,17 @@ struct AppState {
     jellyfin_plans: Mutex<HashMap<i64, Vec<jellyfin::push::Planned>>>,
     /// Held while playlists are sent to a Jellyfin server, so two pushes never interleave.
     jellyfin_pushing: tokio::sync::Mutex<()>,
+    /// Held while the shared library is synced, by a sync the user started or by the one that
+    /// runs on its own, so the two never overlap.
+    libsync_io: tokio::sync::Mutex<()>,
+    /// Wakes the shared library's own sync before its next look.
+    libsync_wake: tokio::sync::Notify,
+    /// The user asked for the shared library to sync now.
+    libsync_asked: AtomicBool,
+    /// The window came back to the front: a good moment to sync, when syncing on its own is on.
+    libsync_focused: AtomicBool,
+    /// How the shared library's last sync went, for the settings.
+    libsync_last: Mutex<Option<LastLibrarySync>>,
 }
 
 /// When the app started, for [`launch_mark`].
@@ -2852,6 +2865,7 @@ impl Drop for SyncGuard<'_> {
 struct SyncClaim<'a> {
     _flag: SyncGuard<'a>,
     _io: tokio::sync::MutexGuard<'a, ()>,
+    _libsync: tokio::sync::MutexGuard<'a, ()>,
 }
 
 async fn claim_sync(state: &AppState) -> Result<SyncClaim<'_>, Error> {
@@ -2860,9 +2874,11 @@ async fn claim_sync(state: &AppState) -> Result<SyncClaim<'_>, Error> {
     }
     let flag = SyncGuard(&state.syncing);
     let io = state.destination_io.lock().await;
+    let libsync = state.libsync_io.lock().await;
     Ok(SyncClaim {
         _flag: flag,
         _io: io,
+        _libsync: libsync,
     })
 }
 
@@ -3566,12 +3582,6 @@ async fn libsync_inspect(
     sync::inspect_library(&state.http, &target, &state.db).await
 }
 
-/// How many tags, playlists and smart playlists "Join and replace mine" would drop.
-#[tauri::command]
-fn libsync_replace_count(state: State<'_, AppState>) -> Result<i64, Error> {
-    with_db!(state, |c| libsync::membership::replace_count(c))
-}
-
 /// Joins the shared library on a destination, or starts one there, and syncs it once.
 #[tauri::command]
 async fn libsync_join(
@@ -3716,49 +3726,6 @@ async fn libsync_join_folder(
     Ok(out)
 }
 
-/// One sync of the shared library kept in the library folder: sends this device's edits and
-/// applies everyone else's. `None` when the device keeps no library there, or another sync is
-/// running (the next round does it).
-#[tauri::command]
-async fn libsync_run_folder(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Option<libsync::remote::RunSummary>, Error> {
-    let Some(SharedPlace::Folder(root)) = shared_place(&state)? else {
-        return Ok(None);
-    };
-    let Ok(_claim) = claim_sync(&state).await else {
-        return Ok(None);
-    };
-    if !root.is_dir() {
-        return Ok(Some(libsync::remote::RunSummary {
-            error: Some(format!(
-                "The library folder {} cannot be reached.",
-                root.display()
-            )),
-            ..libsync::remote::RunSummary::default()
-        }));
-    }
-    let owner = lock_owner(&state)?;
-    let held = match sync::lock::acquire_folder(&root, &owner).await {
-        Ok(held) => held,
-        Err(e) => {
-            return Ok(Some(libsync::remote::RunSummary {
-                error: Some(e.to_string()),
-                ..libsync::remote::RunSummary::default()
-            }));
-        }
-    };
-    state.wf_misses.clear();
-    let store = libsync::folder::FolderStore::new(&root);
-    let out = libsync::membership::run_joined(&state.db, &store, &folder_label(&root)).await;
-    held.release().await;
-    if out.error.is_none() {
-        tauri::async_runtime::spawn(transfer_waveforms(app, SharedPlace::Folder(root)));
-    }
-    Ok(Some(out))
-}
-
 fn shared_target(state: &AppState, id: i64) -> Result<db::SyncTarget, Error> {
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     db::list_targets(&conn)?
@@ -3796,21 +3763,283 @@ async fn libsync_run(
         db::get_targets(&conn, Some(&target_ids))?
     };
     let mut out = Vec::new();
-    state.wf_misses.clear();
-    let owner = lock_owner(&state)?;
-    for target in targets.iter().filter(|t| t.libsync) {
-        match sync::lock::acquire(&state.http, target, &owner).await {
-            Ok(held) => {
-                out.push(sync::run_library_data(&state.http, target, &state.db).await);
-                held.release().await;
-            }
-            Err(e) => out.push(sync::LibraryOutcome::failed(target, e.to_string())),
-        }
-    }
-    if let Some(target) = targets.into_iter().find(|t| t.libsync) {
-        tauri::async_runtime::spawn(transfer_waveforms(app, SharedPlace::Target(target)));
+    for target in targets.into_iter().filter(|t| t.libsync) {
+        let outcome = sync_shared_target(&app, &state, target).await;
+        remember_library_sync(&app, &state, LastLibrarySync::of_outcome(&outcome));
+        out.push(outcome);
     }
     Ok(out)
+}
+
+/// One sync of the shared library kept on `target`, under the destination's lock; the waveforms
+/// follow in the background.
+async fn sync_shared_target(
+    app: &AppHandle,
+    state: &AppState,
+    target: db::SyncTarget,
+) -> sync::LibraryOutcome {
+    let owner = match lock_owner(state) {
+        Ok(owner) => owner,
+        Err(e) => return sync::LibraryOutcome::failed(&target, e.to_string()),
+    };
+    state.wf_misses.clear();
+    let held = match sync::lock::acquire(&state.http, &target, &owner).await {
+        Ok(held) => held,
+        Err(e) => return sync::LibraryOutcome::failed(&target, e.to_string()),
+    };
+    let outcome = sync::run_library_data(&state.http, &target, &state.db).await;
+    held.release().await;
+    if outcome.error.is_none() {
+        tauri::async_runtime::spawn(transfer_waveforms(app.clone(), SharedPlace::Target(target)));
+    }
+    outcome
+}
+
+/// One sync of the shared library kept in the library folder `root`, under the folder's lock;
+/// the waveforms follow in the background.
+async fn sync_shared_folder(
+    app: &AppHandle,
+    state: &AppState,
+    root: PathBuf,
+) -> libsync::remote::RunSummary {
+    let out = run_shared_folder(state, &root).await;
+    if out.error.is_none() {
+        tauri::async_runtime::spawn(transfer_waveforms(app.clone(), SharedPlace::Folder(root)));
+    }
+    out
+}
+
+/// The sync itself of [`sync_shared_folder`]: takes the folder's lock, exchanges edits, gives
+/// the lock back.
+async fn run_shared_folder(state: &AppState, root: &Path) -> libsync::remote::RunSummary {
+    let failed = |error: String| libsync::remote::RunSummary {
+        error: Some(error),
+        ..libsync::remote::RunSummary::default()
+    };
+    if !root.is_dir() {
+        return failed(format!(
+            "The library folder {} cannot be reached.",
+            root.display()
+        ));
+    }
+    let owner = match lock_owner(state) {
+        Ok(owner) => owner,
+        Err(e) => return failed(e.to_string()),
+    };
+    let held = match sync::lock::acquire_folder(root, &owner).await {
+        Ok(held) => held,
+        Err(e) => return failed(e.to_string()),
+    };
+    state.wf_misses.clear();
+    let store = libsync::folder::FolderStore::new(root);
+    let out = libsync::membership::run_joined(&state.db, &store, &folder_label(root)).await;
+    held.release().await;
+    out
+}
+
+/// Unix time in seconds, UTC.
+type UnixSeconds = i64;
+
+/// How the shared library's last sync went.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LastLibrarySync {
+    at: UnixSeconds,
+    /// This device's edits sent.
+    sent: usize,
+    /// Other devices' edits applied here.
+    received: usize,
+    error: Option<String>,
+}
+
+impl LastLibrarySync {
+    fn of_summary(summary: &libsync::remote::RunSummary) -> Self {
+        Self {
+            at: unix_now(),
+            sent: summary.sent,
+            received: summary.received,
+            error: summary.error.clone(),
+        }
+    }
+
+    fn of_outcome(outcome: &sync::LibraryOutcome) -> Self {
+        Self {
+            at: unix_now(),
+            sent: outcome.sent,
+            received: outcome.received,
+            error: outcome.error.clone(),
+        }
+    }
+}
+
+/// Keeps how a sync of the shared library went and tells the window (`libsync-synced`), which
+/// shows what arrived.
+fn remember_library_sync(app: &AppHandle, state: &AppState, last: LastLibrarySync) {
+    let _ = app.emit("libsync-synced", &last);
+    if let Ok(mut slot) = state.libsync_last.lock() {
+        *slot = Some(last);
+    }
+}
+
+/// The shared library, as the settings show its syncing.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibrarySyncStatus {
+    /// Whether it syncs on its own.
+    auto: bool,
+    last: Option<LastLibrarySync>,
+    /// Deletions another device made that wait for the user's word.
+    hold: Option<libsync::brake::Hold>,
+}
+
+#[tauri::command]
+fn libsync_status(state: State<'_, AppState>) -> Result<LibrarySyncStatus, Error> {
+    let last = state.libsync_last.lock().map_err(|_| Error::Lock)?.clone();
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    Ok(LibrarySyncStatus {
+        auto: libsync::auto::enabled(&conn)?,
+        last,
+        hold: libsync::brake::waiting(&conn)?,
+    })
+}
+
+/// Switches the shared library's own syncing on or off. Off, it syncs when asked and with a
+/// Sync of its destination.
+#[tauri::command]
+fn libsync_set_auto(state: State<'_, AppState>, on: bool) -> Result<(), Error> {
+    with_db!(state, |c| libsync::auto::set_enabled(c, on))?;
+    state.libsync_wake.notify_one();
+    Ok(())
+}
+
+/// Asks for a sync of the shared library now; it runs in the background.
+#[tauri::command]
+fn libsync_sync_now(state: State<'_, AppState>) {
+    ask_library_sync(&state);
+}
+
+fn ask_library_sync(state: &AppState) {
+    state.libsync_asked.store(true, Ordering::SeqCst);
+    state.libsync_wake.notify_one();
+}
+
+/// Settles the deletions a sync held back: let them through, or keep the items (they are
+/// restored for everyone). The sync that carries it out starts at once.
+#[tauri::command]
+fn libsync_decide_deletes(
+    state: State<'_, AppState>,
+    choice: libsync::brake::Decision,
+) -> Result<(), Error> {
+    with_db!(state, |c| libsync::brake::decide(c, choice))?;
+    ask_library_sync(&state);
+    Ok(())
+}
+
+/// What other devices' edits changed here in the last 30 days, one entry per sync, newest first.
+#[tauri::command]
+fn list_library_changes(state: State<'_, AppState>) -> Result<Vec<libsync::journal::Batch>, Error> {
+    with_db!(state, |c| libsync::journal::list(
+        c,
+        libsync::clock::now_ms()
+    ))
+}
+
+/// Takes one sync's changes back, for everyone.
+#[tauri::command]
+fn undo_library_changes(
+    state: State<'_, AppState>,
+    batch: libsync::journal::BatchId,
+) -> Result<libsync::journal::Undone, Error> {
+    let undone = with_db!(state, |c| libsync::journal::undo(
+        c,
+        batch,
+        libsync::clock::now_ms()
+    ))?;
+    ask_library_sync(&state);
+    Ok(undone)
+}
+
+/// Keeps the shared library in sync on its own while the app is open (see `libsync::auto` for
+/// when). It gives way to a sync the user started and never runs beside one.
+async fn libsync_worker(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let mut pace = libsync::auto::Pace::default();
+    let mut last_try: Option<std::time::Instant> = None;
+    loop {
+        let asked = state.libsync_asked.swap(false, Ordering::SeqCst);
+        let focused = state.libsync_focused.swap(false, Ordering::SeqCst);
+        match due_library_sync(&state, pace, last_try, asked, focused) {
+            Ok(Some(home)) => {
+                if let Some(last) = auto_sync_library(&app, &state, home).await {
+                    if last.error.is_some() {
+                        pace.failed();
+                    } else {
+                        pace.succeeded();
+                    }
+                    last_try = Some(std::time::Instant::now());
+                    remember_library_sync(&app, &state, last);
+                } else if asked {
+                    // Another sync is running: what was asked for is done after it.
+                    state.libsync_asked.store(true, Ordering::SeqCst);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => log::warn!("could not check whether the shared library is due: {e}"),
+        }
+        let _ = tokio::time::timeout(libsync::auto::TICK, state.libsync_wake.notified()).await;
+    }
+}
+
+/// Where the shared library is kept, when it should sync now.
+fn due_library_sync(
+    state: &AppState,
+    pace: libsync::auto::Pace,
+    last_try: Option<std::time::Instant>,
+    asked: bool,
+    focused: bool,
+) -> Result<Option<SharedPlace>, Error> {
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    let auto = libsync::auto::enabled(&conn)?;
+    if !auto && !asked {
+        return Ok(None);
+    }
+    let moment = libsync::auto::Moment {
+        since_last: last_try.map(|at| at.elapsed()),
+        unsent_age: libsync::auto::unsent_age(&conn, libsync::clock::now_ms())?,
+        asked: asked || focused,
+    };
+    if !pace.due(moment) {
+        return Ok(None);
+    }
+    shared_place_of(&conn)
+}
+
+/// The right to sync the shared library on its own, held until dropped. `None` while a sync the
+/// user started is running or another library sync holds the library.
+fn library_sync_slot(state: &AppState) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+    let slot = state.libsync_io.try_lock().ok()?;
+    if state.syncing.load(Ordering::SeqCst) {
+        return None;
+    }
+    Some(slot)
+}
+
+/// One sync of the shared library at `place`. `None` when a sync the user started is running or
+/// another library sync holds the library: the next look tries again.
+async fn auto_sync_library(
+    app: &AppHandle,
+    state: &AppState,
+    place: SharedPlace,
+) -> Option<LastLibrarySync> {
+    let _slot = library_sync_slot(state)?;
+    Some(match place {
+        SharedPlace::Target(target) => {
+            LastLibrarySync::of_outcome(&sync_shared_target(app, state, target).await)
+        }
+        SharedPlace::Folder(root) => {
+            LastLibrarySync::of_summary(&sync_shared_folder(app, state, root).await)
+        }
+    })
 }
 
 /// Uploads this device's waveforms and downloads everyone else's after a sync, all of them, in
@@ -5275,6 +5504,14 @@ fn art_response(app: &AppHandle, target: ArtTarget) -> tauri::http::Response<Vec
 pub fn run() {
     launch_mark("the app started");
     tauri::Builder::default()
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Focused(true))
+                && let Some(state) = window.try_state::<AppState>()
+            {
+                state.libsync_focused.store(true, Ordering::SeqCst);
+                state.libsync_wake.notify_one();
+            }
+        })
         .on_page_load(|_, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 launch_mark("the page loaded");
@@ -5361,10 +5598,16 @@ pub fn run() {
                 wf_again: AtomicBool::new(false),
                 jellyfin_plans: Mutex::new(HashMap::new()),
                 jellyfin_pushing: tokio::sync::Mutex::new(()),
+                libsync_io: tokio::sync::Mutex::new(()),
+                libsync_wake: tokio::sync::Notify::new(),
+                libsync_asked: AtomicBool::new(false),
+                libsync_focused: AtomicBool::new(false),
+                libsync_last: Mutex::new(None),
             });
             tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(reprint_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(scan_worker(app.handle().clone()));
+            tauri::async_runtime::spawn(libsync_worker(app.handle().clone()));
             tauri::async_runtime::spawn(analysis_worker(app.handle().clone()));
             tauri::async_runtime::spawn(auto_import_worker(app.handle().clone()));
             launch_mark("the backend is set up");
@@ -5431,9 +5674,13 @@ pub fn run() {
             libsync_inspect,
             libsync_inspect_folder,
             libsync_join_folder,
-            libsync_run_folder,
+            libsync_status,
+            libsync_set_auto,
+            libsync_sync_now,
+            libsync_decide_deletes,
+            list_library_changes,
+            undo_library_changes,
             libsync_home,
-            libsync_replace_count,
             libsync_join,
             libsync_leave,
             get_device_name,
@@ -6168,6 +6415,11 @@ mod tests {
             wf_again: AtomicBool::new(false),
             jellyfin_plans: Mutex::new(HashMap::new()),
             jellyfin_pushing: tokio::sync::Mutex::new(()),
+            libsync_io: tokio::sync::Mutex::new(()),
+            libsync_wake: tokio::sync::Notify::new(),
+            libsync_asked: AtomicBool::new(false),
+            libsync_focused: AtomicBool::new(false),
+            libsync_last: Mutex::new(None),
         };
         assert!(export_inner(&state, false).expect("export"));
 
@@ -6272,6 +6524,11 @@ mod tests {
             wf_again: AtomicBool::new(false),
             jellyfin_plans: Mutex::new(HashMap::new()),
             jellyfin_pushing: tokio::sync::Mutex::new(()),
+            libsync_io: tokio::sync::Mutex::new(()),
+            libsync_wake: tokio::sync::Notify::new(),
+            libsync_asked: AtomicBool::new(false),
+            libsync_focused: AtomicBool::new(false),
+            libsync_last: Mutex::new(None),
         };
         assert!(export_inner(&state, false).expect("export"));
 
@@ -6323,6 +6580,11 @@ mod tests {
             wf_again: AtomicBool::new(false),
             jellyfin_plans: Mutex::new(HashMap::new()),
             jellyfin_pushing: tokio::sync::Mutex::new(()),
+            libsync_io: tokio::sync::Mutex::new(()),
+            libsync_wake: tokio::sync::Notify::new(),
+            libsync_asked: AtomicBool::new(false),
+            libsync_focused: AtomicBool::new(false),
+            libsync_last: Mutex::new(None),
         };
         assert!(!export_inner(&state, false).expect("no-op"));
     }

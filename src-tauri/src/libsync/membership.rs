@@ -278,8 +278,6 @@ pub enum JoinChoice {
     Merge,
     /// Mine become local; everything shared arrives.
     KeepLocal,
-    /// Mine are dropped; everything shared arrives.
-    Replace,
     /// There is no library yet: write `library.json` and share mine.
     Start,
 }
@@ -293,35 +291,8 @@ fn prepare_join(conn: &Connection, choice: JoinChoice) -> Result<(), Error> {
                 conn.execute(&format!("UPDATE {table} SET scope = 'local'"), [])?;
             }
         }
-        JoinChoice::Replace => {
-            conn.execute_batch(
-                "DELETE FROM track_tags;
-                 DELETE FROM playlist_tracks;
-                 DELETE FROM tags;
-                 DELETE FROM playlists;
-                 DELETE FROM smart_playlists;
-                 DELETE FROM clashes;
-                 DELETE FROM oplog WHERE e IN
-                     ('tag', 'track_tag', 'playlist', 'playlist_track', 'smart_playlist');
-                 DELETE FROM op_state WHERE e IN
-                     ('tag', 'track_tag', 'playlist', 'playlist_track', 'smart_playlist');
-                 DELETE FROM op_cursor;",
-            )?;
-            snapshot::forget(conn)?;
-        }
     }
     Ok(())
-}
-
-/// How many tags, playlists and smart playlists a replace would drop.
-pub fn replace_count(conn: &Connection) -> Result<i64, Error> {
-    let mut total = 0;
-    for table in [TAGS.table, PLAYLISTS.table, SMARTS.table] {
-        total += conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| {
-            r.get::<_, i64>(0)
-        })?;
-    }
-    Ok(total)
 }
 
 /// Joins the library at `home` (or starts one there with `Start`, called `new_name`), then does

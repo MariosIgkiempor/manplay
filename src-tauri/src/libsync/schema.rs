@@ -75,7 +75,23 @@ pub fn create(conn: &Connection) -> Result<(), Error> {
          -- Audio the user turned down carrying tags and playlists over from.
          CREATE TABLE IF NOT EXISTS carry_dismissed (
              old_fp TEXT PRIMARY KEY
-         );",
+         );
+         -- What other devices' edits changed here, one line per field and sync (`batch` is the
+         -- UTC ms of that sync), with the value from before so it can be taken back (see
+         -- `journal.rs`). `prev` is NULL when the field had no value.
+         CREATE TABLE IF NOT EXISTS op_journal (
+             n      INTEGER PRIMARY KEY,
+             batch  INTEGER NOT NULL,
+             clock  TEXT NOT NULL,
+             dev    TEXT NOT NULL,
+             e      TEXT NOT NULL,
+             id     TEXT NOT NULL,
+             f      TEXT NOT NULL,
+             val    TEXT NOT NULL,
+             prev   TEXT,
+             undone INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE INDEX IF NOT EXISTS op_journal_batch ON op_journal(batch);",
     )?;
     Ok(())
 }

@@ -535,6 +535,20 @@ export async function updateSyncTarget(t: {
 	});
 }
 
+const deleteHoldSchema = z.object({
+	/** How many tags, playlists and smart playlists would be deleted here. */
+	count: int,
+	/** The members who deleted them, by name. */
+	by: z.array(z.string()),
+	/** The first few of their names. */
+	names: z.array(z.string()),
+	/** Unix seconds. */
+	at: int,
+});
+
+/** Deletions another device made that are not applied here until the user decides. */
+export type DeleteHold = z.infer<typeof deleteHoldSchema>;
+
 const libraryOutcomeSchema = z.object({
 	targetId: int,
 	name: z.string(),
@@ -544,6 +558,7 @@ const libraryOutcomeSchema = z.object({
 	held: int,
 	clockWrong: z.boolean(),
 	newDeviceId: z.boolean(),
+	deleteHold: deleteHoldSchema.nullable(),
 	error: z.string().nullable(),
 });
 export type LibraryOutcome = z.infer<typeof libraryOutcomeSchema>;
@@ -585,16 +600,11 @@ export async function libsyncInspect(targetId: number): Promise<FoundLibrary | n
 	return foundLibrarySchema.nullable().parse(await invoke("libsync_inspect", { targetId }));
 }
 
-/** How many tags, playlists and smart playlists "replace mine" would drop. */
-export async function libsyncReplaceCount(): Promise<number> {
-	return int.parse(await invoke("libsync_replace_count"));
-}
-
 /**
  * What happens to what this device has when it joins: `merge` shares it (same names become
- * clashes), `keepLocal` makes it local, `replace` drops it, `start` begins a library there.
+ * clashes), `keepLocal` makes it local, `start` begins a library there.
  */
-export type JoinChoice = "merge" | "keepLocal" | "replace" | "start";
+export type JoinChoice = "merge" | "keepLocal" | "start";
 
 /** Joins (or starts) the shared library on a destination and syncs it once. */
 export async function libsyncJoin(targetId: number, choice: JoinChoice): Promise<LibraryOutcome> {
@@ -608,6 +618,7 @@ const runSummarySchema = z.object({
 	held: int,
 	clockWrong: z.boolean(),
 	newDeviceId: z.boolean(),
+	deleteHold: deleteHoldSchema.nullable(),
 	error: z.string().nullable(),
 });
 /** What one sync of library data did. */
@@ -635,12 +646,98 @@ export async function libsyncJoinFolder(choice: JoinChoice): Promise<RunSummary>
 	return runSummarySchema.parse(await invoke("libsync_join_folder", { choice }));
 }
 
-/**
- * Syncs the shared library kept in the library folder once. Null when there is none, or another
- * sync is running.
- */
-export async function libsyncRunFolder(): Promise<RunSummary | null> {
-	return runSummarySchema.nullable().parse(await invoke("libsync_run_folder"));
+const lastLibrarySyncSchema = z.object({
+	/** Unix seconds. */
+	at: int,
+	sent: int,
+	received: int,
+	error: z.string().nullable(),
+});
+
+/** How the shared library's last sync went. */
+export type LastLibrarySync = z.infer<typeof lastLibrarySyncSchema>;
+
+const librarySyncStatusSchema = z.object({
+	/** Whether the shared library syncs on its own. */
+	auto: z.boolean(),
+	last: lastLibrarySyncSchema.nullable(),
+	hold: deleteHoldSchema.nullable(),
+});
+
+/** The shared library's syncing: on its own or not, how the last one went, what it holds back. */
+export type LibrarySyncStatus = z.infer<typeof librarySyncStatusSchema>;
+
+export async function libsyncStatus(): Promise<LibrarySyncStatus> {
+	return librarySyncStatusSchema.parse(await invoke("libsync_status"));
+}
+
+/** Switches the shared library's own syncing on or off. */
+export async function libsyncSetAuto(on: boolean): Promise<void> {
+	await invoke("libsync_set_auto", { on });
+}
+
+/** Asks for a sync of the shared library now. It runs in the background: see `onLibrarySynced`. */
+export async function libsyncSyncNow(): Promise<void> {
+	await invoke("libsync_sync_now");
+}
+
+/** `apply` lets held deletions through; `keep` restores the items for everyone. */
+export type DeleteDecision = "apply" | "keep";
+
+/** Settles the deletions a sync held back; the sync that carries it out starts at once. */
+export async function libsyncDecideDeletes(choice: DeleteDecision): Promise<void> {
+	await invoke("libsync_decide_deletes", { choice });
+}
+
+/** Calls `handler` after every sync of the shared library, whoever started it. */
+export function onLibrarySynced(handler: (last: LastLibrarySync) => void) {
+	return listen("libsync-synced", (e) => handler(lastLibrarySyncSchema.parse(e.payload)));
+}
+
+const libraryChangeSchema = z.object({
+	kind: z.enum(["tag", "playlist", "smart_playlist", "analysis", "tag_custom"]),
+	/** The item's name now; empty for `analysis` and `tag_custom`. */
+	name: z.string(),
+	/** Whether the sync made the item, removed it or brought it back. */
+	standing: z.enum(["existing", "created", "deleted", "restored"]),
+	renamedFrom: z.string().nullable(),
+	mergedInto: z.string().nullable(),
+	rulesChanged: z.boolean(),
+	songsAdded: int,
+	songsRemoved: int,
+	songsMoved: int,
+	/** `analysis`: songs changed. `tag_custom`: values added or removed. */
+	count: int,
+});
+
+/** What one sync did to one item, or to the analysis or Tag Database values as a whole. */
+export type LibraryChange = z.infer<typeof libraryChangeSchema>;
+
+const libraryChangeBatchSchema = z.object({
+	id: int,
+	/** Unix seconds. */
+	at: int,
+	by: z.array(z.string()),
+	changes: z.array(libraryChangeSchema),
+	undone: z.boolean(),
+});
+
+/** One sync's worth of other devices' edits. */
+export type LibraryChangeBatch = z.infer<typeof libraryChangeBatchSchema>;
+
+/** What other devices' edits changed here in the last 30 days, newest first. */
+export async function listLibraryChanges(): Promise<LibraryChangeBatch[]> {
+	return z.array(libraryChangeBatchSchema).parse(await invoke("list_library_changes"));
+}
+
+const undoneSchema = z.object({ reverted: int, skipped: int });
+
+/** What taking a sync back did: fields put back, and fields left because they changed since. */
+export type Undone = z.infer<typeof undoneSchema>;
+
+/** Takes one sync's changes back, for everyone. */
+export async function undoLibraryChanges(batch: number): Promise<Undone> {
+	return undoneSchema.parse(await invoke("undo_library_changes", { batch }));
 }
 
 /** What happens to the shared items on this device when it leaves: keep them as local or drop them. */

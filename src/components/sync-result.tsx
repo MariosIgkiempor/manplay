@@ -21,6 +21,11 @@ function libraryNotes(l: LibraryOutcome): string[] {
 			`${l.held.toLocaleString()} edits held back: another device's clock is ahead of yours.`,
 		);
 	}
+	if (l.deleteHold) {
+		notes.push(
+			`${l.deleteHold.count.toLocaleString()} deletions from another device are waiting: choose under Changes. Nothing else arrives until then.`,
+		);
+	}
 	if (l.newDeviceId) {
 		notes.push(
 			"Device ID was in use by another copy (copied app data or a backup). New ID given; nothing lost.",

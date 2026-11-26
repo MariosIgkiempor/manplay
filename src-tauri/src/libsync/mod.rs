@@ -8,6 +8,8 @@
 //! matters. See `docs/plans/shared-library/02-op-log.md`.
 
 pub mod apply;
+pub mod auto;
+pub mod brake;
 pub mod carry;
 pub mod clashes;
 pub mod clock;
@@ -16,6 +18,7 @@ pub mod entities;
 pub mod folder;
 pub mod frac;
 pub mod identity;
+pub mod journal;
 pub mod membership;
 pub mod ops;
 pub mod recent;

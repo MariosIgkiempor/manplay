@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::apply::{self, apply_ops};
+use super::brake;
 use super::entities;
 use super::ops::{F_DELETE, F_MERGE, F_PRESENT, F_RULES, FORMAT, Op};
 use super::remote::ChunkStore;
@@ -461,23 +462,33 @@ fn rebuild_rows(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
+/// What [`sync_in`] found.
+pub struct SyncedIn {
+    /// The newest snapshot this device has taken in, if any.
+    pub known: Option<Known>,
+    /// The newest snapshot would delete a lot here and was not applied (see `brake.rs`).
+    pub hold: Option<brake::Hold>,
+}
+
 /// Before a sync reads chunks: loads the newest snapshot when it knows more than this device
 /// (a new device, or one behind chunks that were cleaned up), and returns what the newest
 /// snapshot covers. A snapshot already seen is not downloaded again.
 pub async fn sync_in<S: ChunkStore>(
     db: &Mutex<Connection>,
     store: &S,
-) -> Result<Option<Known>, Error> {
+    now_ms: i64,
+) -> Result<SyncedIn, Error> {
+    let seen = |known| SyncedIn { known, hold: None };
     let clocks = list(store).await?;
     let stored = {
         let conn = lock(db)?;
         known(&conn)?
     };
     let Some(newest) = clocks.last() else {
-        return Ok(stored);
+        return Ok(seen(stored));
     };
     if stored.as_ref().is_some_and(|k| &k.clock == newest) {
-        return Ok(stored);
+        return Ok(seen(stored));
     }
     let mut loaded = None;
     let mut failure = None;
@@ -492,13 +503,26 @@ pub async fn sync_in<S: ChunkStore>(
         }
     }
     let Some(loaded) = loaded else {
-        return failure.map_or(Ok(stored), Err);
+        return failure.map_or(Ok(seen(stored)), Err);
     };
     let mut conn = lock(db)?;
     let tx = conn.transaction()?;
     if behind(&tx, &loaded.header.covers)? {
+        let restore = match brake::judge(&tx, &loaded.ops, now_ms)? {
+            brake::Verdict::Apply { restore } => restore,
+            brake::Verdict::Hold(hold) => {
+                // The snapshot stays unread: the next sync that may read meets it again.
+                drop(tx);
+                brake::set_hold(&conn, &hold)?;
+                return Ok(SyncedIn {
+                    known: stored,
+                    hold: Some(hold),
+                });
+            }
+        };
         let stale = last_sync(&tx)?.is_some_and(|t| t < loaded.header.horizon);
         apply_loaded(&tx, &loaded, stale)?;
+        brake::keep(&tx, &restore, now_ms)?;
     }
     let now_known = Known {
         clock: loaded.header.clock.clone(),
@@ -506,7 +530,7 @@ pub async fn sync_in<S: ChunkStore>(
     };
     set_known(&tx, &now_known)?;
     tx.commit()?;
-    Ok(Some(now_known))
+    Ok(seen(Some(now_known)))
 }
 
 /// A device met a hole in another's chunks (`next` of `dev` is gone, later ones are there).

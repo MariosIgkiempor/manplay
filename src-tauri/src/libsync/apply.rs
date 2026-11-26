@@ -15,7 +15,7 @@ use super::ops::{Entity, F_DELETE, F_MERGE, F_NAME, F_POS, F_PRESENT, FORMAT, Op
 use super::state;
 use crate::error::Error;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Kind {
     pub table: &'static str,
     pub entity: &'static str,
@@ -101,17 +101,8 @@ pub fn find(
 }
 
 /// Applies ops read from other devices. Run it inside a transaction.
-#[allow(clippy::too_many_lines)]
 pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
-    let mut items: BTreeSet<(&'static str, String)> = BTreeSet::new();
-    let mut merges: BTreeSet<(&'static str, String)> = BTreeSet::new();
-    let mut members: BTreeSet<(Entity, String, String)> = BTreeSet::new();
-    let mut customs = BTreeSet::new();
-    let mut analyses = BTreeSet::new();
-    let mut remaps: Vec<(String, String)> = Vec::new();
-    let mut deleted_tags: BTreeSet<String> = BTreeSet::new();
-    let mut resets: Vec<(String, i64)> = Vec::new();
-    let mut won = 0;
+    let mut won = Vec::new();
     for op in ops {
         if op.v > FORMAT {
             conn.execute(
@@ -123,10 +114,25 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
             )?;
             continue;
         }
-        if !state::put(conn, op)? {
-            continue;
+        if state::put(conn, op)? {
+            won.push(op);
         }
-        won += 1;
+    }
+    materialize(conn, &won)?;
+    Ok(won.len())
+}
+
+/// Rebuilds the rows `ops` are about from the register store, which must already hold them.
+pub fn materialize(conn: &Connection, ops: &[&Op]) -> Result<(), Error> {
+    let mut items: BTreeSet<(&'static str, String)> = BTreeSet::new();
+    let mut merges: BTreeSet<(&'static str, String)> = BTreeSet::new();
+    let mut members: BTreeSet<(Entity, String, String)> = BTreeSet::new();
+    let mut customs = BTreeSet::new();
+    let mut analyses = BTreeSet::new();
+    let mut remaps: Vec<(String, String)> = Vec::new();
+    let mut deleted_tags: BTreeSet<String> = BTreeSet::new();
+    let mut resets: Vec<(String, i64)> = Vec::new();
+    for op in ops {
         match op.entity() {
             e @ (Entity::Tag | Entity::Playlist | Entity::SmartPlaylist) => {
                 let kind = match e {
@@ -217,7 +223,7 @@ pub fn apply_ops(conn: &Connection, ops: &[Op]) -> Result<usize, Error> {
     for id in touched {
         renumber(conn, id)?;
     }
-    Ok(won)
+    Ok(())
 }
 
 /// What an item is called according to the registers: `None` when it is gone (deleted or merged

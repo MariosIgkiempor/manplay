@@ -3,6 +3,7 @@ import type {
 	AuditIssue,
 	Clash,
 	DeletedItem,
+	DeleteHold,
 	DuplicateGroup,
 	ExportSelection,
 	FsEntry,
@@ -11,6 +12,7 @@ import type {
 	ImportGroup,
 	ImportScan,
 	ImportTrack,
+	LibraryChangeBatch,
 	MissingTrack,
 	PickerPlace,
 	RekordboxStatus,
@@ -599,6 +601,64 @@ export const RECENTLY_DELETED: DeletedItem[] = [
 		songs: 6,
 	},
 ];
+
+const NO_CHANGE = {
+	standing: "existing",
+	renamedFrom: null,
+	mergedInto: null,
+	rulesChanged: false,
+	songsAdded: 0,
+	songsRemoved: 0,
+	songsMoved: 0,
+	count: 0,
+} as const;
+
+/** What other devices changed lately, one entry per sync. */
+export const LIBRARY_CHANGES: LibraryChangeBatch[] = [
+	{
+		id: (NOW - 140) * 1000,
+		at: NOW - 140,
+		by: ["studio-mac"],
+		undone: false,
+		changes: [
+			{
+				...NO_CHANGE,
+				kind: "playlist",
+				name: "Friday warmup",
+				standing: "created",
+				songsAdded: 24,
+			},
+			{ ...NO_CHANGE, kind: "tag", name: "Genre/House", songsAdded: 6, songsRemoved: 1 },
+			{ ...NO_CHANGE, kind: "smart_playlist", name: "Peak 126+", rulesChanged: true },
+			{ ...NO_CHANGE, kind: "analysis", name: "", count: 31 },
+		],
+	},
+	{
+		id: (NOW - 2 * DAY) * 1000,
+		at: NOW - 2 * DAY,
+		by: ["studio-mac", "tour-laptop"],
+		undone: false,
+		changes: [
+			{ ...NO_CHANGE, kind: "playlist", name: "Closing", renamedFrom: "Last hour", songsMoved: 3 },
+			{ ...NO_CHANGE, kind: "tag", name: "Energy/Low", standing: "deleted" },
+		],
+	},
+	{
+		id: (NOW - 9 * DAY) * 1000,
+		at: NOW - 9 * DAY,
+		by: ["tour-laptop"],
+		undone: true,
+		changes: [{ ...NO_CHANGE, kind: "tag", name: "Vocal", songsAdded: 112 }],
+	},
+];
+
+/** Deletions a sync held back for a choice. */
+export const DELETE_HOLD: DeleteHold = {
+	count: 31,
+	by: ["tour-laptop"],
+	names: ["Genre/Techno", "Genre/Techno/Hard", "Genre/Techno/Dub", "Festival 2026", "B2B ideas"],
+	at: NOW - 900,
+};
 
 const pickerFolder = (name: string): FsEntry => ({ name, isDir: true, size: 0, modified: NOW });
 const pickerFile = (name: string, size: number): FsEntry => ({
