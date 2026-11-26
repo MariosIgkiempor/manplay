@@ -1,6 +1,7 @@
 import type {
 	DeleteHold,
 	ExportSelection,
+	FileRemoval,
 	FsEntry,
 	IgnoreRule,
 	LibraryChangeBatch,
@@ -36,6 +37,7 @@ import {
 	DEFAULT_SELECTION,
 	DELETE_HOLD,
 	DOWNLOADS_FOLDER,
+	FILE_REMOVALS,
 	IMPORT_FOLDERS,
 	LIBRARY_CHANGES,
 	NAS_TARGET_ID,
@@ -87,6 +89,7 @@ interface State {
 	/** Deletions from another device waiting for a choice, until one is made. */
 	deleteHold: DeleteHold | null;
 	libraryChanges: LibraryChangeBatch[];
+	fileRemovals: FileRemoval[];
 	defaultScope: Scope;
 	/** Destination-only files ignored, by destination. */
 	ignored: Map<number, IgnoreRule[]>;
@@ -110,6 +113,7 @@ function createState(scenario: Scenario): State {
 		libraryAuto: true,
 		deleteHold: DELETE_HOLD,
 		libraryChanges: LIBRARY_CHANGES,
+		fileRemovals: FILE_REMOVALS,
 		defaultScope: "shared",
 		ignored: new Map(),
 		analysis: { keyFormat: "camelot", replaceEdits: false },
@@ -294,6 +298,14 @@ function untagTrack(state: State, name: string, trackId: number): void {
 		track.tags = track.tags.filter((tag) => tag !== name);
 	}
 	recountTags(state);
+}
+
+/** Takes the named songs off the list of removed songs; returns how many it took. */
+function settleRemovals(state: State, audioFps: unknown): number {
+	const asked = Array.isArray(audioFps) ? audioFps : [];
+	const before = state.fileRemovals.length;
+	state.fileRemovals = state.fileRemovals.filter((removal) => !asked.includes(removal.audioFp));
+	return before - state.fileRemovals.length;
 }
 
 function libraryCommands(state: State): Record<string, Command> {
@@ -851,6 +863,9 @@ function syncCommands(state: State): Record<string, Command> {
 		libsync_decide_deletes: () => {
 			state.deleteHold = null;
 		},
+		list_file_removals: () => (state.tracks.length > 0 ? state.fileRemovals : []),
+		keep_file_removals: (args) => settleRemovals(state, args.get("audioFps")),
+		apply_file_removals: (args) => settleRemovals(state, args.get("audioFps")),
 		list_library_changes: () => (state.tracks.length > 0 ? state.libraryChanges : []),
 		undo_library_changes: (args) => {
 			state.libraryChanges = state.libraryChanges.map((batch) =>

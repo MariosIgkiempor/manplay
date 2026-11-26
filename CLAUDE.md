@@ -27,7 +27,7 @@ Windows 10/11 x64.
 | Destinations sync (WebDAV over Tailscale, R2) | `sync.rs`, `sync/transfer.rs`, `webdav.rs`, `r2.rs`, `tailscale.rs` |
 | Background destination reads, per-destination plans | `sync_scans.rs`, `scan_worker` in `lib.rs`, `src/lib/sync-status.ts`, `src/lib/review-reads.ts` |
 | Shared library syncing on its own (when it runs, the list of what other devices changed with Undo, the stop before many deletions at once) | `libsync/auto.rs`, `libsync/journal.rs`, `libsync/brake.rs`, `libsync_worker` in `lib.rs`, `src/components/library-changes.tsx`, `src/lib/library-changes.ts` |
-| Where each song's file is and which songs were removed on purpose, written to the shared library's log, and the library following moves and renames other devices made (removals and new songs are recorded only) | `libsync/files.rs`, `record_files`, `follow_file_moves` and `fs_trash` in `lib.rs` |
+| Where each song's file is and which songs were removed on purpose, written to the shared library's log, and the library following moves and renames other devices made and the review of songs other devices removed (new songs are recorded only) | `libsync/files.rs`, `record_files`, `follow_file_moves` and `fs_trash` in `lib.rs` |
 | Source and destination pages | `src/routes/export.*.tsx`, `src/routes/import.*.tsx`, `src/lib/places.ts`, `src/components/place-crumb.tsx` |
 | Shared library data (op log: tags, playlists, smart playlists, analysis, Tag Database values; waveform files; one shared library per device, joined or left per destination) | `src-tauri/src/libsync/`, `docs/plans/shared-library/` |
 | rekordbox / USB export | `rekordbox.rs`, `usb*.rs`, `pdb/`, `onelib/` |

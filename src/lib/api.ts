@@ -730,6 +730,36 @@ export async function listLibraryChanges(): Promise<LibraryChangeBatch[]> {
 	return z.array(libraryChangeBatchSchema).parse(await invoke("list_library_changes"));
 }
 
+const fileRemovalSchema = z.object({
+	audioFp: z.string(),
+	trackId: int,
+	title: z.string(),
+	artist: z.string(),
+	/** Where the song is, below the library folder. */
+	path: z.string(),
+	by: z.string(),
+	/** Unix seconds. */
+	at: int,
+});
+
+/** A song this library has that another device removed from the shared library. */
+export type FileRemoval = z.infer<typeof fileRemovalSchema>;
+
+/** The songs another device removed that are still here. */
+export async function listFileRemovals(): Promise<FileRemoval[]> {
+	return z.array(fileRemovalSchema).parse(await invoke("list_file_removals"));
+}
+
+/** Keeps removed songs: every device has them again. Returns how many were kept. */
+export async function keepFileRemovals(audioFps: string[]): Promise<number> {
+	return int.parse(await invoke("keep_file_removals", { audioFps }));
+}
+
+/** Removes the songs here too, to the system Trash. Returns how many files went. */
+export async function applyFileRemovals(audioFps: string[]): Promise<number> {
+	return int.parse(await invoke("apply_file_removals", { audioFps }));
+}
+
 const undoneSchema = z.object({ reverted: int, skipped: int });
 
 /** What taking a sync back did: fields put back, and fields left because they changed since. */

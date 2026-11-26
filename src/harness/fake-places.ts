@@ -6,6 +6,7 @@ import type {
 	DeleteHold,
 	DuplicateGroup,
 	ExportSelection,
+	FileRemoval,
 	FsEntry,
 	ImportFolder,
 	ImportFolderId,
@@ -659,6 +660,28 @@ export const DELETE_HOLD: DeleteHold = {
 	names: ["Genre/Techno", "Genre/Techno/Hard", "Genre/Techno/Dub", "Festival 2026", "B2B ideas"],
 	at: NOW - 900,
 };
+
+/** Songs another device removed that this library still has. */
+export const FILE_REMOVALS: FileRemoval[] = [
+	{
+		audioFp: "removed-1",
+		trackId: 1,
+		title: "Glue",
+		artist: "Bicep",
+		path: "Bicep/Bicep/Glue.flac",
+		by: "tour-laptop",
+		at: NOW - 3600,
+	},
+	{
+		audioFp: "removed-2",
+		trackId: 2,
+		title: "Opal (Four Tet Remix)",
+		artist: "Bicep",
+		path: "Bicep/Singles/Opal (Four Tet Remix).mp3",
+		by: "tour-laptop",
+		at: NOW - 3500,
+	},
+];
 
 const pickerFolder = (name: string): FsEntry => ({ name, isDir: true, size: 0, modified: NOW });
 const pickerFile = (name: string, size: number): FsEntry => ({

@@ -7,6 +7,7 @@ import {
 	analysisFailures,
 	analysisSettings,
 	analyzeTracks,
+	applyFileRemovals,
 	auditFix,
 	auditLibrary,
 	auditPlace,
@@ -36,6 +37,7 @@ import {
 	type JoinChoice,
 	jellyfinDestinations,
 	jellyfinSettings,
+	keepFileRemovals,
 	type LeaveChoice,
 	libraryStatus,
 	libsyncDecideDeletes,
@@ -49,6 +51,7 @@ import {
 	listCarryCandidates,
 	listClashes,
 	listDuplicates,
+	listFileRemovals,
 	listLibraryChanges,
 	listMissing,
 	listRecentlyDeleted,
@@ -257,6 +260,7 @@ export function useJoinLibrary() {
 
 export const LIBRARY_SYNC_KEY = ["library-sync-status"] as const;
 export const LIBRARY_CHANGES_KEY = ["library-changes"] as const;
+export const FILE_REMOVALS_KEY = ["file-removals"] as const;
 
 /** The shared library's syncing: on its own or not, how the last one went, what it holds back. */
 export function useLibrarySyncStatus() {
@@ -281,6 +285,7 @@ export function useLibrarySyncWatch() {
 		const stop = onLibrarySynced((last) => {
 			void queryClient.invalidateQueries({ queryKey: LIBRARY_SYNC_KEY });
 			if (last.received > 0) {
+				void queryClient.invalidateQueries({ queryKey: FILE_REMOVALS_KEY });
 				void queryClient.invalidateQueries({ queryKey: LIBRARY_CHANGES_KEY });
 				void refreshRef.current();
 			}
@@ -320,6 +325,29 @@ export function useLibraryChanges() {
 		queryKey: LIBRARY_CHANGES_KEY,
 		queryFn: listLibraryChanges,
 		enabled: useSharingOn(),
+	});
+}
+
+/** The songs another device removed from the shared library that are still here. */
+export function useFileRemovals() {
+	return useQuery({
+		queryKey: FILE_REMOVALS_KEY,
+		queryFn: listFileRemovals,
+		enabled: useSharingOn(),
+	});
+}
+
+/** Settles removed songs: `keep` brings them back for everyone, `remove` trashes them here. */
+export function useSettleFileRemovals() {
+	const queryClient = useQueryClient();
+	const refresh = useRefreshItems();
+	return useMutation({
+		mutationFn: ({ choice, audioFps }: { choice: "keep" | "remove"; audioFps: string[] }) =>
+			choice === "keep" ? keepFileRemovals(audioFps) : applyFileRemovals(audioFps),
+		onSettled: async () => {
+			await queryClient.invalidateQueries({ queryKey: FILE_REMOVALS_KEY });
+			await refresh();
+		},
 	});
 }
 

@@ -471,6 +471,66 @@ async fn follow_shared_files(state: &AppState) {
     }
 }
 
+/// The songs another device removed from the shared library that this library still has.
+#[tauri::command]
+fn list_file_removals(state: State<'_, AppState>) -> Result<Vec<libsync::files::Removal>, Error> {
+    let Ok(root) = library_root(&state) else {
+        return Ok(Vec::new());
+    };
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    libsync::files::removals_waiting(&conn, &root)
+}
+
+/// Keeps songs another device removed: every device has them again after its next sync.
+#[tauri::command]
+fn keep_file_removals(state: State<'_, AppState>, audio_fps: Vec<String>) -> Result<usize, Error> {
+    let root = library_root(&state)?;
+    let kept = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        libsync::files::keep(&conn, &root, &audio_fps)?
+    };
+    state.libsync_wake.notify_one();
+    Ok(kept)
+}
+
+/// Removes songs here that another device removed: every copy of them goes to the system Trash.
+/// Only songs that are waiting for this are touched, whatever was asked for.
+#[tauri::command]
+async fn apply_file_removals(
+    state: State<'_, AppState>,
+    audio_fps: Vec<String>,
+) -> Result<usize, Error> {
+    let root = library_root(&state)?;
+    let copies = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let waiting: Vec<String> = libsync::files::removals_waiting(&conn, &root)?
+            .into_iter()
+            .map(|removal| removal.audio_fp)
+            .filter(|fp| audio_fps.contains(fp))
+            .collect();
+        libsync::files::copies_here(&conn, &waiting)?
+    };
+    if copies.is_empty() {
+        return Ok(0);
+    }
+    let folder = root.clone();
+    let files: Vec<PathBuf> = copies.iter().map(|(_, path)| path.clone()).collect();
+    tauri::async_runtime::spawn_blocking(move || fsops::trash(&folder, &files))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    let gone: Vec<i64> = copies
+        .into_iter()
+        .filter(|(_, path)| !path.exists())
+        .map(|(id, _)| id)
+        .collect();
+    {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        libsync::files::deleted_here(&conn, &root, &gone, unix_now())?;
+    }
+    refresh_after_fs_change(&state, root).await;
+    Ok(gone.len())
+}
+
 /// The present songs at or below `paths`, as `(id, path)`.
 fn tracks_below(conn: &Connection, paths: &[PathBuf]) -> Result<Vec<(i64, PathBuf)>, Error> {
     Ok(db::present_tracks(conn)?
@@ -5760,6 +5820,9 @@ pub fn run() {
             libsync_sync_now,
             libsync_decide_deletes,
             list_library_changes,
+            list_file_removals,
+            keep_file_removals,
+            apply_file_removals,
             undo_library_changes,
             libsync_home,
             libsync_join,

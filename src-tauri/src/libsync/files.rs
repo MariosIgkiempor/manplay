@@ -20,7 +20,9 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 
+use super::clock;
 use super::ops::{F_PATH, F_PRESENT};
+use super::recent;
 use super::write::{self, Field, active};
 use crate::error::Error;
 
@@ -443,4 +445,105 @@ fn same_file(a: &Path, b: &Path) -> bool {
 #[cfg(not(unix))]
 fn same_file(_a: &Path, _b: &Path) -> bool {
     true
+}
+
+/// A song this library has that another device removed: it waits for the user to remove it here
+/// too or to keep it for everyone.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Removal {
+    pub audio_fp: String,
+    /// One of the library's copies of it, to show.
+    pub track_id: i64,
+    pub title: String,
+    pub artist: String,
+    /// Where that copy is, below the library folder when it is there.
+    pub path: String,
+    /// The member who removed it, by name.
+    pub by: String,
+    /// When they did.
+    pub at: UnixSeconds,
+}
+
+/// The songs another device removed that are still here, by path.
+pub fn removals_waiting(conn: &Connection, root: &Path) -> Result<Vec<Removal>, Error> {
+    if !active(conn)? {
+        return Ok(Vec::new());
+    }
+    let removed: Vec<(String, String)> = conn
+        .prepare("SELECT id, clock FROM op_state WHERE e = ?1 AND f = ?2 AND val = 'false'")?
+        .query_map(params![E_FILE, F_PRESENT], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let had = had(conn)?;
+    let mut out = Vec::new();
+    for (fp, at_clock) in removed {
+        if !had.get(&fp).is_some_and(|h| h.present) {
+            continue;
+        }
+        let copy: Option<(i64, String, String, String)> = conn
+            .prepare_cached(
+                "SELECT id, title, artist, path FROM tracks
+                 WHERE audio_fp = ?1 AND missing_since IS NULL ORDER BY path LIMIT 1",
+            )?
+            .query_map(params![fp], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .next()
+            .transpose()?;
+        let Some((track_id, title, artist, path)) = copy else {
+            continue;
+        };
+        out.push(Removal {
+            audio_fp: fp,
+            track_id,
+            title,
+            artist,
+            path: RelPath::below(root, Path::new(&path)).map_or(path, |rel| rel.0.join("/")),
+            by: clock::device_of(&at_clock).map_or_else(
+                || recent::ANOTHER_DEVICE.to_owned(),
+                |dev| recent::member_name(conn, dev),
+            ),
+            at: clock::parse(&at_clock).map_or(0, |(ms, _)| ms / 1000),
+        });
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+/// Keeps songs another device removed: they are present again for everyone, and a device that
+/// no longer has one gets it back. Songs that are not waiting are left alone. Returns how many
+/// were kept.
+pub fn keep(conn: &Connection, root: &Path, audio_fps: &[String]) -> Result<usize, Error> {
+    let tx = conn.unchecked_transaction()?;
+    let waiting = removals_waiting(&tx, root)?;
+    let fields: Vec<Field> = waiting
+        .iter()
+        .filter(|w| audio_fps.contains(&w.audio_fp))
+        .map(|w| Field {
+            e: E_FILE.to_owned(),
+            id: w.audio_fp.clone(),
+            f: F_PRESENT.to_owned(),
+            val: json!(true),
+        })
+        .collect();
+    write::stamp(&tx, &fields)?;
+    tx.commit()?;
+    Ok(fields.len())
+}
+
+/// Every copy this library has of the audio in `audio_fps`, as `(track id, file)`.
+pub fn copies_here(conn: &Connection, audio_fps: &[String]) -> Result<Vec<(i64, PathBuf)>, Error> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, path FROM tracks WHERE audio_fp = ?1 AND missing_since IS NULL",
+    )?;
+    let mut out = Vec::new();
+    for fp in audio_fps {
+        let rows = stmt.query_map(params![fp], |r| {
+            Ok((r.get::<_, i64>(0)?, PathBuf::from(r.get::<_, String>(1)?)))
+        })?;
+        for row in rows {
+            out.push(row?);
+        }
+    }
+    Ok(out)
 }

@@ -600,3 +600,68 @@ fn a_file_moves_into_folders_made_for_it_and_never_over_another_file() {
     assert_eq!(names, ["B.mp3"]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+fn waiting(db: &Mutex<Connection>) -> Vec<String> {
+    files::removals_waiting(&db.lock().expect("lock"), Path::new(ROOT))
+        .expect("waiting")
+        .into_iter()
+        .map(|r| format!("{} at {} by {}", r.audio_fp, r.path, r.by))
+        .collect()
+}
+
+/// `a` and `b` share two songs and `a` deleted the first one in the app.
+async fn one_removed(store: &Memory) -> (Mutex<Connection>, Mutex<Connection>) {
+    let (a, b) = two(store).await;
+    let id = track(&a, 1);
+    files::deleted_here(&a.lock().expect("lock"), Path::new(ROOT), &[id], JUST_NOW)
+        .expect("deleted");
+    assert!(run_both(&a, &b, store).await);
+    (a, b)
+}
+
+#[tokio::test]
+async fn a_song_removed_elsewhere_waits_here_and_nowhere_else() {
+    let store = Memory::default();
+    let (a, b) = one_removed(&store).await;
+    let listed = waiting(&b);
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].starts_with("fp1 at 1.mp3 by "), "{listed:?}");
+    assert_eq!(
+        waiting(&a).len(),
+        0,
+        "the device that removed it has nothing to decide"
+    );
+}
+
+#[tokio::test]
+async fn keeping_a_removed_song_brings_it_back_for_everyone() {
+    let store = Memory::default();
+    let (a, b) = one_removed(&store).await;
+    let asked = ["fp1".to_owned(), "fp2".to_owned()];
+    let kept = files::keep(&b.lock().expect("lock"), Path::new(ROOT), &asked).expect("keep");
+    assert_eq!(kept, 1, "only the song that was waiting");
+    assert_eq!(waiting(&b).len(), 0);
+    assert!(run_both(&a, &b, &store).await);
+    assert_eq!(register(&a, 1, "present"), Some(json!(true)));
+    assert_eq!(
+        record(&a),
+        0,
+        "A, without the file, does not remove it again"
+    );
+    assert_eq!(register(&a, 1, "present"), Some(json!(true)));
+}
+
+#[tokio::test]
+async fn removing_it_here_too_settles_it() {
+    let store = Memory::default();
+    let (a, b) = one_removed(&store).await;
+    let copies = files::copies_here(&b.lock().expect("lock"), &["fp1".to_owned()]).expect("copies");
+    assert_eq!(copies.len(), 1);
+    let ids: Vec<i64> = copies.iter().map(|(id, _)| *id).collect();
+    let written = files::deleted_here(&b.lock().expect("lock"), Path::new(ROOT), &ids, JUST_NOW)
+        .expect("gone");
+    assert_eq!(written, 0, "everyone already knows it is removed");
+    assert_eq!(waiting(&b).len(), 0);
+    assert!(run_both(&a, &b, &store).await);
+    assert_eq!(register(&a, 1, "present"), Some(json!(false)));
+}

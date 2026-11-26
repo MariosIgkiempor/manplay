@@ -4,13 +4,16 @@ import { WellCard } from "#/components/frame.tsx";
 import { EmptyState, ErrorLine, Page } from "#/components/page.tsx";
 import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Fact, Facts } from "#/components/ui/facts.tsx";
-import type { DeleteHold, LibraryChange, LibraryChangeBatch } from "#/lib/api.ts";
+import type { DeleteHold, FileRemoval, LibraryChange, LibraryChangeBatch } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
 import { changedBy, changeFacts, changeTitle } from "#/lib/library-changes.ts";
+import { TRASH } from "#/lib/platform.ts";
 import {
 	useDecideDeletes,
+	useFileRemovals,
 	useLibraryChanges,
 	useLibrarySyncStatus,
+	useSettleFileRemovals,
 	useUndoLibraryChanges,
 } from "#/lib/queries.ts";
 
@@ -135,13 +138,106 @@ function HeldDeletions({ hold }: { hold: DeleteHold }) {
 	);
 }
 
+/** How many removed songs are listed before the rest becomes a count. */
+const REMOVALS_SHOWN = 8;
+
+/**
+ * Songs another device removed from the shared library that are still here. Nothing is deleted
+ * until the user says so, song by song or all at once.
+ */
+function RemovedSongs({ removals }: { removals: FileRemoval[] }) {
+	const settle = useSettleFileRemovals();
+	const all = removals.map((removal) => removal.audioFp);
+	const shown = removals.slice(0, REMOVALS_SHOWN);
+	const more = removals.length - shown.length;
+	const count = removals.length === 1 ? "1 song" : `${removals.length.toLocaleString()} songs`;
+	return (
+		<WellCard wellClassName="space-y-3 px-4 py-4">
+			<div>
+				<p className="font-medium text-sm">{count} removed on another device</p>
+				<p className="text-muted-foreground text-xs">
+					Still in this library. Remove them here too, or keep them and every device has them again.
+				</p>
+			</div>
+			<ul className="space-y-1.5">
+				{shown.map((removal) => (
+					<li key={removal.audioFp} className="flex items-center gap-2 text-sm">
+						<div className="min-w-0 flex-1">
+							<div className="truncate">
+								{removal.title || removal.path}
+								{removal.artist && (
+									<span className="text-muted-foreground"> · {removal.artist}</span>
+								)}
+							</div>
+							<div className="truncate text-muted-foreground text-xs">
+								{removal.path} · {removal.by}, {timeAgo(removal.at)}
+							</div>
+						</div>
+						<ConfirmButton
+							size="xs"
+							variant="outline"
+							disabled={settle.isPending}
+							confirmLabel="Keep for everyone"
+							consequence="Every device has this song again; one that no longer has the file gets it back."
+							onConfirm={() => settle.mutate({ choice: "keep", audioFps: [removal.audioFp] })}
+						>
+							Keep
+						</ConfirmButton>
+						<ConfirmButton
+							size="xs"
+							variant="outline"
+							destructive
+							disabled={settle.isPending}
+							confirmLabel={`Move to ${TRASH}`}
+							consequence={`The file goes to the ${TRASH} on this device.`}
+							onConfirm={() => settle.mutate({ choice: "remove", audioFps: [removal.audioFp] })}
+						>
+							Remove
+						</ConfirmButton>
+					</li>
+				))}
+				{more > 0 && (
+					<li className="text-muted-foreground text-xs">and {more.toLocaleString()} more</li>
+				)}
+			</ul>
+			{removals.length > 1 && (
+				<div className="flex flex-wrap gap-2">
+					<ConfirmButton
+						variant="outline"
+						disabled={settle.isPending}
+						confirmLabel={`Keep all ${removals.length.toLocaleString()} for everyone`}
+						consequence="Every device has these songs again; one that no longer has the files gets them back."
+						onConfirm={() => settle.mutate({ choice: "keep", audioFps: all })}
+					>
+						Keep all
+					</ConfirmButton>
+					<ConfirmButton
+						variant="outline"
+						destructive
+						disabled={settle.isPending}
+						confirmLabel={`Move all ${removals.length.toLocaleString()} to ${TRASH}`}
+						consequence={`Their files go to the ${TRASH} on this device.`}
+						onConfirm={() => settle.mutate({ choice: "remove", audioFps: all })}
+					>
+						Remove all here
+					</ConfirmButton>
+				</div>
+			)}
+			{settle.isError && <ErrorLine>{String(settle.error)}</ErrorLine>}
+		</WellCard>
+	);
+}
+
 /**
  * What other devices changed in the shared library in the last 30 days, one entry per sync, each
- * with Undo; and on top, deletions a sync held back because there were many at once.
+ * with Undo; and on top, what waits for a choice: deletions a sync held back because there were
+ * many at once, and songs another device removed that are still here.
  */
 export function LibraryChanges() {
 	const batches = useLibraryChanges().data ?? [];
 	const hold = useLibrarySyncStatus().data?.hold ?? null;
+	const removals = useFileRemovals().data ?? [];
+	const waiting = hold !== null || removals.length > 0;
 	return (
 		<Page
 			title="Changes"
@@ -154,8 +250,9 @@ export function LibraryChanges() {
 			}
 		>
 			{hold && <HeldDeletions hold={hold} />}
+			{removals.length > 0 && <RemovedSongs removals={removals} />}
 			{batches.length === 0 ? (
-				!hold && (
+				!waiting && (
 					<EmptyState icon={<ArrowDownToLine />} title="Nothing changed">
 						What other devices change in the shared library shows here for 30 days.
 					</EmptyState>

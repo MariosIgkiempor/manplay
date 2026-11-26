@@ -3,7 +3,12 @@ import { ArrowDownToLine, History } from "lucide-react";
 import { RowCount, RowTrailing } from "#/components/sidebar-parts.tsx";
 import { pageRow, rowBase, rowClass, useRowMatch } from "#/components/sidebar-row.ts";
 import { compactCount } from "#/lib/format.ts";
-import { useLibrarySyncStatus, useRecentlyDeleted, useSharingOn } from "#/lib/queries.ts";
+import {
+	useFileRemovals,
+	useLibrarySyncStatus,
+	useRecentlyDeleted,
+	useSharingOn,
+} from "#/lib/queries.ts";
 
 /** Under Organise while the library is shared: what was deleted lately, with Restore. */
 export function SidebarRecentlyDeleted() {
@@ -27,11 +32,12 @@ export function SidebarRecentlyDeleted() {
 
 /**
  * Under Organise while the library is shared: what other devices changed lately, with Undo. It
- * carries a count while deletions wait to be let through or kept.
+ * carries a count while deletions or removed songs wait to be let through or kept.
  */
 export function SidebarLibraryChanges() {
 	const active = !!useRowMatch()({ to: "/changes" });
-	const held = useLibrarySyncStatus().data?.hold?.count ?? 0;
+	const held =
+		(useLibrarySyncStatus().data?.hold?.count ?? 0) + (useFileRemovals().data?.length ?? 0);
 	if (!useSharingOn()) {
 		return null;
 	}
