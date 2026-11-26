@@ -262,6 +262,14 @@ pub fn stamp(conn: &Connection, fields: &[Field]) -> Result<Vec<Op>, Error> {
 /// How many ops [`stamp_early`] has made on this device; the next one's clock comes from it.
 const SETTING_EARLY_OPS: &str = "libsync_early_ops";
 
+/// Whether `clock` is one [`stamp_early`] gave: it says what a library simply had, not that
+/// someone changed something.
+pub fn is_early(clock: &str) -> bool {
+    // Any real clock is a time after 2001.
+    const EARLIEST_EDIT_MS: i64 = 1_000_000_000_000;
+    clock::parse(clock).is_none_or(|(ms, ..)| ms < EARLIEST_EDIT_MS)
+}
+
 /// Like [`stamp`], for what the library simply has rather than what someone just changed: the
 /// clocks are older than any edit's, so an edit made on any device at any time wins over them,
 /// and they never win over a value the register store already has.

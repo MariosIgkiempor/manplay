@@ -518,6 +518,53 @@ async fn fetch_shared_songs(app: AppHandle, target: db::SyncTarget) {
     report(sync::FetchProgress::default());
 }
 
+/// Where cover pictures fetched from the shared library wait to be written into the files.
+fn shared_covers(state: &AppState) -> PathBuf {
+    state.data_dir.join("shared-covers")
+}
+
+/// Sends the cover pictures other devices need and fetches the ones this device waits for,
+/// after a sync, in the background. One run at a time; what is left goes after the next sync.
+async fn transfer_covers(app: AppHandle, place: SharedPlace) {
+    static MOVING: AtomicBool = AtomicBool::new(false);
+    if MOVING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _guard = SyncGuard(&MOVING);
+    let state = app.state::<AppState>();
+    let Ok(root) = library_root(&state) else {
+        return;
+    };
+    let cache = shared_covers(&state);
+    tags::prune_cover_backups(&cache);
+    let moved = match &place {
+        SharedPlace::Target(target) => {
+            sync::transfer_covers(&state.http, target, &state.db, &root, &cache).await
+        }
+        SharedPlace::Folder(folder) => {
+            libsync::covers::transfer(
+                &state.db,
+                &libsync::folder::FolderStore::new(folder),
+                &root,
+                &cache,
+                sync::COVER_BATCH,
+            )
+            .await
+        }
+    };
+    match moved {
+        Ok(moved) => {
+            if moved.sent + moved.fetched > 0 {
+                log::info!("covers: {} sent, {} fetched", moved.sent, moved.fetched);
+            }
+            if moved.fetched > 0 {
+                SONG_TAGS_TO_COMPARE.store(true, Ordering::SeqCst);
+            }
+        }
+        Err(e) => log::warn!("could not move cover pictures: {e}"),
+    }
+}
+
 /// How many song files have their tags read in one go for the shared library.
 const TAGS_READ_AT_ONCE: usize = 2000;
 
@@ -534,6 +581,7 @@ async fn keep_song_tags(state: &AppState) -> Result<(), Error> {
     let Ok(root) = library_root(state) else {
         return Ok(());
     };
+    let covers = shared_covers(state);
     let unread = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         libsync::song_tags::unread(&conn, TAGS_READ_AT_ONCE)?
@@ -543,7 +591,7 @@ async fn keep_song_tags(state: &AppState) -> Result<(), Error> {
             unread
                 .into_iter()
                 .map(|file| {
-                    let fields = tags::file_fields(Path::new(&file.path));
+                    let fields = libsync::song_tags::read_file(Path::new(&file.path));
                     (file, fields)
                 })
                 .collect::<Vec<_>>()
@@ -559,8 +607,15 @@ async fn keep_song_tags(state: &AppState) -> Result<(), Error> {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         libsync::song_tags::record(&conn, &root)?;
         let refused = REFUSED.lock().map_err(|_| Error::Lock)?;
-        let mut wanted = libsync::song_tags::wanted(&conn, &root)?;
-        wanted.retain(|write| !refused.contains(write));
+        // A cover whose picture has not come from the destination yet waits for it.
+        let wanted: Vec<_> = libsync::song_tags::wanted(&conn, &root)?
+            .into_iter()
+            .filter_map(|write| match write.cover() {
+                Some(cover) if !covers.join(cover.as_str()).exists() => write.without_cover(),
+                _ => Some(write),
+            })
+            .filter(|write| !refused.contains(write))
+            .collect();
         wanted
     };
     // Not beside a tag edit of the user's: both write the same files.
@@ -574,7 +629,7 @@ async fn keep_song_tags(state: &AppState) -> Result<(), Error> {
     let written = tauri::async_runtime::spawn_blocking(move || {
         let mut written = 0_usize;
         for write in wanted {
-            match write.carry_out(&folder) {
+            match write.carry_out(&folder, &covers) {
                 Ok(()) => written += 1,
                 Err(e) => {
                     log::warn!(
@@ -4053,6 +4108,10 @@ async fn sync_shared_target(
     if outcome.error.is_none() {
         follow_shared_files(state).await;
         tauri::async_runtime::spawn(fetch_shared_songs(app.clone(), target.clone()));
+        tauri::async_runtime::spawn(transfer_covers(
+            app.clone(),
+            SharedPlace::Target(target.clone()),
+        ));
         tauri::async_runtime::spawn(transfer_waveforms(app.clone(), SharedPlace::Target(target)));
     }
     outcome
@@ -4068,6 +4127,10 @@ async fn sync_shared_folder(
     let out = run_shared_folder(state, &root).await;
     if out.error.is_none() {
         follow_shared_files(state).await;
+        tauri::async_runtime::spawn(transfer_covers(
+            app.clone(),
+            SharedPlace::Folder(root.clone()),
+        ));
         tauri::async_runtime::spawn(transfer_waveforms(app.clone(), SharedPlace::Folder(root)));
     }
     out

@@ -28,6 +28,7 @@ describe("changeFacts", () => {
 		["analysis", { kind: "analysis", name: "", count: 1200 }, ["1,200 songs"]],
 		["one value", { kind: "tag_custom", name: "", count: 1 }, ["1 value"]],
 		["retagged songs", { kind: "song_tags", name: "", count: 2 }, ["2 songs"]],
+		["songs with another cover", { kind: "covers", name: "", count: 1 }, ["1 song"]],
 		["nothing worth a fact", {}, []],
 	])("%s", (_name, change, facts) => {
 		expect(changeFacts({ ...PLAIN, ...change })).toEqual(facts);
@@ -41,6 +42,7 @@ describe("changeTitle", () => {
 		[{ kind: "analysis", name: "" }, "BPM, key and beat grids"],
 		[{ kind: "tag_custom", name: "" }, "Tag Database values"],
 		[{ kind: "song_tags", name: "" }, "Tags in the songs' files"],
+		[{ kind: "covers", name: "" }, "Covers"],
 	])("%o", (change, title) => {
 		expect(changeTitle({ ...PLAIN, ...change })).toBe(title);
 	});

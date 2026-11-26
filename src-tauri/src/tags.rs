@@ -608,6 +608,66 @@ impl CoverBackupName {
     }
 }
 
+impl CoverBackupName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether `bytes` are the picture this name stands for.
+    pub fn names(&self, bytes: &[u8]) -> bool {
+        self.0
+            .split('.')
+            .next()
+            .is_some_and(|hash| hash == blake3::hash(bytes).to_hex().as_str())
+    }
+}
+
+/// What a song file's tags say: its fields, and its front cover by name.
+pub struct FileTags {
+    pub fields: BTreeMap<String, String>,
+    pub cover: Option<CoverBackupName>,
+}
+
+/// The fields and front cover of the file at `path`, or `None` when its tags cannot be read.
+pub fn file_tags(path: &Path) -> Option<FileTags> {
+    use lofty::config::ParseOptions;
+    let file = lofty::probe::Probe::open(path)
+        .ok()?
+        .options(ParseOptions::new().read_properties(false))
+        .read()
+        .ok()?;
+    let tag = file.primary_tag();
+    Some(FileTags {
+        fields: field_values(tag),
+        cover: tag
+            .and_then(|tag| tag.get_picture_type(PictureType::CoverFront))
+            .map(CoverBackupName::of),
+    })
+}
+
+/// The front cover of the file at `path`: its name and the picture itself.
+pub fn front_cover(path: &Path) -> Option<(CoverBackupName, Vec<u8>)> {
+    let file = read_from_path(path).ok()?;
+    let picture = file
+        .primary_tag()?
+        .get_picture_type(PictureType::CoverFront)?;
+    Some((CoverBackupName::of(picture), picture.data().to_vec()))
+}
+
+/// Puts `cover` (a JPEG or PNG) in as the song's front cover, or takes the front cover out
+/// when `None`.
+pub fn set_cover(file: &Path, cover: Option<&[u8]>) -> Result<(), Error> {
+    match cover {
+        Some(bytes) => embed_cover(file, bytes),
+        None => set_front_cover(file, None),
+    }
+}
+
+/// Whether `bytes` are a picture that can be a song's cover.
+pub fn is_cover(bytes: &[u8]) -> bool {
+    cover_mime(bytes).is_ok()
+}
+
 impl TryFrom<String> for CoverBackupName {
     type Error = String;
 
@@ -651,7 +711,10 @@ pub struct CoverReport {
 }
 
 /// Saves the song's front cover into `backups`, unless that picture is there already.
-fn back_up_cover(file: &Path, backups: &Path) -> Result<Option<CoverBackupName>, Error> {
+pub(crate) fn back_up_cover(
+    file: &Path,
+    backups: &Path,
+) -> Result<Option<CoverBackupName>, Error> {
     let tagged = read_from_path(file).map_err(|e| err(format!("unreadable tags: {e}")))?;
     let Some(picture) = tagged
         .primary_tag()
@@ -670,7 +733,7 @@ fn back_up_cover(file: &Path, backups: &Path) -> Result<Option<CoverBackupName>,
 
 /// Deletes backups older than [`COVER_BACKUPS_KEPT_FOR`]. Best effort: a backup that cannot
 /// be read or deleted is left for next time.
-fn prune_cover_backups(backups: &Path) {
+pub(crate) fn prune_cover_backups(backups: &Path) {
     let Ok(entries) = std::fs::read_dir(backups) else {
         return;
     };
@@ -780,7 +843,7 @@ pub fn restore_covers(
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::cast_possible_truncation)] // tests: panicking is the failure mode
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -929,8 +992,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// One second of 8-bit mono silence as a WAV file.
-    fn picture(red: u8) -> Vec<u8> {
+    /// A small PNG picture; another `red` gives another picture.
+    pub(crate) fn picture(red: u8) -> Vec<u8> {
         let mut png = std::io::Cursor::new(Vec::new());
         image::RgbImage::from_pixel(2, 2, image::Rgb([red, 0, 0]))
             .write_to(&mut png, image::ImageFormat::Png)
@@ -1021,7 +1084,8 @@ mod tests {
         }
     }
 
-    fn silent_wav() -> Vec<u8> {
+    /// One second of 8-bit mono silence as a WAV file.
+    pub(crate) fn silent_wav() -> Vec<u8> {
         let data = vec![128_u8; 8000];
         let mut w = Vec::new();
         w.extend(b"RIFF");

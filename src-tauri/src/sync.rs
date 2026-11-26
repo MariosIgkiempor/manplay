@@ -571,6 +571,8 @@ impl LibraryOutcome {
 
 /// Waveforms moved between progress reports, after a sync.
 pub(crate) const WAVEFORM_BATCH: usize = 20;
+/// How many cover pictures go each way after one sync.
+pub(crate) const COVER_BATCH: usize = 200;
 /// Pause between waveform downloads, so the destination is not hammered.
 pub(crate) const FILL_PAUSE: std::time::Duration = std::time::Duration::from_millis(100);
 
@@ -719,6 +721,23 @@ pub async fn transfer_waveforms(
         base: base_of(target),
     };
     libsync::waveforms::transfer(db, &store, misses, WAVEFORM_BATCH, FILL_PAUSE, report).await
+}
+
+/// Sends the cover pictures other devices need and fetches the ones this device waits for
+/// (see [`libsync::covers::transfer`]).
+pub async fn transfer_covers(
+    client: &Client,
+    target: &SyncTarget,
+    db: &std::sync::Mutex<rusqlite::Connection>,
+    root: &Path,
+    cache: &Path,
+) -> Result<libsync::covers::Transfer, Error> {
+    let backend = Backend::for_target(client, target)?;
+    let store = LogStore {
+        backend: &backend,
+        base: base_of(target),
+    };
+    libsync::covers::transfer(db, &store, root, cache, COVER_BATCH).await
 }
 
 /// Fetches one song's waveform from the destination when it is shown or played and this device

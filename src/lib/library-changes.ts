@@ -13,6 +13,8 @@ export function changeTitle(change: LibraryChange): string {
 			return "Tag Database values";
 		case "song_tags":
 			return "Tags in the songs' files";
+		case "covers":
+			return "Covers";
 		default:
 			return change.name || "Unnamed";
 	}
@@ -20,7 +22,7 @@ export function changeTitle(change: LibraryChange): string {
 
 /** What a sync did to one item, as short facts in the order they matter. */
 export function changeFacts(change: LibraryChange): string[] {
-	if (change.kind === "analysis" || change.kind === "song_tags") {
+	if (change.kind === "analysis" || change.kind === "song_tags" || change.kind === "covers") {
 		return [songs(change.count)];
 	}
 	if (change.kind === "tag_custom") {

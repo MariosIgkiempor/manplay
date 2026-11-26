@@ -30,6 +30,7 @@ pub struct Outcome {
     pub chunks_deleted: usize,
     pub snapshots_deleted: usize,
     pub waveforms_deleted: usize,
+    pub covers_deleted: usize,
     /// Rows of this device's own op log dropped because a snapshot holds what they said.
     pub ops_pruned: usize,
 }
@@ -177,6 +178,7 @@ async fn clean_up<S: ChunkStore>(
     if wrote {
         out.chunks_deleted += clean_abandoned(store, &me, &covers, listed, now_ms).await?;
         out.waveforms_deleted += clean_waveforms(db, store).await?;
+        out.covers_deleted += super::covers::clean(db, store, now_ms).await?;
     }
     Ok(())
 }

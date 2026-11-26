@@ -7,6 +7,10 @@
 //! and no device has written about. A field another device wrote, and that was not changed
 //! here, is to be written into the file ([`wanted`]).
 //!
+//! The front cover is one more field, `cover`: the name of the picture (the hash of its bytes,
+//! `tags::CoverBackupName`), or `""` for none. The pictures themselves are files on the
+//! destination (`covers.rs`).
+//!
 //! BPM and key are left out: the analysis is shared on its own, and each device writes it into
 //! its files the way it is set to.
 //!
@@ -24,8 +28,12 @@ use serde_json::{Value, json};
 use super::files::{self, Pending, RelPath};
 use super::write::active;
 use crate::error::Error;
+use crate::tags::CoverBackupName;
 
 pub const E_SONG_TAGS: &str = "song_tags";
+
+/// The field that names a song's front cover.
+pub const COVER: &str = "cover";
 
 /// Tag fields the analysis decides, so they are not shared as tags.
 const LEFT_OUT: &[&str] = &["bpm", "key"];
@@ -33,17 +41,38 @@ const LEFT_OUT: &[&str] = &["bpm", "key"];
 /// The longest text a field from another device may hold, in bytes.
 const LONGEST_VALUE: usize = 64 * 1024;
 
-/// A file's tag fields by their id (`tags::field_values`); a field it lacks is left out.
+/// A file's tag fields by their id (`tags::field_values`) and its front cover under [`COVER`];
+/// a field it lacks is left out.
 pub type Fields = BTreeMap<String, String>;
 
 fn shared_field(field: &str) -> bool {
-    crate::tags::is_field(field) && !LEFT_OUT.contains(&field)
+    field == COVER || (crate::tags::is_field(field) && !LEFT_OUT.contains(&field))
+}
+
+/// The cover a `cover` field names; `None` for no cover and for text that names none.
+pub fn cover_named(text: &str) -> Option<CoverBackupName> {
+    CoverBackupName::try_from(text.to_owned()).ok()
 }
 
 /// The text another device wrote for `field`, when it is one that can go into a file's tags.
 pub fn shared_value<'a>(field: &str, val: &'a Value) -> Option<&'a str> {
-    val.as_str()
-        .filter(|text| shared_field(field) && text.len() <= LONGEST_VALUE && !text.contains('\0'))
+    val.as_str().filter(|text| {
+        if field == COVER {
+            text.is_empty() || cover_named(text).is_some()
+        } else {
+            shared_field(field) && text.len() <= LONGEST_VALUE && !text.contains('\0')
+        }
+    })
+}
+
+/// What the file at `path` says, or `None` when its tags cannot be read.
+pub fn read_file(path: &Path) -> Option<Fields> {
+    let tags = crate::tags::file_tags(path)?;
+    let mut fields = tags.fields;
+    if let Some(cover) = tags.cover {
+        fields.insert(COVER.to_owned(), cover.as_str().to_owned());
+    }
+    Some(fields)
 }
 
 /// A song file whose tags have not been read since it last changed.
@@ -108,15 +137,15 @@ pub fn store(conn: &Connection, read: &[(Unread, Option<Fields>)]) -> Result<(),
 }
 
 /// The copy of one audio whose tags are written about, with its tags as last read.
-struct Tracked {
-    path: PathBuf,
+pub(super) struct Tracked {
+    pub(super) path: PathBuf,
     rel: RelPath,
-    fields: Fields,
+    pub(super) fields: Fields,
 }
 
 /// For each audio, the copy `files.rs` writes about (or, when it has not written yet, the first
 /// one below the library folder), when its tags were read since the file last changed.
-fn tracked(conn: &Connection, root: &Path) -> Result<BTreeMap<String, Tracked>, Error> {
+pub(super) fn tracked(conn: &Connection, root: &Path) -> Result<BTreeMap<String, Tracked>, Error> {
     let written_about = files::tracked_paths(conn)?;
     let mut stmt = conn.prepare(
         "SELECT t.audio_fp, t.path, r.fields FROM tracks t
@@ -226,20 +255,45 @@ pub struct TagWrite {
 }
 
 impl TagWrite {
+    /// The cover picture this write puts in, when it puts one in.
+    pub fn cover(&self) -> Option<CoverBackupName> {
+        self.edits.get(COVER).and_then(|name| cover_named(name))
+    }
+
+    /// The write without its new cover, for while the picture is not here yet; `None` when
+    /// nothing else is left to write.
+    pub fn without_cover(mut self) -> Option<Self> {
+        self.edits.remove(COVER);
+        (!self.edits.is_empty()).then_some(self)
+    }
+
     /// Writes the fields into the file, after saving the file as it was under `backups` at the
-    /// same place it has below the library folder. A file that cannot be written is left as it
-    /// was, and its copy is not kept.
-    pub fn carry_out(&self, backups: &Path) -> Result<(), Error> {
+    /// same place it has below the library folder. A new cover is the picture of that name in
+    /// `covers`, and the cover it replaces is saved there, so taking the change back has the
+    /// picture to put back. A file that cannot be written is left as far as it got, and its copy is kept
+    /// only when something was written.
+    pub fn carry_out(&self, backups: &Path, covers: &Path) -> Result<(), Error> {
+        let mut text = self.edits.clone();
+        let cover = text.remove(COVER);
+        let picture = match self.cover() {
+            Some(name) => Some(std::fs::read(covers.join(name.as_str()))?),
+            None => None,
+        };
         let copy = self.rel.under(backups);
         if let Some(folder) = copy.parent() {
             std::fs::create_dir_all(folder)?;
         }
         std::fs::copy(&self.path, &copy)?;
-        let written = crate::tags::write_file(&self.path, &self.edits);
+        let written = crate::tags::write_file(&self.path, &text);
         if written.is_err() {
             let _ = std::fs::remove_file(&copy);
+            return written;
         }
-        written
+        if cover.is_some() {
+            crate::tags::back_up_cover(&self.path, covers)?;
+            crate::tags::set_cover(&self.path, picture.as_deref())?;
+        }
+        Ok(())
     }
 }
 

@@ -32,8 +32,11 @@ pub fn seed(conn: &mut Connection) -> Result<usize, Error> {
     batch.commit(&tx)?;
     tx.execute("UPDATE oplog SET uploaded = 0, seq = NULL", [])?;
     tx.execute("DELETE FROM op_cursor", params![])?;
-    // The destination may be a new one: every waveform has to be checked against it again.
+    // The destination may be a new one: every waveform and cover has to be checked against it
+    // again.
     tx.execute("UPDATE analysis SET wf_pushed = 0", [])?;
+    tx.execute("DELETE FROM covers_pushed", [])?;
+    tx.execute("DELETE FROM covers_unused", [])?;
     db::set_setting(&tx, SETTING_SEEDED, Some(SEEDED))?;
     tx.commit()?;
     Ok(written)

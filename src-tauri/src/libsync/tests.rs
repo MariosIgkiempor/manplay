@@ -3015,7 +3015,7 @@ async fn compaction_leaves_a_library_of_a_newer_format_alone() {
     sync(&a, &store).await;
     store.meta.lock().expect("lock").insert(
         "library.json".into(),
-        br#"{"format":2,"libraryId":"x","name":"Future","createdAt":1}"#.to_vec(),
+        br#"{"format":99,"libraryId":"x","name":"Future","createdAt":1}"#.to_vec(),
     );
     assert_eq!(compacted(&a, &store, 1).await, compact::Outcome::default());
     assert_eq!(snapshots(&store), Vec::<String>::new());
@@ -3206,6 +3206,7 @@ async fn years_of_edits_leave_about_one_snapshot_on_the_destination() {
 }
 
 mod changes;
+mod covers;
 mod edge;
 mod files;
 mod folder;

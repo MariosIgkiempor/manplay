@@ -36,7 +36,7 @@ const SETTING_SEEDED: &str = "libsync_seeded";
 pub(crate) const SETTING_IN_FOLDER: &str = "library_in_folder";
 
 /// Version of `library.json`.
-pub const LIBRARY_FORMAT: u32 = 1;
+pub const LIBRARY_FORMAT: u32 = 2;
 
 fn now() -> i64 {
     SystemTime::now()
@@ -452,9 +452,13 @@ async fn ensure<S: ChunkStore>(
         let conn = lock(db)?;
         remember(&conn, &file)?;
     }
-    if file.audio_fp_version < local_fp {
-        // The first device on the new fingerprint: everyone else waits for it.
-        file.audio_fp_version = local_fp;
+    let older_format = file.format < LIBRARY_FORMAT;
+    if file.audio_fp_version < local_fp || older_format {
+        // The first device on the new fingerprint: everyone else waits for it. And the first on
+        // a newer format: builds that do not know it stop syncing, since they would not follow
+        // what is said about the songs' files.
+        file.audio_fp_version = file.audio_fp_version.max(local_fp);
+        file.format = LIBRARY_FORMAT;
         write_library(store, &file).await?;
     }
     write_device(db, store).await

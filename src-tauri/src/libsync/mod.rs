@@ -14,6 +14,7 @@ pub mod carry;
 pub mod clashes;
 pub mod clock;
 pub mod compact;
+pub mod covers;
 pub mod entities;
 pub mod files;
 pub mod folder;

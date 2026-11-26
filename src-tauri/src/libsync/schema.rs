@@ -121,6 +121,17 @@ fn create_for_files(conn: &Connection) -> Result<(), Error> {
          CREATE TABLE IF NOT EXISTS song_tags_local (
              audio_fp TEXT PRIMARY KEY,
              fields   TEXT NOT NULL
+         );
+         -- Cover pictures known to be on the destination, by name, so they are not sent or
+         -- asked about again (see `covers.rs`).
+         CREATE TABLE IF NOT EXISTS covers_pushed (
+             name TEXT PRIMARY KEY
+         );
+         -- Cover pictures on the destination that no song has, and when (UTC ms) this device
+         -- first saw that, so they are removed only after a while (see `covers::clean`).
+         CREATE TABLE IF NOT EXISTS covers_unused (
+             name     TEXT PRIMARY KEY,
+             since_ms INTEGER NOT NULL
          );",
     )?;
     Ok(())

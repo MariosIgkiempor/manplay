@@ -15,6 +15,7 @@ use serde_json::Value;
 use super::apply;
 use super::ops::{Entity, F_DELETE, F_MERGE, F_NAME, F_POS, F_PRESENT, F_RULES, FORMAT, Op};
 use super::recent;
+use super::song_tags::{COVER, E_SONG_TAGS};
 use super::state;
 use super::write::{self, Field};
 use crate::error::Error;
@@ -63,9 +64,9 @@ pub fn note(conn: &Connection, batch: BatchId, ops: &[Op]) -> Result<usize, Erro
         {
             continue;
         }
-        // The first word about a file's tag is what that device's file has, not a change;
-        // taking it back would clear the field for everyone.
-        if current.is_none() && op.entity() == Entity::SongTags {
+        // The first word about a file's tag, when it says what that device's file simply had,
+        // is not a change; taking it back would clear the field for everyone.
+        if current.is_none() && op.entity() == Entity::SongTags && write::is_early(&op.clock) {
             continue;
         }
         let prev = current
@@ -119,7 +120,7 @@ pub enum Standing {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {
-    /// `tag`, `playlist`, `smart_playlist`, `analysis`, `tag_custom` or `song_tags`.
+    /// `tag`, `playlist`, `smart_playlist`, `analysis`, `tag_custom`, `song_tags` or `covers`.
     pub kind: String,
     /// The item's name now; empty for `analysis` and `tag_custom`.
     pub name: String,
@@ -132,7 +133,7 @@ pub struct Change {
     pub songs_removed: usize,
     pub songs_moved: usize,
     /// `analysis`: songs whose tempo, key or grid changed. `tag_custom`: values added or removed.
-    /// `song_tags`: songs whose file tags changed.
+    /// `song_tags`: songs whose file tags changed. `covers`: songs whose cover changed.
     pub count: usize,
 }
 
@@ -203,6 +204,7 @@ fn changes_of(conn: &Connection, batch: &[&Line]) -> Result<Vec<Change>, Error> 
     let mut analysed: BTreeSet<&str> = BTreeSet::new();
     let mut values: BTreeSet<&str> = BTreeSet::new();
     let mut retagged: BTreeSet<&str> = BTreeSet::new();
+    let mut recovered: BTreeSet<&str> = BTreeSet::new();
     // A song added to or taken out of a list also gets a position: that is not a move.
     let came_or_went: BTreeSet<&str> = batch
         .iter()
@@ -216,6 +218,9 @@ fn changes_of(conn: &Connection, batch: &[&Line]) -> Result<Vec<Change>, Error> 
             }
             "tag_custom" => {
                 values.insert(&line.id);
+            }
+            "song_tags" if line.f == COVER => {
+                recovered.insert(&line.id);
             }
             "song_tags" => {
                 retagged.insert(&line.id);
@@ -270,26 +275,20 @@ fn changes_of(conn: &Connection, batch: &[&Line]) -> Result<Vec<Change>, Error> 
         }
         out.push(change);
     }
-    if !analysed.is_empty() {
-        out.push(Change {
-            kind: "analysis".to_owned(),
-            count: analysed.len(),
-            ..Change::default()
-        });
-    }
-    if !values.is_empty() {
-        out.push(Change {
-            kind: "tag_custom".to_owned(),
-            count: values.len(),
-            ..Change::default()
-        });
-    }
-    if !retagged.is_empty() {
-        out.push(Change {
-            kind: "song_tags".to_owned(),
-            count: retagged.len(),
-            ..Change::default()
-        });
+    let whole = [
+        ("analysis", analysed.len()),
+        ("tag_custom", values.len()),
+        ("song_tags", retagged.len()),
+        ("covers", recovered.len()),
+    ];
+    for (kind, count) in whole {
+        if count > 0 {
+            out.push(Change {
+                kind: kind.to_owned(),
+                count,
+                ..Change::default()
+            });
+        }
     }
     Ok(out)
 }
@@ -362,6 +361,8 @@ fn reversal(line: &Line) -> Reversal {
         }
         (f, Some(prev)) => write(f, prev.clone()),
         (F_PRESENT, None) => write(F_PRESENT, Value::Bool(false)),
+        // The line gave a song's file a tag it did not have: taking it back clears it.
+        (f, None) if line.e == E_SONG_TAGS => write(f, Value::String(String::new())),
         // The line made the item: taking it back deletes it.
         (F_NAME, None) if is_item(&line.e) => write(F_DELETE, Value::Null),
         _ => Reversal::None,
