@@ -757,12 +757,15 @@ const fileRemovalSchema = z.object({
 	artist: z.string(),
 	/** Where the song is, below the library folder. */
 	path: z.string(),
+	/** The device that removed it, by name. */
 	by: z.string(),
+	/** Whether that device is this one: it took back a song another device added. */
+	here: z.boolean(),
 	/** Unix seconds. */
 	at: int,
 });
 
-/** A song this library has that another device removed from the shared library. */
+/** A song this library has that was removed from the shared library. */
 export type FileRemoval = z.infer<typeof fileRemovalSchema>;
 
 /** The songs another device removed that are still here. */

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { LibraryChange } from "#/lib/api.ts";
-import { changedBy, changeFacts, changeTitle } from "#/lib/library-changes.ts";
+import type { FileRemoval, LibraryChange } from "#/lib/api.ts";
+import {
+	changedBy,
+	changeFacts,
+	changeTitle,
+	removalBy,
+	removalsTitle,
+} from "#/lib/library-changes.ts";
 
 const PLAIN: LibraryChange = {
 	kind: "playlist",
@@ -60,5 +66,50 @@ describe("changedBy", () => {
 		[["a", "b", "c"], "3 devices"],
 	])("%j", (by, text) => {
 		expect(changedBy(by)).toBe(text);
+	});
+});
+
+describe("removalsTitle", () => {
+	const removal = (by: string, here = false): FileRemoval => ({
+		audioFp: `${by}-${here}`,
+		trackId: 1,
+		title: "Glue",
+		artist: "Bicep",
+		path: "Bicep/Glue.flac",
+		by,
+		here,
+		at: 0,
+	});
+	it.each<[string, FileRemoval[], string]>([
+		["one song, one device", [removal("tour-laptop")], "tour-laptop removed 1 song"],
+		[
+			"several songs, one device",
+			[removal("tour-laptop"), removal("tour-laptop")],
+			"tour-laptop removed 2 songs",
+		],
+		[
+			"two devices",
+			[removal("tour-laptop"), removal("studio-mac")],
+			"2 songs removed from the shared library",
+		],
+		[
+			"taken back on this device",
+			[removal("this-mac", true), removal("this-mac", true)],
+			"You took back 2 songs another device added",
+		],
+		[
+			"this device and another",
+			[removal("this-mac", true), removal("tour-laptop")],
+			"2 songs removed from the shared library",
+		],
+	])("%s", (_name, removals, title) => {
+		expect(removalsTitle(removals)).toBe(title);
+	});
+
+	it.each<[FileRemoval, string]>([
+		[removal("tour-laptop"), "tour-laptop"],
+		[removal("this-mac", true), "taken back here"],
+	])("who removed %o", (one, by) => {
+		expect(removalBy(one)).toBe(by);
 	});
 });

@@ -674,6 +674,7 @@ export const FILE_REMOVALS: FileRemoval[] = [
 		artist: "Bicep",
 		path: "Bicep/Bicep/Glue.flac",
 		by: "tour-laptop",
+		here: false,
 		at: NOW - 3600,
 	},
 	{
@@ -683,6 +684,7 @@ export const FILE_REMOVALS: FileRemoval[] = [
 		artist: "Bicep",
 		path: "Bicep/Singles/Opal (Four Tet Remix).mp3",
 		by: "tour-laptop",
+		here: false,
 		at: NOW - 3500,
 	},
 ];

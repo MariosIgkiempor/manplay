@@ -823,7 +823,13 @@ async fn a_song_added_elsewhere_is_listed_and_taking_it_back_puts_it_up_for_remo
         1,
         "its file is not removed: it waits for the user here"
     );
+    let taken_back_here = |db: &Mutex<Connection>| {
+        files::removals_waiting(&db.lock().expect("lock"), Path::new(ROOT)).expect("waiting")[0]
+            .here
+    };
+    assert!(taken_back_here(&b));
     assert_eq!(arrivals(&b).len(), 0);
     assert!(run_both(&a, &b, &store).await);
     assert_eq!(waiting(&a).len(), 1, "and on the device that added it");
+    assert!(!taken_back_here(&a), "to A, another device removed it");
 }

@@ -1,4 +1,4 @@
-import type { LibraryChange } from "#/lib/api.ts";
+import type { FileRemoval, LibraryChange } from "#/lib/api.ts";
 
 function songs(n: number): string {
 	return n === 1 ? "1 song" : `${n.toLocaleString()} songs`;
@@ -64,4 +64,41 @@ export function changedBy(by: readonly string[]): string {
 		return by.join(" and ");
 	}
 	return `${by.length} devices`;
+}
+
+/** Who took a set of songs out of the shared library, as far as one name covers them all. */
+type RemovedBy =
+	| { kind: "here" }
+	| { kind: "device"; name: string }
+	/** Several devices, or this one and others: each song says who. */
+	| { kind: "several" };
+
+export function removedBy(removals: FileRemoval[]): RemovedBy {
+	if (removals.every((removal) => removal.here)) {
+		return { kind: "here" };
+	}
+	const names = new Set(removals.map((removal) => removal.by));
+	const [name] = names;
+	return names.size === 1 && name !== undefined && removals.every((removal) => !removal.here)
+		? { kind: "device", name }
+		: { kind: "several" };
+}
+
+/** The heading over songs that wait to be kept or removed: who took them out, and how many. */
+export function removalsTitle(removals: FileRemoval[]): string {
+	const count = songs(removals.length);
+	const by = removedBy(removals);
+	switch (by.kind) {
+		case "here":
+			return `You took back ${count} another device added`;
+		case "device":
+			return `${by.name} removed ${count}`;
+		case "several":
+			return `${count} removed from the shared library`;
+	}
+}
+
+/** Who removed one song, for a line of its own. */
+export function removalBy(removal: FileRemoval): string {
+	return removal.here ? "taken back here" : removal.by;
 }

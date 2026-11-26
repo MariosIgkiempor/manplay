@@ -548,6 +548,8 @@ pub struct Removal {
     pub path: String,
     /// The member who removed it, by name.
     pub by: String,
+    /// Whether that member is this device: it took back a song another device added.
+    pub here: bool,
     /// When they did.
     pub at: UnixSeconds,
 }
@@ -562,6 +564,7 @@ pub fn removals_waiting(conn: &Connection, root: &Path) -> Result<Vec<Removal>, 
         .query_map(params![E_FILE, F_PRESENT], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
     let had = had(conn)?;
+    let me = write::device_id(conn)?;
     let mut out = Vec::new();
     for (fp, at_clock) in removed {
         if !had.get(&fp).is_some_and(|h| h.present) {
@@ -590,6 +593,7 @@ pub fn removals_waiting(conn: &Connection, root: &Path) -> Result<Vec<Removal>, 
                 || recent::ANOTHER_DEVICE.to_owned(),
                 |dev| recent::member_name(conn, dev),
             ),
+            here: clock::device_of(&at_clock) == Some(me.as_str()),
             at: clock::parse(&at_clock).map_or(0, |(ms, _)| ms / 1000),
         });
     }

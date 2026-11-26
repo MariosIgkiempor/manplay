@@ -11,12 +11,19 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { WellCard } from "#/components/frame.tsx";
-import { EmptyState, ErrorLine, Page } from "#/components/page.tsx";
+import { EmptyState, ErrorLine, Page, Section } from "#/components/page.tsx";
 import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Fact, Facts } from "#/components/ui/facts.tsx";
 import type { DeleteHold, FileRemoval, LibraryChange, LibraryChangeBatch } from "#/lib/api.ts";
 import { timeAgo } from "#/lib/format.ts";
-import { changedBy, changeFacts, changeTitle } from "#/lib/library-changes.ts";
+import {
+	changedBy,
+	changeFacts,
+	changeTitle,
+	removalBy,
+	removalsTitle,
+	removedBy,
+} from "#/lib/library-changes.ts";
 import { TRASH } from "#/lib/platform.ts";
 import {
 	useDecideDeletes,
@@ -26,6 +33,7 @@ import {
 	useSettleFileRemovals,
 	useUndoLibraryChanges,
 } from "#/lib/queries.ts";
+import { cn } from "#/lib/utils.ts";
 
 const ICON: Record<LibraryChange["kind"], ReactNode> = {
 	tag: <Tag />,
@@ -85,7 +93,7 @@ function BatchRow({ batch }: { batch: LibraryChangeBatch }) {
 					</ConfirmButton>
 				)}
 			</div>
-			<ul className="space-y-1">
+			<ul className={cn("space-y-1", batch.undone && "opacity-50")}>
 				{shown.map((change) => (
 					<ChangeLine key={`${change.kind}/${change.name}`} change={change} />
 				))}
@@ -152,6 +160,10 @@ function HeldDeletions({ hold }: { hold: DeleteHold }) {
 	);
 }
 
+function capitalised(text: string): string {
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** How many removed songs are listed before the rest becomes a count. */
 const REMOVALS_SHOWN = 8;
 
@@ -164,13 +176,17 @@ function RemovedSongs({ removals }: { removals: FileRemoval[] }) {
 	const all = removals.map((removal) => removal.audioFp);
 	const shown = removals.slice(0, REMOVALS_SHOWN);
 	const more = removals.length - shown.length;
-	const count = removals.length === 1 ? "1 song" : `${removals.length.toLocaleString()} songs`;
+	const by = removedBy(removals);
+	// One device at about one time says so once, above the songs; otherwise each song does.
+	const latest = Math.max(...removals.map((removal) => removal.at));
 	return (
 		<WellCard wellClassName="space-y-3 px-4 py-4">
 			<div>
-				<p className="font-medium text-sm">{count} removed on another device</p>
+				<p className="font-medium text-sm">{removalsTitle(removals)}</p>
 				<p className="text-muted-foreground text-xs">
-					Still in this library. Remove them here too, or keep them and every device has them again.
+					{by.kind !== "several" && `${capitalised(timeAgo(latest))}. `}
+					Still in this library. {by.kind === "here" ? "Remove them" : "Remove them here too"}, or
+					keep them and every device has them again.
 				</p>
 			</div>
 			<ul className="space-y-1.5">
@@ -184,7 +200,8 @@ function RemovedSongs({ removals }: { removals: FileRemoval[] }) {
 								)}
 							</div>
 							<div className="truncate text-muted-foreground text-xs">
-								{removal.path} · {removal.by}, {timeAgo(removal.at)}
+								{removal.path}
+								{by.kind === "several" && ` · ${removalBy(removal)}, ${timeAgo(removal.at)}`}
 							</div>
 						</div>
 						<ConfirmButton
@@ -263,8 +280,12 @@ export function LibraryChanges() {
 				)
 			}
 		>
-			{hold && <HeldDeletions hold={hold} />}
-			{removals.length > 0 && <RemovedSongs removals={removals} />}
+			{waiting && (
+				<Section title="Waiting for your choice">
+					{hold && <HeldDeletions hold={hold} />}
+					{removals.length > 0 && <RemovedSongs removals={removals} />}
+				</Section>
+			)}
 			{batches.length === 0 ? (
 				!waiting && (
 					<EmptyState icon={<ArrowDownToLine />} title="Nothing changed">
@@ -272,11 +293,13 @@ export function LibraryChanges() {
 					</EmptyState>
 				)
 			) : (
-				<WellCard rows>
-					{batches.map((batch) => (
-						<BatchRow key={batch.id} batch={batch} />
-					))}
-				</WellCard>
+				<Section title="Last 30 days">
+					<WellCard rows>
+						{batches.map((batch) => (
+							<BatchRow key={batch.id} batch={batch} />
+						))}
+					</WellCard>
+				</Section>
 			)}
 		</Page>
 	);
