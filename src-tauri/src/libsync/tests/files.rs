@@ -365,3 +365,41 @@ fn a_new_audio_fingerprint_keeps_what_was_written_about_the_file() {
         Some(json!(["1.mp3"]))
     );
 }
+
+#[test]
+fn audio_written_over_in_place_replaces_the_old_audio() {
+    let a = device(2);
+    record(&a);
+    {
+        let conn = a.lock().expect("lock");
+        let id: i64 = conn
+            .query_row("SELECT id FROM tracks WHERE audio_fp = 'fp1'", [], |r| {
+                r.get(0)
+            })
+            .expect("id");
+        conn.execute(
+            "UPDATE tracks SET audio_fp = 'encoded' WHERE id = ?1",
+            params![id],
+        )
+        .expect("re-encode");
+        conn.execute(
+            "INSERT INTO audio_changes (track_id, old_fp, new_fp) VALUES (?1, 'fp1', 'encoded')",
+            params![id],
+        )
+        .expect("noted");
+    }
+    assert_eq!(record(&a), 3, "the old audio removed, the new one written");
+    assert_eq!(register(&a, 1, "present"), Some(json!(false)));
+    assert!(written_at(&a, 1, "present") > EARLY_MS);
+    let conn = a.lock().expect("lock");
+    assert_eq!(
+        state::get(&conn, "file", "encoded", "path").expect("get"),
+        Some(json!(["1.mp3"]))
+    );
+    assert_eq!(
+        state::get(&conn, "file", "encoded", "present").expect("get"),
+        Some(json!(true))
+    );
+    drop(conn);
+    assert_eq!(record(&a), 0);
+}

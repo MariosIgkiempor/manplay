@@ -7,7 +7,8 @@
 //! yet, is written with an early clock (`write::stamp_early`), so it never beats an edit.
 //!
 //! Removed means on purpose: deleted in the app ([`deleted_here`]), or missing below the library
-//! folder for the whole grace period. A song that is only missing (a drive that is unplugged, a
+//! folder for the whole grace period, or its file written over with other audio (a re-encode: the
+//! new audio takes its place). A song that is only missing (a drive that is unplugged, a
 //! library folder that was switched) is not removed.
 //!
 //! Nothing here touches a file. Songs without an `audio_fp` are left out, and of several copies
@@ -252,8 +253,17 @@ pub fn record(conn: &Connection, root: &Path, expired_before: UnixSeconds) -> Re
             )?;
         }
     }
-    // A song whose record is gone without this device seeing it removed says nothing.
-    for fp in had.keys().filter(|fp| !copies.contains_key(*fp)) {
+    // A song whose record is gone without this device seeing it removed says nothing, unless
+    // its file was written over with other audio: then the old audio was replaced, and is removed.
+    for (fp, before) in had.iter().filter(|(fp, _)| !copies.contains_key(*fp)) {
+        let replaced: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM audio_changes WHERE old_fp = ?1)",
+            params![fp],
+            |r| r.get(0),
+        )?;
+        if replaced && before.present {
+            pending.field(&registers, fp, F_PRESENT, json!(false), true);
+        }
         tx.execute("DELETE FROM file_local WHERE audio_fp = ?1", params![fp])?;
     }
     let written = pending.write(&tx)?;
