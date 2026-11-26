@@ -15,7 +15,7 @@
 //! of one audio only one path is written.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
@@ -44,6 +44,33 @@ impl RelPath {
             .map(|part| part.to_str().map(str::to_owned))
             .collect();
         parts.filter(|parts| !parts.is_empty()).map(Self)
+    }
+
+    /// A path another device wrote, when every name in it is one a folder or file can have
+    /// below the library folder: nothing that climbs out of it or names a place of its own.
+    pub fn from_value(val: &Value) -> Option<Self> {
+        let parts: Vec<String> = serde_json::from_value(val.clone()).ok()?;
+        let plain = |part: &String| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && !part.contains(['/', '\\', '\0'])
+                // A drive letter or an alternate stream on Windows; an ordinary character on a Mac.
+                && !(cfg!(windows) && part.contains(':'))
+        };
+        (!parts.is_empty() && parts.iter().all(plain)).then_some(Self(parts))
+    }
+
+    /// The file at this path in the library folder `root`.
+    pub fn under(&self, root: &Path) -> PathBuf {
+        self.0
+            .iter()
+            .fold(root.to_path_buf(), |at, part| at.join(part))
+    }
+
+    /// The same place to a file system that ignores case and the Unicode form of names.
+    fn folded(&self) -> Vec<String> {
+        crate::sync::folded(&self.0)
     }
 
     fn value(&self) -> Value {
@@ -331,4 +358,89 @@ pub fn deleted_here(
     let written = pending.write(&tx)?;
     tx.commit()?;
     Ok(written)
+}
+
+/// A song another device moved or renamed, that is still where this device last saw it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Move {
+    pub audio_fp: String,
+    pub from: RelPath,
+    pub to: RelPath,
+}
+
+/// The songs to move so the library has them where the shared library says they are. Call it
+/// right after [`record`], so a move made here was written first and is not taken back. A song
+/// that was removed elsewhere, or whose new path is not one a file can have, stays.
+pub fn moves_wanted(conn: &Connection) -> Result<Vec<Move>, Error> {
+    if !active(conn)? {
+        return Ok(Vec::new());
+    }
+    let registers = registers(conn)?;
+    let mut out = Vec::new();
+    for (fp, had) in had(conn)? {
+        let field = |f: &str| registers.get(&(fp.clone(), f.to_owned()));
+        if !had.present || field(F_PRESENT) == Some(&json!(false)) {
+            continue;
+        }
+        let Some(to) = field(F_PATH).and_then(RelPath::from_value) else {
+            continue;
+        };
+        if to != had.path {
+            out.push(Move {
+                audio_fp: fp,
+                from: had.path,
+                to,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.to.cmp(&b.to));
+    Ok(out)
+}
+
+/// Why a song was not moved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stayed {
+    /// Its file is not where the library last saw it.
+    NotThere,
+    /// Another file is already at the new path.
+    Taken,
+    /// The file system refused (a name it does not allow, no permission).
+    Refused,
+}
+
+impl Move {
+    /// Moves the file within the library folder `root`. Never writes over another file.
+    pub fn carry_out(&self, root: &Path) -> Result<(), Stayed> {
+        let from = self.from.under(root);
+        let to = self.to.under(root);
+        if !from.is_file() {
+            return Err(Stayed::NotThere);
+        }
+        // On a file system that ignores case, a new spelling of the same name "exists" already:
+        // it is the file itself.
+        let respelled = self.from.folded() == self.to.folded() && same_file(&from, &to);
+        if !respelled && to.symlink_metadata().is_ok() {
+            return Err(Stayed::Taken);
+        }
+        if let Some(folder) = to.parent() {
+            std::fs::create_dir_all(folder).map_err(|_| Stayed::Refused)?;
+        }
+        std::fs::rename(&from, &to).map_err(|_| Stayed::Refused)
+    }
+}
+
+/// Whether two paths that differ only in spelling name one file.
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (a.metadata(), b.metadata()) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Windows folders ignore case, so two spellings of one name are one file.
+#[cfg(not(unix))]
+fn same_file(_a: &Path, _b: &Path) -> bool {
+    true
 }

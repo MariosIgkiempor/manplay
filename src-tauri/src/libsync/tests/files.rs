@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::{Memory, device, library, open, run_both, track};
 use crate::libsync::clock;
-use crate::libsync::files::{self, RelPath, UnixSeconds};
+use crate::libsync::files::{self, Move, RelPath, Stayed, UnixSeconds};
 use crate::libsync::{remap, state};
 
 const ROOT: &str = "/music";
@@ -402,4 +402,201 @@ fn audio_written_over_in_place_replaces_the_old_audio() {
     );
     drop(conn);
     assert_eq!(record(&a), 0);
+}
+
+#[test]
+fn a_path_from_another_device_must_stay_inside_the_library_folder() {
+    let cases = [
+        (json!(["House", "a.mp3"]), true),
+        (json!(["a.mp3"]), true),
+        (json!(["Pão", "ünï cödé.flac"]), true),
+        (json!([]), false),
+        (json!([""]), false),
+        (json!(["..", "a.mp3"]), false),
+        (json!(["House", "..", "..", "a.mp3"]), false),
+        (json!([".", "a.mp3"]), false),
+        (json!(["House/a.mp3"]), false),
+        (json!(["House\\a.mp3"]), false),
+        (json!(["a\0.mp3"]), false),
+        (json!("House/a.mp3"), false),
+        (json!(["House", 3]), false),
+        (json!(null), false),
+        (json!(["C:", "a.mp3"]), !cfg!(windows)),
+    ];
+    for (val, ok) in cases {
+        assert_eq!(RelPath::from_value(&val).is_some(), ok, "{val}");
+    }
+}
+
+fn wanted(db: &Mutex<Connection>) -> Vec<(String, String, String)> {
+    record(db);
+    files::moves_wanted(&db.lock().expect("lock"))
+        .expect("wanted")
+        .into_iter()
+        .map(|m| {
+            (
+                m.audio_fp,
+                serde_json::to_string(&m.from).expect("json"),
+                serde_json::to_string(&m.to).expect("json"),
+            )
+        })
+        .collect()
+}
+
+/// Two devices with the same two songs, in one library, that have heard of each other.
+async fn two(store: &Memory) -> (Mutex<Connection>, Mutex<Connection>) {
+    let a = device(2);
+    let b = device(2);
+    record(&a);
+    record(&b);
+    assert!(run_both(&a, &b, store).await);
+    (a, b)
+}
+
+#[tokio::test]
+async fn a_song_renamed_elsewhere_is_to_be_moved_here_and_then_nothing_is_left_to_say() {
+    let store = Memory::default();
+    let (a, b) = two(&store).await;
+    assert_eq!(wanted(&b).len(), 0);
+    sql(
+        &a,
+        "UPDATE tracks SET path = '/music/House/One.mp3' WHERE audio_fp = ?1",
+        1,
+    );
+    record(&a);
+    assert!(run_both(&a, &b, &store).await);
+    assert_eq!(
+        wanted(&b),
+        [(
+            "fp1".to_owned(),
+            r#"["1.mp3"]"#.to_owned(),
+            r#"["House","One.mp3"]"#.to_owned()
+        )]
+    );
+    assert_eq!(
+        wanted(&a).len(),
+        0,
+        "the device that renamed it has nothing to move"
+    );
+    // B moves the file and its scan finds it there.
+    sql(
+        &b,
+        "UPDATE tracks SET path = '/music/House/One.mp3' WHERE audio_fp = ?1",
+        1,
+    );
+    assert_eq!(wanted(&b).len(), 0);
+    assert_eq!(record(&b), 0, "following a move is not an edit");
+}
+
+#[tokio::test]
+async fn a_rename_made_here_since_is_not_taken_back() {
+    let store = Memory::default();
+    let (a, b) = two(&store).await;
+    sql(
+        &a,
+        "UPDATE tracks SET path = '/music/Theirs.mp3' WHERE audio_fp = ?1",
+        1,
+    );
+    record(&a);
+    // B renames the same song later, before it hears of A's name for it.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    sql(
+        &b,
+        "UPDATE tracks SET path = '/music/Mine.mp3' WHERE audio_fp = ?1",
+        1,
+    );
+    record(&b);
+    assert!(run_both(&a, &b, &store).await);
+    assert_eq!(wanted(&b).len(), 0, "the later rename is B's own");
+    assert_eq!(wanted(&a).len(), 1, "and A follows it");
+    assert_eq!(register(&a, 1, "path"), Some(json!(["Mine.mp3"])));
+}
+
+#[tokio::test]
+async fn nothing_is_moved_for_a_song_removed_elsewhere_or_a_path_that_climbs_out() {
+    let store = Memory::default();
+    let (a, b) = two(&store).await;
+    sql(
+        &a,
+        "UPDATE tracks SET path = '/music/Gone.mp3' WHERE audio_fp = ?1",
+        1,
+    );
+    record(&a);
+    let id = track(&a, 1);
+    files::deleted_here(&a.lock().expect("lock"), Path::new(ROOT), &[id], JUST_NOW)
+        .expect("deleted");
+    {
+        let conn = a.lock().expect("lock");
+        crate::libsync::write::stamp(
+            &conn,
+            &[crate::libsync::write::Field {
+                e: "file".to_owned(),
+                id: "fp2".to_owned(),
+                f: "path".to_owned(),
+                val: json!(["..", "..", "etc", "2.mp3"]),
+            }],
+        )
+        .expect("a path no honest device writes");
+    }
+    assert!(run_both(&a, &b, &store).await);
+    assert_eq!(wanted(&b).len(), 0);
+}
+
+fn folder(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("manplay-files-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    dir
+}
+
+fn a_move(from: &[&str], to: &[&str]) -> Move {
+    Move {
+        audio_fp: "fp".to_owned(),
+        from: RelPath::from_value(&json!(from)).expect("from"),
+        to: RelPath::from_value(&json!(to)).expect("to"),
+    }
+}
+
+#[test]
+fn a_file_moves_into_folders_made_for_it_and_never_over_another_file() {
+    let root = folder("move");
+    std::fs::write(root.join("a.mp3"), b"a").expect("write");
+    std::fs::write(root.join("taken.mp3"), b"other").expect("write");
+
+    assert_eq!(
+        a_move(&["a.mp3"], &["taken.mp3"]).carry_out(&root),
+        Err(Stayed::Taken)
+    );
+    assert_eq!(std::fs::read(root.join("a.mp3")).expect("read"), b"a");
+    assert_eq!(
+        std::fs::read(root.join("taken.mp3")).expect("read"),
+        b"other"
+    );
+
+    assert_eq!(
+        a_move(&["a.mp3"], &["House", "Deep", "b.mp3"]).carry_out(&root),
+        Ok(())
+    );
+    assert!(!root.join("a.mp3").exists());
+    assert_eq!(
+        std::fs::read(root.join("House").join("Deep").join("b.mp3")).expect("read"),
+        b"a"
+    );
+
+    assert_eq!(
+        a_move(&["a.mp3"], &["c.mp3"]).carry_out(&root),
+        Err(Stayed::NotThere)
+    );
+
+    // Only the spelling changes: fine where case is ignored, and where it is not.
+    assert_eq!(
+        a_move(&["House", "Deep", "b.mp3"], &["House", "Deep", "B.mp3"]).carry_out(&root),
+        Ok(())
+    );
+    let names: Vec<String> = std::fs::read_dir(root.join("House").join("Deep"))
+        .expect("list")
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .collect();
+    assert_eq!(names, ["B.mp3"]);
+    let _ = std::fs::remove_dir_all(&root);
 }

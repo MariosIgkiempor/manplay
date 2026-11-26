@@ -427,6 +427,50 @@ fn record_files(conn: &Connection, expired_before: i64) -> Result<(), Error> {
     Ok(())
 }
 
+/// Moves the library's files to where other devices moved or renamed them, then reads the
+/// library again so the songs are found at their new places. A file never replaces another: a
+/// song whose new place is taken stays where it is. Returns how many moved.
+async fn follow_file_moves(state: &AppState) -> Result<usize, Error> {
+    let Ok(root) = library_root(state) else {
+        return Ok(0);
+    };
+    let wanted = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        record_files(&conn, unix_now() - GRACE_SECS)?;
+        libsync::files::moves_wanted(&conn)?
+    };
+    if wanted.is_empty() {
+        return Ok(0);
+    }
+    let folder = root.clone();
+    let moved = tauri::async_runtime::spawn_blocking(move || {
+        wanted
+            .iter()
+            .filter(|wanted| match wanted.carry_out(&folder) {
+                Ok(()) => true,
+                Err(why) => {
+                    log::info!("a song another device moved stays where it is: {why:?}");
+                    false
+                }
+            })
+            .count()
+    })
+    .await
+    .map_err(|e| Error::Msg(e.to_string()))?;
+    if moved > 0 {
+        scan_and_store(state, root, ScanDepth::Changed).await?;
+    }
+    Ok(moved)
+}
+
+/// [`follow_file_moves`] after a sync of the shared library; a problem is only logged, the sync
+/// itself went through.
+async fn follow_shared_files(state: &AppState) {
+    if let Err(e) = follow_file_moves(state).await {
+        log::warn!("could not move songs to where other devices put them: {e}");
+    }
+}
+
 /// The present songs at or below `paths`, as `(id, path)`.
 fn tracks_below(conn: &Connection, paths: &[PathBuf]) -> Result<Vec<(i64, PathBuf)>, Error> {
     Ok(db::present_tracks(conn)?
@@ -3811,6 +3855,7 @@ async fn sync_shared_target(
     let outcome = sync::run_library_data(&state.http, &target, &state.db).await;
     held.release().await;
     if outcome.error.is_none() {
+        follow_shared_files(state).await;
         tauri::async_runtime::spawn(transfer_waveforms(app.clone(), SharedPlace::Target(target)));
     }
     outcome
@@ -3825,6 +3870,7 @@ async fn sync_shared_folder(
 ) -> libsync::remote::RunSummary {
     let out = run_shared_folder(state, &root).await;
     if out.error.is_none() {
+        follow_shared_files(state).await;
         tauri::async_runtime::spawn(transfer_waveforms(app.clone(), SharedPlace::Folder(root)));
     }
     out
