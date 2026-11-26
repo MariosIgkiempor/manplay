@@ -27,6 +27,9 @@ pub fn local_version(conn: &Connection) -> Result<i64, Error> {
         .unwrap_or(1))
 }
 
+/// Entities whose id is the `audio_fp` itself.
+const SONG_ENTITIES: &str = "('analysis', 'file')";
+
 /// Memberships whose `ref` is `old`, with the parent they belong to.
 const MEMBER_ENTITIES: &str = "('track_tag', 'playlist_track')";
 
@@ -63,16 +66,23 @@ pub fn apply_pair(
         params![old],
     )?;
     conn.execute(
-        "INSERT INTO op_state (e, id, f, clock, val, ref)
-         SELECT e, ?2, f, clock, val, ref FROM op_state WHERE e = 'analysis' AND id = ?1 AND true
-         ON CONFLICT(e, id, f) DO UPDATE SET
-             clock = excluded.clock, val = excluded.val, ref = excluded.ref
-         WHERE excluded.clock > op_state.clock",
+        &format!(
+            "INSERT INTO op_state (e, id, f, clock, val, ref)
+             SELECT e, ?2, f, clock, val, ref FROM op_state
+             WHERE e IN {SONG_ENTITIES} AND id = ?1 AND true
+             ON CONFLICT(e, id, f) DO UPDATE SET
+                 clock = excluded.clock, val = excluded.val, ref = excluded.ref
+             WHERE excluded.clock > op_state.clock"
+        ),
         params![old, new],
     )?;
     conn.execute(
-        "DELETE FROM op_state WHERE e = 'analysis' AND id = ?1",
+        &format!("DELETE FROM op_state WHERE e IN {SONG_ENTITIES} AND id = ?1"),
         params![old],
+    )?;
+    conn.execute(
+        "UPDATE OR REPLACE file_local SET audio_fp = ?2 WHERE audio_fp = ?1",
+        params![old, new],
     )?;
     // What this device has not sent yet names the new audio too.
     conn.execute(
@@ -83,7 +93,9 @@ pub fn apply_pair(
         params![old, new],
     )?;
     conn.execute(
-        "UPDATE oplog SET id = ?2 WHERE uploaded = 0 AND e = 'analysis' AND id = ?1",
+        &format!(
+            "UPDATE oplog SET id = ?2 WHERE uploaded = 0 AND e IN {SONG_ENTITIES} AND id = ?1"
+        ),
         params![old, new],
     )?;
     Ok(moved)

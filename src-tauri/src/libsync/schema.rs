@@ -91,7 +91,15 @@ pub fn create(conn: &Connection) -> Result<(), Error> {
              prev   TEXT,
              undone INTEGER NOT NULL DEFAULT 0
          );
-         CREATE INDEX IF NOT EXISTS op_journal_batch ON op_journal(batch);",
+         CREATE INDEX IF NOT EXISTS op_journal_batch ON op_journal(batch);
+         -- What this device's library had for each audio when it last wrote `file` ops, so a
+         -- change made here can be told from one another device made (see `files.rs`). `path` is
+         -- a JSON list of the names below the library folder.
+         CREATE TABLE IF NOT EXISTS file_local (
+             audio_fp TEXT PRIMARY KEY,
+             path     TEXT NOT NULL,
+             present  INTEGER NOT NULL
+         );",
     )?;
     Ok(())
 }

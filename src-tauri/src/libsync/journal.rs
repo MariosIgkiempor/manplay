@@ -44,7 +44,7 @@ struct Noted {
 pub fn note(conn: &Connection, batch: BatchId, ops: &[Op]) -> Result<usize, Error> {
     let mut noted: BTreeMap<FieldKey, Noted> = BTreeMap::new();
     for op in ops {
-        if op.v > FORMAT || matches!(op.entity(), Entity::Other(_)) {
+        if op.v > FORMAT || matches!(op.entity(), Entity::File | Entity::Other(_)) {
             continue;
         }
         let key = (op.e.clone(), op.id.clone(), op.f.clone());

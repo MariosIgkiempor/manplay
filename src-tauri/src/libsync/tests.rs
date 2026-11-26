@@ -3207,6 +3207,7 @@ async fn years_of_edits_leave_about_one_snapshot_on_the_destination() {
 
 mod changes;
 mod edge;
+mod files;
 mod folder;
 
 #[test]

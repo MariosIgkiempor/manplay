@@ -244,34 +244,60 @@ pub struct Field {
 }
 
 /// Stamps `fields` as this device's ops, appends them to the local log and the register store,
-/// and returns them. The only place an op is made. Rows are not touched: the caller changes them
-/// itself, or rebuilds them with `apply::materialize`.
+/// and returns them. Rows are not touched: the caller changes them itself, or rebuilds them with
+/// `apply::materialize`.
 pub fn stamp(conn: &Connection, fields: &[Field]) -> Result<Vec<Op>, Error> {
     let dev = device_id(conn)?;
     let mut hlc = clock::load(conn)?;
     let now = clock::now_ms();
     let mut stamped = Vec::with_capacity(fields.len());
-    {
-        let mut insert = conn.prepare_cached(
-            "INSERT INTO oplog (clock, dev, e, id, f, val, uploaded) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
-        )?;
-        for field in fields {
-            let (ms, counter) = hlc.tick(now);
-            let op = Op {
-                v: FORMAT,
-                clock: clock::format(ms, counter, &dev),
-                dev: dev.clone(),
-                e: field.e.clone(),
-                id: field.id.clone(),
-                f: field.f.clone(),
-                val: field.val.clone(),
-            };
-            let val = serde_json::to_string(&op.val).map_err(|e| Error::Msg(e.to_string()))?;
-            insert.execute(params![op.clock, op.dev, op.e, op.id, op.f, val])?;
-            state::put(conn, &op)?;
-            stamped.push(op);
-        }
+    for field in fields {
+        let (ms, counter) = hlc.tick(now);
+        stamped.push(append(conn, clock::format(ms, counter, &dev), &dev, field)?);
     }
     clock::save(conn, hlc)?;
     Ok(stamped)
+}
+
+/// How many ops [`stamp_early`] has made on this device; the next one's clock comes from it.
+const SETTING_EARLY_OPS: &str = "libsync_early_ops";
+
+/// Like [`stamp`], for what the library simply has rather than what someone just changed: the
+/// clocks are older than any edit's, so an edit made on any device at any time wins over them,
+/// and they never win over a value the register store already has.
+pub fn stamp_early(conn: &Connection, fields: &[Field]) -> Result<Vec<Op>, Error> {
+    const PER_MS: u64 = 10_000;
+    let dev = device_id(conn)?;
+    let mut made: u64 = db::get_setting(conn, SETTING_EARLY_OPS)?
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(0);
+    let mut stamped = Vec::with_capacity(fields.len());
+    for field in fields {
+        let ms = i64::try_from(made / PER_MS + 1).unwrap_or(i64::MAX);
+        let counter = u32::try_from(made % PER_MS).unwrap_or(0);
+        made += 1;
+        stamped.push(append(conn, clock::format(ms, counter, &dev), &dev, field)?);
+    }
+    db::set_setting(conn, SETTING_EARLY_OPS, Some(&made.to_string()))?;
+    Ok(stamped)
+}
+
+/// Makes one op with the clock it was given. The only place an op is made.
+fn append(conn: &Connection, clock: String, dev: &str, field: &Field) -> Result<Op, Error> {
+    let op = Op {
+        v: FORMAT,
+        clock,
+        dev: dev.to_owned(),
+        e: field.e.clone(),
+        id: field.id.clone(),
+        f: field.f.clone(),
+        val: field.val.clone(),
+    };
+    let val = serde_json::to_string(&op.val).map_err(|e| Error::Msg(e.to_string()))?;
+    conn.prepare_cached(
+        "INSERT INTO oplog (clock, dev, e, id, f, val, uploaded) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+    )?
+    .execute(params![op.clock, op.dev, op.e, op.id, op.f, val])?;
+    state::put(conn, &op)?;
+    Ok(op)
 }

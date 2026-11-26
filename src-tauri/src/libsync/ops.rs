@@ -9,6 +9,8 @@ pub const FORMAT: u32 = 1;
 pub const F_NAME: &str = "name";
 pub const F_PRESENT: &str = "present";
 pub const F_POS: &str = "pos";
+/// Where a `file` is, below the library folder: the folder names and the file name, in order.
+pub const F_PATH: &str = "path";
 /// A smart playlist's rules (tags by uid).
 pub const F_RULES: &str = "rules";
 
@@ -49,6 +51,9 @@ pub enum Entity {
     SmartPlaylist,
     TagCustom,
     Analysis,
+    /// A song's file, by `audio_fp`: where it is (`path`) and whether the library still has it
+    /// (`present`). See `files.rs`.
+    File,
     Other(String),
 }
 
@@ -62,6 +67,7 @@ impl Entity {
             "smart_playlist" => Self::SmartPlaylist,
             "tag_custom" => Self::TagCustom,
             "analysis" => Self::Analysis,
+            "file" => Self::File,
             other => Self::Other(other.to_owned()),
         }
     }

@@ -208,7 +208,8 @@ async fn fill_audio_fps(app: AppHandle) {
     };
     let stored = db::set_audio_fps(&mut conn, &printed)
         .and_then(|()| db::rekey_legacy(&mut conn))
-        .and_then(|()| libsync::apply::materialize_pending(&mut conn).map(|_| ()));
+        .and_then(|()| libsync::apply::materialize_pending(&mut conn).map(|_| ()))
+        .and_then(|()| record_files(&conn, unix_now() - GRACE_SECS));
     if let Err(e) = stored {
         log::warn!("could not fingerprint the library's audio: {e}");
     }
@@ -405,14 +406,34 @@ fn reconcile_missing(
     purge_expired(conn, &backups, now)
 }
 
-/// Removes missing tracks past the grace period that have no remote copies left.
+/// Removes missing tracks past the grace period that have no remote copies left. The shared
+/// library hears first where the songs are and which are gone for good, while their records
+/// still say so.
 fn purge_expired(conn: &Connection, backups: &Path, now: i64) -> Result<(), Error> {
     let cutoff = now - GRACE_SECS;
+    record_files(conn, cutoff)?;
     if db::purgeable_count(conn, cutoff)? > 0 {
         db::backup(conn, backups, now, BACKUPS_KEEP)?;
         db::purge_expired(conn, cutoff)?;
     }
     Ok(())
+}
+
+/// Writes where the library's songs are to the shared library (`libsync::files`).
+fn record_files(conn: &Connection, expired_before: i64) -> Result<(), Error> {
+    if let Some(root) = db::get_setting(conn, SETTING_ROOT)? {
+        libsync::files::record(conn, Path::new(&root), expired_before)?;
+    }
+    Ok(())
+}
+
+/// The present songs at or below `paths`, as `(id, path)`.
+fn tracks_below(conn: &Connection, paths: &[PathBuf]) -> Result<Vec<(i64, PathBuf)>, Error> {
+    Ok(db::present_tracks(conn)?
+        .into_iter()
+        .map(|(id, path)| (id, PathBuf::from(path)))
+        .filter(|(_, path)| paths.iter().any(|p| path.starts_with(p)))
+        .collect())
 }
 
 #[derive(serde::Serialize)]
@@ -4240,14 +4261,28 @@ async fn fs_reveal(state: State<'_, AppState>, path: PathBuf) -> Result<(), Erro
         .map_err(|e| Error::Msg(e.to_string()))?
 }
 
-/// Moves to the system Trash. Tracks that vanish are soft-deleted by the rescan, as usual.
+/// Moves to the system Trash. The songs that went are marked missing at once, and the shared
+/// library hears they were deleted on purpose (`libsync::files::deleted_here`).
 #[tauri::command]
 async fn fs_trash(state: State<'_, AppState>, paths: Vec<PathBuf>) -> Result<(), Error> {
     let root = library_root(&state)?;
     let r = root.clone();
+    let doomed = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        tracks_below(&conn, &paths)?
+    };
     tauri::async_runtime::spawn_blocking(move || fsops::trash(&r, &paths))
         .await
         .map_err(|e| Error::Msg(e.to_string()))??;
+    {
+        let gone: Vec<i64> = doomed
+            .into_iter()
+            .filter(|(_, path)| !path.exists())
+            .map(|(id, _)| id)
+            .collect();
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        libsync::files::deleted_here(&conn, &root, &gone, unix_now())?;
+    }
     refresh_after_fs_change(&state, root).await;
     Ok(())
 }

@@ -159,6 +159,8 @@ pub fn materialize(conn: &Connection, ops: &[&Op]) -> Result<(), Error> {
             Entity::Analysis => {
                 analyses.insert(op.id.clone());
             }
+            // Recorded only: no file is moved or removed from what another device wrote.
+            Entity::File => {}
             Entity::Other(name) => {
                 if name == super::remap::E_REMAP
                     && let Some(new) = op.val.as_str()
