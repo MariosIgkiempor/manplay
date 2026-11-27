@@ -8,8 +8,8 @@ use rusqlite::{Connection, params};
 use super::{Memory, device, run_both, tag};
 use crate::db::FileState;
 use crate::libsync::files::{self, UnixSeconds};
-use crate::libsync::song_tags::{self, Fields};
 use crate::libsync::keep::{self, KeepKind, KeepRule};
+use crate::libsync::song_tags::{self, Fields};
 use crate::libsync::streamed::{self, NewSongs, Refreshed};
 
 const ROOT: &str = "/music";
@@ -350,7 +350,9 @@ async fn a_song_in_a_kept_playlist_is_kept_by_it_and_a_rule_can_be_taken_back() 
         .expect("uid");
     assert!(!kept_before);
     let id: i64 = conn
-        .query_row("SELECT id FROM tracks WHERE audio_fp = 'fp3'", [], |r| r.get(0))
+        .query_row("SELECT id FROM tracks WHERE audio_fp = 'fp3'", [], |r| {
+            r.get(0)
+        })
         .expect("id");
     keep::add(&conn, &[rule(KeepKind::Playlist, &uid)]).expect("keep");
     assert!(keep::kept_by_playlist(&conn, id).expect("kept"));
@@ -360,4 +362,47 @@ async fn a_song_in_a_kept_playlist_is_kept_by_it_and_a_rule_can_be_taken_back() 
     assert!(!keep::kept_by_playlist(&conn, id).expect("kept"));
     drop(conn);
     assert_eq!(to_download(&b), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_tag_edit_on_a_streamed_song_goes_to_the_log_and_the_row_and_reaches_the_device_with_the_file()
+ {
+    let store = Memory::default();
+    let (a, b) = one_more(&store).await;
+    refresh(&b);
+    let edits: std::collections::BTreeMap<String, String> = [
+        ("title", "Night Drive (VIP)"),
+        ("genre", "House;  Deep House"),
+        ("bpm", "124"),
+    ]
+    .into_iter()
+    .map(|(f, v)| (f.to_owned(), v.to_owned()))
+    .collect();
+    let left_out = song_tags::edit_streamed(&lock(&b), "fp3", &edits).expect("edit");
+    assert_eq!(left_out, ["bpm"], "BPM is the analysis's, not a shared tag");
+    let values = song_tags::streamed_values(&lock(&b), "fp3").expect("values");
+    assert_eq!(
+        values.get("title").cloned().flatten().as_deref(),
+        Some("Night Drive (VIP)")
+    );
+    assert_eq!(
+        values.get("genre").cloned().flatten().as_deref(),
+        Some("House; Deep House"),
+        "stored the way a file would hold it"
+    );
+    assert_eq!(values.get("bpm").cloned().flatten(), None);
+    assert_eq!(refresh(&b).updated, 1);
+    assert_eq!(
+        row(&b, 3).map(|r| r.3).as_deref(),
+        Some("Night Drive (VIP)")
+    );
+
+    assert!(run_both(&a, &b, &store).await);
+    let wanted = song_tags::wanted(&lock(&a), Path::new(ROOT)).expect("wanted");
+    assert!(
+        wanted
+            .iter()
+            .any(|w| w.edits.get("title").map(String::as_str) == Some("Night Drive (VIP)")),
+        "the device with the file is to write it in"
+    );
 }

@@ -370,6 +370,7 @@ mod tests {
             grid: None,
             grid_edited: false,
             cues: Vec::new(),
+            file_state: crate::db::FileState::Here,
         }
     }
 

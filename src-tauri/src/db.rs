@@ -3617,6 +3617,9 @@ pub struct ExportTrack {
     pub grid_edited: bool,
     /// Cues set in manplay, written as `POSITION_MARK`s; filled in by the caller.
     pub cues: Vec<Cue>,
+    /// A streamed song has no file here: the rekordbox XML leaves it out, a USB export takes its
+    /// copy in the stream cache, Jellyfin finds it on the destination like any song.
+    pub file_state: FileState,
 }
 
 pub struct ExportPlaylist {
@@ -3626,14 +3629,15 @@ pub struct ExportPlaylist {
     pub track_ids: Vec<i64>,
 }
 
-/// Everything the rekordbox export needs: present tracks and playlists in their saved order.
+/// Everything the exports need: present tracks, kept or streamed (see
+/// [`ExportTrack::file_state`]), and playlists in their saved order.
 pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPlaylist>), Error> {
     let mut stmt = conn.prepare(
         "SELECT t.id, t.path, t.artist, t.album, t.title, t.size, t.duration_ms, t.bitrate,
                 t.sample_rate, COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key),
-                NULLIF(t.audio_fp, ''), COALESCE(a.grid_edited, 0)
+                NULLIF(t.audio_fp, ''), COALESCE(a.grid_edited, 0), t.file_state
          FROM tracks t LEFT JOIN analysis a ON a.audio_fp = t.audio_fp
-         WHERE t.missing_since IS NULL AND t.file_state = 'here' ORDER BY t.artist, t.album, t.path",
+         WHERE t.missing_since IS NULL ORDER BY t.artist, t.album, t.path",
     )?;
     let tracks = stmt
         .query_map([], |r| {
@@ -3653,6 +3657,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
                 grid: None,
                 grid_edited: r.get(12)?,
                 cues: Vec::new(),
+                file_state: r.get(13)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -3664,7 +3669,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
         .collect::<Result<Vec<_>, _>>()?;
     let mut member_stmt = conn.prepare(&format!(
         "SELECT pt.track_id FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
-         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL AND t.file_state = 'here' {ONE_PER_AUDIO}
+         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL {ONE_PER_AUDIO}
          ORDER BY pt.position"
     ))?;
     let mut playlists = Vec::new();
@@ -3692,7 +3697,7 @@ pub fn export_tag_playlists(
         "SELECT DISTINCT t.id FROM tags g
          JOIN tags c ON {IN_SUBTREE}
          JOIN track_tags tt ON tt.tag_id = c.id
-         JOIN tracks t ON t.id = tt.track_id AND t.missing_since IS NULL AND t.file_state = 'here'
+         JOIN tracks t ON t.id = tt.track_id AND t.missing_since IS NULL
          WHERE g.id = ?1 ORDER BY t.artist, t.album, t.path"
     ))?;
     let mut out = Vec::new();
@@ -4146,15 +4151,37 @@ pub fn analysis_jobs(
     ids: Option<&[i64]>,
     force: bool,
 ) -> Result<Vec<AnalysisJob>, Error> {
+    Ok(analysis_candidates(conn, ids, force, FileState::Here)?
+        .into_iter()
+        .map(|(_, job)| job)
+        .collect())
+}
+
+/// Streamed songs to analyse, by row id, picked like [`analysis_jobs`]: they have no file here,
+/// so the caller analyses their copy in the stream cache instead of the `path` given.
+pub fn streamed_analysis_candidates(
+    conn: &Connection,
+    ids: Option<&[i64]>,
+    force: bool,
+) -> Result<Vec<(i64, AnalysisJob)>, Error> {
+    analysis_candidates(conn, ids, force, FileState::Streamed)
+}
+
+fn analysis_candidates(
+    conn: &Connection,
+    ids: Option<&[i64]>,
+    force: bool,
+    file_state: FileState,
+) -> Result<Vec<(i64, AnalysisJob)>, Error> {
     let wanted: Option<std::collections::HashSet<i64>> = ids.map(|i| i.iter().copied().collect());
     let mut stmt = conn.prepare(
         "SELECT t.id, t.path, t.audio_fp, a.version, a.waveform IS NULL AND a.error IS NULL
          FROM tracks t
          LEFT JOIN analysis a ON a.audio_fp = t.audio_fp
-         WHERE t.missing_since IS NULL AND t.file_state = 'here' AND t.audio_fp <> ''
+         WHERE t.missing_since IS NULL AND t.file_state = ?1 AND t.audio_fp <> ''
          ORDER BY t.artist, t.album, t.path",
     )?;
-    let rows = stmt.query_map([], |r| {
+    let rows = stmt.query_map(params![file_state], |r| {
         Ok((
             r.get::<_, i64>(0)?,
             r.get::<_, String>(1)?,
@@ -4177,7 +4204,7 @@ pub fn analysis_jobs(
             continue;
         }
         if seen.insert(audio_fp.clone()) {
-            jobs.push(AnalysisJob { path, audio_fp });
+            jobs.push((id, AnalysisJob { path, audio_fp }));
         }
     }
     Ok(jobs)
@@ -4235,9 +4262,12 @@ pub fn analysis_results(
 }
 
 /// Ids of present tracks holding any of these `audio_fp`s (duplicates included).
+/// The songs with these audio prints whose files are here: the files an analysis writes its
+/// results into.
 pub fn track_ids_with_audio_fps(conn: &Connection, prints: &[&str]) -> Result<Vec<i64>, Error> {
-    let mut stmt =
-        conn.prepare("SELECT id FROM tracks WHERE audio_fp = ?1 AND missing_since IS NULL")?;
+    let mut stmt = conn.prepare(
+        "SELECT id FROM tracks WHERE audio_fp = ?1 AND missing_since IS NULL AND file_state = 'here'",
+    )?;
     let mut ids = Vec::new();
     for fp in prints {
         for id in stmt.query_map(params![fp], |r| r.get(0))? {
@@ -4373,6 +4403,34 @@ pub fn share_auto_grid(
 mod tests {
     use super::*;
     use crate::analysis::Analysis;
+
+    #[test]
+    fn streamed_songs_are_analysed_apart_from_kept_ones() {
+        let conn = open(Path::new(":memory:")).expect("db");
+        for (path, fp, state) in [
+            ("/m/kept.mp3", "a1:01", FileState::Here),
+            ("/m/streamed.mp3", "a1:02", FileState::Streamed),
+        ] {
+            conn.execute(
+                "INSERT INTO tracks (path, artist, album, title, size, audio_fp, file_state)
+                 VALUES (?1, 'a', 'b', 'c', 1, ?2, ?3)",
+                params![path, fp, state],
+            )
+            .expect("track");
+        }
+        let kept: Vec<String> = analysis_jobs(&conn, None, false)
+            .expect("jobs")
+            .into_iter()
+            .map(|j| j.audio_fp)
+            .collect();
+        assert_eq!(kept, ["a1:01"]);
+        let streamed: Vec<String> = streamed_analysis_candidates(&conn, None, false)
+            .expect("streamed")
+            .into_iter()
+            .map(|(_, j)| j.audio_fp)
+            .collect();
+        assert_eq!(streamed, ["a1:02"]);
+    }
 
     /// A database file of its own in the temp dir, holding `user_version` = `version` and nothing
     /// else.

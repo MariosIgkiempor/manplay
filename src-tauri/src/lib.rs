@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{NewTarget, Playlist, RunView, SyncTarget, Tag, Track};
@@ -1467,6 +1467,17 @@ async fn analyze_locked(
         )?;
         (jobs, ids, replace_edits)
     };
+    // Asked for these songs: a streamed one comes down into the stream cache to be analysed. In
+    // the background only the ones already there are, so analysis never downloads the library.
+    let mut jobs = jobs;
+    let streamed =
+        streamed_analysis_jobs(app, state, track_ids, force, track_ids.is_some()).await?;
+    let queued: HashSet<String> = jobs.iter().map(|j| j.audio_fp.clone()).collect();
+    jobs.extend(
+        streamed
+            .into_iter()
+            .filter(|j| !queued.contains(&j.audio_fp)),
+    );
     let jobs = if force {
         jobs
     } else {
@@ -1492,6 +1503,50 @@ async fn analyze_locked(
         result.tags = Some(save_analysis_tags(app, state, Some(&ids)).await?);
     }
     Ok(result)
+}
+
+/// Analysis jobs for the streamed songs among `track_ids` (every one when `None`), each reading
+/// the song's copy in the stream cache. With `fetch`, a song not cached yet is downloaded first;
+/// without, it is left for later.
+async fn streamed_analysis_jobs(
+    app: &AppHandle,
+    state: &AppState,
+    track_ids: Option<&[i64]>,
+    force: bool,
+    fetch: bool,
+) -> Result<Vec<db::AnalysisJob>, Error> {
+    let songs: Vec<(StreamedFile, db::AnalysisJob)> = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        db::streamed_analysis_candidates(&conn, track_ids, force)?
+            .into_iter()
+            .filter_map(|(id, job)| match source_of(&conn, id) {
+                Ok(Source::Streamed(song)) => Some((song, job)),
+                _ => None,
+            })
+            .collect()
+    };
+    if songs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cache = stream_cache_of(app)?;
+    let mut jobs = Vec::new();
+    for (song, job) in songs {
+        let file = match cache.cached(&song.audio_fp, song.extension()) {
+            Some(file) => Some(file),
+            None if fetch => fill_stream_cache(app, &song).await.unwrap_or_else(|e| {
+                log::info!("could not fetch a streamed song to analyse it: {e}");
+                None
+            }),
+            None => None,
+        };
+        if let Some(file) = file {
+            jobs.push(db::AnalysisJob {
+                path: file.to_string_lossy().into_owned(),
+                audio_fp: job.audio_fp,
+            });
+        }
+    }
+    Ok(jobs)
 }
 
 /// Waits (up to a few minutes) for another metadata change to finish writing files.
@@ -1555,7 +1610,11 @@ macro_rules! with_db {
 
 /// Keeps these streamed songs on this device: their files are downloaded now and stay.
 #[tauri::command]
-fn keep_songs(app: AppHandle, state: State<'_, AppState>, track_ids: Vec<i64>) -> Result<(), Error> {
+fn keep_songs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_ids: Vec<i64>,
+) -> Result<(), Error> {
     with_db!(state, |c| {
         let rules: Vec<libsync::keep::KeepRule> = track_ids
             .iter()
@@ -2959,9 +3018,12 @@ fn smart_playlist_preview(
     )))
 }
 
-/// The library's songs and the chosen playlists, as a USB export or its preview takes them.
+/// The library's songs and the chosen playlists, as a USB export or its preview takes them. A
+/// streamed song goes from its copy in the stream cache; one that is not there is left out (keep
+/// it, or play it once, to take it along).
 fn usb_inputs(
     state: &AppState,
+    cache: Option<&stream_cache::StreamCache>,
     selection: &db::ExportSelection,
 ) -> Result<
     (
@@ -2976,9 +3038,23 @@ fn usb_inputs(
     let (tracks, lists) = db::export_data(&conn)?;
     let sources: Vec<usb_export::Source> = tracks
         .into_iter()
-        .map(|t| usb_export::Source {
+        .filter_map(|t| {
+            let path = PathBuf::from(&t.path);
+            let (path, name) = match t.file_state {
+                db::FileState::Here => (path, None),
+                db::FileState::Streamed => {
+                    let ext = path.extension()?.to_str()?;
+                    let cached = cache?.peek(t.audio_fp.as_deref()?, ext)?;
+                    let name = path.file_name()?.to_string_lossy().into_owned();
+                    (cached, Some(name))
+                }
+            };
+            Some((t, path, name))
+        })
+        .map(|(t, path, name)| usb_export::Source {
             id: t.id,
-            path: PathBuf::from(&t.path),
+            path,
+            name,
             artist: t.artist,
             album: t.album,
             title: t.title,
@@ -3022,7 +3098,8 @@ async fn usb_export_preview(
     tauri::async_runtime::spawn_blocking(move || {
         usb::check_mount(&mount).map_err(Error::Msg)?;
         let state = app.state::<AppState>();
-        let (sources, playlists, _) = usb_inputs(&state, &selection)?;
+        let cache = stream_cache_of(&app).ok();
+        let (sources, playlists, _) = usb_inputs(&state, cache.as_ref(), &selection)?;
         usb_export::preview(&mount, &sources, &playlists, selection.usb_mode).map_err(Error::Msg)
     })
     .await
@@ -3045,7 +3122,8 @@ async fn export_to_usb(
         ));
     }
     let _guard = SyncGuard(&state.usb_exporting);
-    let (sources, playlists, camelot) = usb_inputs(&state, &selection)?;
+    let cache = stream_cache_of(&app).ok();
+    let (sources, playlists, camelot) = usb_inputs(&state, cache.as_ref(), &selection)?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let drive = usb::list()
@@ -5168,16 +5246,64 @@ async fn tag_values_migrate(
     Ok(report)
 }
 
+/// A streamed song named among the paths of a tag command: it has no file to read or write, so
+/// its tags are the shared library's (`libsync::song_tags`).
+struct StreamedTags {
+    path: PathBuf,
+    audio_fp: String,
+}
+
+/// Splits `paths` into the streamed songs among them and the rest (files and folders).
+fn split_streamed(
+    conn: &Connection,
+    paths: Vec<PathBuf>,
+) -> Result<(Vec<StreamedTags>, Vec<PathBuf>), Error> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT audio_fp FROM tracks
+         WHERE path = ?1 AND file_state = 'streamed' AND audio_fp IS NOT NULL AND audio_fp <> ''",
+    )?;
+    let mut streamed = Vec::new();
+    let mut rest = Vec::new();
+    for path in paths {
+        let fp: Option<String> = stmt
+            .query_row(rusqlite::params![path.to_string_lossy()], |r| r.get(0))
+            .optional()?;
+        match fp {
+            Some(audio_fp) => streamed.push(StreamedTags { path, audio_fp }),
+            None => rest.push(path),
+        }
+    }
+    Ok((streamed, rest))
+}
+
+/// The songs at or under `paths` with their tags: files as they are, streamed songs as the
+/// shared library has them.
+async fn tag_songs(state: &AppState, paths: Vec<PathBuf>) -> Result<Vec<tags::SongValues>, Error> {
+    let root = library_root(state)?;
+    let (streamed, rest) = split_streamed(&*state.db.lock().map_err(|_| Error::Lock)?, paths)?;
+    let mut songs = tauri::async_runtime::spawn_blocking(move || tags::file_songs(&root, &rest))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        for song in streamed {
+            songs.push(tags::SongValues {
+                values: libsync::song_tags::streamed_values(&conn, &song.audio_fp)?,
+                path: song.path,
+            });
+        }
+    }
+    songs.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(songs)
+}
+
 /// Tags shared by every song at or under `paths` (songs and/or folders).
 #[tauri::command]
 async fn tags_read(
     state: State<'_, AppState>,
     paths: Vec<PathBuf>,
 ) -> Result<tags::TagView, Error> {
-    let root = library_root(&state)?;
-    tauri::async_runtime::spawn_blocking(move || tags::read(&root, &paths))
-        .await
-        .map_err(|e| Error::Msg(e.to_string()))?
+    Ok(tags::view(&tag_songs(&state, paths).await?))
 }
 
 /// What a tag edit would change per song, without writing anything.
@@ -5187,10 +5313,44 @@ async fn tags_preview(
     paths: Vec<PathBuf>,
     edits: std::collections::BTreeMap<String, String>,
 ) -> Result<tags::Preview, Error> {
-    let root = library_root(&state)?;
-    tauri::async_runtime::spawn_blocking(move || tags::preview(&root, &paths, &edits))
+    tags::check_fields(&edits)?;
+    tags::preview_songs(&tag_songs(&state, paths).await?, &edits)
+}
+
+/// Writes tag edits to one song or every song under a folder: into the files, and for a streamed
+/// song into the shared library, whose row then shows them.
+async fn write_tags(
+    state: &AppState,
+    root: &Path,
+    paths: Vec<PathBuf>,
+    edits: std::collections::BTreeMap<String, String>,
+) -> Result<audit::FixReport, Error> {
+    tags::check_fields(&edits)?;
+    let (streamed, rest) = split_streamed(&*state.db.lock().map_err(|_| Error::Lock)?, paths)?;
+    let (r, e) = (root.to_path_buf(), edits.clone());
+    let mut report = tauri::async_runtime::spawn_blocking(move || tags::write(&r, &rest, &e))
         .await
-        .map_err(|e| Error::Msg(e.to_string()))?
+        .map_err(|e| Error::Msg(e.to_string()))??;
+    if streamed.is_empty() || edits.is_empty() {
+        return Ok(report);
+    }
+    let conn = state.db.lock().map_err(|_| Error::Lock)?;
+    for song in streamed {
+        let left_out = libsync::song_tags::edit_streamed(&conn, &song.audio_fp, &edits)?;
+        if left_out.is_empty() {
+            report.fixed += 1;
+        } else {
+            report.failed.push(audit::FixFailure {
+                path: song.path.to_string_lossy().into_owned(),
+                error: format!(
+                    "a streamed song keeps {} in its analysis, not in tags",
+                    left_out.join(" and ")
+                ),
+            });
+        }
+    }
+    libsync::streamed::refresh(&conn, root)?;
+    Ok(report)
 }
 
 /// Looks up the songs at or under `paths` in `MusicBrainz` and says, per song, which tags it
@@ -5316,10 +5476,7 @@ async fn tags_write(
         return Err(Error::Msg("a fix is already running".to_owned()));
     }
     let _guard = SyncGuard(&state.fixing);
-    let r = root.clone();
-    let report = tauri::async_runtime::spawn_blocking(move || tags::write(&r, &paths, &edits))
-        .await
-        .map_err(|e| Error::Msg(e.to_string()))??;
+    let report = write_tags(&state, &root, paths, edits).await?;
     refresh_after_fs_change(&state, root).await;
     Ok(report)
 }
@@ -5342,18 +5499,12 @@ async fn tags_write_many(
         return Err(Error::Msg("a fix is already running".to_owned()));
     }
     let _guard = SyncGuard(&state.fixing);
-    let r = root.clone();
-    let report = tauri::async_runtime::spawn_blocking(move || {
-        let mut total = audit::FixReport::default();
-        for item in items {
-            let one = tags::write(&r, std::slice::from_ref(&item.path), &item.edits)?;
-            total.fixed += one.fixed;
-            total.failed.extend(one.failed);
-        }
-        Ok::<_, Error>(total)
-    })
-    .await
-    .map_err(|e| Error::Msg(e.to_string()))??;
+    let mut report = audit::FixReport::default();
+    for item in items {
+        let one = write_tags(&state, &root, vec![item.path], item.edits).await?;
+        report.fixed += one.fixed;
+        report.failed.extend(one.failed);
+    }
     refresh_after_fs_change(&state, root).await;
     Ok(report)
 }
@@ -6102,6 +6253,8 @@ fn export_inner(state: &AppState, record_ok: bool) -> Result<bool, Error> {
         };
         let selection = rekordbox_selection_of(&conn)?;
         let (mut tracks, mut playlists) = db::export_data(&conn)?;
+        // rekordbox plays the files the XML names; a streamed song has none here.
+        tracks.retain(|t| t.file_state == db::FileState::Here);
         for t in &mut tracks {
             t.cues = t
                 .audio_fp

@@ -101,6 +101,11 @@ pub fn split_names(value: &str) -> Vec<String> {
 }
 
 /// Whether `field` is the id of a tag field the app reads and writes.
+/// Every tag field's id, in the editor's order.
+pub fn field_ids() -> impl Iterator<Item = &'static str> {
+    FIELDS.iter().map(|(id, _)| *id)
+}
+
 pub fn is_field(field: &str) -> bool {
     item_key(field).is_some()
 }
@@ -193,20 +198,47 @@ fn read_value(tag: Option<&Tag>, key: ItemKey) -> Option<String> {
 }
 
 /// What the editor shows: each field's shared value across the songs at or under `paths`.
+#[cfg(test)]
 pub fn read(root: &Path, paths: &[PathBuf]) -> Result<TagView, Error> {
-    let files = songs(root, paths)?;
-    let mut per_field: BTreeMap<&str, Vec<Option<String>>> = BTreeMap::new();
-    for file in &files {
-        let tagged = read_from_path(file).ok();
-        let tag = tagged.as_ref().and_then(|f| f.primary_tag());
-        for (id, _) in FIELDS {
-            per_field.entry(id).or_default().push(read_field(tag, id));
-        }
-    }
+    Ok(view(&file_songs(root, paths)?))
+}
+
+/// A song's tag fields by id: what [`read_field`] finds in its file, or for a streamed song what
+/// the shared library says (`libsync::song_tags`). `None` for a field it lacks.
+pub type FieldValues = BTreeMap<String, Option<String>>;
+
+/// A song whose tags the editor looks at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SongValues {
+    pub path: PathBuf,
+    pub values: FieldValues,
+}
+
+/// The songs at or under `paths` with what their files hold.
+pub fn file_songs(root: &Path, paths: &[PathBuf]) -> Result<Vec<SongValues>, Error> {
+    Ok(songs(root, paths)?
+        .into_iter()
+        .map(|file| {
+            let tagged = read_from_path(&file).ok();
+            let tag = tagged.as_ref().and_then(|f| f.primary_tag());
+            let values = FIELDS
+                .iter()
+                .map(|(id, _)| ((*id).to_owned(), read_field(tag, id)))
+                .collect();
+            SongValues { path: file, values }
+        })
+        .collect())
+}
+
+/// What the editor shows of `songs`: each field's shared value.
+pub fn view(songs: &[SongValues]) -> TagView {
     let fields = FIELDS
         .iter()
         .map(|(id, _)| {
-            let values = per_field.get(id).map(Vec::as_slice).unwrap_or_default();
+            let values: Vec<Option<String>> = songs
+                .iter()
+                .map(|song| song.values.get(*id).cloned().flatten())
+                .collect();
             let first = values.first().cloned().flatten();
             let mixed = values.iter().any(|v| *v != first);
             let shared = Shared {
@@ -216,14 +248,14 @@ pub fn read(root: &Path, paths: &[PathBuf]) -> Result<TagView, Error> {
             ((*id).to_owned(), shared)
         })
         .collect();
-    Ok(TagView {
-        count: files.len(),
+    TagView {
+        count: songs.len(),
         fields,
-    })
+    }
 }
 
 /// Value as it will be stored: lists are normalised to `A; B`, everything else trimmed.
-fn normalized(field: &str, value: &str) -> String {
+pub fn normalized(field: &str, value: &str) -> String {
     if MULTI.contains(&field) {
         split_names(value).join(SEPARATOR)
     } else {
@@ -375,19 +407,30 @@ pub fn preview(
     paths: &[PathBuf],
     edits: &BTreeMap<String, String>,
 ) -> Result<Preview, Error> {
-    if let Some(bad) = edits.keys().find(|k| item_key(k).is_none()) {
-        return Err(err(format!("unknown tag field: {bad}")));
+    preview_songs(&file_songs(root, paths)?, edits)
+}
+
+/// Refuses an edit of a field that is not a tag field.
+pub fn check_fields(edits: &BTreeMap<String, String>) -> Result<(), Error> {
+    match edits.keys().find(|k| item_key(k).is_none()) {
+        Some(bad) => Err(err(format!("unknown tag field: {bad}"))),
+        None => Ok(()),
     }
-    let songs = songs(root, paths)?;
+}
+
+/// What `edits` would change in each of `songs`.
+pub fn preview_songs(
+    songs: &[SongValues],
+    edits: &BTreeMap<String, String>,
+) -> Result<Preview, Error> {
+    check_fields(edits)?;
     let mut files = Vec::new();
-    for song in &songs {
-        let tagged = read_from_path(song).ok();
-        let tag = tagged.as_ref().and_then(|f| f.primary_tag());
+    for song in songs {
         let changes: Vec<Change> = edits
             .iter()
             .filter_map(|(field, value)| {
                 item_key(field)?;
-                let from = read_field(tag, field);
+                let from = song.values.get(field).cloned().flatten();
                 let to = Some(normalized(field, value)).filter(|v| !v.is_empty());
                 (from != to).then(|| Change {
                     field: field.clone(),
@@ -398,7 +441,7 @@ pub fn preview(
             .collect();
         if !changes.is_empty() {
             files.push(FileChanges {
-                path: song.to_string_lossy().into_owned(),
+                path: song.path.to_string_lossy().into_owned(),
                 changes,
             });
         }
@@ -848,6 +891,88 @@ pub fn restore_covers(
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::cast_possible_truncation)] // tests: panicking is the failure mode
 pub(crate) mod tests {
+
+    fn song(path: &str, pairs: &[(&str, Option<&str>)]) -> SongValues {
+        SongValues {
+            path: PathBuf::from(path),
+            values: pairs
+                .iter()
+                .map(|(f, v)| ((*f).to_owned(), v.map(str::to_owned)))
+                .collect(),
+        }
+    }
+
+    /// The editor shows a value every song shares, and says when they differ, wherever each
+    /// song's tags come from (a file, or the shared library for a streamed song).
+    #[test]
+    fn the_view_of_songs_shows_shared_values_and_where_they_differ() {
+        let cases: [(&str, Vec<SongValues>, Option<&str>, bool); 4] = [
+            (
+                "one song",
+                vec![song("/m/a.mp3", &[("genre", Some("House"))])],
+                Some("House"),
+                false,
+            ),
+            (
+                "two that agree",
+                vec![
+                    song("/m/a.mp3", &[("genre", Some("House"))]),
+                    song("/m/b.mp3", &[("genre", Some("House"))]),
+                ],
+                Some("House"),
+                false,
+            ),
+            (
+                "two that differ",
+                vec![
+                    song("/m/a.mp3", &[("genre", Some("House"))]),
+                    song("/m/b.mp3", &[("genre", Some("Techno"))]),
+                ],
+                None,
+                true,
+            ),
+            (
+                "one lacking it",
+                vec![
+                    song("/m/a.mp3", &[("genre", Some("House"))]),
+                    song("/m/b.mp3", &[]),
+                ],
+                None,
+                true,
+            ),
+        ];
+        for (what, songs, value, mixed) in cases {
+            let view = view(&songs);
+            let genre = view.fields.get("genre").expect("genre");
+            assert_eq!(genre.value.as_deref(), value, "{what}");
+            assert_eq!(genre.mixed, mixed, "{what}");
+            assert_eq!(view.count, songs.len(), "{what}");
+        }
+    }
+
+    #[test]
+    fn a_preview_of_songs_lists_only_real_changes_and_refuses_unknown_fields() {
+        let songs = [
+            song("/m/a.mp3", &[("genre", Some("House; Deep"))]),
+            song("/m/b.mp3", &[("genre", None)]),
+        ];
+        let edits: BTreeMap<String, String> =
+            [("genre".to_owned(), "House;Deep".to_owned())].into();
+        let preview = preview_songs(&songs, &edits).expect("preview");
+        assert_eq!(preview.total, 2);
+        assert_eq!(
+            preview
+                .files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/m/b.mp3"],
+            "the same list written another way is no change"
+        );
+        let unknown: BTreeMap<String, String> = [("colour".to_owned(), "red".to_owned())].into();
+        assert!(preview_songs(&songs, &unknown).is_err());
+    }
+
     use super::*;
 
     #[test]

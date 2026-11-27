@@ -26,7 +26,7 @@ use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 
 use super::files::{self, Pending, RelPath};
-use super::write::active;
+use super::write::{self, active};
 use crate::error::Error;
 use crate::tags::CoverBackupName;
 
@@ -354,5 +354,51 @@ pub fn wanted(conn: &Connection, root: &Path) -> Result<Vec<TagWrite>, Error> {
                 edits,
             })
         })
+        .collect())
+}
+
+/// The tags of a song this device streams, as the editor reads them (`tags::FieldValues`): what
+/// the shared library says, `None` for a field it says nothing of or holds empty. BPM and key are
+/// not in the log; they come from the analysis.
+pub fn streamed_values(conn: &Connection, fp: &str) -> Result<crate::tags::FieldValues, Error> {
+    let mut out = crate::tags::FieldValues::new();
+    for field in crate::tags::field_ids() {
+        let value = super::state::get(conn, E_SONG_TAGS, fp, field)?
+            .as_ref()
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .filter(|v| !v.is_empty());
+        out.insert(field.to_owned(), value);
+    }
+    Ok(out)
+}
+
+/// Writes tag edits (field -> value, empty clears) to a song this device streams: it has no file
+/// here, so the edits go to the shared library as edits, and every device that keeps the song
+/// writes them into its file. BPM and key are not shared as tags and are left out. Returns the
+/// fields left out.
+pub fn edit_streamed(
+    conn: &Connection,
+    fp: &str,
+    edits: &BTreeMap<String, String>,
+) -> Result<Vec<String>, Error> {
+    let (shared, left_out): (Vec<_>, Vec<_>) = edits
+        .iter()
+        .partition(|(field, _)| shared_field(field) && field.as_str() != COVER);
+    let fields: Vec<write::Field> = shared
+        .into_iter()
+        .map(|(field, value)| write::Field {
+            e: E_SONG_TAGS.to_owned(),
+            id: fp.to_owned(),
+            f: field.clone(),
+            val: json!(crate::tags::normalized(field, value)),
+        })
+        .collect();
+    if !fields.is_empty() {
+        write::stamp(conn, &fields)?;
+    }
+    Ok(left_out
+        .into_iter()
+        .map(|(field, _)| field.clone())
         .collect())
 }

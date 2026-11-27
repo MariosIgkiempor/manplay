@@ -52,6 +52,9 @@ pub struct Source {
     pub grid_edited: bool,
     /// Cues set in manplay, which replace the drive's own; `None` when never set here.
     pub cues: Option<Vec<crate::db::Cue>>,
+    /// The song's file name, when `path` is a copy under another name (a streamed song's file in
+    /// the stream cache); `None` takes the name from `path`.
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -295,11 +298,12 @@ pub(crate) fn safe_file_name(name: &str) -> String {
 
 /// `/Contents/Artist/Album/file.mp3`, the layout rekordbox uses.
 fn content_path(s: &Source) -> String {
-    let file = s
-        .path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let file = s.name.clone().unwrap_or_else(|| {
+        s.path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
     content_path_of(&s.artist, &s.album, &file)
 }
 
@@ -1662,7 +1666,28 @@ mod tests {
             audio_fp: None,
             grid_edited: false,
             cues: None,
+            name: None,
         }
+    }
+
+    /// A streamed song is read from the stream cache but lands on the drive under its own name.
+    #[test]
+    fn a_song_read_from_a_copy_keeps_its_own_name_on_the_drive() {
+        let dir = std::env::temp_dir().join(format!("manplay-usb-name-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("dir");
+        let cases = [
+            (None, "/Contents/Artist/Album/a1_00ff.mp3"),
+            (
+                Some("01 Night Drive.mp3"),
+                "/Contents/Artist/Album/01 Night Drive.mp3",
+            ),
+        ];
+        for (name, want) in cases {
+            let mut s = source(&dir, 1, "Artist", "Album", "a1_00ff.mp3", 4);
+            s.name = name.map(str::to_owned);
+            assert_eq!(content_path(&s), want, "{name:?}");
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn test_store() -> Store {
@@ -2608,6 +2633,7 @@ mod tests {
             audio_fp: None,
             grid_edited: false,
             cues: None,
+            name: None,
         };
         let playlists = [SourcePlaylist {
             name: "manplay dry run".into(),

@@ -1,6 +1,6 @@
 # Step 9: Streaming
 
-Date: 2026-11-27. Status: planned, nothing built yet.
+Date: 2026-11-27. Status: built (steps 9.0 to 9.6); see "Done in" under each part.
 
 A device in a shared library sees every song, with up-to-date tags, covers, BPM, key, grids and
 waveforms, without having every audio file. Each song is either **kept** (its file is in the
@@ -147,6 +147,25 @@ Windows AIFF/ALAC through `pcm://`, and covers of streamed songs from the cached
   mark next to a streamed song's title.
 - Settings, Library: a Streaming group (shown when the shared library is on a destination) with
   Songs other devices add, Stream cache size and Empty cache.
+
+### Done in 9.6
+
+- Tags: the tag commands split their paths (`split_streamed`). Files are read and written as
+  before; a streamed song's tags are read from the log (`song_tags::streamed_values`) and edits
+  go to the log as edits (`song_tags::edit_streamed`), then its row follows
+  (`streamed::refresh`). BPM and key edits on a streamed song are refused (they belong to the
+  analysis). `tags::view` and `tags::preview_songs` work on song values from either place.
+- Analysis: "Analyze" on a streamed song downloads it into the stream cache and analyses that
+  copy; the background analysis takes only streamed songs already cached, so it never downloads
+  the library. Results are written into files only for kept songs.
+- Export: `db::export_data` includes streamed songs with their `file_state`. The rekordbox XML
+  leaves them out (rekordbox plays the files the XML names); a USB export takes a streamed
+  song's cached copy, under the song's own file name (`usb_export::Source::name`), and leaves
+  out one that is not cached; Jellyfin playlists keep every song.
+
+Not done: changing a streamed song's cover (the cover card writes into the file, so it fails on
+a streamed song); a USB export does not download streamed songs that are not cached: keep them,
+or their playlist, first.
 
 ## Playback
 
