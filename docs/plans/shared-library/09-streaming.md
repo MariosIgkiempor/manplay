@@ -106,9 +106,10 @@ Left for later steps:
   default.
 - `files::moves_wanted` skips songs that are only streamed here.
 
-Left for later steps: covers of streamed songs (the art route reads the file; 9.3), and the
-Tag Database's value lists (`tag_values`), which only scans fill, so a streamed song's genre is
-not offered in pick lists until some file here has it.
+Left for later steps: covers of streamed songs (the art route reads the file; 9.3). Pick lists
+(`tag_values`) are rebuilt from every row, kept or streamed (`db::rebuild_tag_values`), after
+each scan and each change to the streamed rows, so a streamed song's values are offered with no
+download.
 
 ### Done in 9.3
 

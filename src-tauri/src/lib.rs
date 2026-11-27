@@ -158,7 +158,7 @@ async fn scan_and_store(state: &AppState, root: PathBuf, depth: ScanDepth) -> Re
     db::upsert(&mut conn, &result.tracks)?;
     // Shared tags and playlists that were waiting for these songs.
     libsync::apply::materialize_pending(&mut conn)?;
-    db::replace_tag_values(&mut conn, &result.values)?;
+    db::rebuild_tag_values(&mut conn)?;
     if db::get_setting(&conn, SETTING_ROOT)?.as_deref() != root.to_str() {
         // The old folder's shared library stays there; this device keeps a copy of it.
         let tx = conn.transaction()?;
@@ -698,7 +698,13 @@ fn keep_streamed_songs(state: &AppState) {
         .db
         .lock()
         .map_err(|_| Error::Lock)
-        .and_then(|conn| libsync::streamed::refresh(&conn, &root));
+        .and_then(|mut conn| {
+            let refreshed = libsync::streamed::refresh(&conn, &root)?;
+            if refreshed.changed() {
+                db::rebuild_tag_values(&mut conn)?;
+            }
+            Ok(refreshed)
+        });
     match refreshed {
         Ok(r) if r.changed() => log::info!(
             "streamed songs: {} added, {} updated, {} removed",
@@ -3104,7 +3110,10 @@ async fn download_streamed_for_usb(
             .flat_map(|p| p.track_ids)
             .collect();
         let mut songs = Vec::new();
-        for t in tracks.iter().filter(|t| t.file_state == db::FileState::Streamed) {
+        for t in tracks
+            .iter()
+            .filter(|t| t.file_state == db::FileState::Streamed)
+        {
             if chosen.contains(&t.id)
                 && let Source::Streamed(song) = source_of(&conn, t.id)?
             {

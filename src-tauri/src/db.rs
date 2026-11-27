@@ -1067,6 +1067,21 @@ pub fn replace_tag_values(
     Ok(())
 }
 
+/// Rebuilds the remembered tag values from every song in the library, kept or streamed (a
+/// streamed song's fields come from the shared library), so a value only a streamed song has is
+/// offered too.
+pub fn rebuild_tag_values(conn: &mut Connection) -> Result<(), Error> {
+    let mut values = std::collections::HashMap::new();
+    {
+        let mut stmt = conn.prepare("SELECT fields FROM tracks WHERE missing_since IS NULL")?;
+        let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
+        for fields in rows {
+            crate::scan::collect_values(fields?.as_deref(), &mut values);
+        }
+    }
+    replace_tag_values(conn, &values)
+}
+
 #[derive(serde::Serialize)]
 pub struct TagValue {
     pub value: String,
@@ -3708,6 +3723,44 @@ pub fn share_auto_grid(
 mod tests {
     use super::*;
     use crate::analysis::Analysis;
+
+    #[test]
+    fn pick_lists_offer_the_values_of_kept_and_streamed_songs_but_not_missing_ones() {
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        let rows = [
+            ("/m/kept.mp3", "here", None, r#"{"genre":"House; Disco"}"#),
+            (
+                "/m/streamed.mp3",
+                "streamed",
+                None,
+                r#"{"genre":"House","label":"Low Tide"}"#,
+            ),
+            ("/m/gone.mp3", "here", Some(5), r#"{"genre":"Techno"}"#),
+        ];
+        for (path, state, missing, fields) in rows {
+            conn.execute(
+                "INSERT INTO tracks (path, artist, album, title, size, file_state, missing_since, fields)
+                 VALUES (?1, 'a', 'b', 'c', 1, ?2, ?3, ?4)",
+                params![path, state, missing, fields],
+            )
+            .expect("track");
+        }
+        rebuild_tag_values(&mut conn).expect("rebuild");
+        let cases = [
+            ("genre", vec![("House", 2), ("Disco", 1)]),
+            ("label", vec![("Low Tide", 1)]),
+        ];
+        for (field, want) in cases {
+            let got: Vec<(String, i64)> = tag_values(&conn, field)
+                .expect("values")
+                .into_iter()
+                .map(|v| (v.value, v.count))
+                .collect();
+            let want: Vec<(String, i64)> =
+                want.into_iter().map(|(v, n)| (v.to_owned(), n)).collect();
+            assert_eq!(got, want, "{field}");
+        }
+    }
 
     #[test]
     fn streamed_songs_are_analysed_apart_from_kept_ones() {

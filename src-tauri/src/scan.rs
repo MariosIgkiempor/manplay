@@ -80,7 +80,7 @@ pub struct ScanResult {
 
 /// Counts the names in the suggestion fields of one file, from the list fields kept for it
 /// (`NewTrack::fields`), so a file the scan did not read again is counted like one it did.
-fn collect_values(
+pub fn collect_values(
     fields: Option<&str>,
     into: &mut std::collections::HashMap<(&'static str, String), i64>,
 ) {
