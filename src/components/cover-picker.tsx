@@ -40,6 +40,8 @@ export function CoverPicker({
 	const openRef = useRef(open);
 	openRef.current = open;
 	const [error, setError] = useState<string | null>(null);
+	// A picture pasted onto a song of an album, shown in the card to ask which songs get it.
+	const [pasted, setPasted] = useState<Blob | null>(null);
 
 	const apply = async (file: Blob | null | undefined) => {
 		if (!file) {
@@ -50,6 +52,11 @@ export function CoverPicker({
 			return;
 		}
 		setError(null);
+		if (album) {
+			setPasted(file);
+			setOpen(true);
+			return;
+		}
 		const image = new Uint8Array(await file.arrayBuffer());
 		setCover.mutate(
 			{ path: paths, image },
@@ -66,7 +73,8 @@ export function CoverPicker({
 		);
 	};
 
-	// ⌘V with an image on the clipboard replaces the cover, unless typing in a field.
+	// ⌘V with an image on the clipboard replaces the cover, unless typing in a field; for a song
+	// on an album the card opens with it, asking which songs get it, as an upload would.
 	const applyRef = useRef(apply);
 	applyRef.current = apply;
 	useEffect(() => {
@@ -104,7 +112,14 @@ export function CoverPicker({
 			<Popover
 				open={open}
 				// A click in the file picker is a click outside the card, and must not close it.
-				onOpenChange={(next) => (next || !isPickOpen()) && setOpen(next)}
+				onOpenChange={(next) => {
+					if (next || !isPickOpen()) {
+						setOpen(next);
+					}
+					if (!next) {
+						setPasted(null);
+					}
+				}}
 			>
 				<PopoverTrigger
 					ref={triggerRef}
@@ -139,7 +154,16 @@ export function CoverPicker({
 					aria-label={`Change the cover of ${name}`}
 					className="size-60 max-w-[calc(100vw-2rem)] origin-center overflow-hidden rounded-xl bg-muted shadow-2xl outline-none ring-1 ring-foreground/15 transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.3,0,0.2,1)] data-[ending-style]:scale-[0.4] data-[starting-style]:scale-[0.4] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none"
 				>
-					<CoverCard paths={paths} name={name} album={album} onDone={() => setOpen(false)} />
+					<CoverCard
+						paths={paths}
+						name={name}
+						album={album}
+						pasted={pasted}
+						onDone={() => {
+							setOpen(false);
+							setPasted(null);
+						}}
+					/>
 				</PopoverPopup>
 			</Popover>
 		</>

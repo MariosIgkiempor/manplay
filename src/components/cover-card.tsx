@@ -55,6 +55,7 @@ export function CoverCard({
 	paths,
 	name,
 	album,
+	pasted,
 	onDone,
 }: {
 	/** The song, or every song the cover goes to. */
@@ -63,6 +64,8 @@ export function CoverCard({
 	name: string;
 	/** The album of the one song in `paths`, when it has others: confirming asks which to cover. */
 	album?: CoverAlbum | undefined;
+	/** A picture pasted before the card opened, shown to confirm like an upload. */
+	pasted?: Blob | null | undefined;
 	/** Called once a new cover is written. */
 	onDone: () => void;
 }) {
@@ -121,6 +124,11 @@ export function CoverCard({
 	};
 	const applyFileRef = useRef(applyFile);
 	applyFileRef.current = applyFile;
+	useEffect(() => {
+		if (pasted) {
+			applyFileRef.current(pasted);
+		}
+	}, [pasted]);
 	useEffect(() => {
 		const onPaste = (e: ClipboardEvent) => {
 			const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
