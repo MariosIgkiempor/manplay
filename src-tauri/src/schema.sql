@@ -1,7 +1,6 @@
--- The library database as this version of manplay keeps it. `db::open` runs this on every
--- start; every statement is IF NOT EXISTS, so it only fills in what a new database lacks.
--- There are no migrations: a change to a table is a change here, and an existing database
--- is brought up to it by hand (see `docs/plans/shared-library/09-streaming.md`).
+-- The library database at its newest layout (`db::SCHEMA_VERSION`). A new database is made from
+-- this; an existing one is brought here by the steps in `db::MIGRATIONS`. A change to a table
+-- goes in both: here, and as a new migration step.
 
 CREATE TABLE IF NOT EXISTS tracks (
     id     INTEGER PRIMARY KEY,

@@ -73,7 +73,11 @@ events, adding a command to the fake backend. The backend is fake, so anything i
 
 ## Rules for agents
 
-- **No migrations (unreleased).** The database is `src-tauri/src/schema.sql`, run as is on every start (`CREATE ... IF NOT EXISTS`); no code reads old formats. A schema or stored-format change edits `schema.sql` (and raises `db::SCHEMA_VERSION` when an older build would harm the new data), and is flagged to the user with the one-off SQL that brings their own `library.db` up to it.
+- **Schema changes are migrations; no old-version back-compat.** A new database is made from
+  `src-tauri/src/schema.sql`; an existing one is brought up to date by `db::MIGRATIONS`, one step
+  per layout (`db::SCHEMA_VERSION`). A change to a table adds a step and changes `schema.sql` to
+  match (the migration test compares the two). Code that reads data an older build wrote is not
+  kept: the app is unreleased. Flag any change to stored data to the user.
 - **Rust:** `unwrap` is denied and clippy pedantic warns. Return `Result<_, Error>`
   (`error.rs`). Don't add new clippy warnings. No `unsafe`.
 - **TypeScript:** Biome formats (tabs, double quotes, width 100). Import with `#/…` paths.

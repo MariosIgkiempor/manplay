@@ -618,15 +618,41 @@ fn check_schema_version(conn: &Connection) -> Result<(), Error> {
 /// Opens the library database, refusing one a newer manplay set up ([`Error::NewerLibrary`]), and
 /// brings an older one up to [`SCHEMA_VERSION`].
 /// Every table and index of the library database (`schema.sql`).
+/// Every table and index of the library database at [`SCHEMA_VERSION`] (`schema.sql`).
 const SCHEMA: &str = include_str!("schema.sql");
 
-/// Opens the library database, refusing one a newer manplay set up ([`Error::NewerLibrary`]), and
-/// makes whatever a new one lacks (`schema.sql`).
+/// The oldest layout migrations start from; a database older than this cannot be opened.
+const FIRST_LAYOUT: SchemaVersion = SchemaVersion(2);
+
+/// One step from the layout before it to `to`.
+struct Migration {
+    to: SchemaVersion,
+    run: fn(&Connection) -> Result<(), Error>,
+}
+
+/// The steps from [`FIRST_LAYOUT`] to [`SCHEMA_VERSION`], in order, one layout each. A new step
+/// raises `SCHEMA_VERSION` and changes `schema.sql` to match what it leaves behind.
+const MIGRATIONS: &[Migration] = &[];
+
+/// Opens the library database: makes a new one from `schema.sql`, brings an older one up to date
+/// one migration at a time, and refuses one a newer manplay set up ([`Error::NewerLibrary`]).
 pub fn open(path: &Path) -> Result<Connection, Error> {
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
     check_schema_version(&conn)?;
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
-    conn.execute_batch(SCHEMA)?;
+    let empty: bool = conn.query_row(
+        "SELECT NOT EXISTS (SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%')",
+        [],
+        |r| r.get(0),
+    )?;
+    if empty {
+        let tx = conn.transaction()?;
+        tx.execute_batch(SCHEMA)?;
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION.0)?;
+        tx.commit()?;
+    } else {
+        migrate(&mut conn, MIGRATIONS)?;
+    }
     if get_setting(&conn, SETTING_AUDIO_FP_VERSION)?.is_none() {
         set_setting(
             &conn,
@@ -634,10 +660,24 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
             Some(&crate::audioprint::VERSION.to_string()),
         )?;
     }
-    if schema_version(&conn)? < SCHEMA_VERSION {
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION.0)?;
-    }
     Ok(conn)
+}
+
+/// Runs the `steps` past the database's layout, each in a transaction with the layout it leaves.
+fn migrate(conn: &mut Connection, steps: &[Migration]) -> Result<(), Error> {
+    let found = schema_version(conn)?;
+    if found < FIRST_LAYOUT {
+        return Err(Error::Msg(format!(
+            "this library is of layout {found}, older than any this manplay can bring up to date"
+        )));
+    }
+    for step in steps.iter().filter(|step| step.to > found) {
+        let tx = conn.transaction()?;
+        (step.run)(&tx)?;
+        tx.pragma_update(None, "user_version", step.to.0)?;
+        tx.commit()?;
+    }
+    Ok(())
 }
 
 // ---- Ignored destination files -----------------------------------------------------------------
@@ -3788,6 +3828,74 @@ mod tests {
             .map(|(_, j)| j.audio_fp)
             .collect();
         assert_eq!(streamed, ["a1:02"]);
+    }
+
+    /// Every table, column and index, for comparing two databases.
+    fn layout(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.type || ' ' || m.name || '.' || IFNULL(p.name, '') || ' ' || IFNULL(p.type, '')
+                        || ' ' || IFNULL(p.\"notnull\", '') || ' ' || IFNULL(p.dflt_value, '')
+                        || ' ' || IFNULL(p.pk, '')
+                 FROM sqlite_master m LEFT JOIN pragma_table_info(m.name) p ON m.type = 'table'
+                 WHERE m.name NOT LIKE 'sqlite_%' ORDER BY 1",
+            )
+            .expect("layout");
+        stmt.query_map([], |r| r.get(0))
+            .expect("rows")
+            .collect::<Result<_, _>>()
+            .expect("read")
+    }
+
+    /// The migrations bring a database of the first layout to what `schema.sql` makes, and each
+    /// step raises the layout by one.
+    #[test]
+    fn the_migrations_bring_the_first_layout_to_the_newest() {
+        let mut old = Connection::open_in_memory().expect("old");
+        old.execute_batch(include_str!("schema_v2.sql")).expect("first layout");
+        old.pragma_update(None, "user_version", FIRST_LAYOUT.0).expect("version");
+        migrate(&mut old, MIGRATIONS).expect("migrate");
+        let new = open(Path::new(":memory:")).expect("new");
+        assert_eq!(layout(&old), layout(&new));
+        assert_eq!(schema_version(&old).expect("version"), SCHEMA_VERSION);
+        let mut at = FIRST_LAYOUT;
+        for step in MIGRATIONS {
+            assert_eq!(step.to.0, at.0 + 1, "one layout per step");
+            at = step.to;
+        }
+        assert_eq!(at, SCHEMA_VERSION, "the last step reaches SCHEMA_VERSION");
+    }
+
+    #[test]
+    fn a_step_runs_once_and_a_failed_one_leaves_the_layout_where_it_was() {
+        fn add_note(conn: &Connection) -> Result<(), Error> {
+            conn.execute_batch("ALTER TABLE settings ADD COLUMN note TEXT;")?;
+            Ok(())
+        }
+        fn fail(conn: &Connection) -> Result<(), Error> {
+            conn.execute_batch("ALTER TABLE settings ADD COLUMN half TEXT;")?;
+            Err(Error::Msg("stopped".to_owned()))
+        }
+        let steps = [
+            Migration { to: SchemaVersion(3), run: add_note },
+            Migration { to: SchemaVersion(4), run: fail },
+        ];
+        let mut conn = Connection::open_in_memory().expect("db");
+        conn.execute_batch(include_str!("schema_v2.sql")).expect("first layout");
+        conn.pragma_update(None, "user_version", 2).expect("version");
+        assert!(migrate(&mut conn, &steps).is_err());
+        assert_eq!(schema_version(&conn).expect("version"), SchemaVersion(3));
+        let columns = layout(&conn).join("\n");
+        assert!(columns.contains("settings.note"), "the first step stays done");
+        assert!(!columns.contains("settings.half"), "the failed step is undone");
+        assert!(migrate(&mut conn, &steps[..1]).is_ok(), "a step already run is not run again");
+    }
+
+    #[test]
+    fn a_library_older_than_the_first_layout_is_refused() {
+        let mut conn = Connection::open_in_memory().expect("db");
+        conn.execute_batch("CREATE TABLE tracks (id INTEGER PRIMARY KEY);").expect("old");
+        assert!(migrate(&mut conn, MIGRATIONS).is_err());
     }
 
     /// A database file of its own in the temp dir, holding `user_version` = `version` and nothing
