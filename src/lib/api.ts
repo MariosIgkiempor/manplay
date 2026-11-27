@@ -1027,8 +1027,8 @@ export async function dismissSyncRuns(ids: number[]): Promise<void> {
 	await invoke("dismiss_sync_runs", { ids });
 }
 
-/** Whose runs: an import folder's (`import:<id>`), or the rekordbox file's. */
-export type ActivitySource = `import:${number}` | "rekordbox";
+/** Whose runs: an import folder's (`import:<id>`). */
+export type ActivitySource = `import:${number}`;
 
 const activitySchema = z.object({
 	id: int,
@@ -1301,7 +1301,7 @@ export function onPullProgress(handler: (p: PullProgress) => void): Promise<() =
 	});
 }
 
-export type ServiceId = "appleCovers" | "tailscale" | "r2" | "rekordbox" | "usb" | "lookup";
+export type ServiceId = "appleCovers" | "tailscale" | "r2" | "usb" | "lookup";
 
 /** Explicit on/off choices by service id; a service never switched is absent. */
 export async function serviceFlags(): Promise<Record<string, string>> {
@@ -1331,63 +1331,6 @@ export function onSyncProgress(handler: (p: SyncProgress) => void): Promise<() =
 			handler(parsed.data);
 		}
 	});
-}
-
-// ---- rekordbox ------------------------------------------------------------
-
-const rekordboxSchema = z.object({
-	path: z.string().nullable(),
-	exportedAt: int.nullable(),
-	playlists: int,
-	tracks: int,
-	error: z.string().nullable(),
-});
-
-export type RekordboxStatus = z.infer<typeof rekordboxSchema>;
-
-export async function rekordboxStatus(): Promise<RekordboxStatus> {
-	return rekordboxSchema.parse(await invoke("rekordbox_status"));
-}
-
-/** Asks where to save the rekordbox XML. Returns null if cancelled. */
-export function pickRekordboxFile(): Promise<string | null> {
-	return pickPath({
-		kind: "save",
-		purpose: "rekordbox",
-		title: "Where should manplay save the rekordbox library?",
-		confirmLabel: "Save here",
-		defaultName: "manplay-rekordbox.xml",
-		extension: "xml",
-	});
-}
-
-/** Sets (or clears, with null) the export file; it is written immediately. */
-export async function setRekordboxPath(path: string | null): Promise<RekordboxStatus> {
-	return rekordboxSchema.parse(await invoke("rekordbox_set_path", { path }));
-}
-
-export async function exportRekordbox(): Promise<RekordboxStatus> {
-	return rekordboxSchema.parse(await invoke("rekordbox_export"));
-}
-
-const rekordboxLibrarySchema = z
-	.object({
-		tracks: int,
-		playlists: z.array(
-			z.object({
-				folders: z.array(z.string()),
-				name: z.string(),
-				tracks: z.array(z.object({ title: z.string(), artist: z.string() })),
-			}),
-		),
-	})
-	.nullable();
-
-export type RekordboxLibrary = NonNullable<z.infer<typeof rekordboxLibrarySchema>>;
-
-/** What the exported rekordbox file holds right now; null before it has been written. */
-export async function rekordboxLibrary(): Promise<RekordboxLibrary | null> {
-	return rekordboxLibrarySchema.parse(await invoke("rekordbox_library"));
 }
 
 /** rekordbox's two libraries, each for the players that read it. */
@@ -1492,15 +1435,6 @@ export type UsbMode = ExportSelection["usbMode"];
 
 /** What a destination gets; saved each time it is exported to, so it is what it holds. */
 export type ExportSelection = z.infer<typeof exportSelectionSchema>;
-
-export async function rekordboxSelection(): Promise<ExportSelection> {
-	return exportSelectionSchema.parse(await invoke("rekordbox_selection"));
-}
-
-/** Saves what goes into the rekordbox file and writes it. */
-export async function setRekordboxSelection(selection: ExportSelection): Promise<ExportSelection> {
-	return exportSelectionSchema.parse(await invoke("rekordbox_set_selection", { selection }));
-}
 
 // ---- Jellyfin playlists -----------------------------------------------------
 
@@ -2852,7 +2786,7 @@ const cueSchema = z.object({
 	main: z.boolean().default(false),
 });
 
-/** Cues set in manplay for a song; they go into the rekordbox file and onto USB drives. */
+/** Cues set in manplay for a song; they go onto USB drives. */
 export async function trackCues(trackId: number): Promise<z.infer<typeof cueSchema>[]> {
 	return z.array(cueSchema).parse(await invoke("track_cues", { trackId }));
 }

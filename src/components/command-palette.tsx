@@ -129,7 +129,7 @@ function usePaletteGroups(query: string): Group[] {
 			{
 				id: "action:add-destination",
 				label: "Add a destination",
-				detail: "Tailscale folder, R2, rekordbox, USB",
+				detail: "Tailscale folder, R2, USB",
 				value: go(() => void navigate({ to: "/export/add", search: {} }), <Plus />),
 			},
 		];

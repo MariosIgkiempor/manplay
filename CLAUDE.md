@@ -32,7 +32,7 @@ Windows 10/11 x64.
 | Cover pictures in the shared library: each song's cover named by the hash of the picture in the log, the pictures themselves as files under `.manplay/covers/` on the destination, asked for under `.manplay/covers-wanted/` when a device lacks one, and removed 30 days after the last song stopped using them | `libsync/covers.rs`, `transfer_covers` in `lib.rs` and `sync.rs` |
 | Source and destination pages | `src/routes/export.*.tsx`, `src/routes/import.*.tsx`, `src/lib/places.ts`, `src/components/place-crumb.tsx` |
 | Shared library data (op log: tags, playlists, smart playlists, analysis, Tag Database values; waveform files; one shared library per device, joined or left per destination) | `src-tauri/src/libsync/`, `docs/plans/shared-library/` |
-| rekordbox / USB export | `rekordbox.rs`, `usb*.rs`, `pdb/`, `onelib/` |
+| rekordbox / USB export | `usb*.rs`, `pdb/`, `onelib/` |
 | The formats a USB export writes (`usb_export::Outputs`): rekordbox, Serato crates, VirtualDJ library (`VirtualDJ/`), Gemini MDJ library (`GEMINI/`, the V-CASE format), playlists as folders (`Playlists/`); the drive's own song list when rekordbox is off (`.manplay/`) | `usb_export.rs`, `serato.rs`, `virtualdj.rs`, `gemini.rs`, `playlist_folders.rs`, `usb_files.rs`, `src/lib/usb-outputs.ts`, `docs/virtualdj.md`, `docs/gemini-vcase.md` |
 | Frontend API wrappers | `src/lib/api.ts`, `src/lib/queries.ts` |
 | The app's own file picker, confirm question, two-press confirm button and hover hints, in place of native UI | `file_picker.rs`, `src/lib/file-picker.ts`, `src/components/file-picker.tsx`, `src/lib/confirm.ts`, `src/components/ui/confirm-button.tsx`, `src/components/hint-layer.tsx`, `src/components/text-field-menu.tsx` |

@@ -1,11 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { FolderOpen, Plus, Trash2, Upload } from "lucide-react";
+import { Plus, Trash2, Upload } from "lucide-react";
 import type { ReactNode } from "react";
 import { FrameSection } from "#/components/frame.tsx";
 import { EmptyState, ErrorLine } from "#/components/page.tsx";
 import { PlaceFill, PlaceRow } from "#/components/place-row.tsx";
-import { RekordboxExportButton } from "#/components/rekordbox-view.tsx";
 import { useRemoveDestination } from "#/components/remove-destination.tsx";
 import { LibraryBadge } from "#/components/shared-library.tsx";
 import { SyncButton } from "#/components/sync-flow.tsx";
@@ -19,9 +18,7 @@ import {
 	type UsbDrive,
 } from "#/lib/api.ts";
 import { formatBytes, timeAgo } from "#/lib/format.ts";
-import { baseName } from "#/lib/fs-path.ts";
 import { useSyncHistory, useSyncTargets, useTracks } from "#/lib/queries.ts";
-import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -102,45 +99,6 @@ function TargetRow({
 	);
 }
 
-function RekordboxRow() {
-	const navigate = useNavigate();
-	const { status, choose, stop } = useRekordbox();
-	const s = status.data;
-	if (!s?.path) {
-		return null;
-	}
-	let line: ReactNode =
-		s.exportedAt === null ? "Not exported yet" : `Exported ${timeAgo(s.exportedAt)}`;
-	if (s.error) {
-		line = <ErrorLine compact>{s.error}</ErrorLine>;
-	}
-	return (
-		<PlaceRow
-			brand="rekordbox"
-			name="rekordbox XML"
-			where={baseName(s.path)}
-			whereTitle={s.path}
-			fill={
-				<div className="text-muted-foreground text-xs tabular-nums">
-					{plural(s.playlists, "playlist", "playlists")}, {plural(s.tracks, "song", "songs")}
-				</div>
-			}
-			status={line}
-			action={<RekordboxExportButton size="sm" variant="outline" />}
-			open={() => void navigate({ to: "/export/rekordbox" })}
-			menu={[
-				{ label: "Change location…", icon: <FolderOpen />, onSelect: () => choose.mutate() },
-				{
-					label: "Remove",
-					icon: <Trash2 />,
-					destructive: true,
-					onSelect: () => stop.mutate(),
-				},
-			]}
-		/>
-	);
-}
-
 function UsbRow({ drive }: { drive: UsbDrive }) {
 	const navigate = useNavigate();
 	const open = () => void navigate({ to: "/export/usb", search: { mount: drive.mount } });
@@ -176,17 +134,16 @@ function UsbRow({ drive }: { drive: UsbDrive }) {
 	);
 }
 
-/** Every export destination in one list: sync folders, the rekordbox file, plugged-in drives. */
+/** Every export destination in one list: sync folders, plugged-in drives. */
 export function Destinations() {
 	const navigate = useNavigate();
 	const targets = useSyncTargets();
 	const tracks = useTracks();
 	const drives = useUsbDrives();
-	const rekordbox = useRekordbox().status.data;
 	const removal = useRemoveDestination();
 	const list = targets.data ?? [];
 	const plugged = drives.data ?? [];
-	const count = list.length + plugged.length + (rekordbox?.path ? 1 : 0);
+	const count = list.length + plugged.length;
 	const librarySize = tracks.data?.length ?? 0;
 	const add = () => void navigate({ to: "/export/add", search: {} });
 
@@ -204,7 +161,7 @@ export function Destinations() {
 						</Button>
 					}
 				>
-					A Tailscale folder, an R2 bucket, a rekordbox file or a USB drive.
+					A Tailscale folder, an R2 bucket or a USB drive.
 				</EmptyState>
 				{removal.dialog}
 			</>
@@ -234,7 +191,6 @@ export function Destinations() {
 						onRemove={() => removal.ask(t)}
 					/>
 				))}
-				<RekordboxRow />
 				{plugged.map((d) => (
 					<UsbRow key={d.mount} drive={d} />
 				))}

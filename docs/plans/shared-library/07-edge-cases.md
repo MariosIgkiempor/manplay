@@ -28,7 +28,7 @@ Estimate: 1 day. Some of these land earlier, inside the step they touch; the res
 | Delete vs edit at the same time | Delete wins; Recently deleted can restore (step 6). |
 | Rename a parent tag while someone adds a child | Tags are paths (`Genre/House`). The child keeps the old parent path; `restore_tag_parents` recreates the parent. Shows as a separate tag to tidy up, not lost. |
 | Smart playlist rules by name | Store tag uids (step 3). |
-| `export_selections` stores integer ids | Switch to uids, or USB/rekordbox selections break when ids differ across devices. |
+| `export_selections` stores integer ids | Switch to uids, or USB selections break when ids differ across devices. |
 | Same file's tags edited on two devices | File-level three-way merge (step 0). |
 
 ## Tests

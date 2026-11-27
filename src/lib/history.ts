@@ -22,8 +22,8 @@ export interface Part {
 /** Where a run came from, for telling runs apart in a history of several sources. */
 export type HistorySource = ActivityKind | "tailscale" | "r2";
 
-/** What kind of run an activity row is: an import folder's, or the rekordbox file's. */
-export type ActivityKind = "import" | "rekordbox";
+/** What kind of run an activity row is: an import folder's, */
+export type ActivityKind = "import";
 
 /** A run of any import or export source, in the shape the shared history UI shows. */
 export interface HistoryEntry {
@@ -122,11 +122,6 @@ const ACTIVITY: Record<
 			a.items.length === 1
 				? (a.items[0] ?? "")
 				: plural(a.items.length, "album added", "albums added"),
-	},
-	rekordbox: {
-		ok: "tracks exported",
-		skipped: "skipped",
-		title: (a) => (a.failed > 0 ? "Export failed" : "Library exported"),
 	},
 };
 

@@ -16,7 +16,6 @@ import type {
 	LibraryChangeBatch,
 	MissingTrack,
 	PickerPlace,
-	RekordboxStatus,
 	SyncAction,
 	SyncRun,
 	SyncTarget,
@@ -29,7 +28,7 @@ import { fieldOf } from "#/lib/track-fields.ts";
 import { DAY, LIBRARY_ROOT, NOW } from "./fake-library.ts";
 
 /** Sources and destinations the harness pretends are set up: two sync destinations (one with
- * work waiting, one in sync), a USB stick, a rekordbox file, iTunes and a Downloads folder. */
+ * work waiting, one in sync), a USB stick, iTunes and a Downloads folder. */
 
 export const DOWNLOADS_FOLDER = "/Users/dj/Downloads";
 export const USB_MOUNT = "/Volumes/DJ STICK";
@@ -213,21 +212,6 @@ export function buildSyncHistory(): SyncRun[] {
 }
 
 export function buildActivity(source: string): Activity[] {
-	if (source === "rekordbox") {
-		return [
-			{
-				id: 3,
-				source,
-				startedAt: NOW - 2 * DAY - 2,
-				finishedAt: NOW - 2 * DAY,
-				ok: 61,
-				skipped: 0,
-				failed: 0,
-				items: ["Friday Warm-up", "Peak Time", "Sets/Friday", "New This Month"],
-				errors: [],
-			},
-		];
-	}
 	return [
 		{
 			id: source === "import:1" ? 1 : 2,
@@ -242,14 +226,6 @@ export function buildActivity(source: string): Activity[] {
 		},
 	];
 }
-
-export const REKORDBOX_STATUS: RekordboxStatus = {
-	path: "/Users/dj/Documents/manplay-rekordbox.xml",
-	exportedAt: NOW - 2 * DAY,
-	playlists: 5,
-	tracks: 61,
-	error: null,
-};
 
 export const DEFAULT_SELECTION: ExportSelection = {
 	playlists: [1, 2],
@@ -713,7 +689,7 @@ export const PICKER_FOLDERS: Readonly<Record<string, FsEntry[]>> = {
 	"/": [pickerFolder("Users"), pickerFolder("Volumes")],
 	"/Users": [pickerFolder("dj")],
 	"/Users/dj": ["Desktop", "Documents", "Downloads", "Music", "Pictures"].map(pickerFolder),
-	"/Users/dj/Documents": [pickerFolder("Sets"), pickerFile("manplay-rekordbox.xml", 482_113)],
+	"/Users/dj/Documents": [pickerFolder("Sets"), pickerFile("notes.txt", 2_113)],
 	[DOWNLOADS_FOLDER]: [
 		pickerFolder("Bandcamp"),
 		pickerFolder("Promos 2026"),

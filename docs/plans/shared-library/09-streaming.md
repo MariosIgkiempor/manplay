@@ -158,8 +158,7 @@ Windows AIFF/ALAC through `pcm://`, and covers of streamed songs from the cached
 - Analysis: "Analyze" on a streamed song downloads it into the stream cache and analyses that
   copy; the background analysis takes only streamed songs already cached, so it never downloads
   the library. Results are written into files only for kept songs.
-- Export: `db::export_data` includes streamed songs with their `file_state`. The rekordbox XML
-  leaves them out (rekordbox plays the files the XML names); a USB export takes a streamed
+- Export: `db::export_data` includes streamed songs with their `file_state`. A USB export takes a streamed
   song's cached copy, under the song's own file name (`usb_export::Source::name`), and leaves
   out one that is not cached; Jellyfin playlists keep every song.
 

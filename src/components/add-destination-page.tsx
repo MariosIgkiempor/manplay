@@ -1,21 +1,18 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronRight, FolderOpen, Usb } from "lucide-react";
+import { ChevronRight, Usb } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AddR2, AddTailscale } from "#/components/add-destination.tsx";
 import { type Brand, BrandIcon } from "#/components/brand-icon.tsx";
 import { Framed } from "#/components/frame.tsx";
-import { EmptyState, ErrorLine } from "#/components/page.tsx";
+import { EmptyState } from "#/components/page.tsx";
 import { PageHeader } from "#/components/page-header.tsx";
 import { PlaceCrumb } from "#/components/place-crumb.tsx";
 import { PlaceFrame } from "#/components/place-page.tsx";
 import { PullReview } from "#/components/pull-review.tsx";
 import { JoinLibraryDialog } from "#/components/shared-library.tsx";
-import { Button } from "#/components/ui/button.tsx";
-import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { PAGE_ART, WELL_ROWS } from "#/lib/page-layout.ts";
 import type { DestinationService } from "#/lib/places.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
-import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { space, useUsbDrives } from "#/lib/use-usb.ts";
 
 const SERVICES: { id: DestinationService; brand: Brand; title: string; what: string }[] = [
@@ -26,12 +23,6 @@ const SERVICES: { id: DestinationService; brand: Brand; title: string; what: str
 		what: "A folder shared from one of your machines",
 	},
 	{ id: "r2", brand: "cloudflare", title: "Cloudflare R2", what: "A bucket, or a folder in one" },
-	{
-		id: "rekordbox",
-		brand: "rekordbox",
-		title: "rekordbox XML",
-		what: "A file rekordbox imports your playlists from",
-	},
 	{ id: "usb", brand: "usb", title: "CDJ USB drive", what: "A stick for Pioneer CDJs and XDJs" },
 ];
 
@@ -65,12 +56,8 @@ function Heading({ brand, title }: { brand?: Brand | undefined; title: string })
 /** Step one: pick what kind of destination. */
 function Pick() {
 	const navigate = useNavigate();
-	const rekordbox = useRekordbox().status.data;
 	const drives = useUsbDrives().data ?? [];
 	const note = (id: DestinationService) => {
-		if (id === "rekordbox" && rekordbox?.path) {
-			return "Already set up";
-		}
 		if (id === "usb") {
 			return drives.length === 0 ? "None plugged in" : plural(drives.length);
 		}
@@ -160,49 +147,6 @@ function SyncTargetStep({ service }: { service: "tailscale" | "r2" }) {
 	);
 }
 
-function RekordboxStep() {
-	const navigate = useNavigate();
-	const openRekordbox = () => void navigate({ to: "/export/rekordbox" });
-	const { status, choose } = useRekordbox();
-	const path = status.data?.path ?? null;
-	return (
-		<PlaceFrame header={<Heading brand="rekordbox" title="rekordbox XML" />}>
-			<div className="space-y-3 rounded-xl border border-hairline border-dashed p-5 text-center">
-				<p className="text-sm">
-					{path ? (
-						<>
-							Already writing to <span className="font-mono text-xs">{path}</span>
-						</>
-					) : (
-						<Facts
-							label="Choose where to save the file. Nothing is written until you export."
-							className="justify-center"
-						>
-							<span>Choose where to save the file.</span>
-							<Fact tone="kept">Nothing written until export</Fact>
-						</Facts>
-					)}
-				</p>
-				<div className="flex justify-center gap-2">
-					<Button
-						disabled={choose.isPending}
-						variant={path ? "outline" : "default"}
-						onClick={() =>
-							choose.mutate(undefined, {
-								onSuccess: (next) => next && openRekordbox(),
-							})
-						}
-					>
-						<FolderOpen /> {path ? "Change location…" : "Choose location…"}
-					</Button>
-					{path && <Button onClick={openRekordbox}>Open</Button>}
-				</div>
-			</div>
-			{choose.isError && <ErrorLine>{String(choose.error)}</ErrorLine>}
-		</PlaceFrame>
-	);
-}
-
 function UsbStep() {
 	const navigate = useNavigate();
 	const drives = useUsbDrives().data ?? [];
@@ -244,9 +188,6 @@ function UsbStep() {
 export function AddDestinationPage({ service }: { service?: DestinationService | undefined }) {
 	if (service === "tailscale" || service === "r2") {
 		return <SyncTargetStep service={service} />;
-	}
-	if (service === "rekordbox") {
-		return <RekordboxStep />;
 	}
 	if (service === "usb") {
 		return <UsbStep />;

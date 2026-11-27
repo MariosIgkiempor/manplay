@@ -6,7 +6,6 @@ import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
 import { IssuesPanel } from "#/components/issues-drawer.tsx";
 import { MissingPanel } from "#/components/missing-files.tsx";
 import { PanelBar } from "#/components/panel-header.tsx";
-import { RekordboxExportPanel } from "#/components/rekordbox-view.tsx";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
 import { SongPanel } from "#/components/song-panel.tsx";
 import { UsbExportPanel } from "#/components/usb-export.tsx";
@@ -37,8 +36,6 @@ function Content({ view }: { view: DetailView }) {
 			return <DuplicatesPanel />;
 		case "usbExport":
 			return <UsbExportPanel mount={view.mount} />;
-		case "rekordboxExport":
-			return <RekordboxExportPanel />;
 	}
 }
 

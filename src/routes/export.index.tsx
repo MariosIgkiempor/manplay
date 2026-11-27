@@ -6,7 +6,6 @@ import { HeaderMenu } from "#/components/header-menu.tsx";
 import { HistoryList } from "#/components/history-list.tsx";
 import { EmptyState, Page } from "#/components/page.tsx";
 import { type OverviewTab, OverviewTabs, PlaceSettingsGroup } from "#/components/place-page.tsx";
-import { RekordboxSourceSettings } from "#/components/rekordbox-source.tsx";
 import { SyncButton } from "#/components/sync-flow.tsx";
 import { DestinationSettings } from "#/components/target-page.tsx";
 import { Button } from "#/components/ui/button.tsx";
@@ -14,9 +13,8 @@ import { DriveSettings } from "#/components/usb-drives.tsx";
 import { useSyncActions } from "#/context/sync-actions-context.ts";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
 import { isR2, targetShortName } from "#/lib/api.ts";
-import { activityEntries, mergedHistory, syncEntries } from "#/lib/history.ts";
-import { useActivity, useSyncHistory, useSyncTargets, useTracks } from "#/lib/queries.ts";
-import { useRekordbox } from "#/lib/use-rekordbox.ts";
+import { syncEntries } from "#/lib/history.ts";
+import { useSyncHistory, useSyncTargets, useTracks } from "#/lib/queries.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
 
 export const Route = createFileRoute("/export/")({ component: ExportPage });
@@ -83,29 +81,20 @@ function ExportPage() {
 	);
 }
 
-/** Every sync and rekordbox export, newest first, each run marked with where it went. */
+/** Every sync, newest first, each run marked with where it went. */
 function ExportHistory() {
 	const syncs = useSyncHistory();
-	const rekordbox = useActivity("rekordbox");
 	return (
-		<HistoryList
-			marked
-			entries={mergedHistory(
-				syncEntries(syncs.data ?? []),
-				activityEntries(rekordbox.data ?? [], "rekordbox"),
-			)}
-			empty="Nothing exported yet"
-		/>
+		<HistoryList marked entries={syncEntries(syncs.data ?? [])} empty="Nothing exported yet" />
 	);
 }
 
-/** Every destination's settings, one after the other: synced folders, the rekordbox file, drives. */
+/** Every destination's settings, one after the other: synced folders, drives. */
 function ExportSettings() {
 	const navigate = useNavigate();
 	const targets = useSyncTargets().data ?? [];
-	const rekordbox = useRekordbox().status.data;
 	const drives = useUsbDrives().data ?? [];
-	if (targets.length === 0 && !rekordbox?.path && drives.length === 0) {
+	if (targets.length === 0 && drives.length === 0) {
 		return (
 			<EmptyState
 				icon={<Settings2 />}
@@ -133,16 +122,6 @@ function ExportSettings() {
 					<DestinationSettings target={t} />
 				</PlaceSettingsGroup>
 			))}
-			{rekordbox?.path && (
-				<PlaceSettingsGroup
-					brand="rekordbox"
-					title="rekordbox XML"
-					detail={rekordbox.path}
-					onOpen={() => void navigate({ to: "/export/rekordbox" })}
-				>
-					<RekordboxSourceSettings />
-				</PlaceSettingsGroup>
-			)}
 			{drives.map((d) => (
 				<PlaceSettingsGroup
 					key={d.mount}

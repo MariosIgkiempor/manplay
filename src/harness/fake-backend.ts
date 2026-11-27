@@ -45,7 +45,6 @@ import {
 	PICKER_PLACES,
 	R2_TARGET_ID,
 	RECENTLY_DELETED,
-	REKORDBOX_STATUS,
 	relOf,
 	USB_DRIVES,
 	USB_FORMATS,
@@ -958,33 +957,7 @@ function syncCommands(state: State): Record<string, Command> {
 function exportCommands(state: State): Record<string, Command> {
 	const configured = () => state.tracks.length > 0;
 	const selection = (key: string) => state.selections.get(key) ?? DEFAULT_SELECTION;
-	const saveSelection = (key: string, args: Args) => {
-		const saved = args.get("selection") as ExportSelection;
-		state.selections.set(key, saved);
-		return saved;
-	};
-	const none = { path: null, exportedAt: null, playlists: 0, tracks: 0, error: null };
 	return {
-		rekordbox_status: () => (configured() ? REKORDBOX_STATUS : none),
-		rekordbox_set_path: (args) => (args.get("path") === null ? none : REKORDBOX_STATUS),
-		rekordbox_export: () => REKORDBOX_STATUS,
-		rekordbox_selection: () => selection("rekordbox"),
-		rekordbox_set_selection: (args) => saveSelection("rekordbox", args),
-		rekordbox_library: () =>
-			configured()
-				? {
-						tracks: REKORDBOX_STATUS.tracks,
-						playlists: state.playlists.slice(0, 3).map((entry) => ({
-							folders: [],
-							name: entry.playlist.name,
-							tracks: entry.trackIds.flatMap((id) =>
-								state.tracks
-									.filter((track) => track.id === id)
-									.map((track) => ({ title: track.title, artist: track.artist })),
-							),
-						})),
-					}
-				: null,
 		usb_drives: () => (configured() ? USB_DRIVES : []),
 		usb_library: () => buildUsbLibrary(state.tracks),
 		usb_formats: () => USB_FORMATS,

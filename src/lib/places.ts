@@ -4,20 +4,14 @@ import { isR2, targetShortName } from "#/lib/api.ts";
 import { folderBrand, folderName } from "#/lib/import-folders.ts";
 import { useSyncTargets } from "#/lib/queries.ts";
 import { useImportFolders } from "#/lib/use-import.ts";
-import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
 
 /** Kinds of export destination that can be added. */
-export const DESTINATION_SERVICES = ["tailscale", "r2", "rekordbox", "usb"] as const;
+export const DESTINATION_SERVICES = ["tailscale", "r2", "usb"] as const;
 export type DestinationService = (typeof DESTINATION_SERVICES)[number];
 
 /** One import source or export destination, as its page and the pickers name it. */
-export type PlaceKey =
-	| `target:${number}`
-	| "rekordbox"
-	| `usb:${string}`
-	| `import:${number}`
-	| "add";
+export type PlaceKey = `target:${number}` | `usb:${string}` | `import:${number}` | "add";
 
 export type PlaceSection = "import" | "export";
 
@@ -32,7 +26,6 @@ export interface PlaceOption {
 export function useExportPlaces(): PlaceOption[] {
 	const navigate = useNavigate();
 	const targets = useSyncTargets().data ?? [];
-	const rekordbox = useRekordbox().status.data;
 	const drives = useUsbDrives().data ?? [];
 	return [
 		...targets.map(
@@ -43,16 +36,6 @@ export function useExportPlaces(): PlaceOption[] {
 				go: () => void navigate({ to: "/export/$targetId", params: { targetId: t.id } }),
 			}),
 		),
-		...(rekordbox?.path
-			? [
-					{
-						key: "rekordbox",
-						label: "rekordbox XML",
-						brand: "rekordbox",
-						go: () => void navigate({ to: "/export/rekordbox" }),
-					} satisfies PlaceOption,
-				]
-			: []),
 		...drives.map(
 			(d): PlaceOption => ({
 				key: `usb:${d.mount}`,

@@ -40,7 +40,6 @@ import { CLASHES_ANCHOR } from "#/lib/settings-sections.ts";
 import { type DestinationStatus, destinationStatus } from "#/lib/sync-status.ts";
 import { useAddImportFolder, useImportFolders, useImportNewCount } from "#/lib/use-import.ts";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
-import { useRekordbox } from "#/lib/use-rekordbox.ts";
 import { useUsbDrives } from "#/lib/use-usb.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -301,7 +300,6 @@ function ExportItems() {
 	const scans = useSyncScans().data;
 	const targets = useSyncTargets().data ?? [];
 	const drives = useUsbDrives().data ?? [];
-	const rekordbox = useRekordbox().status.data;
 	const progress = useSyncProgress();
 	const syncing = new Set([...progress.values()].map((p) => p.targetId));
 	const { start } = useSyncActions();
@@ -369,15 +367,6 @@ function ExportItems() {
 				);
 			})}
 			{removal.dialog}
-			{rekordbox?.path && (
-				<ChildRow
-					brand="rekordbox"
-					label="rekordbox XML"
-					title={rekordbox.path}
-					active={Boolean(matchRoute({ to: "/export/rekordbox" }))}
-					onOpen={() => void navigate({ to: "/export/rekordbox" })}
-				/>
-			)}
 			{drives.map((d) => (
 				<ChildRow
 					key={d.mount}

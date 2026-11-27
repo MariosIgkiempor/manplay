@@ -249,7 +249,6 @@ function dayLabel(unixSeconds: number): string {
 /** The mark each source's runs carry in a history of several. */
 const SOURCE_BRAND: Record<HistorySource, Brand> = {
 	import: "folder",
-	rekordbox: "rekordbox",
 	tailscale: "tailscale",
 	r2: "cloudflare",
 };

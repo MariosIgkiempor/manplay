@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImportFolderId } from "#/lib/api.ts";
 import { createFakeBackend, type FakeBackend, SCENARIOS } from "./fake-backend.ts";
-import { DOWNLOADS_FOLDER, NAS_TARGET_ID, USB_MOUNT } from "./fake-places.ts";
+import { DEFAULT_SELECTION, DOWNLOADS_FOLDER, NAS_TARGET_ID, USB_MOUNT } from "./fake-places.ts";
 
 /** The fake backend only helps while the app accepts what it answers: every answer below goes
  * through the same zod schemas in `api.ts` that check the real backend's. */
@@ -60,9 +60,6 @@ const READS: [name: string, read: () => Promise<unknown>][] = [
 	["syncScans", () => api.syncScans()],
 	["syncScan", () => api.syncScan(NAS_TARGET_ID)],
 	["serviceFlags", () => api.serviceFlags()],
-	["rekordboxStatus", () => api.rekordboxStatus()],
-	["rekordboxLibrary", () => api.rekordboxLibrary()],
-	["rekordboxSelection", () => api.rekordboxSelection()],
 	["smartPlaylists", () => api.smartPlaylists()],
 	["smartPlaylistPreview", () => api.smartPlaylistPreview(NO_RULES)],
 	["smartLocalTags", () => api.smartLocalTags(NO_RULES)],
@@ -109,8 +106,6 @@ const READS: [name: string, read: () => Promise<unknown>][] = [
 	["trackAnalysis", () => api.trackAnalysis(1)],
 	["trackCues", () => api.trackCues(1)],
 ];
-
-const DEFAULT_SELECTION = await api.rekordboxSelection();
 
 describe.each(SCENARIOS)("the %s scenario", (scenario) => {
 	beforeEach(() => {

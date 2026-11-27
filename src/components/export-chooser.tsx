@@ -207,7 +207,7 @@ export function HeldPlaylists({
 }
 
 /**
- * What goes to a destination, the same for the rekordbox file and USB drives: library playlists,
+ * What goes to a destination, for USB drives: library playlists,
  * tags as playlists, smart playlists, and a tab with what the destination holds now.
  */
 export function ExportChooser({

@@ -93,18 +93,6 @@ fn mode_from(text: &str) -> crate::usb_export::Mode {
     serde_json::from_value(serde_json::Value::String(text.to_owned())).unwrap_or_default()
 }
 
-/// The destination key of the rekordbox XML file. USB drives are `usb:<volume id>`.
-pub const RB_DESTINATION: &str = "rekordbox";
-
-/// Every library playlist's id.
-pub fn playlist_ids(conn: &Connection) -> Result<Vec<i64>, Error> {
-    let mut stmt = conn.prepare("SELECT id FROM playlists ORDER BY id")?;
-    let ids = stmt
-        .query_map([], |r| r.get(0))?
-        .collect::<Result<Vec<i64>, _>>()?;
-    Ok(ids)
-}
-
 /// What was last exported to a destination; `None` before its first export.
 pub fn export_selection(
     conn: &Connection,
@@ -2384,14 +2372,13 @@ pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
 }
 
 /// The services a user can switch on or off.
-pub const SERVICES: [&str; 8] = [
+pub const SERVICES: [&str; 7] = [
     // Before import folders: kept so their old switches still read during the move to them.
     "downloads",
     "itunes",
     crate::apple_art::SERVICE,
     "tailscale",
     "r2",
-    "rekordbox",
     "usb",
     crate::lookup::SERVICE,
 ];
@@ -2966,13 +2953,9 @@ pub struct ExportTrack {
     pub key: Option<String>,
     /// Under which the song's analysis and cues are kept.
     pub audio_fp: Option<String>,
-    /// The kept beat grid, written as a rekordbox `TEMPO` marker; filled in by the caller.
-    pub grid: Option<crate::rekordbox::Grid>,
     /// The beat grid was set by hand in manplay.
     pub grid_edited: bool,
-    /// Cues set in manplay, written as `POSITION_MARK`s; filled in by the caller.
-    pub cues: Vec<Cue>,
-    /// A streamed song has no file here: the rekordbox XML leaves it out, a USB export takes its
+    /// A streamed song has no file here: a USB export takes its
     /// copy in the stream cache, Jellyfin finds it on the destination like any song.
     pub file_state: FileState,
 }
@@ -3009,9 +2992,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
                 bpm: r.get(9)?,
                 key: r.get(10)?,
                 audio_fp: r.get(11)?,
-                grid: None,
                 grid_edited: r.get(12)?,
-                cues: Vec::new(),
                 file_state: r.get(13)?,
             })
         })?

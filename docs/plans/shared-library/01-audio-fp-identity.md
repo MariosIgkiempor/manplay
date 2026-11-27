@@ -64,6 +64,6 @@ Every present track has an `audio_fp`, analysis survives a retag, and duplicates
   not the audit page. Reveal and move to Trash per file (reuses `fs_trash`). Query:
   `db::duplicate_groups`, command `list_duplicates`. Empty `audio_fp` never counts as a duplicate.
 - **One entry per `audio_fp` in playlists**: applied to `playlist_tracks`, the playlist count and
-  the rekordbox export members (first position wins). Tag playlists, smart playlists and the
+  the USB export members (first position wins). Tag playlists, smart playlists and the
   library list still show every file. USB export playlists built elsewhere are not deduplicated.
 - `ExportTrack.fingerprint` and `usb_export::Source.fingerprint` are now `audio_fp`.

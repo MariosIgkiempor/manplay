@@ -8,7 +8,7 @@ import { joinPath } from "#/lib/fs-path.ts";
  */
 
 /** What a picker is for; each remembers the folder it was last used in. */
-export type PickPurpose = "library" | "import" | "rekordbox" | "cover";
+export type PickPurpose = "library" | "import" | "cover";
 
 interface PickBase {
 	purpose: PickPurpose;

@@ -31,10 +31,10 @@ const PICTURE: FilePick = {
 };
 const SAVE: SavePick = {
 	kind: "save",
-	purpose: "rekordbox",
+	purpose: "library",
 	title: "Save",
 	confirmLabel: "Save",
-	defaultName: "manplay-rekordbox.xml",
+	defaultName: "manplay-library.xml",
 	extension: "xml",
 };
 

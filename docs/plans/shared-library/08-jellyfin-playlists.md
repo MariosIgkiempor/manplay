@@ -35,7 +35,7 @@ Nothing here is shared through the op log: every person can point at their own s
 What goes where is one list per Jellyfin destination (`export_selections`, key
 `jellyfin:<target id>`). Two places edit it:
 
-- **Destination page → Playlists:** `ExportChooser`, as rekordbox and USB drives use, with the
+- **Destination page → Playlists:** `ExportChooser`, as USB drives use, with the
   library's playlists, smart playlists and tags.
 - **Playlist → Send to Jellyfin:** a picker on each playlist (and smart playlist) listing the
   Jellyfin destinations, ticked where it is in that destination's list.
@@ -67,7 +67,7 @@ Runs after a destination sync finishes uploading, and from a **Push playlists** 
    `GET /Items` (every 5 s, up to 2 min) until those paths appear.
 2. Per chosen playlist, build the ordered list of Jellyfin item ids. Songs not on the
    destination or not yet scanned are left out and counted ("3 songs waiting for Jellyfin").
-   Smart playlists are worked out at push time; tag playlists the same way as for rekordbox.
+   Smart playlists are worked out at push time; tag playlists the same way as for USB drives.
 3. Find the Jellyfin playlist: by the stored id (`jellyfin_playlists`: target id, playlist uid,
    Jellyfin id); else by exact name among the user's playlists (adopt, so a second device does
    not make a duplicate); else `POST /Playlists` with a JSON body `{Name, Ids, UserId,
