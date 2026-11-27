@@ -650,7 +650,11 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
         tx.pragma_update(None, "user_version", SCHEMA_VERSION.0)?;
         tx.commit()?;
     } else {
-        migrate(&mut conn, MIGRATIONS)?;
+        let backups = path
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty() && path != Path::new(":memory:"))
+            .map(|dir| dir.join("backups"));
+        migrate(&mut conn, MIGRATIONS, backups.as_deref())?;
     }
     if get_setting(&conn, SETTING_AUDIO_FP_VERSION)?.is_none() {
         set_setting(
@@ -663,19 +667,53 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
 }
 
 /// Runs the `steps` past the database's layout, each in a transaction with the layout it leaves.
-fn migrate(conn: &mut Connection, steps: &[Migration]) -> Result<(), Error> {
+///
+/// Before the first step the database is copied into `backups` (when there is one and a step is
+/// due). Steps run with foreign keys off, as SQLite advises for rebuilding a table: with them on,
+/// dropping a table cascades into the rows that point at it. A step that leaves a dangling
+/// reference is undone.
+fn migrate(
+    conn: &mut Connection,
+    steps: &[Migration],
+    backups: Option<&Path>,
+) -> Result<(), Error> {
     let found = schema_version(conn)?;
     if found < FIRST_LAYOUT {
         return Err(Error::Msg(format!(
             "this library is of layout {found}, older than any this manplay can bring up to date"
         )));
     }
-    for step in steps.iter().filter(|step| step.to > found) {
-        let tx = conn.transaction()?;
-        (step.run)(&tx)?;
-        tx.pragma_update(None, "user_version", step.to.0)?;
-        tx.commit()?;
+    let due: Vec<&Migration> = steps.iter().filter(|step| step.to > found).collect();
+    if due.is_empty() {
+        return Ok(());
     }
+    if let Some(dir) = backups {
+        backup(conn, dir, crate::unix_now(), crate::BACKUPS_KEEP)?;
+    }
+    conn.pragma_update(None, "foreign_keys", false)?;
+    let ran = due.into_iter().try_for_each(|step| run_step(conn, step));
+    conn.pragma_update(None, "foreign_keys", true)?;
+    ran
+}
+
+fn run_step(conn: &mut Connection, step: &Migration) -> Result<(), Error> {
+    let tx = conn.transaction()?;
+    (step.run)(&tx)?;
+    let dangling: Option<String> = tx
+        .query_row(
+            "SELECT \"table\" FROM pragma_foreign_key_check LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(table) = dangling {
+        return Err(Error::Msg(format!(
+            "step {} left rows of {table} pointing at rows that are gone",
+            step.to
+        )));
+    }
+    tx.pragma_update(None, "user_version", step.to.0)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -970,7 +1008,16 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                  file_state = 'here'",
         )?;
         for t in tracks {
-            note_audio_change(&tx, &t.path, t.audio_fp.as_deref())?;
+            let streamed_before = streamed_row_at(&tx, &t.path)?;
+            // A scan that listed a file before it went to the Trash (Stream only) must not bring
+            // the streamed song back as one with a file: it would be missing next.
+            if streamed_before && !Path::new(&t.path).is_file() {
+                continue;
+            }
+            // A file that came to a streamed song's place is not that song's audio changing.
+            if !streamed_before {
+                note_audio_change(&tx, &t.path, t.audio_fp.as_deref())?;
+            }
             stmt.execute(params![
                 t.path,
                 t.artist,
@@ -991,6 +1038,18 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
     }
     tx.commit()?;
     Ok(())
+}
+
+/// Whether the row at `path` is a streamed song.
+fn streamed_row_at(conn: &Connection, path: &str) -> Result<bool, Error> {
+    Ok(conn
+        .query_row(
+            "SELECT file_state = 'streamed' FROM tracks WHERE path = ?1",
+            params![path],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(false))
 }
 
 /// A file whose audio changed in place (re-encoded over the same path) keeps its row, so its
@@ -3851,7 +3910,7 @@ mod tests {
             .expect("first layout");
         old.pragma_update(None, "user_version", FIRST_LAYOUT.0)
             .expect("version");
-        migrate(&mut old, MIGRATIONS).expect("migrate");
+        migrate(&mut old, MIGRATIONS, None).expect("migrate");
         let new = open(Path::new(":memory:")).expect("new");
         assert_eq!(layout(&old), layout(&new));
         assert_eq!(schema_version(&old).expect("version"), SCHEMA_VERSION);
@@ -3888,7 +3947,7 @@ mod tests {
             .expect("first layout");
         conn.pragma_update(None, "user_version", 2)
             .expect("version");
-        assert!(migrate(&mut conn, &steps).is_err());
+        assert!(migrate(&mut conn, &steps, None).is_err());
         assert_eq!(schema_version(&conn).expect("version"), SchemaVersion(3));
         let columns = layout(&conn).join("\n");
         assert!(
@@ -3900,9 +3959,113 @@ mod tests {
             "the failed step is undone"
         );
         assert!(
-            migrate(&mut conn, &steps[..1]).is_ok(),
+            migrate(&mut conn, &steps[..1], None).is_ok(),
             "a step already run is not run again"
         );
+    }
+
+    /// A database of the first layout with a song in a playlist.
+    fn first_layout_with_a_playlist(path: &Path) -> Connection {
+        let conn = Connection::open(path).expect("db");
+        conn.execute_batch(include_str!("schema_v2.sql"))
+            .expect("first layout");
+        conn.pragma_update(None, "user_version", FIRST_LAYOUT.0)
+            .expect("version");
+        conn.execute_batch(
+            "INSERT INTO tracks (id, path, artist, album, title, size) VALUES (1, '/a.mp3', 'a', 'b', 't', 1);
+             INSERT INTO playlists (id, name) VALUES (1, 'set');
+             INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (1, 1, 0);",
+        )
+        .expect("rows");
+        conn
+    }
+
+    fn playlist_rows(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM playlist_tracks", [], |r| r.get(0))
+            .expect("count")
+    }
+
+    /// Rebuilds `tracks` the way SQLite documents: drop it and make it again with the rows.
+    fn rebuild_tracks(conn: &Connection) -> Result<(), Error> {
+        conn.execute_batch(
+            "CREATE TABLE tracks_old AS SELECT * FROM tracks;
+             DROP TABLE tracks;
+             CREATE TABLE tracks (
+                 id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, artist TEXT NOT NULL,
+                 album TEXT NOT NULL, title TEXT NOT NULL, size INTEGER NOT NULL,
+                 missing_since INTEGER, fingerprint TEXT, duration_ms INTEGER, bitrate INTEGER,
+                 sample_rate INTEGER, tag_bpm REAL, tag_key TEXT, fields TEXT, added_at INTEGER,
+                 audio_fp TEXT, mtime_ms INTEGER, file_state TEXT NOT NULL DEFAULT 'here');
+             INSERT INTO tracks SELECT * FROM tracks_old;
+             DROP TABLE tracks_old;",
+        )?;
+        Ok(())
+    }
+
+    fn drop_a_song_and_keep_its_playlist_row(conn: &Connection) -> Result<(), Error> {
+        conn.execute_batch("DELETE FROM tracks;")?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_step_that_rebuilds_a_table_does_not_cascade_into_the_rows_pointing_at_it() {
+        let mut conn = first_layout_with_a_playlist(Path::new(":memory:"));
+        let steps = [Migration {
+            to: SchemaVersion(3),
+            run: rebuild_tracks,
+        }];
+        migrate(&mut conn, &steps, None).expect("migrate");
+        assert_eq!(playlist_rows(&conn), 1, "the playlist keeps its song");
+        let on: i64 = conn
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .expect("pragma");
+        assert_eq!(on, 1, "foreign keys are on again afterwards");
+    }
+
+    #[test]
+    fn a_step_that_leaves_a_dangling_reference_is_undone() {
+        let mut conn = first_layout_with_a_playlist(Path::new(":memory:"));
+        let steps = [Migration {
+            to: SchemaVersion(3),
+            run: drop_a_song_and_keep_its_playlist_row,
+        }];
+        assert!(migrate(&mut conn, &steps, None).is_err());
+        assert_eq!(schema_version(&conn).expect("version"), FIRST_LAYOUT);
+        let songs: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(songs, 1, "the delete was rolled back");
+        let on: i64 = conn
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .expect("pragma");
+        assert_eq!(on, 1, "foreign keys are on again after a failure");
+    }
+
+    #[test]
+    fn the_database_is_copied_before_a_step_runs_and_only_when_one_is_due() {
+        let dir = std::env::temp_dir().join(format!("manplay-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let backups = dir.join("backups");
+        let steps = [Migration {
+            to: SchemaVersion(3),
+            run: rebuild_tracks,
+        }];
+        let copies = || std::fs::read_dir(&backups).map_or(0, Iterator::count);
+        let mut conn = first_layout_with_a_playlist(&dir.join("library.db"));
+        migrate(&mut conn, &steps, Some(&backups)).expect("migrate");
+        assert_eq!(copies(), 1, "one copy before the step");
+        let copy = std::fs::read_dir(&backups)
+            .expect("backups")
+            .next()
+            .expect("entry")
+            .expect("entry")
+            .path();
+        let before = Connection::open(copy).expect("copy");
+        assert_eq!(schema_version(&before).expect("version"), FIRST_LAYOUT);
+        assert_eq!(playlist_rows(&before), 1);
+        migrate(&mut conn, &steps, Some(&backups)).expect("nothing due");
+        assert_eq!(copies(), 1, "no copy when nothing is due");
     }
 
     #[test]
@@ -3910,7 +4073,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().expect("db");
         conn.execute_batch("CREATE TABLE tracks (id INTEGER PRIMARY KEY);")
             .expect("old");
-        assert!(migrate(&mut conn, MIGRATIONS).is_err());
+        assert!(migrate(&mut conn, MIGRATIONS, None).is_err());
     }
 
     /// A database file of its own in the temp dir, holding `user_version` = `version` and nothing
@@ -3997,6 +4160,50 @@ mod tests {
             size: 10,
             version: version.to_owned(),
             signature: format!("sig-{path}-{version}"),
+        }
+    }
+
+    /// A streamed song at `path` (in a folder of its own in the temp dir) whose file is there or
+    /// not, as `(connection, path)`.
+    fn streamed_song(name: &str, file_there: bool) -> (Connection, String) {
+        let dir =
+            std::env::temp_dir().join(format!("manplay-upsert-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("song.mp3");
+        if file_there {
+            std::fs::write(&path, b"audio").expect("file");
+        }
+        let path = path.to_string_lossy().into_owned();
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        upsert(&mut conn, &[track(&path, "fp-song", None)]).expect("upsert");
+        conn.execute("UPDATE tracks SET file_state = 'streamed'", [])
+            .expect("streamed");
+        (conn, path)
+    }
+
+    fn state_of(conn: &Connection) -> FileState {
+        conn.query_row("SELECT file_state FROM tracks", [], |r| r.get(0))
+            .expect("state")
+    }
+
+    /// `(file is there, scan's audio, expected state, expected audio changes)`.
+    #[test]
+    fn a_scan_turns_a_streamed_song_into_a_kept_one_only_when_its_file_is_there() {
+        let cases = [
+            ("no-file", false, "fp-song", FileState::Streamed, 0),
+            ("file", true, "fp-song", FileState::Here, 0),
+            // Other audio at a streamed song's place is not that song's audio changing.
+            ("other-audio", true, "fp-other", FileState::Here, 0),
+        ];
+        for (name, file_there, audio, expected, changes) in cases {
+            let (mut conn, path) = streamed_song(name, file_there);
+            upsert(&mut conn, &[track(&path, audio, None)]).expect("scan");
+            assert_eq!(state_of(&conn), expected, "{name}");
+            let recorded: i64 = conn
+                .query_row("SELECT COUNT(*) FROM audio_changes", [], |r| r.get(0))
+                .expect("count");
+            assert_eq!(recorded, changes, "{name}");
         }
     }
 

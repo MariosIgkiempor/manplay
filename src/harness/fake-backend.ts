@@ -47,6 +47,7 @@ import {
 	R2_TARGET_ID,
 	RECENTLY_DELETED,
 	relOf,
+	STREAMED_REMOVAL_WITHOUT_FILE,
 	USB_DRIVES,
 	USB_FORMATS,
 } from "./fake-places.ts";
@@ -325,6 +326,29 @@ function settleRemovals(state: State, audioFps: unknown): number {
 	const before = state.fileRemovals.length;
 	state.fileRemovals = state.fileRemovals.filter((removal) => !asked.includes(removal.audioFp));
 	return before - state.fileRemovals.length;
+}
+
+/** Keeps the named removed songs, except a streamed one whose file the destination lost. */
+function keepRemovals(state: State, audioFps: unknown): { kept: number; noFile: string[] } {
+	const asked = Array.isArray(audioFps) ? audioFps : [];
+	const lost = state.fileRemovals.filter(
+		(removal) =>
+			removal.audioFp === STREAMED_REMOVAL_WITHOUT_FILE && asked.includes(removal.audioFp),
+	);
+	const allowed = asked.filter((fp) => fp !== STREAMED_REMOVAL_WITHOUT_FILE);
+	return { kept: settleRemovals(state, allowed), noFile: lost.map((removal) => removal.title) };
+}
+
+/** What leaving the library (or removing its destination) does to the streamed songs. */
+function settleStreamed(state: State, choice: unknown): null {
+	if (choice === "remove") {
+		state.tracks = state.tracks.filter((track) => track.fileState !== "streamed");
+	} else if (choice === "download") {
+		for (const track of state.tracks) {
+			track.fileState = "here";
+		}
+	}
+	return null;
 }
 
 function libraryCommands(state: State): Record<string, Command> {
@@ -941,7 +965,14 @@ function syncCommands(state: State): Record<string, Command> {
 			state.deleteHold = null;
 		},
 		list_file_removals: () => (state.tracks.length > 0 ? state.fileRemovals : []),
-		keep_file_removals: (args) => settleRemovals(state, args.get("audioFps")),
+		keep_file_removals: (args) => keepRemovals(state, args.get("audioFps")),
+		streamed_songs: () => ({
+			count: state.tracks.filter((track) => track.fileState === "streamed").length,
+			playable: true,
+		}),
+		remove_unavailable_streamed_songs: () => 0,
+		libsync_leave: (args) => settleStreamed(state, args.get("streamed")),
+		remove_sync_target: (args) => settleStreamed(state, args.get("streamed")),
 		apply_file_removals: (args) => settleRemovals(state, args.get("audioFps")),
 		list_library_changes: () => (state.tracks.length > 0 ? state.libraryChanges : []),
 		undo_library_changes: (args) => {
@@ -1149,8 +1180,6 @@ const ACCEPTED = new Set([
 	"remove_missing_now",
 	"migrate_library_tags",
 	"update_sync_target",
-	"remove_sync_target",
-	"libsync_leave",
 	"jellyfin_forget",
 	"dismiss_sync_runs",
 	"dismiss_activity",

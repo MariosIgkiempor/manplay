@@ -9,8 +9,10 @@ import { FieldRow, FrameSection } from "#/components/frame.tsx";
 import { ScopeSwitch } from "#/components/item-sharing.tsx";
 import { ErrorLine, LoadingLine } from "#/components/page.tsx";
 import { StatusIcon } from "#/components/status-icon.tsx";
+import { StreamedLeaveChoice } from "#/components/streamed-leave-choice.tsx";
 import { StreamingSettings } from "#/components/streaming-settings.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Fact, Facts, MoreInfo } from "#/components/ui/facts.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
 import {
@@ -21,6 +23,7 @@ import {
 	type LibraryHome,
 	libsyncInspect,
 	libsyncInspectFolder,
+	type StreamedOnLeaving,
 	type SyncTarget,
 	targetName,
 } from "#/lib/api.ts";
@@ -35,7 +38,9 @@ import {
 	useLibraryRoot,
 	useLibrarySyncStatus,
 	useLibrarySyncWatch,
+	useRemoveUnavailableStreamedSongs,
 	useSetLibraryAuto,
+	useStreamedSongs,
 	useSyncLibraryNow,
 	useSyncTargets,
 } from "#/lib/queries.ts";
@@ -171,9 +176,15 @@ export function LeaveLibraryDialog({
 }) {
 	const leave = useLeaveLibrary();
 	const [last, setLast] = useState<LeaveChoice>("keepCopy");
+	const [streamed, setStreamed] = useState<StreamedOnLeaving>("download");
+	const streaming = useStreamedSongs().data;
+	const streamedCount = streaming?.playable ? streaming.count : 0;
 	const go = (choice: LeaveChoice, sync: boolean) => {
 		setLast(choice);
-		leave.mutate({ choice, sync }, { onSuccess: onDone });
+		leave.mutate(
+			{ choice, sync, streamed: streamedCount > 0 ? streamed : undefined },
+			{ onSuccess: onDone },
+		);
 	};
 	return (
 		<Dialog
@@ -203,7 +214,13 @@ export function LeaveLibraryDialog({
 						</div>
 					)}
 					<div className="flex items-center justify-end gap-2">
-						{leave.isPending && <LoadingLine>Leaving…</LoadingLine>}
+						{leave.isPending && (
+							<LoadingLine>
+								{streamedCount > 0 && streamed === "download"
+									? "Downloading the streamed songs, then leaving…"
+									: "Leaving…"}
+							</LoadingLine>
+						)}
 						<Button variant="ghost" onClick={onCancel}>
 							Cancel
 						</Button>
@@ -213,6 +230,14 @@ export function LeaveLibraryDialog({
 		>
 			Other members keep the library and everything you sent. This device stops reading and writing{" "}
 			<code>.manplay</code> there.
+			{streamedCount > 0 && (
+				<StreamedLeaveChoice
+					count={streamedCount}
+					value={streamed}
+					onChange={setStreamed}
+					disabled={leave.isPending}
+				/>
+			)}
 		</Dialog>
 	);
 }
@@ -652,6 +677,35 @@ function JoinedRows({
 	);
 }
 
+/**
+ * Songs listed from a shared library this device left, kept as entries that cannot play (the
+ * choice made when leaving): they can be removed from the library here, after a database backup.
+ */
+function UnavailableSongsRow({ count }: { count: number }) {
+	const remove = useRemoveUnavailableStreamedSongs();
+	return (
+		<FieldRow
+			label="Songs that cannot play"
+			description={`${count === 1 ? "1 song is" : `${count.toLocaleString()} songs are`} listed from a shared library this device left. They play again after joining it again.`}
+			align="center"
+		>
+			<div className="space-y-1">
+				<ConfirmButton
+					variant="outline"
+					destructive
+					disabled={remove.isPending}
+					confirmLabel="Remove them from the library"
+					consequence="They leave your library, with their places in playlists and tags. A copy of the database is saved first."
+					onConfirm={() => remove.mutate()}
+				>
+					Remove them…
+				</ConfirmButton>
+				{remove.isError && <ErrorLine>{String(remove.error)}</ErrorLine>}
+			</div>
+		</FieldRow>
+	);
+}
+
 /** Outside a library: the library folder and each destination, to start or join one at. */
 function PlaceRows({
 	root,
@@ -717,6 +771,8 @@ export function SharedLibrarySettings() {
 	const root = useLibraryRoot().data ?? null;
 	const [joining, setJoining] = useState<LibraryPlace | null>(null);
 	const [leaving, setLeaving] = useState(false);
+	const streaming = useStreamedSongs().data;
+	const unavailable = streaming && !streaming.playable ? streaming.count : 0;
 	const target = home?.kind === "target" ? targets.find((t) => t.id === home.targetId) : undefined;
 	const place = homePlace(home, target);
 	const label = home ? homeLabel(home, targets) : null;
@@ -744,6 +800,7 @@ export function SharedLibrarySettings() {
 				) : (
 					<PlaceRows root={root} targets={targets} onJoin={setJoining} />
 				)}
+				{unavailable > 0 && <UnavailableSongsRow count={unavailable} />}
 				<DeviceNameRow />
 				{joining && <JoinLibraryDialog place={joining} onClose={() => setJoining(null)} />}
 				{leaving && label !== null && (

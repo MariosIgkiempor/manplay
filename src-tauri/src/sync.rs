@@ -3061,15 +3061,18 @@ async fn pull_one(
         return Err(Error::Msg("unsafe path on destination".to_owned()));
     }
     let dest = file.rel.iter().fold(root.to_path_buf(), |p, s| p.join(s));
-    pull_file(backend, base, file, &dest).await
+    pull_file(backend, base, file, &dest, None).await
 }
 
 /// Downloads one destination file to exactly `dest`. Returns `false` if a file is already there.
+/// With `expected_audio` (a song's `audio_fp`), the download must hold that audio: another file
+/// at the same place on the destination is thrown away and nothing is put at `dest`.
 async fn pull_file(
     backend: &Backend<'_>,
     base: &[String],
     file: &Remote,
     dest: &Path,
+    expected_audio: Option<&str>,
 ) -> Result<bool, Error> {
     if tokio::fs::try_exists(dest).await? {
         return Ok(false);
@@ -3090,6 +3093,9 @@ async fn pull_file(
                 "incomplete download ({got} of {} bytes)",
                 file.size
             )));
+        }
+        if let Some(expected) = expected_audio {
+            check_audio(&tmp, expected).await?;
         }
         // A file that appeared at `dest` while this one came down stays.
         let (from, to) = (tmp.clone(), dest.to_path_buf());
@@ -3113,6 +3119,22 @@ async fn pull_file(
     result
 }
 
+/// Fails unless the file at `path` holds the audio with print `expected`. A file whose audio
+/// cannot be read fails too: it cannot be shown to be the song.
+async fn check_audio(path: &Path, expected: &str) -> Result<(), Error> {
+    let file = path.to_path_buf();
+    let found = tokio::task::spawn_blocking(move || crate::audioprint::audio_print_path(&file))
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))?;
+    if found.as_deref() == Some(expected) {
+        Ok(())
+    } else {
+        Err(Error::Msg(
+            "the file on the destination is not the song that was expected".to_owned(),
+        ))
+    }
+}
+
 /// What fetching songs from a destination did.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Fetched {
@@ -3134,14 +3156,23 @@ pub struct FetchProgress {
 /// More songs than this and the destination is listed once instead of asked about each.
 const LIST_ABOVE: usize = 20;
 
+/// A song to download: its place below the destination folder, and its audio, which the file
+/// there must hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SongToFetch {
+    pub rel: Vec<String>,
+    pub audio_fp: String,
+}
+
 /// Downloads the songs at `wanted` (paths below the destination folder) to the same paths in
 /// the library folder `root`, telling `report` before each one and once at the end. Never writes
-/// over a file; a song the destination does not have is left for another time.
+/// over a file; a song the destination does not have is left for another time. A file that does
+/// not hold the audio asked for is not put in the library (it counts as failed).
 pub async fn fetch_songs(
     client: &Client,
     target: &SyncTarget,
     root: &Path,
-    wanted: &[Vec<String>],
+    wanted: &[SongToFetch],
     report: impl Fn(FetchProgress),
 ) -> Result<Fetched, Error> {
     let base = base_of(target);
@@ -3159,32 +3190,35 @@ pub async fn fetch_songs(
         None
     };
     let mut out = Fetched::default();
-    let mut there: Vec<Remote> = Vec::new();
-    for rel in wanted.iter().filter(|rel| safe_rel(rel)) {
+    let mut there: Vec<(Remote, &str)> = Vec::new();
+    for song in wanted.iter().filter(|song| safe_rel(&song.rel)) {
         let size = match &listed {
-            Some(listed) => listed.get(rel).copied(),
+            Some(listed) => listed.get(&song.rel).copied(),
             None => backend
-                .remote_size(&dest_of(&base, rel))
+                .remote_size(&dest_of(&base, &song.rel))
                 .await
                 .unwrap_or(None),
         };
         match size {
-            Some(size) => there.push(Remote {
-                rel: rel.clone(),
-                size,
-                version: None,
-            }),
+            Some(size) => there.push((
+                Remote {
+                    rel: song.rel.clone(),
+                    size,
+                    version: None,
+                },
+                &song.audio_fp,
+            )),
             None => out.waiting += 1,
         }
     }
     let total = there.len();
-    for (done, file) in there.iter().enumerate() {
+    for (done, (file, audio_fp)) in there.iter().enumerate() {
         report(FetchProgress { done, total });
         let dest = file
             .rel
             .iter()
             .fold(root.to_path_buf(), |at, part| at.join(part));
-        match pull_file(&backend, &base, file, &dest).await {
+        match pull_file(&backend, &base, file, &dest, Some(audio_fp)).await {
             Ok(true) => out.downloaded += 1,
             Ok(false) => out.waiting += 1,
             Err(e) => {
@@ -3199,29 +3233,45 @@ pub async fn fetch_songs(
     Ok(out)
 }
 
+/// What [`fetch_file`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fetch {
+    Downloaded,
+    /// The destination does not have the file.
+    NotOnDestination,
+    /// A file is at `dest` already (it stays).
+    DestinationTaken,
+}
+
 /// Downloads the file at `rel` below the destination folder to `dest`, by way of a part file next
-/// to it. False when the destination does not have it, or a file appeared at `dest` meanwhile
-/// (that file stays).
+/// to it. With `expected_audio` the file must hold that audio, or nothing is put at `dest`.
 pub async fn fetch_file(
     client: &Client,
     target: &SyncTarget,
     rel: &[String],
     dest: &Path,
-) -> Result<bool, Error> {
+    expected_audio: Option<&str>,
+) -> Result<Fetch, Error> {
     if !safe_rel(rel) {
         return Err(Error::Msg("unsafe path on destination".to_owned()));
     }
     let base = base_of(target);
     let backend = Backend::for_target(client, target)?;
     let Some(size) = backend.remote_size(&dest_of(&base, rel)).await? else {
-        return Ok(false);
+        return Ok(Fetch::NotOnDestination);
     };
     let file = Remote {
         rel: rel.to_vec(),
         size,
         version: None,
     };
-    pull_file(&backend, &base, &file, dest).await
+    Ok(
+        if pull_file(&backend, &base, &file, dest, expected_audio).await? {
+            Fetch::Downloaded
+        } else {
+            Fetch::DestinationTaken
+        },
+    )
 }
 
 /// Puts `file` at `rel` below the destination folder, whole, replacing what is there. The caller
@@ -3316,6 +3366,40 @@ mod tests {
 
     fn rel(p: &str) -> Vec<String> {
         p.split('/').map(str::to_owned).collect()
+    }
+
+    /// An MP3-looking file: an ID3 tag of `tag` bytes (up to 127), then frames made from `seed`.
+    fn mp3_like(tag: u8, seed: u8) -> Vec<u8> {
+        let mut file = b"ID3\x04\x00\x00\x00\x00\x00".to_vec();
+        file.push(tag);
+        file.extend(vec![7_u8; usize::from(tag)]);
+        file.extend([0xff, 0xfb]);
+        file.extend((0..200_000_u32).map(|i| u8::try_from(i % 251).unwrap_or(0) ^ seed));
+        file
+    }
+
+    #[tokio::test]
+    async fn a_download_must_hold_the_audio_it_was_asked_for() {
+        let dir = std::env::temp_dir().join(format!("manplay-check-audio-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let wanted = dir.join("wanted.mp3");
+        std::fs::write(&wanted, mp3_like(10, 0)).expect("write");
+        let expected = crate::audioprint::audio_print_path(&wanted).expect("print");
+        let cases = [
+            ("the same audio, other tags", Some(mp3_like(100, 0)), true),
+            ("other audio", Some(mp3_like(10, 5)), false),
+            ("not audio at all", Some(b"hello".to_vec()), false),
+            ("no file", None, false),
+        ];
+        for (what, bytes, ok) in cases {
+            let file = dir.join("download.manplay-part");
+            let _ = std::fs::remove_file(&file);
+            if let Some(bytes) = bytes {
+                std::fs::write(&file, bytes).expect("write");
+            }
+            assert_eq!(check_audio(&file, &expected).await.is_ok(), ok, "{what}");
+        }
     }
 
     #[test]

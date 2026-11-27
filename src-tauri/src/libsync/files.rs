@@ -115,7 +115,14 @@ impl RelPath {
                 // A drive letter or an alternate stream on Windows; an ordinary character on a Mac.
                 && !(cfg!(windows) && part.contains(':'))
         };
-        (!parts.is_empty() && parts.iter().all(plain)).then_some(Self(parts))
+        let own_folder = parts
+            .first()
+            .is_some_and(|first| first.eq_ignore_ascii_case(super::remote::DIR));
+        (!parts.is_empty()
+            && parts.iter().all(plain)
+            && !parts.iter().any(|part| is_windows_device_name(part))
+            && !own_folder)
+            .then_some(Self(parts))
     }
 
     /// The file at this path in the library folder `root`.
@@ -141,6 +148,18 @@ impl RelPath {
     fn from_stored(raw: &str) -> Option<Self> {
         serde_json::from_str(raw).ok().map(Self)
     }
+}
+
+/// Whether `name` is one Windows keeps for a device (`CON`, `NUL`, `COM1`, ...), with or without
+/// an extension: a file called that cannot be made there, and any device may read the path.
+fn is_windows_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    let stem = stem.to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix)
+                .is_some_and(|n| matches!(n.as_bytes(), [b'1'..=b'9']))
+        })
 }
 
 /// What the library has of one audio.
@@ -648,6 +667,9 @@ pub struct Removal {
     pub by: String,
     /// Whether that member is this device: it took back a song another device added.
     pub here: bool,
+    /// This device only streams it: removing it here takes the song out of the library but there
+    /// is no file to trash, and keeping it needs the destination to still have the file.
+    pub streamed: bool,
     /// When they did.
     pub at: UnixSeconds,
 }
@@ -665,21 +687,41 @@ pub fn removals_waiting(conn: &Connection, root: &Path) -> Result<Vec<Removal>, 
     let me = write::device_id(conn)?;
     let mut out = Vec::new();
     for (fp, at_clock) in removed {
-        if !had.get(&fp).is_some_and(|h| h.present) {
-            continue;
-        }
-        let copy: Option<(i64, String, String, String)> = conn
-            .prepare_cached(
-                "SELECT id, title, artist, path FROM tracks
+        // A kept copy first; else the row of a song this device streams (it has no record of
+        // having had a file: it never did).
+        let copy: Option<(i64, String, String, String, bool)> =
+            if had.get(&fp).is_some_and(|h| h.present) {
+                conn.prepare_cached(
+                    "SELECT id, title, artist, path, 0 FROM tracks
                  WHERE audio_fp = ?1 AND missing_since IS NULL AND file_state = 'here'
                  ORDER BY path LIMIT 1",
-            )?
-            .query_map(params![fp], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })?
-            .next()
-            .transpose()?;
-        let Some((track_id, title, artist, path)) = copy else {
+                )?
+                .query_map(params![fp], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })?
+                .next()
+                .transpose()?
+            } else {
+                None
+            };
+        let copy = match copy {
+            Some(copy) => Some(copy),
+            None => conn
+                .prepare_cached(
+                    "SELECT id, title, artist, path, 1 FROM tracks
+                     WHERE audio_fp = ?1 AND file_state = 'streamed'
+                       AND NOT EXISTS (SELECT 1 FROM tracks k
+                                       WHERE k.audio_fp = ?1 AND k.file_state = 'here'
+                                         AND k.missing_since IS NULL)
+                     ORDER BY path LIMIT 1",
+                )?
+                .query_map(params![fp], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })?
+                .next()
+                .transpose()?,
+        };
+        let Some((track_id, title, artist, path, streamed)) = copy else {
             continue;
         };
         out.push(Removal {
@@ -693,6 +735,7 @@ pub fn removals_waiting(conn: &Connection, root: &Path) -> Result<Vec<Removal>, 
                 |dev| recent::member_name(conn, dev),
             ),
             here: clock::device_of(&at_clock) == Some(me.as_str()),
+            streamed,
             at: clock::parse(&at_clock).map_or(0, |(ms, _)| ms / 1000),
         });
     }

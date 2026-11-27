@@ -107,7 +107,7 @@ pub async fn download(
         record(
             &mut out,
             &label,
-            pull_file(&backend, &base, file, &dest).await,
+            pull_file(&backend, &base, file, &dest, None).await,
         );
     }
     progress(app, total, total, "");

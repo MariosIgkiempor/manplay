@@ -200,6 +200,7 @@ function RemovedSongs({ removals }: { removals: FileRemoval[] }) {
 								)}
 							</div>
 							<div className="truncate text-muted-foreground text-xs">
+								{removal.streamed ? "Streamed, no file here · " : ""}
 								{removal.path}
 								{by.kind === "several" && ` · ${removalBy(removal)}, ${timeAgo(removal.at)}`}
 							</div>
@@ -209,7 +210,11 @@ function RemovedSongs({ removals }: { removals: FileRemoval[] }) {
 							variant="outline"
 							disabled={settle.isPending}
 							confirmLabel="Keep for everyone"
-							consequence="Every device has this song again; one that no longer has the file gets it back."
+							consequence={
+								removal.streamed
+									? "Every device has this song again, as long as the destination still has its file."
+									: "Every device has this song again; one that no longer has the file gets it back."
+							}
 							onConfirm={() => settle.mutate({ choice: "keep", audioFps: [removal.audioFp] })}
 						>
 							Keep
@@ -219,8 +224,12 @@ function RemovedSongs({ removals }: { removals: FileRemoval[] }) {
 							variant="outline"
 							destructive
 							disabled={settle.isPending}
-							confirmLabel={`Move to ${TRASH}`}
-							consequence={`The file goes to the ${TRASH} on this device.`}
+							confirmLabel={removal.streamed ? "Remove from the library" : `Move to ${TRASH}`}
+							consequence={
+								removal.streamed
+									? "The song leaves this library. There is no file here to move; a copy of the database is saved first."
+									: `The file goes to the ${TRASH} on this device.`
+							}
 							onConfirm={() => settle.mutate({ choice: "remove", audioFps: [removal.audioFp] })}
 						>
 							Remove
@@ -247,7 +256,11 @@ function RemovedSongs({ removals }: { removals: FileRemoval[] }) {
 						destructive
 						disabled={settle.isPending}
 						confirmLabel={`Move all ${removals.length.toLocaleString()} to ${TRASH}`}
-						consequence={`Their files go to the ${TRASH} on this device.`}
+						consequence={
+							removals.some((removal) => removal.streamed)
+								? `Their files go to the ${TRASH} on this device. Songs that are only streamed leave the library; a copy of the database is saved first.`
+								: `Their files go to the ${TRASH} on this device.`
+						}
 						onConfirm={() => settle.mutate({ choice: "remove", audioFps: all })}
 					>
 						Remove all here
@@ -255,6 +268,12 @@ function RemovedSongs({ removals }: { removals: FileRemoval[] }) {
 				</div>
 			)}
 			{settle.isError && <ErrorLine>{String(settle.error)}</ErrorLine>}
+			{(settle.data?.noFile.length ?? 0) > 0 && (
+				<ErrorLine>
+					Not kept: the destination no longer has the file of {settle.data?.noFile.join(", ")}, so
+					no device could play it. Remove it here, or put the file back on the destination first.
+				</ErrorLine>
+			)}
 		</WellCard>
 	);
 }

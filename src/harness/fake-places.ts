@@ -651,6 +651,7 @@ export const FILE_REMOVALS: FileRemoval[] = [
 		path: "Bicep/Bicep/Glue.flac",
 		by: "tour-laptop",
 		here: false,
+		streamed: false,
 		at: NOW - 3600,
 	},
 	{
@@ -661,9 +662,35 @@ export const FILE_REMOVALS: FileRemoval[] = [
 		path: "Bicep/Singles/Opal (Four Tet Remix).mp3",
 		by: "tour-laptop",
 		here: false,
+		streamed: false,
 		at: NOW - 3500,
 	},
+	{
+		audioFp: "removed-3",
+		trackId: 5,
+		title: "Night Drive",
+		artist: "Kas",
+		path: "Kas/Singles/Night Drive.mp3",
+		by: "tour-laptop",
+		here: false,
+		streamed: true,
+		at: NOW - 3400,
+	},
+	{
+		audioFp: "removed-4",
+		trackId: 11,
+		title: "Lost Signal",
+		artist: "Kas",
+		path: "Kas/Singles/Lost Signal.mp3",
+		by: "tour-laptop",
+		here: false,
+		streamed: true,
+		at: NOW - 3300,
+	},
 ];
+
+/** The streamed song the fake destination has no file of any more: keeping it is refused. */
+export const STREAMED_REMOVAL_WITHOUT_FILE = "removed-4";
 
 const pickerFolder = (name: string): FsEntry => ({ name, isDir: true, size: 0, modified: NOW });
 const pickerFile = (name: string, size: number): FsEntry => ({

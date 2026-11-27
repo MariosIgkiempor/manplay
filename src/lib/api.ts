@@ -839,6 +839,8 @@ const fileRemovalSchema = z.object({
 	by: z.string(),
 	/** Whether that device is this one: it took back a song another device added. */
 	here: z.boolean(),
+	/** This device only streams it: there is no file here to move to the Trash. */
+	streamed: z.boolean(),
 	/** Unix seconds. */
 	at: int,
 });
@@ -851,12 +853,24 @@ export async function listFileRemovals(): Promise<FileRemoval[]> {
 	return z.array(fileRemovalSchema).parse(await invoke("list_file_removals"));
 }
 
-/** Keeps removed songs: every device has them again. Returns how many were kept. */
-export async function keepFileRemovals(audioFps: string[]): Promise<number> {
-	return int.parse(await invoke("keep_file_removals", { audioFps }));
+const keptRemovalsSchema = z.object({
+	kept: int,
+	/** Streamed songs left removed: the destination no longer has their file, so none can play. */
+	noFile: z.array(z.string()),
+});
+
+/** What keeping removed songs did. */
+export type KeptRemovals = z.infer<typeof keptRemovalsSchema>;
+
+/** Keeps removed songs: every device has them again. A streamed song is kept only while the destination has its file. */
+export async function keepFileRemovals(audioFps: string[]): Promise<KeptRemovals> {
+	return keptRemovalsSchema.parse(await invoke("keep_file_removals", { audioFps }));
 }
 
-/** Removes the songs here too, to the system Trash. Returns how many files went. */
+/**
+ * Removes the songs here too: kept files go to the system Trash, and a song that is only
+ * streamed leaves the library (a copy of the database is saved first). Returns how many went.
+ */
 export async function applyFileRemovals(audioFps: string[]): Promise<number> {
 	return int.parse(await invoke("apply_file_removals", { audioFps }));
 }
@@ -874,9 +888,43 @@ export async function undoLibraryChanges(batch: number): Promise<Undone> {
 /** What happens to the shared items on this device when it leaves: keep them as local or drop them. */
 export type LeaveChoice = "keepCopy" | "keepLocal";
 
-/** Leaves the shared library; `sync` sends and receives one last time first. */
-export async function libsyncLeave(choice: LeaveChoice, sync: boolean): Promise<void> {
-	await invoke("libsync_leave", { choice, sync });
+/**
+ * What becomes of the songs this device streams when it leaves their shared library or removes
+ * its destination: downloaded first (leaves only when all are here), kept as songs that cannot
+ * play, or removed from the library (after a copy of the database is saved).
+ */
+export const streamedOnLeavingSchema = z.enum(["download", "keepUnplayable", "remove"]);
+export type StreamedOnLeaving = z.infer<typeof streamedOnLeavingSchema>;
+
+const streamedSongsSchema = z.object({
+	/** How many songs are listed here without a file. */
+	count: int,
+	/** Whether they can play: the library they come from is on a destination this device is in. */
+	playable: z.boolean(),
+});
+
+/** The songs listed here without a file. */
+export type StreamedSongs = z.infer<typeof streamedSongsSchema>;
+
+export async function getStreamedSongs(): Promise<StreamedSongs> {
+	return streamedSongsSchema.parse(await invoke("streamed_songs"));
+}
+
+/** Removes the songs of a shared library this device left, after a copy of the database is saved. Returns how many. */
+export async function removeUnavailableStreamedSongs(): Promise<number> {
+	return int.parse(await invoke("remove_unavailable_streamed_songs"));
+}
+
+/**
+ * Leaves the shared library; `sync` sends and receives one last time first. `streamed` says what
+ * becomes of the songs this device streams from it, and is needed when there are any.
+ */
+export async function libsyncLeave(
+	choice: LeaveChoice,
+	sync: boolean,
+	streamed?: StreamedOnLeaving,
+): Promise<void> {
+	await invoke("libsync_leave", { choice, sync, streamed: streamed ?? null });
 }
 
 /** The name other members see this device as. */
@@ -889,8 +937,9 @@ export async function setDeviceName(name: string): Promise<string> {
 	return z.string().parse(await invoke("set_device_name", { name }));
 }
 
-export async function removeSyncTarget(id: number): Promise<void> {
-	await invoke("remove_sync_target", { id });
+/** Removes a destination; `streamed` says what becomes of the songs streamed from its shared library. */
+export async function removeSyncTarget(id: number, streamed?: StreamedOnLeaving): Promise<void> {
+	await invoke("remove_sync_target", { id, streamed: streamed ?? null });
 }
 
 // ---- Jellyfin ---------------------------------------------------------------

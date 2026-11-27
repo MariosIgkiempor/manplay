@@ -426,6 +426,25 @@ fn a_path_from_another_device_must_stay_inside_the_library_folder() {
         (json!(["House", 3]), false),
         (json!(null), false),
         (json!(["C:", "a.mp3"]), !cfg!(windows)),
+        // The shared library's own folder is not for songs.
+        (json!([".manplay", "a.mp3"]), false),
+        (json!([".MANPLAY", "log", "a.mp3"]), false),
+        (json!(["House", ".manplay", "a.mp3"]), true),
+        (json!([".manplayer", "a.mp3"]), true),
+        // Names Windows keeps for devices, in any case, with or without an extension.
+        (json!(["CON"]), false),
+        (json!(["con.mp3"]), false),
+        (json!(["House", "Nul.flac"]), false),
+        (json!(["aux.tar.gz"]), false),
+        (json!(["PRN.mp3"]), false),
+        (json!(["COM1.mp3"]), false),
+        (json!(["lpt9"]), false),
+        (json!(["Com5", "a.mp3"]), false),
+        (json!(["COM0.mp3"]), true),
+        (json!(["COM10.mp3"]), true),
+        (json!(["LPT.mp3"]), true),
+        (json!(["Console.mp3"]), true),
+        (json!(["a.con"]), true),
     ];
     for (val, ok) in cases {
         assert_eq!(RelPath::from_value(&val).is_some(), ok, "{val}");

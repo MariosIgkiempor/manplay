@@ -7,6 +7,7 @@
 //! fetch it again. Only this module deletes files here, and only inside the cache folder.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::SystemTime;
 
 use rusqlite::Connection;
@@ -59,6 +60,31 @@ pub struct Usage {
     pub limit: Bytes,
 }
 
+/// Files that must stay while something (a USB export) is about to read them.
+static PINNED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Keeps files in the cache until it is dropped: [`StreamCache::trim`] passes them by.
+#[derive(Debug)]
+pub struct Pins(Vec<PathBuf>);
+
+impl Drop for Pins {
+    fn drop(&mut self) {
+        if let Ok(mut pinned) = PINNED.lock() {
+            for file in &self.0 {
+                if let Some(at) = pinned.iter().position(|p| p == file) {
+                    pinned.swap_remove(at);
+                }
+            }
+        }
+    }
+}
+
+fn is_pinned(file: &Path) -> bool {
+    PINNED
+        .lock()
+        .map_or(true, |pinned| pinned.iter().any(|p| p == file))
+}
+
 /// The cache folder.
 #[derive(Debug, Clone)]
 pub struct StreamCache {
@@ -109,6 +135,19 @@ impl StreamCache {
         self.file_for(audio_fp, ext).filter(|file| file.is_file())
     }
 
+    /// Keeps the cache files of these songs (`(audio_fp, extension)`), downloaded or not yet,
+    /// from being trimmed until the returned [`Pins`] is dropped.
+    pub fn pin<'a>(&self, songs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Pins {
+        let files: Vec<PathBuf> = songs
+            .into_iter()
+            .filter_map(|(fp, ext)| self.file_for(fp, ext))
+            .collect();
+        if let Ok(mut pinned) = PINNED.lock() {
+            pinned.extend(files.iter().cloned());
+        }
+        Pins(files)
+    }
+
     /// The files in the cache, finished ones only, with their sizes and when each was last used.
     fn files(&self) -> Vec<(PathBuf, Bytes, SystemTime)> {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
@@ -132,7 +171,7 @@ impl StreamCache {
     }
 
     /// Removes the files used longest ago until the cache fits in `limit`, never `keep` (the
-    /// song just fetched). Returns how many went.
+    /// song just fetched) or a pinned file. Returns how many went.
     pub fn trim(&self, limit: Bytes, keep: Option<&Path>) -> usize {
         let mut files = self.files();
         let mut used: Bytes = files.iter().map(|(_, size, _)| size).sum();
@@ -142,7 +181,7 @@ impl StreamCache {
             if used <= limit {
                 break;
             }
-            if Some(path.as_path()) == keep {
+            if Some(path.as_path()) == keep || is_pinned(&path) {
                 continue;
             }
             match std::fs::remove_file(&path) {
@@ -239,6 +278,34 @@ mod tests {
         );
         assert!(newest.exists());
         assert!(!older.exists());
+    }
+
+    #[test]
+    fn pinned_files_stay_through_a_trim_until_the_pins_are_dropped() {
+        let cache = cache("pins");
+        let oldest = put(&cache, "a1:01", 100, 300);
+        let older = put(&cache, "a1:02", 100, 200);
+        let newest = put(&cache, "a1:03", 100, 100);
+        let pins = cache.pin([("a1:01", "mp3"), ("a1:02", "mp3")]);
+        assert_eq!(cache.trim(0, None), 1, "only the one nobody pinned");
+        assert!(oldest.exists() && older.exists());
+        assert!(!newest.exists());
+        drop(pins);
+        assert_eq!(cache.trim(0, None), 2);
+        assert!(!oldest.exists() && !older.exists());
+    }
+
+    #[test]
+    fn a_file_pinned_twice_stays_until_both_pins_are_dropped() {
+        let cache = cache("pins-twice");
+        let song = put(&cache, "a1:01", 100, 300);
+        let first = cache.pin([("a1:01", "mp3")]);
+        let second = cache.pin([("a1:01", "mp3")]);
+        drop(first);
+        assert_eq!(cache.trim(0, None), 0);
+        drop(second);
+        assert_eq!(cache.trim(0, None), 1);
+        assert!(!song.exists());
     }
 
     #[test]

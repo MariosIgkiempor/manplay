@@ -78,6 +78,7 @@ describe("removalsTitle", () => {
 		path: "Bicep/Glue.flac",
 		by,
 		here,
+		streamed: false,
 		at: 0,
 	});
 	it.each<[string, FileRemoval[], string]>([

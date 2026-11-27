@@ -173,6 +173,26 @@ a cover file already there is saved under `cover-backups` first (undo puts a loc
 Picking a cover for a song on an album with other songs asks: this song, or all of them.
 Thumbnails of streamed songs are filed under the song's own folder, not the stream cache's.
 
+### Data-safety rules (since)
+
+Streaming must never lose a song, a playlist place or a tag.
+
+- `streamed::refresh` never deletes a row because a device left, or because another device
+  removed the song. Leaving the library (or removing its destination) asks what becomes of the
+  streamed songs: download them first (leaves only when every one is here), keep them as
+  unplayable entries, or remove them (after `db::backup`). A song another device removed waits in
+  the review of removals with the kept ones; removing a streamed one deletes only its row, after
+  a backup; keeping it needs the destination to still have the same audio.
+- A streamed row whose audio is kept here as well hands its playlists and tags to the kept row
+  before it goes, after a backup.
+- A USB export pins the cache files it downloads and stops before touching the drive when a
+  chosen song has no file.
+- Stream only checks the destination holds the same audio (fingerprint), trashes the file while
+  holding the database (a scan cannot flip the row back), and a scan makes a streamed row kept
+  only when its file is there.
+- Downloads (cache, keep, leaving) must hold the audio the song was listed with, or nothing is
+  placed. Migrations run after a backup, with foreign keys off and a foreign key check.
+
 ## Playback
 
 - `audioUrl` takes a track, not a path: kept → local file as now; streamed → `remote:` URL for

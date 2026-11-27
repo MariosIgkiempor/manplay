@@ -447,10 +447,13 @@ async fn fetch_shared_songs(app: AppHandle, target: db::SyncTarget) {
         Ok(conn) => songs_to_fetch(&conn, &root),
         Err(e) => Err(e),
     };
-    let wanted: Vec<Vec<String>> = match wanted {
+    let wanted: Vec<sync::SongToFetch> = match wanted {
         Ok(wanted) => wanted
             .into_iter()
-            .map(|path| path.parts().to_vec())
+            .map(|song| sync::SongToFetch {
+                rel: song.path.parts().to_vec(),
+                audio_fp: song.audio_fp,
+            })
             .collect(),
         Err(e) => {
             log::warn!("could not tell which songs to fetch: {e}");
@@ -487,17 +490,20 @@ async fn fetch_shared_songs(app: AppHandle, target: db::SyncTarget) {
 /// The songs to download from the shared library's destination: the streamed songs this device
 /// keeps (`libsync::keep`), and, while new songs are set to download, the songs other devices
 /// added. While new songs stream, those are streamed rows instead (`libsync::streamed`).
-fn songs_to_fetch(conn: &Connection, root: &Path) -> Result<Vec<libsync::files::RelPath>, Error> {
+fn songs_to_fetch(conn: &Connection, root: &Path) -> Result<Vec<libsync::keep::ToDownload>, Error> {
     let mut wanted = libsync::keep::to_download(conn, root)?;
     if libsync::streamed::NewSongs::get(conn)? == libsync::streamed::NewSongs::Download {
         wanted.extend(
             libsync::files::arrivals_wanted(conn)?
                 .into_iter()
-                .map(|arrival| arrival.path),
+                .map(|arrival| libsync::keep::ToDownload {
+                    path: arrival.path,
+                    audio_fp: arrival.audio_fp,
+                }),
         );
     }
-    wanted.sort();
-    wanted.dedup();
+    wanted.sort_by(|a, b| a.path.cmp(&b.path));
+    wanted.dedup_by(|a, b| a.path == b.path);
     Ok(wanted)
 }
 
@@ -699,7 +705,8 @@ fn keep_streamed_songs(state: &AppState) {
         .lock()
         .map_err(|_| Error::Lock)
         .and_then(|mut conn| {
-            let refreshed = libsync::streamed::refresh(&conn, &root)?;
+            let refreshed =
+                libsync::streamed::refresh(&conn, &root, &state.data_dir.join("backups"))?;
             if refreshed.changed() {
                 db::rebuild_tag_values(&mut conn)?;
             }
@@ -727,54 +734,120 @@ fn list_file_removals(state: State<'_, AppState>) -> Result<Vec<libsync::files::
     libsync::files::removals_waiting(&conn, &root)
 }
 
-/// Keeps songs another device removed: every device has them again after its next sync.
-#[tauri::command]
-fn keep_file_removals(state: State<'_, AppState>, audio_fps: Vec<String>) -> Result<usize, Error> {
-    let root = library_root(&state)?;
-    let kept = {
-        let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        libsync::files::keep(&conn, &root, &audio_fps)?
-    };
-    state.libsync_wake.notify_one();
-    Ok(kept)
+/// What keeping removed songs did.
+#[derive(Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeepRemovalsReport {
+    /// Songs present again for every device.
+    kept: usize,
+    /// Streamed songs that were not kept because the destination no longer has their file (or it
+    /// is another song's, or the destination cannot be asked): no device would have the audio.
+    /// By title.
+    no_file: Vec<String>,
 }
 
-/// Removes songs here that another device removed: every copy of them goes to the system Trash.
-/// Only songs that are waiting for this are touched, whatever was asked for.
+/// Keeps songs another device removed: every device has them again after its next sync. A song
+/// this device only streams is kept only while the destination still has its file.
+#[tauri::command]
+async fn keep_file_removals(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    audio_fps: Vec<String>,
+) -> Result<KeepRemovalsReport, Error> {
+    let root = library_root(&state)?;
+    let (target, asked, paths) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let asked: Vec<libsync::files::Removal> = libsync::files::removals_waiting(&conn, &root)?
+            .into_iter()
+            .filter(|w| audio_fps.contains(&w.audio_fp))
+            .collect();
+        let mut paths = HashMap::new();
+        for removal in asked.iter().filter(|w| w.streamed) {
+            if let Some(rel) = libsync::files::shared_path(&conn, &removal.audio_fp)? {
+                paths.insert(removal.audio_fp.clone(), rel);
+            }
+        }
+        (library_destination(&conn)?, asked, paths)
+    };
+    let mut report = KeepRemovalsReport::default();
+    let mut keepable = Vec::new();
+    for removal in asked {
+        if !removal.streamed {
+            keepable.push(removal.audio_fp);
+            continue;
+        }
+        let there = match (&target, paths.get(&removal.audio_fp)) {
+            (Some(target), Some(rel)) => {
+                destination_has_the_song(&app, &state, target, rel, &removal.audio_fp)
+                    .await
+                    .unwrap_or(false)
+            }
+            _ => false,
+        };
+        if there {
+            keepable.push(removal.audio_fp);
+        } else {
+            report.no_file.push(removal.title);
+        }
+    }
+    report.kept = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        libsync::files::keep(&conn, &root, &keepable)?
+    };
+    state.libsync_wake.notify_one();
+    Ok(report)
+}
+
+/// Removes songs here that another device removed: every kept copy of them goes to the system
+/// Trash, and a song this device only streams leaves the library (it has no file; a copy of the
+/// database is saved first). Only songs that are waiting for this are touched, whatever was asked
+/// for.
 #[tauri::command]
 async fn apply_file_removals(
     state: State<'_, AppState>,
     audio_fps: Vec<String>,
 ) -> Result<usize, Error> {
     let root = library_root(&state)?;
-    let copies = {
+    let (copies, streamed) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        let waiting: Vec<String> = libsync::files::removals_waiting(&conn, &root)?
+        let waiting: Vec<libsync::files::Removal> = libsync::files::removals_waiting(&conn, &root)?
             .into_iter()
-            .map(|removal| removal.audio_fp)
-            .filter(|fp| audio_fps.contains(fp))
+            .filter(|removal| audio_fps.contains(&removal.audio_fp))
             .collect();
-        libsync::files::copies_here(&conn, &waiting)?
+        let kept_fps: Vec<String> = waiting
+            .iter()
+            .filter(|w| !w.streamed)
+            .map(|w| w.audio_fp.clone())
+            .collect();
+        // A streamed row beside a kept copy goes with it.
+        let all_fps: Vec<String> = waiting.into_iter().map(|w| w.audio_fp).collect();
+        (libsync::files::copies_here(&conn, &kept_fps)?, all_fps)
     };
-    if copies.is_empty() {
-        return Ok(0);
-    }
-    let folder = root.clone();
-    let files: Vec<PathBuf> = copies.iter().map(|(_, path)| path.clone()).collect();
-    tauri::async_runtime::spawn_blocking(move || fsops::trash(&folder, &files))
-        .await
-        .map_err(|e| Error::Msg(e.to_string()))??;
-    let gone: Vec<i64> = copies
-        .into_iter()
-        .filter(|(_, path)| !path.exists())
-        .map(|(id, _)| id)
-        .collect();
-    {
+    let mut removed = 0;
+    if !copies.is_empty() {
+        let folder = root.clone();
+        let files: Vec<PathBuf> = copies.iter().map(|(_, path)| path.clone()).collect();
+        tauri::async_runtime::spawn_blocking(move || fsops::trash(&folder, &files))
+            .await
+            .map_err(|e| Error::Msg(e.to_string()))??;
+        let gone: Vec<i64> = copies
+            .into_iter()
+            .filter(|(_, path)| !path.exists())
+            .map(|(id, _)| id)
+            .collect();
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         libsync::files::deleted_here(&conn, &root, &gone, unix_now())?;
+        removed += gone.len();
     }
-    refresh_after_fs_change(&state, root).await;
-    Ok(gone.len())
+    if !streamed.is_empty() {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        removed +=
+            libsync::streamed::remove(&conn, Some(&streamed), &state.data_dir.join("backups"))?;
+    }
+    if removed > 0 {
+        refresh_after_fs_change(&state, root).await;
+    }
+    Ok(removed)
 }
 
 /// The present songs at or below `paths`, as `(id, path)`.
@@ -1649,19 +1722,28 @@ struct StreamOnlyReport {
 /// A kept song Stream only may make streamed: its row, file and place on the destination.
 struct Streamable {
     track_id: i64,
+    audio_fp: String,
     file: PathBuf,
     rel: libsync::files::RelPath,
 }
 
 /// Streams these kept songs instead of keeping them: each file whose song the shared library's
-/// destination has goes to the trash, and the song stays in the library, streamed. Never tells
-/// other devices the song was removed (`files::record` sees it streamed).
+/// destination has, the same audio, goes to the trash, and the song stays in the library,
+/// streamed. Never tells other devices the song was removed (`files::record` sees it streamed).
 #[tauri::command]
 async fn stream_only(
+    app: AppHandle,
     state: State<'_, AppState>,
     track_ids: Vec<i64>,
 ) -> Result<StreamOnlyReport, Error> {
     let root = library_root(&state)?;
+    // Not beside a tag edit or another fix: they read and write the same files.
+    if state.fixing.swap(true, Ordering::SeqCst) {
+        return Err(Error::Msg(
+            "another metadata change is running; try again when it finishes".to_owned(),
+        ));
+    }
+    let _guard = SyncGuard(&state.fixing);
     let mut report = StreamOnlyReport::default();
     let (target, candidates) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
@@ -1694,6 +1776,7 @@ async fn stream_only(
             match libsync::files::shared_path(&conn, &fp)? {
                 Some(rel) => candidates.push(Streamable {
                     track_id: *id,
+                    audio_fp: fp,
                     file: PathBuf::from(place.path),
                     rel,
                 }),
@@ -1703,35 +1786,76 @@ async fn stream_only(
         (target, candidates)
     };
     for song in candidates {
-        // Only a song whose file is on the destination loses its copy here.
-        if sync::remote_file_size(&state.http, &target, song.rel.parts())
-            .await?
-            .is_none()
-        {
+        if !destination_has_the_song(&app, &state, &target, &song.rel, &song.audio_fp).await? {
             report.not_on_destination += 1;
             continue;
         }
-        {
-            // Streamed first, so a scan meanwhile does not take the song as missing.
+        let (handle, root, file, track_id) =
+            (app.clone(), root.clone(), song.file.clone(), song.track_id);
+        tauri::async_runtime::spawn_blocking(move || {
+            let state = handle.state::<AppState>();
             let conn = state.db.lock().map_err(|_| Error::Lock)?;
-            db::set_file_state(&conn, song.track_id, db::FileState::Streamed)?;
-        }
-        let (r, file) = (root.clone(), song.file.clone());
-        let trashed = tauri::async_runtime::spawn_blocking(move || fsops::trash(&r, &[file]))
-            .await
-            .map_err(|e| Error::Msg(e.to_string()))
-            .and_then(|done| done);
-        if let Err(e) = trashed {
-            let conn = state.db.lock().map_err(|_| Error::Lock)?;
-            db::set_file_state(&conn, song.track_id, db::FileState::Here)?;
-            return Err(e);
-        }
+            stream_one(&conn, &root, track_id, &file)
+        })
+        .await
+        .map_err(|e| Error::Msg(e.to_string()))??;
         report.streamed += 1;
     }
     if report.streamed > 0 {
         library_changed(&state);
     }
     Ok(report)
+}
+
+/// Whether the destination has the file of `song` at its place, and it is the same audio: only
+/// then may this device's copy go. A file that is there but cannot be read, or is another song,
+/// says no.
+async fn destination_has_the_song(
+    app: &AppHandle,
+    state: &AppState,
+    target: &db::SyncTarget,
+    rel: &libsync::files::RelPath,
+    audio_fp: &str,
+) -> Result<bool, Error> {
+    let Some(size) = sync::remote_file_size(&state.http, target, rel.parts()).await? else {
+        return Ok(false);
+    };
+    let remote = sync::Remote {
+        rel: rel.parts().to_vec(),
+        size,
+        version: None,
+    };
+    let prints = sync::fingerprint_remote(app, &state.http, target, &[remote]).await?;
+    Ok(is_same_audio(
+        prints.into_iter().next().flatten().as_deref(),
+        audio_fp,
+    ))
+}
+
+/// Whether a file's fingerprint (`None` when it could not be read) is the audio `expected`.
+fn is_same_audio(found: Option<&str>, expected: &str) -> bool {
+    !expected.is_empty() && found == Some(expected)
+}
+
+/// Makes a kept song streamed and puts its file in the Trash. The caller holds the database for
+/// the whole call, so a scan cannot write the song's row between the two steps. The row goes back
+/// to kept when the file cannot be trashed or is still there afterwards.
+fn stream_one(conn: &Connection, root: &Path, track_id: i64, file: &Path) -> Result<(), Error> {
+    db::set_file_state(conn, track_id, db::FileState::Streamed)?;
+    let trashed = fsops::trash(root, &[file.to_path_buf()]).and_then(|()| {
+        if file.exists() {
+            Err(Error::Msg(format!(
+                "{} is still there after it was moved to the Trash",
+                file.display()
+            )))
+        } else {
+            Ok(())
+        }
+    });
+    if trashed.is_err() {
+        db::set_file_state(conn, track_id, db::FileState::Here)?;
+    }
+    trashed
 }
 
 /// What becomes of songs other devices add to the shared library: streamed or downloaded.
@@ -1962,6 +2086,16 @@ async fn update_sync_target(
         }
     } else if path.is_empty() {
         return Err(Error::Msg("choose a shared folder".to_owned()));
+    }
+    if path != target.path {
+        let count = with_db!(state, |c| libsync::streamed::streamed_from(c, id))?;
+        if count > 0 {
+            return Err(Error::Msg(format!(
+                "This device streams {count} {} from the shared library on this destination. \
+                 Leave the shared library first, and choose what happens to them.",
+                if count == 1 { "song" } else { "songs" }
+            )));
+        }
     }
     with_db!(state, |c| db::set_target_path(c, id, &path)).map_err(|e| {
         if e.to_string().contains("UNIQUE") {
@@ -2195,9 +2329,29 @@ async fn remote_move(
     moved
 }
 
+/// Removes a destination. When it holds the shared library this device streams songs from,
+/// `streamed` says what becomes of them, as when leaving the library ([`libsync_leave`]).
 #[tauri::command]
-fn remove_sync_target(app: AppHandle, state: State<'_, AppState>, id: i64) -> Result<(), Error> {
+async fn remove_sync_target(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: i64,
+    streamed: Option<libsync::streamed::OnLeaving>,
+) -> Result<(), Error> {
+    let count = with_db!(state, |c| libsync::streamed::streamed_from(c, id))?;
+    streamed_choice_needed(count, streamed)?;
+    if count > 0 && streamed == Some(libsync::streamed::OnLeaving::Download) {
+        let (target, _) = find_target(&state, id)?;
+        download_every_streamed_song(&app, &target).await?;
+    }
     with_db!(state, |c| db::remove_target(c, id))?;
+    if count > 0 && streamed == Some(libsync::streamed::OnLeaving::Remove) {
+        with_db!(state, |c| libsync::streamed::remove(
+            c,
+            None,
+            &state.data_dir.join("backups")
+        ))?;
+    }
     r2::forget_credentials(id);
     jellyfin::forget_key(id);
     with_db!(state, |c| db::remove_export_selection(
@@ -3017,10 +3171,16 @@ fn usb_inputs(
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     let camelot = analysis_settings_of(&conn)?.key_format == KeyFormat::Camelot;
     let (tracks, lists) = db::export_data(&conn)?;
+    let streamed_titles: HashMap<i64, String> = tracks
+        .iter()
+        .filter(|t| t.file_state == db::FileState::Streamed)
+        .map(|t| (t.id, format!("{} - {}", t.artist, t.title)))
+        .collect();
     let sources: Vec<usb_export::Source> = tracks
         .into_iter()
         .filter_map(|t| {
             let path = PathBuf::from(&t.path);
+            let mut size = u64::try_from(t.size).unwrap_or(0);
             let (path, name) = match t.file_state {
                 db::FileState::Here => (path, None),
                 db::FileState::Streamed => {
@@ -3030,20 +3190,24 @@ fn usb_inputs(
                         StreamedForUsb::Cached => cache?.peek(fp, ext)?,
                         StreamedForUsb::Planned => cache?.file_for(fp, ext)?,
                     };
+                    // The room it needs is the cached file's, not what the log said once.
+                    if let Ok(meta) = std::fs::metadata(&cached) {
+                        size = meta.len();
+                    }
                     let name = path.file_name()?.to_string_lossy().into_owned();
                     (cached, Some(name))
                 }
             };
-            Some((t, path, name))
+            Some((t, path, name, size))
         })
-        .map(|(t, path, name)| usb_export::Source {
+        .map(|(t, path, name, size)| usb_export::Source {
             id: t.id,
             path,
             name,
             artist: t.artist,
             album: t.album,
             title: t.title,
-            size: u64::try_from(t.size).unwrap_or(0),
+            size,
             duration_ms: t.duration_ms,
             bitrate: t.bitrate,
             sample_rate: t.sample_rate,
@@ -3069,7 +3233,58 @@ fn usb_inputs(
             "Choose at least one playlist, tag or smart playlist with songs.".into(),
         ));
     }
+    if streamed == StreamedForUsb::Cached {
+        let have: HashSet<i64> = sources.iter().map(|s| s.id).collect();
+        let left_out = chosen_songs_without_a_file(&playlists, &have);
+        if !left_out.is_empty() {
+            let titles: Vec<&str> = left_out
+                .iter()
+                .filter_map(|id| streamed_titles.get(id).map(String::as_str))
+                .collect();
+            return Err(songs_not_downloaded(left_out.len(), &titles));
+        }
+    }
     Ok((sources, playlists, camelot))
+}
+
+/// The songs of `playlists` that are not among `have` (the songs with a file to copy): a USB
+/// export would leave them out of the drive, and in a mode that replaces what is there, delete
+/// them from it.
+fn chosen_songs_without_a_file(
+    playlists: &[usb_export::SourcePlaylist],
+    have: &HashSet<i64>,
+) -> Vec<i64> {
+    let mut left_out: Vec<i64> = playlists
+        .iter()
+        .flat_map(|p| p.track_ids.iter().copied())
+        .filter(|id| !have.contains(id))
+        .collect();
+    left_out.sort_unstable();
+    left_out.dedup();
+    left_out
+}
+
+/// How many titles an error names before it says "and N more".
+const NAMED_IN_AN_ERROR: usize = 5;
+
+/// The error of a USB export stopped before it touched the drive, because `count` chosen songs
+/// have no file to copy. `names` are some of them.
+fn songs_not_downloaded(count: usize, names: &[&str]) -> Error {
+    let shown = names
+        .iter()
+        .take(NAMED_IN_AN_ERROR)
+        .copied()
+        .collect::<Vec<_>>();
+    let more = count.saturating_sub(shown.len());
+    let mut list = shown.join(", ");
+    if more > 0 {
+        let joiner = if list.is_empty() { "" } else { " and " };
+        list = format!("{list}{joiner}{more} more");
+    }
+    Error::Msg(format!(
+        "{count} streamed {} could not be downloaded, so nothing was written to the drive: {list}.",
+        if count == 1 { "song" } else { "songs" }
+    ))
 }
 
 /// What exporting `selection` would change on the drive: playlists added, changed and removed,
@@ -3092,15 +3307,23 @@ async fn usb_export_preview(
     .map_err(|e| Error::Msg(e.to_string()))?
 }
 
+/// What [`download_streamed_for_usb`] did.
+struct StreamedDownload {
+    /// The songs that could not be downloaded.
+    failed: Vec<usb_export::Failure>,
+    /// Keeps the downloaded files in the cache while the export reads them.
+    pins: stream_cache::Pins,
+}
+
 /// Downloads into the stream cache the songs of `selection` this device streams and has not
-/// cached, so a USB export takes every chosen song. Emits `usb-export-progress` in the
-/// `Downloading` phase while the shared library is on a destination. Returns the songs that could
-/// not be downloaded (the export leaves them out).
+/// cached, so a USB export takes every chosen song, and pins them there until the export is
+/// over. Emits `usb-export-progress` in the `Downloading` phase while the shared library is on a
+/// destination.
 async fn download_streamed_for_usb(
     app: &AppHandle,
     state: &AppState,
     selection: &db::ExportSelection,
-) -> Result<Vec<usb_export::Failure>, Error> {
+) -> Result<StreamedDownload, Error> {
     let (streaming, songs) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         let streaming = library_destination(&conn)?.is_some();
@@ -3122,10 +3345,18 @@ async fn download_streamed_for_usb(
         }
         (streaming, songs)
     };
-    if !streaming {
-        return Ok(Vec::new());
-    }
     let cache = stream_cache_of(app)?;
+    let pins = cache.pin(
+        songs
+            .iter()
+            .map(|(_, song)| (song.audio_fp.as_str(), song.extension())),
+    );
+    if !streaming {
+        return Ok(StreamedDownload {
+            failed: Vec::new(),
+            pins,
+        });
+    }
     let wanted: Vec<(String, StreamedFile)> = songs
         .into_iter()
         .filter(|(_, song)| cache.peek(&song.audio_fp, song.extension()).is_none())
@@ -3157,7 +3388,7 @@ async fn download_streamed_for_usb(
         }
     }
     report(total, "");
-    Ok(failed)
+    Ok(StreamedDownload { failed, pins })
 }
 
 /// Copies the chosen playlists and their songs onto a USB drive and rewrites its rekordbox
@@ -3177,9 +3408,41 @@ async fn export_to_usb(
     }
     let _guard = SyncGuard(&state.usb_exporting);
     let cache = stream_cache_of(&app).ok();
-    let not_downloaded = download_streamed_for_usb(&app, &state, &selection).await?;
+    let downloaded = download_streamed_for_usb(&app, &state, &selection).await?;
+    if !downloaded.failed.is_empty() {
+        let named: Vec<String> = downloaded
+            .failed
+            .iter()
+            .map(|f| format!("{} ({})", f.path, f.error))
+            .collect();
+        let named: Vec<&str> = named.iter().map(String::as_str).collect();
+        return Err(songs_not_downloaded(downloaded.failed.len(), &named));
+    }
+    let exported =
+        export_with_streamed_songs(&app, &state, &mount, selection, cache.as_ref()).await;
+    // The cache is trimmed only now: the export read the files it had pinned.
+    drop(downloaded.pins);
+    if let Some(cache) = &cache
+        && let Ok(conn) = state.db.lock()
+        && let Ok(limit) = stream_cache::limit(&conn)
+    {
+        cache.trim(limit, None);
+    }
+    exported
+}
+
+/// The export itself, once every chosen streamed song is in the cache. Stops before the drive
+/// is touched when one is not.
+async fn export_with_streamed_songs(
+    app: &AppHandle,
+    state: &AppState,
+    mount: &Path,
+    selection: db::ExportSelection,
+    cache: Option<&stream_cache::StreamCache>,
+) -> Result<usb_export::Report, Error> {
     let (sources, playlists, camelot) =
-        usb_inputs(&state, cache.as_ref(), StreamedForUsb::Cached, &selection)?;
+        usb_inputs(state, cache, StreamedForUsb::Cached, &selection)?;
+    let (app, mount) = (app.clone(), mount.to_path_buf());
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let drive = usb::list()
@@ -3212,8 +3475,6 @@ async fn export_to_usb(
             let _ = app.emit("usb-export-progress", p);
         })?;
         remember_usb_selection(&state, &drive.id, selection)?;
-        let mut report = report;
-        report.failed.extend(not_downloaded);
         Ok(report)
     })
     .await
@@ -4315,26 +4576,145 @@ async fn libsync_join(
     Ok(out)
 }
 
-/// Leaves the shared library. `sync` sends and receives one last time first.
+/// The songs this device streams from its shared library, for the choice to make before leaving
+/// it or removing its destination.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamedSongs {
+    /// How many songs are listed here without a file.
+    count: usize,
+    /// Whether they can play: the shared library they come from is on a destination this device is
+    /// in. When not, they are unavailable entries.
+    playable: bool,
+}
+
+#[tauri::command]
+fn streamed_songs(state: State<'_, AppState>) -> Result<StreamedSongs, Error> {
+    with_db!(state, |c| Ok(StreamedSongs {
+        count: libsync::streamed::count(c)?,
+        playable: libsync::streamed::streamed_from_home(c)? > 0,
+    }))
+}
+
+/// Removes the songs listed without a file from a shared library this device is not in any more,
+/// after a copy of the database was saved. Songs that can still play are left alone.
+#[tauri::command]
+fn remove_unavailable_streamed_songs(state: State<'_, AppState>) -> Result<usize, Error> {
+    with_db!(state, |c| {
+        if libsync::streamed::streamed_from_home(c)? > 0 {
+            return Err(Error::Msg(
+                "These songs still play from the shared library this device is in.".to_owned(),
+            ));
+        }
+        libsync::streamed::remove(c, None, &state.data_dir.join("backups"))
+    })
+}
+
+/// Fails unless `choice` says what happens to the `count` songs this device streams from the
+/// library it is about to leave.
+fn streamed_choice_needed(
+    count: usize,
+    choice: Option<libsync::streamed::OnLeaving>,
+) -> Result<(), Error> {
+    if count > 0 && choice.is_none() {
+        return Err(Error::Msg(format!(
+            "This device streams {count} {} from this library. Choose what happens to them first.",
+            if count == 1 { "song" } else { "songs" }
+        )));
+    }
+    Ok(())
+}
+
+/// Downloads every streamed song into the library folder, with progress in the status bar, and
+/// reads the library again. Fails, saying how many are missing, unless all of them are here.
+async fn download_every_streamed_song(
+    app: &AppHandle,
+    target: &db::SyncTarget,
+) -> Result<(), Error> {
+    let state = app.state::<AppState>();
+    let root = library_root(&state)?;
+    let (wanted, total) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let wanted: Vec<sync::SongToFetch> = libsync::streamed::all(&conn, &root)?
+            .into_iter()
+            .map(|song| sync::SongToFetch {
+                rel: song.path.parts().to_vec(),
+                audio_fp: song.audio_fp,
+            })
+            .collect();
+        (wanted, libsync::streamed::count(&conn)?)
+    };
+    if total == 0 {
+        return Ok(());
+    }
+    let report = |progress: sync::FetchProgress| {
+        let _ = app.emit("song-fetch-progress", progress);
+    };
+    let fetched = sync::fetch_songs(&state.http, target, &root, &wanted, report).await;
+    // After the library was read again, so the songs are in the lists when the bar goes.
+    let read = scan_and_store(&state, root, ScanDepth::Changed).await;
+    report(sync::FetchProgress::default());
+    let fetched = fetched?;
+    read?;
+    let left = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        libsync::streamed::count(&conn)?
+    };
+    if left > 0 {
+        return Err(Error::Msg(format!(
+            "{left} of {total} streamed songs could not be downloaded ({} not on the destination, \
+             {} failed), so nothing was changed. Try again, or choose another way.",
+            fetched.waiting, fetched.failed
+        )));
+    }
+    Ok(())
+}
+
+/// Leaves the shared library. `sync` sends and receives one last time first. When this device
+/// streams songs from it, `streamed` says what becomes of them: downloaded first (and the device
+/// leaves only when every one is here), kept as songs that cannot play, or removed.
 #[tauri::command]
 async fn libsync_leave(
+    app: AppHandle,
     state: State<'_, AppState>,
     choice: libsync::membership::LeaveChoice,
     sync: bool,
+    streamed: Option<libsync::streamed::OnLeaving>,
 ) -> Result<(), Error> {
+    let count = with_db!(state, |c| libsync::streamed::streamed_from_home(c))?;
+    streamed_choice_needed(count, streamed)?;
+    if count > 0 && streamed == Some(libsync::streamed::OnLeaving::Download) {
+        let target = with_db!(state, |c| library_destination(c))?.ok_or_else(|| {
+            Error::Msg(
+                "The songs can only be downloaded from the shared library's destination."
+                    .to_owned(),
+            )
+        })?;
+        download_every_streamed_song(&app, &target).await?;
+    }
     let _claim = claim_sync(&state).await?;
     match shared_place(&state)? {
         Some(SharedPlace::Target(target)) => {
-            sync::leave_library(&state.http, &target, &state.db, choice, sync).await
+            sync::leave_library(&state.http, &target, &state.db, choice, sync).await?;
         }
         Some(SharedPlace::Folder(root)) => {
             let store = libsync::folder::FolderStore::new(&root);
-            libsync::membership::leave(&state.db, &store, choice, sync).await
+            libsync::membership::leave(&state.db, &store, choice, sync).await?;
         }
-        None => Err(Error::Msg(
-            "This device is not in a shared library.".to_owned(),
-        )),
+        None => {
+            return Err(Error::Msg(
+                "This device is not in a shared library.".to_owned(),
+            ));
+        }
     }
+    if count > 0 && streamed == Some(libsync::streamed::OnLeaving::Remove) {
+        with_db!(state, |c| libsync::streamed::remove(
+            c,
+            None,
+            &state.data_dir.join("backups")
+        ))?;
+    }
+    Ok(())
 }
 
 /// Where this device's shared library is kept, with what is needed to reach it.
@@ -5059,7 +5439,8 @@ fn source_of(conn: &Connection, track_id: i64) -> Result<Source, Error> {
     let Some(libsync::membership::Home::Target(target_id)) = libsync::membership::home(conn)?
     else {
         return Err(Error::Msg(
-            "this song is streamed from a shared library this device is no longer in".to_owned(),
+            "This song is listed from a shared library this device is no longer in, so it cannot play."
+                .to_owned(),
         ));
     };
     let root = db::get_setting(conn, SETTING_ROOT)?
@@ -5112,13 +5493,21 @@ async fn fill_stream_cache(app: &AppHandle, song: &StreamedFile) -> Result<Optio
                 .next()
                 .ok_or_else(|| Error::Msg("the shared library's destination is gone".to_owned()))?
         };
-        sync::fetch_file(&state.http, &target, song.rel.parts(), &dest).await
+        // What comes down must be the song's audio, or nothing is cached.
+        sync::fetch_file(
+            &state.http,
+            &target,
+            song.rel.parts(),
+            &dest,
+            Some(&song.audio_fp),
+        )
+        .await
     }
     .await;
     if let Ok(mut filling) = FILLING.lock() {
         filling.retain(|fp| *fp != song.audio_fp);
     }
-    if !fetched? {
+    if fetched? == sync::Fetch::NotOnDestination {
         return Ok(None);
     }
     let limit = {
@@ -5216,6 +5605,11 @@ fn empty_stream_cache(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<stream_cache::Usage, Error> {
+    if state.usb_exporting.load(Ordering::SeqCst) {
+        return Err(Error::Msg(
+            "Songs are being exported to a USB drive. Empty the cache when that finishes.".into(),
+        ));
+    }
     let limit = with_db!(state, |c| stream_cache::limit(c))?;
     let cache = stream_cache_of(&app)?;
     cache.empty()?;
@@ -5404,7 +5798,7 @@ async fn write_tags(
             });
         }
     }
-    libsync::streamed::refresh(&conn, root)?;
+    libsync::streamed::refresh(&conn, root, &state.data_dir.join("backups"))?;
     Ok(report)
 }
 
@@ -5747,7 +6141,9 @@ async fn cover_streamed_songs(
 }
 
 /// Puts the picture `upload` at `rel` on the destination, after saving the file there under
-/// `cover-backups`.
+/// `cover-backups`. A cover on the destination that could not be saved is not replaced. (Undo
+/// puts back covers in the library folder only; the saved copy of one on the destination stays
+/// in `cover-backups` for a person to put back.)
 async fn put_folder_cover(
     state: &AppState,
     target: &db::SyncTarget,
@@ -5756,13 +6152,48 @@ async fn put_folder_cover(
 ) -> Result<(), Error> {
     let backups = cover_backups(state);
     std::fs::create_dir_all(&backups)?;
-    let incoming = backups.join(format!("incoming-{}", unix_now()));
-    if sync::fetch_file(&state.http, target, rel.parts(), &incoming).await? {
-        let held = std::fs::read(&incoming)?;
-        let saved = tags::CoverBackupName::of_image(&held)?;
-        std::fs::rename(&incoming, backups.join(saved.as_str()))?;
+    let incoming = backups.join(unique_incoming_name());
+    let fetched = sync::fetch_file(&state.http, target, rel.parts(), &incoming, None).await?;
+    if must_save_before_replacing(fetched)? {
+        let saved = std::fs::read(&incoming)
+            .map_err(Error::from)
+            .and_then(|held| {
+                let saved = tags::CoverBackupName::of_image(&held)?;
+                std::fs::rename(&incoming, backups.join(saved.as_str()))?;
+                Ok(())
+            });
+        if let Err(e) = saved {
+            let _ = std::fs::remove_file(&incoming);
+            return Err(e);
+        }
     }
     sync::replace_file(&state.http, target, rel.parts(), upload).await
+}
+
+/// Whether the cover that was on the destination was fetched and has to be saved before the new
+/// one goes there. Fails when a file in the way stopped the fetch: the cover on the destination
+/// was not saved, so it must not be replaced.
+fn must_save_before_replacing(fetched: sync::Fetch) -> Result<bool, Error> {
+    match fetched {
+        sync::Fetch::Downloaded => Ok(true),
+        sync::Fetch::NotOnDestination => Ok(false),
+        sync::Fetch::DestinationTaken => Err(Error::Msg(
+            "the cover on the destination could not be saved first, so it was left as it is"
+                .to_owned(),
+        )),
+    }
+}
+
+/// A file name no other download in `cover-backups` has, even within the same second or from
+/// another run.
+fn unique_incoming_name() -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    format!(
+        "incoming-{}-{}-{}",
+        std::process::id(),
+        unix_now(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// Where the covers that were replaced are kept, so a cover change can be undone.
@@ -6703,6 +7134,8 @@ pub fn run() {
             libsync_home,
             libsync_join,
             libsync_leave,
+            streamed_songs,
+            remove_unavailable_streamed_songs,
             get_device_name,
             set_device_name,
             list_clashes,
@@ -6844,6 +7277,115 @@ mod tests {
             ..result
         };
         assert!(!analysis_edits(&only_key, KeyFormat::Musical).contains_key("bpm"));
+    }
+
+    #[test]
+    fn a_file_is_the_expected_song_only_when_its_fingerprint_matches() {
+        for (found, expected, same) in [
+            (Some("fp1"), "fp1", true),
+            (Some("fp2"), "fp1", false),
+            (None, "fp1", false),
+            (Some(""), "", false),
+            (None, "", false),
+        ] {
+            assert_eq!(is_same_audio(found, expected), same, "{found:?} {expected}");
+        }
+    }
+
+    #[test]
+    fn a_song_whose_file_cannot_be_trashed_stays_kept() {
+        let dir = std::env::temp_dir().join(format!("manplay-stream-one-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (root, outside) = (dir.join("library"), dir.join("elsewhere"));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let file = outside.join("song.mp3");
+        std::fs::write(&file, b"audio").expect("file");
+        let conn = db::open(Path::new(":memory:")).expect("db");
+        conn.execute(
+            "INSERT INTO tracks (id, path, artist, album, title, size, audio_fp)
+             VALUES (1, ?1, 'a', 'b', 't', 5, 'fp1')",
+            [file.to_string_lossy()],
+        )
+        .expect("track");
+        assert!(stream_one(&conn, &root, 1, &file).is_err());
+        let state: db::FileState = conn
+            .query_row("SELECT file_state FROM tracks WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .expect("state");
+        assert_eq!(state, db::FileState::Here, "the row is put back");
+        assert!(file.exists(), "the file is untouched");
+    }
+
+    #[test]
+    fn a_usb_export_names_the_chosen_songs_that_have_no_file() {
+        let playlist = |ids: &[i64]| usb_export::SourcePlaylist {
+            name: "Set".to_owned(),
+            track_ids: ids.to_vec(),
+        };
+        for (what, playlists, have, left_out) in [
+            ("all there", vec![playlist(&[1, 2])], vec![1, 2, 9], vec![]),
+            ("one missing", vec![playlist(&[1, 2])], vec![1], vec![2]),
+            (
+                "missing from two lists, named once",
+                vec![playlist(&[3, 1]), playlist(&[3, 4])],
+                vec![1],
+                vec![3, 4],
+            ),
+            ("none there", vec![playlist(&[5])], vec![], vec![5]),
+        ] {
+            let have: HashSet<i64> = have.into_iter().collect();
+            assert_eq!(
+                chosen_songs_without_a_file(&playlists, &have),
+                left_out,
+                "{what}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_error_of_a_stopped_usb_export_says_how_many_and_which() {
+        for (count, names, want) in [
+            (
+                1,
+                vec!["Kas - Night"],
+                "1 streamed song could not be downloaded, so nothing was written to the drive: Kas - Night.",
+            ),
+            (
+                7,
+                vec!["a", "b", "c", "d", "e", "f", "g"],
+                "7 streamed songs could not be downloaded, so nothing was written to the drive: a, b, c, d, e and 2 more.",
+            ),
+            (
+                2,
+                vec![],
+                "2 streamed songs could not be downloaded, so nothing was written to the drive: 2 more.",
+            ),
+        ] {
+            assert_eq!(songs_not_downloaded(count, &names).to_string(), want);
+        }
+    }
+
+    #[test]
+    fn a_cover_on_the_destination_is_replaced_only_when_it_was_saved_or_was_not_there() {
+        for (fetched, saves) in [
+            (sync::Fetch::Downloaded, Some(true)),
+            (sync::Fetch::NotOnDestination, Some(false)),
+            (sync::Fetch::DestinationTaken, None),
+        ] {
+            assert_eq!(
+                must_save_before_replacing(fetched).ok(),
+                saves,
+                "{fetched:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_covers_fetched_in_the_same_second_get_different_names() {
+        let names: HashSet<String> = (0..50).map(|_| unique_incoming_name()).collect();
+        assert_eq!(names.len(), 50);
     }
 
     #[test]
@@ -7096,15 +7638,48 @@ mod tests {
         }
     }
 
-    /// Keeping a streamed song puts its file at its path; the next scan makes it kept.
+    /// Keeping a streamed song puts its file at its path; the next scan makes it kept. A scan that
+    /// lists a file that is not there (it went to the Trash after the scan listed it) does not.
     #[test]
     fn a_file_found_at_a_streamed_songs_path_makes_it_kept() {
-        let mut f = Fixture::new("streamed-kept");
-        f.apply(&f.scan_of(&["1", "2"], 0));
-        stream(&f, "2");
-        f.apply(&f.scan_of(&["1", "2"], 0));
-        assert_eq!(file_state_at(&f, "2"), Some(db::FileState::Here));
-        assert_eq!(f.visible(), 2);
+        for (what, file_there, state) in [
+            ("the file is there", true, db::FileState::Here),
+            (
+                "the file went away after the scan listed it",
+                false,
+                db::FileState::Streamed,
+            ),
+        ] {
+            let mut f = Fixture::new("streamed-kept");
+            let song = f.dir.join("2.mp3");
+            let mut scan = f.scan_of(&["1"], 0);
+            scan.tracks.push(NewTrack {
+                path: song.to_string_lossy().into_owned(),
+                ..f.scan_of(&["2"], 0).tracks.remove(0)
+            });
+            f.apply(&scan);
+            let id: i64 = f
+                .conn
+                .query_row(
+                    "SELECT id FROM tracks WHERE path = ?1",
+                    [song.to_string_lossy()],
+                    |r| r.get(0),
+                )
+                .expect("id");
+            db::set_file_state(&f.conn, id, db::FileState::Streamed).expect("stream");
+            if file_there {
+                std::fs::write(&song, b"audio").expect("file");
+            }
+            f.apply(&scan);
+            let found: db::FileState = f
+                .conn
+                .query_row("SELECT file_state FROM tracks WHERE id = ?1", [id], |r| {
+                    r.get(0)
+                })
+                .expect("state");
+            assert_eq!(found, state, "{what}");
+            assert_eq!(f.visible(), 2, "{what}");
+        }
     }
 
     /// A file that changed bytes and path together is followed by its audio, but only when the

@@ -72,6 +72,8 @@ const READS: [name: string, read: () => Promise<unknown>][] = [
 	["listLibraryChanges", () => api.listLibraryChanges()],
 	["listFileRemovals", () => api.listFileRemovals()],
 	["keepFileRemovals", () => api.keepFileRemovals(["removed-1"])],
+	["getStreamedSongs", () => api.getStreamedSongs()],
+	["removeUnavailableStreamedSongs", () => api.removeUnavailableStreamedSongs()],
 	["applyFileRemovals", () => api.applyFileRemovals(["removed-2"])],
 	["undoLibraryChanges", () => api.undoLibraryChanges(1)],
 	["fsList", () => api.fsList("/Users/dj/Music/Library")],

@@ -68,10 +68,16 @@ pub fn kept_by_playlist(conn: &Connection, track_id: i64) -> Result<bool, Error>
     )?)
 }
 
-/// The streamed songs some rule keeps, by their path below `root`: the files to download.
-pub fn to_download(conn: &Connection, root: &std::path::Path) -> Result<Vec<RelPath>, Error> {
+/// A streamed song to download: its place below the library folder and its audio.
+pub struct ToDownload {
+    pub path: RelPath,
+    pub audio_fp: String,
+}
+
+/// The streamed songs some rule keeps: the files to download.
+pub fn to_download(conn: &Connection, root: &std::path::Path) -> Result<Vec<ToDownload>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT t.path FROM tracks t
+        "SELECT t.path, t.audio_fp FROM tracks t
          WHERE t.file_state = 'streamed' AND (
              EXISTS (SELECT 1 FROM keep_rules k WHERE k.kind = 'song' AND k.id = t.audio_fp)
              OR EXISTS (
@@ -81,11 +87,17 @@ pub fn to_download(conn: &Connection, root: &std::path::Path) -> Result<Vec<RelP
                  WHERE k.kind = 'playlist' AND pt.track_id = t.id))
          ORDER BY t.path",
     )?;
-    let paths = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+    })?;
     let mut out = Vec::new();
-    for path in paths {
-        if let Some(rel) = RelPath::below(root, std::path::Path::new(&path?)) {
-            out.push(rel);
+    for row in rows {
+        let (path, audio_fp) = row?;
+        if let (Some(path), Some(audio_fp)) = (
+            RelPath::below(root, std::path::Path::new(&path)),
+            audio_fp.filter(|fp| !fp.is_empty()),
+        ) {
+            out.push(ToDownload { path, audio_fp });
         }
     }
     Ok(out)

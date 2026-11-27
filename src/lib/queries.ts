@@ -31,6 +31,7 @@ import {
 	getLibraryRoot,
 	getLibraryView,
 	getPanelTabs,
+	getStreamedSongs,
 	getTagClipboard,
 	getUiSetting,
 	type IgnoreRule,
@@ -70,11 +71,13 @@ import {
 	type ReleaseId,
 	type Resolution,
 	removeMissingNow,
+	removeUnavailableStreamedSongs,
 	rescanLibrary,
 	resetLibrary,
 	restoreDeleted,
 	type ServiceId,
 	type StreamCacheUsage,
+	type StreamedOnLeaving,
 	type SyncTarget,
 	saveAnalysisToFiles,
 	serviceFlags,
@@ -200,6 +203,26 @@ export const LIBRARY_HOME_KEY = ["library-home"] as const;
 /** Where this device's shared library is kept, if it is in one. */
 export function useLibraryHome() {
 	return useQuery({ queryKey: LIBRARY_HOME_KEY, queryFn: libsyncHome });
+}
+
+export const STREAMED_SONGS_KEY = ["streamed-songs"] as const;
+
+/** The songs listed here without a file, and whether they can still play. */
+export function useStreamedSongs() {
+	return useQuery({ queryKey: STREAMED_SONGS_KEY, queryFn: getStreamedSongs });
+}
+
+/** Removes the songs of a shared library this device left, after a copy of the database is saved. */
+export function useRemoveUnavailableStreamedSongs() {
+	const queryClient = useQueryClient();
+	const refresh = useRefreshItems();
+	return useMutation({
+		mutationFn: removeUnavailableStreamedSongs,
+		onSettled: async () => {
+			await queryClient.invalidateQueries({ queryKey: STREAMED_SONGS_KEY });
+			await refresh();
+		},
+	});
 }
 
 /** Whether this device is in a shared library: until then nothing is sent to anyone. */
@@ -357,13 +380,27 @@ export function useFileRemovals() {
 	});
 }
 
-/** Settles removed songs: `keep` brings them back for everyone, `remove` trashes them here. */
+/**
+ * Settles removed songs: `keep` brings them back for everyone, `remove` trashes them here. The
+ * result lists the streamed songs that could not be kept because the destination has no file.
+ */
 export function useSettleFileRemovals() {
 	const queryClient = useQueryClient();
 	const refresh = useRefreshItems();
 	return useMutation({
-		mutationFn: ({ choice, audioFps }: { choice: "keep" | "remove"; audioFps: string[] }) =>
-			choice === "keep" ? keepFileRemovals(audioFps) : applyFileRemovals(audioFps),
+		mutationFn: async ({
+			choice,
+			audioFps,
+		}: {
+			choice: "keep" | "remove";
+			audioFps: string[];
+		}): Promise<{ noFile: string[] }> => {
+			if (choice === "keep") {
+				return { noFile: (await keepFileRemovals(audioFps)).noFile };
+			}
+			await applyFileRemovals(audioFps);
+			return { noFile: [] };
+		},
 		onSettled: async () => {
 			await queryClient.invalidateQueries({ queryKey: FILE_REMOVALS_KEY });
 			await refresh();
@@ -389,9 +426,17 @@ export function useLeaveLibrary() {
 	const queryClient = useQueryClient();
 	const refresh = useRefreshItems();
 	return useMutation({
-		mutationFn: ({ choice, sync }: { choice: LeaveChoice; sync: boolean }) =>
-			libsyncLeave(choice, sync),
+		mutationFn: ({
+			choice,
+			sync,
+			streamed,
+		}: {
+			choice: LeaveChoice;
+			sync: boolean;
+			streamed?: StreamedOnLeaving | undefined;
+		}) => libsyncLeave(choice, sync, streamed),
 		onSettled: async () => {
+			await queryClient.invalidateQueries({ queryKey: STREAMED_SONGS_KEY });
 			await queryClient.invalidateQueries({ queryKey: ["sync-targets"] });
 			await queryClient.invalidateQueries({ queryKey: LIBRARY_HOME_KEY });
 			await refresh();
