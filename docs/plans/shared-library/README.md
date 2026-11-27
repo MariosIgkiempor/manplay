@@ -71,6 +71,7 @@ ends up with the same list. `tag_custom` (values typed by hand in the Tag Databa
 | 6 | [06-compaction.md](06-compaction.md) | Snapshots, tombstones, Recently deleted | ½ day |
 | 7 | [07-edge-cases.md](07-edge-cases.md) | Clock cap, cloned IDs, safe writes, unknown ops, rename races | 1 day |
 | 8 | [08-jellyfin-playlists.md](08-jellyfin-playlists.md) | Push chosen playlists to a Jellyfin server through its API | 3 days |
+| 9 | [09-streaming.md](09-streaming.md) | See and play every song without downloading it; keep chosen songs, albums, playlists | 6 days |
 
 Total about 6½ days. Step 0 is useful on its own and ships first. Each step ends with
 `pnpm verify`, `cargo clippy` and `cargo test` passing (see `CLAUDE.md`).
