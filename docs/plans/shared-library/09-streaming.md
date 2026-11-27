@@ -92,6 +92,24 @@ Left for later steps:
   then leaves that song out. Rare; revisit in 9.6.
 - The frontend does not see `file_state` yet (9.3).
 
+### Done in 9.2
+
+- The `file` entity has `size`, `duration_ms`, `bitrate` and `sample_rate`, written once by the
+  first device with the file (early ops, never edits), so a size goes stale after a tag edit.
+- `libsync::streamed::refresh` runs after every sync of a shared library kept on a destination:
+  adds a streamed row per song the log has and this library has no file of, follows renames and
+  tag edits, and drops rows of songs removed, kept here, or no longer in a shared library (or one
+  kept in the library folder). Names follow the scan: album artist, else artist, else folder.
+- `NewSongs` (`new_shared_songs` setting, commands `new_shared_songs` / `set_new_shared_songs`):
+  Stream (default) adds rows and downloads nothing; Download adds no rows and `fetch_shared_songs`
+  downloads as before. **Behaviour change:** songs other devices add are no longer downloaded by
+  default.
+- `files::moves_wanted` skips songs that are only streamed here.
+
+Left for later steps: covers of streamed songs (the art route reads the file; 9.3), and the
+Tag Database's value lists (`tag_values`), which only scans fill, so a streamed song's genre is
+not offered in pick lists until some file here has it.
+
 ## Playback
 
 - `audioUrl` takes a track, not a path: kept → local file as now; streamed → `remote:` URL for

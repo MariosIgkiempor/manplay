@@ -33,6 +33,7 @@ pub mod skew;
 pub mod snapshot;
 pub mod song_tags;
 pub mod state;
+pub mod streamed;
 pub mod waveforms;
 pub mod write;
 

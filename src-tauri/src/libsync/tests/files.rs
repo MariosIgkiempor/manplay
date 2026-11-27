@@ -76,7 +76,7 @@ fn a_path_is_told_from_the_library_folder_down() {
 #[test]
 fn what_the_library_has_is_written_once_and_never_as_an_edit() {
     let a = device(3);
-    assert_eq!(record(&a), 6, "a path and a presence per song");
+    assert_eq!(record(&a), 9, "a path, a presence and a size per song");
     assert_eq!(register(&a, 2, "path"), Some(json!(["2.mp3"])));
     assert_eq!(register(&a, 2, "present"), Some(json!(true)));
     assert!(written_at(&a, 2, "path") < EARLY_MS);
@@ -388,7 +388,11 @@ fn audio_written_over_in_place_replaces_the_old_audio() {
         )
         .expect("noted");
     }
-    assert_eq!(record(&a), 3, "the old audio removed, the new one written");
+    assert_eq!(
+        record(&a),
+        4,
+        "the old audio removed, the new one written with its size"
+    );
     assert_eq!(register(&a, 1, "present"), Some(json!(false)));
     assert!(written_at(&a, 1, "present") > EARLY_MS);
     let conn = a.lock().expect("lock");
@@ -869,12 +873,39 @@ fn a_streamed_song_is_never_written_as_removed() {
         let written = record(&a);
         assert_eq!(
             written,
-            // Streamed from the start: only the other song's path and presence.
-            if case.recorded_first { 0 } else { 2 },
+            // Streamed from the start: only the other song's path, presence and size.
+            if case.recorded_first { 0 } else { 3 },
             "{}",
             case.what
         );
         assert_eq!(register(&a, 1, "present"), case.present, "{}", case.what);
         assert_eq!(record(&a), 0, "{}: said once", case.what);
     }
+}
+
+/// What a file is like is written once, by the first device that has it, and never as an edit.
+#[test]
+fn a_files_details_are_written_once_and_never_as_an_edit() {
+    let a = device(1);
+    sql(
+        &a,
+        "UPDATE tracks SET size = 9000, duration_ms = 200000, bitrate = 320, sample_rate = 0
+         WHERE audio_fp = ?1",
+        1,
+    );
+    record(&a);
+    let cases = [
+        ("size", Some(json!(9000))),
+        ("duration_ms", Some(json!(200_000))),
+        ("bitrate", Some(json!(320))),
+        ("sample_rate", None),
+    ];
+    for (field, want) in cases {
+        assert_eq!(register(&a, 1, field), want, "{field}");
+        if want.is_some() {
+            assert!(written_at(&a, 1, field) < EARLY_MS, "{field} is not an edit");
+        }
+    }
+    sql(&a, "UPDATE tracks SET size = 9100 WHERE audio_fp = ?1", 1);
+    assert_eq!(record(&a), 0, "a new size is not written over the first");
 }

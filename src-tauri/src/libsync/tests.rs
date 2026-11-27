@@ -3211,6 +3211,7 @@ mod edge;
 mod files;
 mod folder;
 mod song_tags;
+mod streamed;
 
 #[test]
 fn real_audio_prints_name_waveform_files() {

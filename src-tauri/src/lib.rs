@@ -477,8 +477,13 @@ async fn fetch_shared_songs(app: AppHandle, target: db::SyncTarget) {
     let Ok(root) = library_root(&state) else {
         return;
     };
+    // While new songs stream, the ones not streamed yet wait for the next look instead.
     let wanted = match state.db.lock().map_err(|_| Error::Lock) {
-        Ok(conn) => libsync::files::arrivals_wanted(&conn),
+        Ok(conn) => match libsync::streamed::NewSongs::get(&conn) {
+            Ok(libsync::streamed::NewSongs::Stream) => Ok(Vec::new()),
+            Ok(libsync::streamed::NewSongs::Download) => libsync::files::arrivals_wanted(&conn),
+            Err(e) => Err(e),
+        },
         Err(e) => Err(e),
     };
     let wanted: Vec<Vec<String>> = match wanted {
@@ -684,6 +689,29 @@ async fn keep_song_tags(state: &AppState) -> Result<(), Error> {
 async fn follow_shared_files(state: &AppState) {
     if let Err(e) = follow_file_moves(state).await {
         log::warn!("could not move songs to where other devices put them: {e}");
+    }
+}
+
+/// Brings the songs this device streams up to the shared library after a sync
+/// (`libsync::streamed`); a problem is only logged, the sync itself went through.
+fn keep_streamed_songs(state: &AppState) {
+    let Ok(root) = library_root(state) else {
+        return;
+    };
+    let refreshed = state
+        .db
+        .lock()
+        .map_err(|_| Error::Lock)
+        .and_then(|conn| libsync::streamed::refresh(&conn, &root));
+    match refreshed {
+        Ok(r) if r.changed() => log::info!(
+            "streamed songs: {} added, {} updated, {} removed",
+            r.added,
+            r.updated,
+            r.removed
+        ),
+        Ok(_) => {}
+        Err(e) => log::warn!("could not bring the streamed songs up to date: {e}"),
     }
 }
 
@@ -1493,6 +1521,21 @@ macro_rules! with_db {
         let $conn = &mut *guard;
         $body
     }};
+}
+
+/// What becomes of songs other devices add to the shared library: streamed or downloaded.
+#[tauri::command]
+fn new_shared_songs(state: State<'_, AppState>) -> Result<libsync::streamed::NewSongs, Error> {
+    with_db!(state, |c| libsync::streamed::NewSongs::get(c))
+}
+
+/// Sets [`new_shared_songs`]. Songs already streamed stay streamed; only later ones follow it.
+#[tauri::command]
+fn set_new_shared_songs(
+    state: State<'_, AppState>,
+    choice: libsync::streamed::NewSongs,
+) -> Result<(), Error> {
+    with_db!(state, |c| choice.set(c))
 }
 
 #[tauri::command]
@@ -4151,6 +4194,7 @@ async fn sync_shared_target(
     held.release().await;
     if outcome.error.is_none() {
         follow_shared_files(state).await;
+        keep_streamed_songs(state);
         tauri::async_runtime::spawn(fetch_shared_songs(app.clone(), target.clone()));
         tauri::async_runtime::spawn(transfer_covers(
             app.clone(),
@@ -6172,6 +6216,8 @@ pub fn run() {
             trash_duplicates,
             open_privacy_settings,
             newer_library,
+            new_shared_songs,
+            set_new_shared_songs,
             audit_library,
             tags_read,
             tag_values,

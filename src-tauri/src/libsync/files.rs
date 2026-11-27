@@ -29,6 +29,60 @@ use crate::error::Error;
 
 pub const E_FILE: &str = "file";
 
+/// The file's size in bytes, its length, its bit rate and its sample rate: what the song list
+/// shows of a song a device streams and has never read. The first device to write one is kept
+/// (they are not edits), so a size goes stale after a tag edit somewhere.
+pub const F_SIZE: &str = "size";
+pub const F_DURATION_MS: &str = "duration_ms";
+pub const F_BITRATE: &str = "bitrate";
+pub const F_SAMPLE_RATE: &str = "sample_rate";
+
+/// File size in bytes.
+pub type Bytes = i64;
+/// Length in milliseconds.
+pub type Millis = i64;
+/// Bit rate in kbit/s.
+pub type Kbps = i64;
+/// Sample rate in Hz.
+pub type Hertz = i64;
+
+/// What a song's file is like, as the device that has it read it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Details {
+    pub size: Option<Bytes>,
+    pub duration_ms: Option<Millis>,
+    pub bitrate: Option<Kbps>,
+    pub sample_rate: Option<Hertz>,
+}
+
+impl Details {
+    fn fields(self) -> [(&'static str, Option<i64>); 4] {
+        [
+            (F_SIZE, self.size),
+            (F_DURATION_MS, self.duration_ms),
+            (F_BITRATE, self.bitrate),
+            (F_SAMPLE_RATE, self.sample_rate),
+        ]
+    }
+
+    /// The details the shared library has of one audio; a value that is not a whole number
+    /// above zero is left out.
+    pub(super) fn of(registers: &HashMap<(String, String), Value>, fp: &str) -> Self {
+        let get = |f: &str| {
+            registers
+                .get(&(fp.to_owned(), f.to_owned()))
+                .and_then(Value::as_i64)
+                .filter(|v| *v > 0)
+        };
+        Self {
+            size: get(F_SIZE),
+            duration_ms: get(F_DURATION_MS),
+            bitrate: get(F_BITRATE),
+            sample_rate: get(F_SAMPLE_RATE),
+        }
+    }
+}
+
 /// Unix time in seconds, UTC.
 pub type UnixSeconds = i64;
 
@@ -101,6 +155,8 @@ struct Copies {
     awaited: bool,
     /// The song is streamed here: having no file is not removing it.
     streamed: bool,
+    /// What the first copy here is like.
+    details: Details,
 }
 
 /// What this device had of one audio when it last wrote ops.
@@ -116,8 +172,8 @@ fn copies(
     expired_before: UnixSeconds,
 ) -> Result<BTreeMap<String, Copies>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT audio_fp, path, missing_since, file_state FROM tracks
-         WHERE audio_fp IS NOT NULL AND audio_fp <> ''",
+        "SELECT audio_fp, path, missing_since, file_state, size, duration_ms, bitrate, sample_rate
+         FROM tracks WHERE audio_fp IS NOT NULL AND audio_fp <> '' ORDER BY path",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok((
@@ -125,11 +181,17 @@ fn copies(
             r.get::<_, String>(1)?,
             r.get::<_, Option<UnixSeconds>>(2)?,
             r.get::<_, FileState>(3)?,
+            Details {
+                size: r.get(4)?,
+                duration_ms: r.get(5)?,
+                bitrate: r.get(6)?,
+                sample_rate: r.get(7)?,
+            },
         ))
     })?;
     let mut out: BTreeMap<String, Copies> = BTreeMap::new();
     for row in rows {
-        let (fp, path, missing_since, file_state) = row?;
+        let (fp, path, missing_since, file_state, details) = row?;
         let rel = RelPath::below(root, Path::new(&path));
         let of = out.entry(fp).or_default();
         if file_state == FileState::Streamed {
@@ -137,7 +199,12 @@ fn copies(
             continue;
         }
         match (missing_since, rel) {
-            (None, Some(rel)) => of.here.push(rel),
+            (None, Some(rel)) => {
+                if of.here.is_empty() {
+                    of.details = details;
+                }
+                of.here.push(rel);
+            }
             (None, None) => of.elsewhere = true,
             (Some(since), Some(_)) if since <= expired_before => {}
             (Some(_), _) => of.awaited = true,
@@ -289,6 +356,11 @@ pub fn record(conn: &Connection, root: &Path, expired_before: UnixSeconds) -> Re
             let back = before.is_some_and(|b| !b.present);
             pending.field(&registers, fp, F_PATH, path.value(), moved);
             pending.field(&registers, fp, F_PRESENT, json!(true), back);
+            for (f, val) in of.details.fields() {
+                if let Some(val) = val.filter(|v| *v > 0) {
+                    pending.field(&registers, fp, f, json!(val), false);
+                }
+            }
             let now = Had {
                 path: path.clone(),
                 present: true,
@@ -409,10 +481,17 @@ pub fn moves_wanted(conn: &Connection) -> Result<Vec<Move>, Error> {
         return Ok(Vec::new());
     }
     let registers = registers(conn, E_FILE)?;
+    let mut has_file = conn.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM tracks WHERE audio_fp = ?1 AND file_state = 'here')",
+    )?;
     let mut out = Vec::new();
     for (fp, had) in had(conn)? {
         let field = |f: &str| registers.get(&(fp.clone(), f.to_owned()));
         if !had.present || field(F_PRESENT) == Some(&json!(false)) {
+            continue;
+        }
+        // A streamed song has no file to move; its row follows the log (`streamed.rs`).
+        if !has_file.query_row(params![fp], |r| r.get::<_, bool>(0))? {
             continue;
         }
         let Some(to) = field(F_PATH).and_then(RelPath::from_value) else {
