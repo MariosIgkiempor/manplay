@@ -307,6 +307,7 @@ function buildTrack(spec: AlbumSpec, position: number, id: number, random: () =>
 		analyzed,
 		fields,
 		edited: { bpm: id % 23 === 0, key: false, grid: id % 31 === 0 },
+		fileState: "here",
 		addedAt: id % 29 === 0 ? null : NOW - Math.floor(random() * 400) * DAY,
 	};
 }

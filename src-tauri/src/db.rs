@@ -34,6 +34,8 @@ pub struct Track {
     pub edited: Edited,
     /// Unix seconds the song came into the library, when known.
     pub added_at: Option<i64>,
+    /// Whether its file is here or the song is streamed.
+    pub file_state: FileState,
 }
 
 #[derive(Default, Clone)]
@@ -1657,7 +1659,7 @@ const TRACK_COLS: &str = "t.id, t.path, t.artist, t.album, t.title, t.size,
     COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key), (COALESCE(a.version, 0) >= 2
         AND (a.waveform IS NOT NULL OR a.error IS NOT NULL)),
     t.fields, COALESCE(a.bpm_edited, 0), COALESCE(a.key_edited, 0), COALESCE(a.grid_edited, 0),
-    t.added_at";
+    t.added_at, t.file_state";
 
 /// Joined wherever [`TRACK_COLS`] is selected.
 const ANALYSIS_JOIN: &str = "LEFT JOIN analysis a ON a.audio_fp = t.audio_fp";
@@ -1691,6 +1693,7 @@ fn track_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
             grid: r.get(17)?,
         },
         added_at: r.get(18)?,
+        file_state: r.get(19)?,
     })
 }
 
@@ -2855,6 +2858,17 @@ pub fn mark_grid_edited(conn: &Connection, id: i64) -> Result<(), Error> {
     }
     ops.commit(conn)?;
     Ok(())
+}
+
+/// A song's path and whether its file is there.
+pub fn track_place(conn: &Connection, id: i64) -> Result<Option<(String, FileState)>, Error> {
+    Ok(conn
+        .query_row(
+            "SELECT path, file_state FROM tracks WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?)
 }
 
 pub fn track_path(conn: &Connection, id: i64) -> Result<Option<String>, Error> {

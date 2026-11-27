@@ -110,6 +110,16 @@ Left for later steps: covers of streamed songs (the art route reads the file; 9.
 Tag Database's value lists (`tag_values`), which only scans fill, so a streamed song's genre is
 not offered in pick lists until some file here has it.
 
+### Done in 9.3
+
+- `Track` carries `fileState` (`fileStateSchema` in `api.ts`, default `here`).
+- The player loads every song through `trackUrl`: a kept song from its file; a streamed one from
+  `stream_source`, which answers `remote:<destination id>/<path>` for the shared library's
+  destination. A stream that fails says the destination may be out of reach.
+
+Left for 9.4: the stream cache (so `stream_source` answers a local file once a song is cached),
+Windows AIFF/ALAC through `pcm://`, and covers of streamed songs from the cached file.
+
 ## Playback
 
 - `audioUrl` takes a track, not a path: kept → local file as now; streamed → `remote:` URL for

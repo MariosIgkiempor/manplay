@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type PlayerApi, PlayerContext, PlayerTimeContext } from "#/context/player-context.ts";
-import { playableUrl, type Track } from "#/lib/api.ts";
+import { type Track, trackUrl } from "#/lib/api.ts";
 import { withAdded, withNext } from "#/lib/queue.ts";
 import { useMediaSession } from "#/lib/use-media-session.ts";
 
@@ -26,6 +26,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
 	const current = queue[index] ?? null;
 	const currentPath = current?.path ?? null;
+	const currentId = current?.id ?? null;
+	const currentFileState = current?.fileState ?? null;
 	// Whether the next song loaded starts playing; `load` turns it off for one song.
 	const autoplay = useRef(true);
 
@@ -35,12 +37,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
 	useEffect(() => {
 		const audio = audioRef.current;
-		if (audio === null || currentPath === null) {
+		if (audio === null || currentPath === null || currentId === null || currentFileState === null) {
 			return;
 		}
 		setError(null);
 		let stale = false;
-		playableUrl(currentPath)
+		trackUrl({ id: currentId, path: currentPath, fileState: currentFileState })
 			.then((src) => {
 				if (!stale) {
 					audio.src = src;
@@ -58,7 +60,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 		return () => {
 			stale = true;
 		};
-	}, [currentPath, start]);
+	}, [currentId, currentPath, currentFileState, start]);
 
 	useEffect(() => {
 		if (audioRef.current) {
@@ -218,7 +220,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 				onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
 				onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
 				onEnded={onEnded}
-				onError={() => setError("Could not play this file")}
+				onError={() =>
+					setError(
+						currentFileState === "streamed"
+							? "Could not stream this song: the destination may be out of reach"
+							: "Could not play this file",
+					)
+				}
 			/>
 		</PlayerContext.Provider>
 	);

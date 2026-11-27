@@ -21,6 +21,7 @@ const track = (id: number, artist: string, album: string, extra: Partial<Track> 
 	analyzed: false,
 	fields: {},
 	edited: { bpm: false, key: false, grid: false },
+	fileState: "here",
 	...extra,
 });
 

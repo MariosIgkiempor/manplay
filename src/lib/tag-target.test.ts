@@ -19,6 +19,7 @@ const track = (id: number, album: string, artist = "A"): Track => ({
 	key: null,
 	analyzed: false,
 	edited: { bpm: false, key: false, grid: false },
+	fileState: "here",
 });
 
 describe("tagTargetFor", () => {

@@ -344,6 +344,7 @@ function libraryCommands(state: State): Record<string, Command> {
 		audit_library: () => (state.tracks.length > 0 ? buildAuditIssues(state.tracks) : []),
 		audit_fix: () => FIX_NOTHING,
 		playback_needs_decoding: () => false,
+		stream_source: (args) => state.tracks.find((t) => t.id === args.get("trackId"))?.path ?? "",
 		get_library_view: () => state.settings.get("library_view") ?? null,
 		set_library_view: (args) => state.settings.set("library_view", text(args.get("view"))),
 		get_panel_tabs: () => state.settings.get("panel_tabs") ?? null,

@@ -4699,6 +4699,38 @@ async fn fs_move(
     Ok(())
 }
 
+/// Where the player loads a song from: its file when it is kept, else the shared library's
+/// destination, as `remote:<destination id>/<path below the library folder>` (see `stream.rs`).
+#[tauri::command]
+fn stream_source(state: State<'_, AppState>, track_id: i64) -> Result<String, Error> {
+    with_db!(state, |c| source_of(c, track_id))
+}
+
+/// [`stream_source`] of one song.
+fn source_of(conn: &Connection, track_id: i64) -> Result<String, Error> {
+    let (path, file_state) =
+        db::track_place(conn, track_id)?.ok_or_else(|| Error::Msg("song not found".to_owned()))?;
+    if file_state == db::FileState::Here {
+        return Ok(path);
+    }
+    let Some(libsync::membership::Home::Target(target_id)) = libsync::membership::home(conn)?
+    else {
+        return Err(Error::Msg(
+            "this song is streamed from a shared library this device is no longer in".to_owned(),
+        ));
+    };
+    let root = db::get_setting(conn, SETTING_ROOT)?
+        .ok_or_else(|| Error::Msg("library folder unknown".to_owned()))?;
+    let rel = libsync::files::RelPath::below(Path::new(&root), Path::new(&path))
+        .ok_or_else(|| Error::Msg("this song is outside the library folder".to_owned()))?;
+    Ok(remote_source(target_id, &rel))
+}
+
+/// The player's name for a file on destination `target_id` (`remoteTrackPath` in `api.ts`).
+fn remote_source(target_id: i64, rel: &libsync::files::RelPath) -> String {
+    format!("remote:{target_id}/{}", rel.parts().join("/"))
+}
+
 /// Whether the player should load `path` through `pcm://` (AIFF and ALAC on Windows, whose
 /// webview cannot decode them).
 #[tauri::command]
@@ -6217,6 +6249,7 @@ pub fn run() {
             open_privacy_settings,
             newer_library,
             new_shared_songs,
+            stream_source,
             set_new_shared_songs,
             audit_library,
             tags_read,
@@ -6415,6 +6448,76 @@ mod tests {
         f.apply(&f.scan_of(&["1", "2", "elsewhere/3"], 0));
         assert_eq!(file_state_at(&f, "3"), Some(db::FileState::Streamed));
         assert_eq!(file_state_at(&f, "elsewhere/3"), Some(db::FileState::Here));
+    }
+
+    /// Where the player loads a song from, for each place a song can be.
+    #[test]
+    fn a_song_plays_from_its_file_or_from_the_shared_librarys_destination() {
+        struct Case {
+            what: &'static str,
+            path: &'static str,
+            state: db::FileState,
+            /// Whether the shared library is on a destination.
+            on_destination: bool,
+            want: Option<&'static str>,
+        }
+        let cases = [
+            Case {
+                what: "kept",
+                path: "/music/House/a.mp3",
+                state: db::FileState::Here,
+                on_destination: true,
+                want: Some("/music/House/a.mp3"),
+            },
+            Case {
+                what: "streamed",
+                path: "/music/House/a b.mp3",
+                state: db::FileState::Streamed,
+                on_destination: true,
+                want: Some("remote:{target}/House/a b.mp3"),
+            },
+            Case {
+                what: "streamed, but no longer in a shared library",
+                path: "/music/House/a.mp3",
+                state: db::FileState::Streamed,
+                on_destination: false,
+                want: None,
+            },
+            Case {
+                what: "streamed, outside the library folder",
+                path: "/elsewhere/a.mp3",
+                state: db::FileState::Streamed,
+                on_destination: true,
+                want: None,
+            },
+        ];
+        for case in cases {
+            let mut f = Fixture::new("stream-source");
+            db::set_setting(&f.conn, SETTING_ROOT, Some("/music")).expect("root");
+            f.conn
+                .execute(
+                    "INSERT INTO tracks (path, artist, album, title, size, file_state)
+                     VALUES (?1, 'a', 'b', 'c', 1, ?2)",
+                    rusqlite::params![case.path, case.state],
+                )
+                .expect("track");
+            let id = f.conn.last_insert_rowid();
+            let target = if case.on_destination {
+                f.conn
+                    .execute(
+                        "INSERT INTO sync_targets (tailnet, machine, path) VALUES ('t', 'm', '[]')",
+                        [],
+                    )
+                    .expect("target");
+                let target = f.conn.last_insert_rowid();
+                db::set_target_libsync(&mut f.conn, target, true).expect("share");
+                target
+            } else {
+                0
+            };
+            let want = case.want.map(|w| w.replace("{target}", &target.to_string()));
+            assert_eq!(source_of(&f.conn, id).ok(), want, "{}", case.what);
+        }
     }
 
     /// Keeping a streamed song puts its file at its path; the next scan makes it kept.

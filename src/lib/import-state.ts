@@ -186,5 +186,6 @@ export function previewTrack(path: string, t: ImportTrack, edit: Edit): Track {
 		key: null,
 		analyzed: false,
 		edited: { bpm: false, key: false, grid: false },
+		fileState: "here",
 	};
 }

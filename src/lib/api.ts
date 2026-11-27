@@ -7,6 +7,11 @@ const int = z.number().int();
 
 // ---- tracks ---------------------------------------------------------------
 
+/** Whether a song's file is in the library folder or the song plays from the shared library's
+ * destination (`db::FileState`). */
+export const fileStateSchema = z.enum(["here", "streamed"]);
+export type FileState = z.infer<typeof fileStateSchema>;
+
 const trackSchema = z.object({
 	id: int,
 	path: z.string(),
@@ -33,6 +38,7 @@ const trackSchema = z.object({
 		.default({ bpm: false, key: false, grid: false }),
 	/** Unix seconds the song came into the library; null for songs from before this was kept. */
 	addedAt: int.nullable().optional(),
+	fileState: fileStateSchema.default("here"),
 });
 
 export type Track = z.infer<typeof trackSchema>;
@@ -340,6 +346,14 @@ export async function playableUrl(path: string): Promise<string> {
 	}
 	const decode = await invoke<boolean>("playback_needs_decoding", { path });
 	return decode ? convertFileSrc(path, "pcm") : audioUrl(path);
+}
+
+/** URL the player loads `track` from: its file, or the destination when it is streamed. */
+export async function trackUrl(track: Pick<Track, "id" | "path" | "fileState">): Promise<string> {
+	if (track.fileState === "here") {
+		return playableUrl(track.path);
+	}
+	return playableUrl(z.string().parse(await invoke("stream_source", { trackId: track.id })));
 }
 
 // ---- playlists ------------------------------------------------------------

@@ -233,6 +233,7 @@ mod tests {
             fields: std::collections::BTreeMap::new(),
             edited: Edited::default(),
             added_at,
+            file_state: crate::db::FileState::Here,
         }
     }
 
