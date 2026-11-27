@@ -19,7 +19,7 @@ Windows 10/11 x64.
 | Area | Where |
 |---|---|
 | Tauri commands | `src-tauri/src/lib.rs` |
-| Schema and queries | `src-tauri/src/db.rs` |
+| Schema and queries | `src-tauri/src/schema.sql`, `src-tauri/src/db.rs` |
 | Library scan, file tags | `scan.rs`, `tags.rs`, `tag_region.rs` |
 | Audio identity | `audioprint.rs` (`audio_fp`: audio only), `scan::fingerprint` (whole file) |
 | Analysis, waveforms | `analysis.rs`, `anlz.rs` |
@@ -73,7 +73,7 @@ events, adding a command to the fake backend. The backend is fake, so anything i
 
 ## Rules for agents
 
-- **Flag breaking changes to the user.** check whether old formats should be supported (and if we need a migration or not). Additive (eg `add_column`) schema changes are fine.
+- **No migrations (unreleased).** The database is `src-tauri/src/schema.sql`, run as is on every start (`CREATE ... IF NOT EXISTS`); no code reads old formats. A schema or stored-format change edits `schema.sql` (and raises `db::SCHEMA_VERSION` when an older build would harm the new data), and is flagged to the user with the one-off SQL that brings their own `library.db` up to it.
 - **Rust:** `unwrap` is denied and clippy pedantic warns. Return `Result<_, Error>`
   (`error.rs`). Don't add new clippy warnings. No `unsafe`.
 - **TypeScript:** Biome formats (tabs, double quotes, width 100). Import with `#/…` paths.

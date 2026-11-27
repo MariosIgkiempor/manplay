@@ -9,7 +9,7 @@ use super::ops::{
     A_GRID_EDITED, A_GRID_HAND, A_KEY, A_KEY_EDITED, A_KEY_HAND, A_VERSION, F_NAME, F_PRESENT,
 };
 use super::state;
-use super::write::{Batch, active};
+use super::write::Batch;
 use crate::db;
 use crate::error::Error;
 
@@ -40,33 +40,6 @@ pub fn seed(conn: &mut Connection) -> Result<usize, Error> {
     db::set_setting(&tx, SETTING_SEEDED, Some(SEEDED))?;
     tx.commit()?;
     Ok(written)
-}
-
-/// Writes ops for analysis rows that exist here but were never shared (rows made after sharing
-/// was on, for example by the move of old analysis to `audio_fp` keys).
-pub fn send_missing_analysis(conn: &Connection) -> Result<(), Error> {
-    if !active(conn)? {
-        return Ok(());
-    }
-    let tx = conn.unchecked_transaction()?;
-    let mut batch = Batch::new(&tx)?;
-    seed_analysis(&tx, &mut batch)?;
-    batch.commit(&tx)?;
-    Ok(tx.commit()?)
-}
-
-/// A library that had library data on before smart playlists, analysis and Tag Database values
-/// were shared gets their ops once, without sending its whole log again.
-pub fn catch_up(conn: &Connection) -> Result<(), Error> {
-    if !active(conn)? || db::get_setting(conn, SETTING_SEEDED)?.as_deref() == Some(SEEDED) {
-        return Ok(());
-    }
-    let tx = conn.unchecked_transaction()?;
-    let mut batch = Batch::new(&tx)?;
-    seed_more(&tx, &mut batch)?;
-    batch.commit(&tx)?;
-    db::set_setting(&tx, SETTING_SEEDED, Some(SEEDED))?;
-    Ok(tx.commit()?)
 }
 
 fn seed_basics(tx: &Connection, batch: &mut Batch) -> Result<(), Error> {

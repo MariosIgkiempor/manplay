@@ -157,7 +157,6 @@ async fn scan_and_store(state: &AppState, root: PathBuf, depth: ScanDepth) -> Re
     let mut conn = state.db.lock().map_err(|_| Error::Lock)?;
     detect_moves(&mut conn, &state.data_dir, &root, &result)?;
     db::upsert(&mut conn, &result.tracks)?;
-    db::rekey_legacy(&mut conn)?;
     // Shared tags and playlists that were waiting for these songs.
     libsync::apply::materialize_pending(&mut conn)?;
     db::replace_tag_values(&mut conn, &result.values)?;
@@ -182,38 +181,6 @@ fn library_changed(state: &AppState) {
     }
     state.scan_wake.notify_one();
     state.analysis_wake.notify_one();
-}
-
-/// Fingerprints the audio of present tracks that have no `audio_fp` yet (libraries from before
-/// scans did it) and re-keys the old fingerprint-keyed analysis and cues onto them. Scans do
-/// this for every file they read, so this only matters until the first scan after an update.
-async fn fill_audio_fps(app: AppHandle) {
-    let state = app.state::<AppState>();
-    let todo = match state.db.lock().map_err(|_| Error::Lock) {
-        Ok(conn) => db::tracks_without_audio_fp(&conn),
-        Err(e) => Err(e),
-    };
-    let Ok(todo) = todo else { return };
-    let printed = tauri::async_runtime::spawn_blocking(move || {
-        todo.into_iter()
-            .map(|(id, path)| {
-                let fp = audioprint::audio_print_path(Path::new(&path)).unwrap_or_default();
-                (id, fp)
-            })
-            .collect::<Vec<_>>()
-    })
-    .await;
-    let Ok(printed) = printed else { return };
-    let Ok(mut conn) = state.db.lock() else {
-        return;
-    };
-    let stored = db::set_audio_fps(&mut conn, &printed)
-        .and_then(|()| db::rekey_legacy(&mut conn))
-        .and_then(|()| libsync::apply::materialize_pending(&mut conn).map(|_| ()))
-        .and_then(|()| record_files(&conn, unix_now() - GRACE_SECS));
-    if let Err(e) = stored {
-        log::warn!("could not fingerprint the library's audio: {e}");
-    }
 }
 
 /// After an update that changed the audio fingerprint algorithm (`audioprint::VERSION`): prints
@@ -3719,10 +3686,7 @@ fn scan_inputs(conn: &Connection, target_id: i64) -> Result<ScanInputs, Error> {
         known,
         streamed,
         synced_at,
-        cached: db::remote_prints(conn, target_id)?
-            .into_iter()
-            .filter(|(_, print)| sync::is_identity(print))
-            .collect(),
+        cached: db::remote_prints(conn, target_id)?,
         bases,
         signatures: db::remote_signatures(conn, target_id)?,
         library: sync_scans::KnownLibrary::of(&present),
@@ -5796,21 +5760,10 @@ async fn audit_fix(
 
 // ---- import folders ----------------------------------------------------------
 
-/// Every import folder. The first time, the Downloads and iTunes sources from before are moved
-/// into the list (see [`db::move_to_import_folders`]).
+/// Every import folder.
 #[tauri::command]
-fn import_folders(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Vec<db::ImportFolder>, Error> {
-    let downloads = app
-        .path()
-        .download_dir()
-        .ok()
-        .and_then(|p| p.to_str().map(str::to_owned));
-    let conn = state.db.lock().map_err(|_| Error::Lock)?;
-    db::move_to_import_folders(&conn, downloads.as_deref())?;
-    db::import_folders(&conn)
+fn import_folders(state: State<'_, AppState>) -> Result<Vec<db::ImportFolder>, Error> {
+    with_db!(state, |c| db::import_folders(c))
 }
 
 /// Adds a folder to import from.
@@ -6616,7 +6569,6 @@ pub fn run() {
             if newer.is_some() {
                 return Ok(());
             }
-            tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(reprint_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(scan_worker(app.handle().clone()));
             tauri::async_runtime::spawn(libsync_worker(app.handle().clone()));
@@ -7200,8 +7152,6 @@ mod tests {
         step("detect moves");
         db::upsert(&mut conn, &result.tracks).expect("upsert");
         step("store the songs");
-        db::rekey_legacy(&mut conn).expect("rekey");
-        step("rekey legacy analysis");
         libsync::apply::materialize_pending(&mut conn).expect("pending");
         step("apply waiting shared edits");
         db::replace_tag_values(&mut conn, &result.values).expect("values");

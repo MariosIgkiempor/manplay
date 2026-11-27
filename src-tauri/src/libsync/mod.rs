@@ -27,7 +27,6 @@ pub mod ops;
 pub mod recent;
 pub mod remap;
 pub mod remote;
-pub mod schema;
 pub mod seed;
 pub mod share;
 pub mod skew;

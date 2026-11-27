@@ -63,35 +63,6 @@ pub struct NewTrack {
     pub mtime_ms: Option<i64>,
 }
 
-/// Remembered tag values (artists, genres, ...), rebuilt on every scan.
-fn create_tag_values(conn: &Connection) -> Result<(), Error> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS tag_values (
-             field TEXT NOT NULL,
-             value TEXT NOT NULL,
-             count INTEGER NOT NULL,
-             PRIMARY KEY (field, value)
-         );
-         -- Values made by hand in the Tag Database; kept until a song uses them.
-         CREATE TABLE IF NOT EXISTS tag_custom (
-             field TEXT NOT NULL,
-             value TEXT NOT NULL COLLATE NOCASE,
-             PRIMARY KEY (field, value)
-         );",
-    )?;
-    Ok(())
-}
-
-/// Tag tables that live outside the main schema, plus any parent tag levels that are missing.
-fn prepare_tags(conn: &Connection) -> Result<(), Error> {
-    create_tag_values(conn)?;
-    let tx = conn.unchecked_transaction()?;
-    let mut ops = crate::libsync::Batch::new(&tx)?;
-    restore_tag_parents(&tx, &mut ops)?;
-    ops.commit(&tx)?;
-    Ok(tx.commit()?)
-}
-
 // ---- export selections -------------------------------------------------------
 
 /// What a destination gets: library playlists by id, and tags that become playlists. Saved when
@@ -122,102 +93,8 @@ fn mode_from(text: &str) -> crate::usb_export::Mode {
     serde_json::from_value(serde_json::Value::String(text.to_owned())).unwrap_or_default()
 }
 
-/// The settings key the rekordbox choice lived under before it moved to `export_selections`.
-const LEGACY_RB_SELECTION: &str = "rekordbox_selection";
-
 /// The destination key of the rekordbox XML file. USB drives are `usb:<volume id>`.
 pub const RB_DESTINATION: &str = "rekordbox";
-
-fn create_export_selections(conn: &Connection) -> Result<(), Error> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS export_selections (
-             destination TEXT PRIMARY KEY,
-             playlists   TEXT NOT NULL DEFAULT '[]',
-             tags        TEXT NOT NULL DEFAULT '[]'
-         );
-         -- Rule-based playlists. Only the rules are kept; the songs are worked out when needed.
-         CREATE TABLE IF NOT EXISTS smart_playlists (
-             id    INTEGER PRIMARY KEY,
-             name  TEXT NOT NULL,
-             rules TEXT NOT NULL DEFAULT '{}'
-         );",
-    )?;
-    // Smart playlists briefly belonged to one export destination; they are the library's now.
-    if has_column(conn, "smart_playlists", "destination")? {
-        conn.execute_batch(
-            "DROP INDEX IF EXISTS smart_playlists_destination;
-             ALTER TABLE smart_playlists DROP COLUMN destination;",
-        )?;
-    }
-    add_column(
-        conn,
-        "export_selections",
-        "smart",
-        "TEXT NOT NULL DEFAULT '[]'",
-    )?;
-    add_column(
-        conn,
-        "export_selections",
-        "usb_mode",
-        "TEXT NOT NULL DEFAULT 'add'",
-    )?;
-    // rekordbox was all an export wrote before there was a choice, so it starts switched on.
-    for (column, default) in [
-        ("usb_rekordbox", 1),
-        ("usb_serato", 0),
-        ("usb_gemini", 0),
-        ("usb_virtualdj", 0),
-        ("usb_playlist_folders", 0),
-        ("usb_rekordbox_device_library", 1),
-        ("usb_rekordbox_one_library", 1),
-    ] {
-        add_column(
-            conn,
-            "export_selections",
-            column,
-            &format!("INTEGER NOT NULL DEFAULT {default}"),
-        )?;
-    }
-    // Empty means the songs keep their file names, as they did before names could be chosen.
-    add_column(
-        conn,
-        "export_selections",
-        "usb_folder_file_names",
-        "TEXT NOT NULL DEFAULT ''",
-    )?;
-    migrate_rekordbox_selection(conn)
-}
-
-/// The old rekordbox choice exported every playlist except `excludedPlaylists`. It becomes the
-/// list of playlists that were going into the file, so new playlists now stay out until chosen.
-fn migrate_rekordbox_selection(conn: &Connection) -> Result<(), Error> {
-    #[derive(serde::Deserialize, Default)]
-    #[serde(rename_all = "camelCase", default)]
-    struct Legacy {
-        excluded_playlists: Vec<i64>,
-        tags: Vec<String>,
-    }
-    let Some(raw) = get_setting(conn, LEGACY_RB_SELECTION)? else {
-        return Ok(());
-    };
-    let legacy: Legacy = serde_json::from_str(&raw).unwrap_or_default();
-    if export_selection(conn, RB_DESTINATION)?.is_none() {
-        let playlists = playlist_ids(conn)?
-            .into_iter()
-            .filter(|id| !legacy.excluded_playlists.contains(id))
-            .collect();
-        set_export_selection(
-            conn,
-            RB_DESTINATION,
-            &ExportSelection {
-                playlists,
-                tags: legacy.tags,
-                ..ExportSelection::default()
-            },
-        )?;
-    }
-    set_setting(conn, LEGACY_RB_SELECTION, None)
-}
 
 /// Every library playlist's id.
 pub fn playlist_ids(conn: &Connection) -> Result<Vec<i64>, Error> {
@@ -326,36 +203,6 @@ fn uids_for(conn: &Connection, table: &str, ids: &[i64]) -> Result<Vec<String>, 
         }
     }
     Ok(uids)
-}
-
-/// Selections saved with integer ids (older versions) become uids, once. A playlist that no
-/// longer exists is dropped from the selection, as it already was in effect.
-pub(crate) fn migrate_selection_uids(conn: &Connection) -> Result<(), Error> {
-    let rows: Vec<(String, String, String)> = conn
-        .prepare("SELECT destination, playlists, smart FROM export_selections")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-        .collect::<Result<_, _>>()?;
-    for (destination, playlists, smart) in rows {
-        let legacy = |raw: &str| {
-            serde_json::from_str::<Vec<serde_json::Value>>(raw)
-                .is_ok_and(|v| v.iter().any(serde_json::Value::is_number))
-        };
-        if !legacy(&playlists) && !legacy(&smart) {
-            continue;
-        }
-        let as_uids = |table: &str, raw: &str| -> Result<String, Error> {
-            let ids = ids_from_stored(conn, table, raw)?;
-            serde_json::to_string(&uids_for(conn, table, &ids)?)
-                .map_err(|e| Error::Msg(e.to_string()))
-        };
-        let playlists = as_uids("playlists", &playlists)?;
-        let smart = as_uids("smart_playlists", &smart)?;
-        conn.execute(
-            "UPDATE export_selections SET playlists = ?2, smart = ?3 WHERE destination = ?1",
-            params![destination, playlists, smart],
-        )?;
-    }
-    Ok(())
 }
 
 pub fn remove_export_selection(conn: &Connection, destination: &str) -> Result<(), Error> {
@@ -696,29 +543,6 @@ fn drop_smart_rule_tag(conn: &Connection, tag_uid: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// Rules saved before they were kept by tag uid hold tag names: each name that is a tag here is
-/// replaced by its uid. A name that is no tag stays as it is (it matched nothing before and
-/// still does not). Safe to repeat.
-fn convert_smart_rules(conn: &Connection) -> Result<(), Error> {
-    let rows: Vec<(i64, String)> = conn
-        .prepare("SELECT id, rules FROM smart_playlists")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
-    for (id, rules) in rows {
-        let Ok(old) = serde_json::from_str::<crate::smart::Rules>(&rules) else {
-            continue;
-        };
-        let new = rules_to_stored(conn, &old)?;
-        if new != old {
-            conn.execute(
-                "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
-                params![id, rules_json(&new)?.to_string()],
-            )?;
-        }
-    }
-    Ok(())
-}
-
 /// The layout of the database, kept in SQLite's `user_version`. Raised when a change would let an
 /// older manplay harm what it finds: a song this one streams has no file, and an older one would
 /// take it as removed and tell every device in the shared library so.
@@ -805,205 +629,16 @@ fn check_schema_version(conn: &Connection) -> Result<(), Error> {
 
 /// Opens the library database, refusing one a newer manplay set up ([`Error::NewerLibrary`]), and
 /// brings an older one up to [`SCHEMA_VERSION`].
-#[allow(clippy::too_many_lines)]
+/// Every table and index of the library database (`schema.sql`).
+const SCHEMA: &str = include_str!("schema.sql");
+
+/// Opens the library database, refusing one a newer manplay set up ([`Error::NewerLibrary`]), and
+/// makes whatever a new one lacks (`schema.sql`).
 pub fn open(path: &Path) -> Result<Connection, Error> {
     let conn = Connection::open(path)?;
     check_schema_version(&conn)?;
-    conn.execute_batch(
-        "PRAGMA journal_mode = WAL;
-         PRAGMA foreign_keys = ON;
-         CREATE TABLE IF NOT EXISTS tracks (
-             id     INTEGER PRIMARY KEY,
-             path   TEXT NOT NULL UNIQUE,
-             artist TEXT NOT NULL,
-             album  TEXT NOT NULL,
-             title  TEXT NOT NULL,
-             size   INTEGER NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS playlists (
-             id   INTEGER PRIMARY KEY,
-             name TEXT NOT NULL UNIQUE
-         );
-         CREATE TABLE IF NOT EXISTS playlist_tracks (
-             playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
-             track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-             position    INTEGER NOT NULL,
-             PRIMARY KEY (playlist_id, track_id)
-         );
-         CREATE TABLE IF NOT EXISTS settings (
-             key   TEXT PRIMARY KEY,
-             value TEXT NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS sync_targets (
-             id      INTEGER PRIMARY KEY,
-             tailnet TEXT NOT NULL,
-             machine TEXT NOT NULL,
-             path    TEXT NOT NULL,
-             UNIQUE (tailnet, machine, path)
-         );
-         CREATE TABLE IF NOT EXISTS synced_files (
-             target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
-             track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-             size      INTEGER NOT NULL,
-             synced_at INTEGER NOT NULL,
-             PRIMARY KEY (target_id, track_id)
-         );
-         CREATE TABLE IF NOT EXISTS sync_runs (
-             id          INTEGER PRIMARY KEY,
-             target_id   INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
-             started_at  INTEGER NOT NULL,
-             finished_at INTEGER NOT NULL,
-             uploaded    INTEGER NOT NULL,
-             skipped     INTEGER NOT NULL,
-             failed      INTEGER NOT NULL,
-             first_error TEXT
-         );
-         CREATE TABLE IF NOT EXISTS tags (
-             id   INTEGER PRIMARY KEY,
-             name TEXT NOT NULL UNIQUE COLLATE NOCASE
-         );
-         CREATE TABLE IF NOT EXISTS track_tags (
-             track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-             tag_id   INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
-             PRIMARY KEY (track_id, tag_id)
-         );",
-    )?;
-    prepare_sharing(&conn)?;
-    add_column(&conn, "tracks", "missing_since", "INTEGER")?;
-    add_column(&conn, "tracks", "fingerprint", "TEXT")?;
-    add_column(&conn, "tracks", "duration_ms", "INTEGER")?;
-    add_column(&conn, "tracks", "bitrate", "INTEGER")?;
-    add_column(&conn, "tracks", "sample_rate", "INTEGER")?;
-    add_column(&conn, "tracks", "tag_bpm", "REAL")?;
-    add_column(&conn, "tracks", "tag_key", "TEXT")?;
-    add_column(&conn, "tracks", "fields", "TEXT")?;
-    // Unix seconds the song first came into the library; NULL for songs from before this column
-    // (they sort by id, which follows the order they were added).
-    add_column(&conn, "tracks", "added_at", "INTEGER")?;
-    // Fingerprint of the audio alone (see `audioprint`): the key of a song's analysis and cues.
-    add_column(&conn, "tracks", "audio_fp", "TEXT")?;
-    // The file's modification time when it was last read (Unix milliseconds); NULL for rows from
-    // before this column, which the next scan reads once more.
-    add_column(&conn, "tracks", "mtime_ms", "INTEGER")?;
-    // Whether the song's file is in the library folder or the song is played from the shared
-    // library's destination (`FileState`).
-    add_column(
-        &conn,
-        "tracks",
-        "file_state",
-        "TEXT NOT NULL DEFAULT 'here' CHECK (file_state IN ('here', 'streamed'))",
-    )?;
-    retire_fingerprint_keys(&conn)?;
-    // What each side of a destination looked like at the last successful sync (see `Base`).
-    add_column(&conn, "synced_files", "local_sig", "TEXT")?;
-    add_column(&conn, "synced_files", "remote_sig", "TEXT")?;
-    add_column(&conn, "synced_files", "base_tags", "TEXT")?;
-    // Its exact check (see `Exact`): the whole file's hash and both sides' change markers.
-    add_column(&conn, "synced_files", "base_content", "TEXT")?;
-    add_column(&conn, "synced_files", "base_modified", "INTEGER")?;
-    add_column(&conn, "synced_files", "base_version", "TEXT")?;
-    conn.execute_batch(
-        "-- The song list counts each song's copies on the destinations: without this every song
-         -- walks the whole table.
-         CREATE INDEX IF NOT EXISTS synced_files_track ON synced_files(track_id);
-         CREATE INDEX IF NOT EXISTS tracks_fingerprint ON tracks(fingerprint);
-         CREATE INDEX IF NOT EXISTS tracks_audio_fp ON tracks(audio_fp);
-         CREATE TABLE IF NOT EXISTS import_cache (
-             folder TEXT PRIMARY KEY,
-             data   TEXT NOT NULL
-         );
-         -- Answers from online music databases, by source and by what was asked.
-         CREATE TABLE IF NOT EXISTS lookup_cache (
-             source     TEXT NOT NULL,
-             key        TEXT NOT NULL,
-             data       TEXT NOT NULL,
-             fetched_at INTEGER NOT NULL,
-             PRIMARY KEY (source, key)
-         );
-         -- Folders music is imported from, each with how its songs come in.
-         CREATE TABLE IF NOT EXISTS import_folders (
-             id          INTEGER PRIMARY KEY,
-             path        TEXT NOT NULL UNIQUE,
-             enabled     INTEGER NOT NULL DEFAULT 1,
-             convert_aac INTEGER NOT NULL DEFAULT 0,
-             auto_import INTEGER NOT NULL DEFAULT 0
-         );
-         -- Songs converted on import (source file and size), which the library cannot recognise
-         -- by content any more. Named for the iTunes import that started it.
-         CREATE TABLE IF NOT EXISTS itunes_imported (
-             source      TEXT NOT NULL,
-             size        INTEGER NOT NULL,
-             dest        TEXT NOT NULL,
-             imported_at INTEGER NOT NULL,
-             PRIMARY KEY (source, size)
-         );
-         CREATE TABLE IF NOT EXISTS activity (
-             id          INTEGER PRIMARY KEY,
-             source      TEXT NOT NULL,
-             started_at  INTEGER NOT NULL,
-             finished_at INTEGER NOT NULL,
-             ok          INTEGER NOT NULL,
-             skipped     INTEGER NOT NULL,
-             failed      INTEGER NOT NULL,
-             items       TEXT NOT NULL DEFAULT '[]',
-             errors      TEXT NOT NULL DEFAULT '[]'
-         );
-         CREATE TABLE IF NOT EXISTS remote_prints (
-             target_id INTEGER NOT NULL,
-             path TEXT NOT NULL,
-             size INTEGER NOT NULL,
-             fingerprint TEXT NOT NULL,
-             PRIMARY KEY (target_id, path)
-         );
-         -- BPM and key detection results, by audio content: they follow a file through renames,
-         -- moves, tag edits and library resets, and duplicates share them.
-         CREATE TABLE IF NOT EXISTS analysis (
-             audio_fp    TEXT PRIMARY KEY,
-             bpm         REAL,
-             musical_key TEXT,
-             error       TEXT,
-             version     INTEGER NOT NULL,
-             analyzed_at INTEGER NOT NULL
-         );
-         -- Hot and memory cues set in manplay, by audio content like the analysis.
-         CREATE TABLE IF NOT EXISTS cues (
-             id          INTEGER PRIMARY KEY,
-             audio_fp    TEXT NOT NULL,
-             -- 0-7 for hot cues A-H, NULL for a memory cue.
-             slot        INTEGER,
-             start       REAL NOT NULL,
-             name        TEXT NOT NULL DEFAULT '',
-             -- #rrggbb, or '' for the player's default.
-             color       TEXT NOT NULL DEFAULT '',
-             -- The memory cue the song starts from (rekordbox's main cue on load).
-             main        INTEGER NOT NULL DEFAULT 0
-         );
-         CREATE INDEX IF NOT EXISTS cues_audio_fp ON cues(audio_fp);
-         -- Signatures of destination files (tags region and audio samples), valid while the file
-         -- keeps the size and change marker (modified time or ETag) it had when read.
-         CREATE TABLE IF NOT EXISTS remote_signatures (
-             target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
-             path      TEXT NOT NULL,
-             size      INTEGER NOT NULL,
-             version   TEXT NOT NULL,
-             signature TEXT NOT NULL,
-             PRIMARY KEY (target_id, path)
-         );
-         CREATE TABLE IF NOT EXISTS stale_remote (
-             target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
-             track_id  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-             rel       TEXT NOT NULL,
-             PRIMARY KEY (target_id, track_id, rel)
-         );",
-    )?;
-    add_column(&conn, "sync_runs", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
-    add_column(&conn, "sync_runs", "errors", "TEXT NOT NULL DEFAULT '[]'")?;
-    add_column(&conn, "sync_runs", "batch", "INTEGER NOT NULL DEFAULT 0")?;
-    add_analysis_columns(&conn, "analysis")?;
-    add_column(&conn, "cues", "main", "INTEGER NOT NULL DEFAULT 0")?;
-    // The source's audio fingerprint when it was converted, so a source retagged since (a new
-    // size) is still known; NULL for songs converted before this column.
-    add_column(&conn, "itunes_imported", "source_audio_fp", "TEXT")?;
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+    conn.execute_batch(SCHEMA)?;
     if get_setting(&conn, SETTING_AUDIO_FP_VERSION)?.is_none() {
         set_setting(
             &conn,
@@ -1011,16 +646,6 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
             Some(&crate::audioprint::VERSION.to_string()),
         )?;
     }
-    prepare_tags(&conn)?;
-    create_export_selections(&conn)?;
-    prepare_smart_sharing(&conn)?;
-    migrate_selection_uids(&conn)?;
-    crate::libsync::seed::catch_up(&conn)?;
-    crate::libsync::clashes::migrate(&conn)?;
-    retry_unnamed_waveforms(&conn)?;
-    create_jellyfin(&conn)?;
-    create_sync_ignored(&conn)?;
-    crate::libsync::keep::create(&conn)?;
     if schema_version(&conn)? < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION.0)?;
     }
@@ -1028,21 +653,6 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
 }
 
 // ---- Ignored destination files -----------------------------------------------------------------
-
-/// Destination files and folders the review leaves out (`sync_ignore`). `rel` is the path as a
-/// JSON array of names, relative to the destination folder; `added_at` is Unix seconds, UTC.
-fn create_sync_ignored(conn: &Connection) -> Result<(), Error> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sync_ignored (
-             target_id INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
-             rel       TEXT NOT NULL,
-             scope     TEXT NOT NULL CHECK (scope IN ('file', 'folder')),
-             added_at  INTEGER NOT NULL,
-             PRIMARY KEY (target_id, rel, scope)
-         );",
-    )?;
-    Ok(())
-}
 
 /// Every destination's ignore rules, oldest first. A row that no longer parses is skipped.
 pub fn sync_ignores(conn: &Connection) -> Result<crate::sync_ignore::Ignores, Error> {
@@ -1117,43 +727,6 @@ pub fn remove_sync_ignores(
 }
 
 // ---- Jellyfin ----------------------------------------------------------------------------------
-
-/// The Jellyfin server that scans a destination. Its API key is in the keychain
-/// (`jellyfin::save_key`), not here.
-fn create_jellyfin(conn: &Connection) -> Result<(), Error> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS jellyfin_servers (
-             target_id    INTEGER PRIMARY KEY REFERENCES sync_targets(id) ON DELETE CASCADE,
-             url          TEXT NOT NULL,
-             server_name  TEXT NOT NULL,
-             user_id      TEXT NOT NULL,
-             user_name    TEXT NOT NULL,
-             library_id   TEXT NOT NULL,
-             library_name TEXT NOT NULL
-         );
-         -- The Jellyfin playlist each chosen manplay playlist was sent to, so later pushes
-         -- update it (and renames find it) instead of making another.
-         CREATE TABLE IF NOT EXISTS jellyfin_playlists (
-             target_id   INTEGER NOT NULL REFERENCES sync_targets(id) ON DELETE CASCADE,
-             key         TEXT NOT NULL,
-             playlist_id TEXT NOT NULL,
-             PRIMARY KEY (target_id, key)
-         );",
-    )?;
-    // The last push: when (Unix seconds, UTC) and what it did, as JSON.
-    add_column(conn, "jellyfin_servers", "last_push_at", "INTEGER")?;
-    add_column(conn, "jellyfin_servers", "last_push", "TEXT")?;
-    // Who sees the playlists manplay makes (`jellyfin::Visibility` as JSON).
-    add_column(
-        conn,
-        "jellyfin_servers",
-        "visibility",
-        "TEXT NOT NULL DEFAULT '{\"kind\":\"onlyMe\"}'",
-    )?;
-    // What a playlist was made with; NULL for one taken over, whose sharing is left alone.
-    add_column(conn, "jellyfin_playlists", "visibility", "TEXT")?;
-    Ok(())
-}
 
 fn visibility_from(json: Option<String>) -> Option<crate::jellyfin::Visibility> {
     serde_json::from_str(&json?).ok()
@@ -1338,227 +911,9 @@ pub fn remove_jellyfin(conn: &Connection, target_id: i64) -> Result<(), Error> {
     Ok(())
 }
 
-/// Waveforms of prints like `a1:<hex>` could not be named as files before, and were marked as on
-/// the destination without being sent. Once, they are marked to be sent again.
-fn retry_unnamed_waveforms(conn: &Connection) -> Result<(), Error> {
-    const KEY: &str = "libsync_wf_names";
-    if get_setting(conn, KEY)?.is_none() {
-        conn.execute("UPDATE analysis SET wf_pushed = 0", [])?;
-        set_setting(conn, KEY, Some("1"))?;
-    }
-    Ok(())
-}
-
-/// Columns and tables for sharing library data (see `libsync`): a uid per shareable item, its
-/// scope and whether it is hidden here, the position keys of playlists, and the op log.
-fn prepare_sharing(conn: &Connection) -> Result<(), Error> {
-    for table in ["tags", "playlists"] {
-        add_sharing_columns(conn, table)?;
-    }
-    // Fractional index of a song in a playlist; `position` is its rank, kept for queries.
-    add_column(conn, "playlist_tracks", "pos", "TEXT")?;
-    // Whether this destination receives and sends library data (off until switched on).
-    add_column(
-        conn,
-        "sync_targets",
-        "libsync",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    crate::libsync::schema::create(conn)?;
-    // The chunk an op was uploaded in, so ops a snapshot covers can be pruned.
-    add_column(conn, "oplog", "seq", "INTEGER")?;
-    backfill_positions(conn)
-}
-
-fn prepare_smart_sharing(conn: &Connection) -> Result<(), Error> {
-    add_sharing_columns(conn, "smart_playlists")?;
-    convert_smart_rules(conn)
-}
-
-fn add_sharing_columns(conn: &Connection, table: &str) -> Result<(), Error> {
-    add_column(conn, table, "uid", "TEXT")?;
-    add_column(conn, table, "scope", "TEXT NOT NULL DEFAULT 'shared'")?;
-    add_column(conn, table, "hidden", "INTEGER NOT NULL DEFAULT 0")?;
-    let ids: Vec<i64> = conn
-        .prepare(&format!("SELECT id FROM {table} WHERE uid IS NULL"))?
-        .query_map([], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    for id in ids {
-        conn.execute(
-            &format!("UPDATE {table} SET uid = ?1 WHERE id = ?2"),
-            params![crate::libsync::new_uid(), id],
-        )?;
-    }
-    conn.execute_batch(&format!(
-        "CREATE UNIQUE INDEX IF NOT EXISTS {table}_uid ON {table}(uid)"
-    ))?;
-    Ok(())
-}
-
-/// Gives songs in playlists from before position keys one, in their current order.
-fn backfill_positions(conn: &Connection) -> Result<(), Error> {
-    let lists: Vec<i64> = conn
-        .prepare("SELECT DISTINCT playlist_id FROM playlist_tracks WHERE pos IS NULL")?
-        .query_map([], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    for list in lists {
-        let tracks: Vec<i64> = conn
-            .prepare("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position, track_id")?
-            .query_map(params![list], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        let keys = crate::libsync::frac::spread(None, None, tracks.len());
-        for (track, key) in tracks.iter().zip(keys) {
-            conn.execute(
-                "UPDATE playlist_tracks SET pos = ?1 WHERE playlist_id = ?2 AND track_id = ?3",
-                params![key, list, track],
-            )?;
-        }
-    }
-    Ok(())
-}
-
 /// Setting that records which version of `audioprint` made the stored `audio_fp` values. A new
 /// algorithm needs a remap of `tracks.audio_fp`, `analysis` and `cues` before it is used.
 pub const SETTING_AUDIO_FP_VERSION: &str = "audio_fp_version";
-
-/// The columns of `analysis` added after its first version (also for `analysis_legacy`, so the
-/// old table is complete before it is re-keyed).
-fn add_analysis_columns(conn: &Connection, table: &str) -> Result<(), Error> {
-    // Values set by hand, which a new analysis keeps unless told to replace them.
-    for column in ["bpm_edited", "key_edited", "grid_edited"] {
-        add_column(conn, table, column, "INTEGER NOT NULL DEFAULT 0")?;
-    }
-    // The beat grid (seconds to the first beat, its place in the bar) and the detail waveform
-    // (`analysis::WAVEFORM_RATE` columns per second, each whiteness << 5 | height) that the
-    // library shows and USB drives and rekordbox get. A NULL waveform: not analysed that far.
-    for (column, decl) in [
-        ("grid_bpm", "REAL"),
-        ("first_beat", "REAL"),
-        ("bar_offset", "INTEGER"),
-        ("duration", "REAL"),
-        ("waveform", "BLOB"),
-    ] {
-        add_column(conn, table, column, decl)?;
-    }
-    // Cues were set in manplay (possibly to none): they replace a drive's own on export.
-    add_column(conn, table, "cues_edited", "INTEGER NOT NULL DEFAULT 0")?;
-    // Whether the waveform is known to be on the sharing destination (see `libsync::waveforms`).
-    add_column(conn, table, "wf_pushed", "INTEGER NOT NULL DEFAULT 0")?;
-    Ok(())
-}
-
-/// Older databases keyed `analysis` and `cues` by `tracks.fingerprint` (the whole file, which
-/// every tag edit changes). Those tables are set aside as `analysis_legacy` and `cues_legacy`;
-/// [`rekey_legacy`] copies what maps to a track's `audio_fp` into the new ones.
-fn retire_fingerprint_keys(conn: &Connection) -> Result<(), Error> {
-    if has_column(conn, "analysis", "fingerprint")? {
-        add_analysis_columns(conn, "analysis")?;
-        conn.execute_batch(
-            "DROP TABLE IF EXISTS analysis_legacy;
-             ALTER TABLE analysis RENAME TO analysis_legacy;",
-        )?;
-    }
-    if has_column(conn, "cues", "fingerprint")? {
-        add_column(conn, "cues", "main", "INTEGER NOT NULL DEFAULT 0")?;
-        conn.execute_batch(
-            "DROP INDEX IF EXISTS cues_fingerprint;
-             DROP TABLE IF EXISTS cues_legacy;
-             ALTER TABLE cues RENAME TO cues_legacy;",
-        )?;
-    }
-    Ok(())
-}
-
-fn table_exists(conn: &Connection, name: &str) -> Result<bool, Error> {
-    Ok(conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-            params![name],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some())
-}
-
-/// Finishes the move of `analysis` and `cues` to `audio_fp` keys: every old row whose track now
-/// has an audio fingerprint is copied under it (hand edits, grids, waveforms and cues included).
-/// Once every present track has been fingerprinted the old tables are dropped, and rows that map
-/// to no track go with them. Does nothing on a database without them.
-pub fn rekey_legacy(conn: &mut Connection) -> Result<(), Error> {
-    let has_analysis = table_exists(conn, "analysis_legacy")?;
-    let has_cues = table_exists(conn, "cues_legacy")?;
-    if !has_analysis && !has_cues {
-        return Ok(());
-    }
-    let tx = conn.transaction()?;
-    if has_analysis {
-        // Present tracks first, then the newest analysis, win when duplicates disagree.
-        tx.execute(
-            "INSERT OR IGNORE INTO analysis
-                 (audio_fp, bpm, musical_key, error, version, analyzed_at, bpm_edited, key_edited,
-                  grid_edited, cues_edited, grid_bpm, first_beat, bar_offset, duration, waveform)
-             SELECT t.audio_fp, a.bpm, a.musical_key, a.error, a.version, a.analyzed_at,
-                    a.bpm_edited, a.key_edited, a.grid_edited, a.cues_edited,
-                    a.grid_bpm, a.first_beat, a.bar_offset, a.duration, a.waveform
-             FROM analysis_legacy a JOIN tracks t ON t.fingerprint = a.fingerprint
-             WHERE t.audio_fp IS NOT NULL AND t.audio_fp <> ''
-             ORDER BY t.missing_since IS NOT NULL, a.analyzed_at DESC",
-            [],
-        )?;
-    }
-    if has_cues {
-        // One legacy fingerprint's cues per audio, and never over cues set since.
-        tx.execute(
-            "INSERT INTO cues (audio_fp, slot, start, name, color, main)
-             SELECT p.audio_fp, c.slot, c.start, c.name, c.color, c.main
-             FROM (SELECT t.audio_fp AS audio_fp, MIN(t.fingerprint) AS fingerprint
-                   FROM tracks t
-                   WHERE t.audio_fp IS NOT NULL AND t.audio_fp <> ''
-                     AND t.fingerprint IN (SELECT fingerprint FROM cues_legacy)
-                   GROUP BY t.audio_fp) p
-             JOIN cues_legacy c ON c.fingerprint = p.fingerprint
-             WHERE NOT EXISTS (SELECT 1 FROM cues n WHERE n.audio_fp = p.audio_fp)",
-            [],
-        )?;
-    }
-    let pending: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM tracks WHERE missing_since IS NULL AND audio_fp IS NULL",
-        [],
-        |r| r.get(0),
-    )?;
-    if pending == 0 {
-        tx.execute_batch(
-            "DROP TABLE IF EXISTS analysis_legacy; DROP TABLE IF EXISTS cues_legacy;",
-        )?;
-    }
-    tx.commit()?;
-    // Analysis that came back from the old tables after sharing started was never sent.
-    crate::libsync::seed::send_missing_analysis(conn)?;
-    Ok(())
-}
-
-fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, Error> {
-    Ok(conn
-        .prepare(&format!("PRAGMA table_info({table})"))?
-        .query_map([], |r| r.get::<_, String>(1))?
-        .filter_map(Result::ok)
-        .any(|name| name == column))
-}
-
-pub(crate) fn add_column(
-    conn: &Connection,
-    table: &str,
-    column: &str,
-    decl: &str,
-) -> Result<(), Error> {
-    if !has_column(conn, table, column)? {
-        conn.execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
-            [],
-        )?;
-    }
-    Ok(())
-}
 
 pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
     let tx = conn.transaction()?;
@@ -4014,37 +3369,6 @@ pub fn remove_import_folder(conn: &Connection, id: ImportFolderId) -> Result<(),
     Ok(())
 }
 
-const IMPORT_FOLDERS_MOVED: &str = "import_folders_moved";
-
-/// Moves the two import sources from before import folders into the list, once: the Downloads
-/// folder (`downloads`, the system Downloads folder when none was chosen) and the iTunes folder,
-/// which converts AAC as it did. Both start as folders you pick from: the old iTunes import also
-/// skipped songs whose artist and title the library had, which import folders do not, so
-/// importing everything unseen could bring those in twice. Each keeps its on/off switch, and
-/// their history moves with them.
-pub fn move_to_import_folders(conn: &Connection, downloads: Option<&str>) -> Result<(), Error> {
-    if get_setting(conn, IMPORT_FOLDERS_MOVED)?.is_some() {
-        return Ok(());
-    }
-    let chosen = get_setting(conn, "import_folder")?;
-    let sources = [
-        ("downloads", chosen.as_deref().or(downloads), false),
-        ("itunes", get_setting(conn, "itunes_path")?.as_deref(), true),
-    ]
-    .map(|(service, path, itunes)| (service, path.map(str::to_owned), itunes));
-    for (service, path, itunes) in sources {
-        let Some(path) = path else { continue };
-        let mut folder = add_import_folder(conn, &path, itunes, false)?;
-        folder.enabled = !service_off(conn, service)?;
-        update_import_folder(conn, &folder)?;
-        conn.execute(
-            "UPDATE activity SET source = ?2 WHERE source = ?1",
-            params![service, folder.id.activity_source()],
-        )?;
-    }
-    set_setting(conn, IMPORT_FOLDERS_MOVED, Some("1"))
-}
-
 /// Songs converted on import, by source path and size: the scan counts them as imported.
 pub fn converted_sources(conn: &Connection) -> Result<crate::import::Converted, Error> {
     let mut stmt = conn.prepare("SELECT source, source_audio_fp FROM itunes_imported")?;
@@ -4630,40 +3954,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn saved_rules_with_tag_names_become_uids_and_keep_working() {
-        let mut conn = open(Path::new(":memory:")).expect("db");
-        upsert(&mut conn, &[track("/a.mp3", "fp-a", None)]).expect("upsert");
-        let id: i64 = conn
-            .query_row("SELECT id FROM tracks", [], |r| r.get(0))
-            .expect("id");
-        tag_tracks(&mut conn, "Genre/House", &[id]).expect("tag");
-        conn.execute(
-            "INSERT INTO smart_playlists (name, rules, uid) VALUES ('Old', ?1, 'u')",
-            params![r#"{"allTags":["genre/house"],"anyTags":["Ghost"],"noneTags":[]}"#],
-        )
-        .expect("legacy row");
-        convert_smart_rules(&conn).expect("convert");
-        let stored: String = conn
-            .query_row("SELECT rules FROM smart_playlists", [], |r| r.get(0))
-            .expect("rules");
-        let parsed: crate::smart::Rules = serde_json::from_str(&stored).expect("json");
-        assert!(crate::smart::is_uid(&parsed.all_tags[0]), "{stored}");
-        assert_eq!(
-            parsed.any_tags,
-            ["Ghost"],
-            "a name that is no tag stays as it was"
-        );
-        let shown = smart_playlists(&conn).expect("list").remove(0);
-        assert_eq!(shown.rules.all_tags, ["Genre/House"]);
-        // Converting again changes nothing.
-        convert_smart_rules(&conn).expect("again");
-        let again: String = conn
-            .query_row("SELECT rules FROM smart_playlists", [], |r| r.get(0))
-            .expect("rules");
-        assert_eq!(again, stored);
-    }
-
     fn kept(bpm: Option<f64>) -> crate::anlz::Stored {
         crate::anlz::Stored {
             grid_bpm: bpm,
@@ -4861,68 +4151,6 @@ mod tests {
     }
 
     #[test]
-    fn old_analysis_and_cues_are_rekeyed_through_their_tracks() {
-        let dir = std::env::temp_dir().join(format!("manplay-rekey-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
-        let path = dir.join("library.db");
-        {
-            // A database from before `audio_fp` keyed the analysis.
-            let conn = open(&path).expect("db");
-            conn.execute_batch(
-                "DROP TABLE analysis; DROP TABLE cues;
-                 CREATE TABLE analysis (fingerprint TEXT PRIMARY KEY, bpm REAL, musical_key TEXT,
-                     error TEXT, version INTEGER NOT NULL, analyzed_at INTEGER NOT NULL);
-                 CREATE TABLE cues (id INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL, slot INTEGER,
-                     start REAL NOT NULL, name TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '');
-                 INSERT INTO analysis VALUES ('f-a', 120, 'Am', NULL, 3, 5), ('f-orphan', 90, NULL, NULL, 3, 5);
-                 INSERT INTO cues (fingerprint, slot, start) VALUES ('f-a', 0, 1.5), ('f-orphan', 1, 2.0);",
-            )
-            .expect("old shape");
-            let mut conn = conn;
-            let mut a = track_with("/a.mp3", "f-a", "", None);
-            a.audio_fp = None;
-            upsert(&mut conn, &[a]).expect("upsert");
-        }
-        let mut conn = open(&path).expect("migrates");
-        assert!(table_exists(&conn, "analysis_legacy").expect("legacy"));
-        assert!(table_exists(&conn, "cues_legacy").expect("legacy"));
-        // Not fingerprinted yet: nothing maps, the old rows wait.
-        rekey_legacy(&mut conn).expect("rekey");
-        assert!(table_exists(&conn, "analysis_legacy").expect("legacy"));
-        assert_eq!(analysis_results(&conn, None).expect("results").len(), 0);
-
-        set_audio_fps(&mut conn, &[(1, "audio-a".into())]).expect("fps");
-        rekey_legacy(&mut conn).expect("rekey");
-        let t = &list(&conn).expect("list")[0];
-        assert_eq!(t.bpm, Some(120.0), "analysis follows the audio");
-        let cues = cues_of(&conn, "audio-a").expect("cues");
-        assert_eq!(
-            cues, None,
-            "cues_edited was never set before, so they stay unset"
-        );
-        let n: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM cues WHERE audio_fp = 'audio-a'",
-                [],
-                |r| r.get(0),
-            )
-            .expect("count");
-        assert_eq!(n, 1, "the cue moved; the orphan's did not");
-        let all: i64 = conn
-            .query_row("SELECT COUNT(*) FROM analysis", [], |r| r.get(0))
-            .expect("count");
-        assert_eq!(all, 1, "the row without a track is dropped");
-        assert!(!table_exists(&conn, "analysis_legacy").expect("gone"));
-        assert!(!table_exists(&conn, "cues_legacy").expect("gone"));
-        assert_eq!(
-            get_setting(&conn, SETTING_AUDIO_FP_VERSION).expect("setting"),
-            Some(crate::audioprint::VERSION.to_string())
-        );
-        drop(conn);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn hand_edits_survive_reanalysis_unless_replaced() {
         let mut conn = open(Path::new(":memory:")).expect("db");
         upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
@@ -5028,141 +4256,6 @@ mod tests {
         let a = tracks.iter().find(|t| t.path == "/a.mp3").expect("a");
         assert!(a.analyzed, "analysis stays with the audio");
         assert_eq!(a.key.as_deref(), Some("Am"));
-    }
-
-    #[test]
-    fn downloads_and_itunes_become_import_folders_once() {
-        // Name, settings saved before, the system Downloads folder, then each folder as
-        // (path, on, converts AAC, imports everything).
-        type Case<'a> = (
-            &'a str,
-            Vec<(&'a str, &'a str)>,
-            Option<&'a str>,
-            Vec<(String, bool, bool, bool)>,
-        );
-        let folders_after = |settings: &[(&str, &str)], downloads: Option<&str>| {
-            let conn = open(Path::new(":memory:")).expect("db");
-            for (key, value) in settings {
-                set_setting(&conn, key, Some(value)).expect("setting");
-            }
-            move_to_import_folders(&conn, downloads).expect("move");
-            move_to_import_folders(&conn, Some("/again")).expect("second time does nothing");
-            import_folders(&conn)
-                .expect("folders")
-                .into_iter()
-                .map(|f| (f.path, f.enabled, f.convert_aac, f.auto_import))
-                .collect::<Vec<_>>()
-        };
-        let cases: [Case<'_>; 4] = [
-            ("nothing chosen", vec![], None, vec![]),
-            (
-                "the system Downloads folder",
-                vec![],
-                Some("/Users/dj/Downloads"),
-                vec![("/Users/dj/Downloads".into(), true, false, false)],
-            ),
-            (
-                "a chosen folder, and iTunes switched off",
-                vec![
-                    ("import_folder", "/music/in"),
-                    ("itunes_path", "/music/iTunes"),
-                    ("service.itunes", "off"),
-                ],
-                Some("/Users/dj/Downloads"),
-                vec![
-                    ("/music/in".into(), true, false, false),
-                    ("/music/iTunes".into(), false, true, false),
-                ],
-            ),
-            (
-                "Downloads switched off",
-                vec![("service.downloads", "off")],
-                Some("/Users/dj/Downloads"),
-                vec![("/Users/dj/Downloads".into(), false, false, false)],
-            ),
-        ];
-        for (name, settings, downloads, expected) in cases {
-            assert_eq!(folders_after(&settings, downloads), expected, "{name}");
-        }
-    }
-
-    #[test]
-    fn import_history_moves_with_its_folder() {
-        let conn = open(Path::new(":memory:")).expect("db");
-        set_setting(&conn, "itunes_path", Some("/music/iTunes")).expect("setting");
-        let run = Activity {
-            source: "itunes".into(),
-            ok: 3,
-            ..Activity::default()
-        };
-        record_activity(&conn, &run).expect("activity");
-        move_to_import_folders(&conn, None).expect("move");
-        let folder = import_folders(&conn).expect("folders").remove(0);
-        let moved = activity_history(&conn, &folder.id.activity_source(), 10).expect("history");
-        assert_eq!(moved.len(), 1);
-        assert_eq!(activity_history(&conn, "itunes", 10).expect("old").len(), 0);
-    }
-
-    #[test]
-    fn old_rekordbox_choice_becomes_the_list_of_exported_playlists() {
-        let conn = open(Path::new(":memory:")).expect("db");
-        let a = create_playlist(&conn, "A", None).expect("a");
-        let b = create_playlist(&conn, "B", None).expect("b");
-        let c = create_playlist(&conn, "C", None).expect("c");
-        assert_eq!(export_selection(&conn, RB_DESTINATION).expect("none"), None);
-        set_setting(
-            &conn,
-            LEGACY_RB_SELECTION,
-            Some(&format!(
-                r#"{{"excludedPlaylists":[{b}],"tags":["Genre/House"]}}"#
-            )),
-        )
-        .expect("legacy");
-        migrate_rekordbox_selection(&conn).expect("migrate");
-        assert_eq!(
-            export_selection(&conn, RB_DESTINATION).expect("row"),
-            Some(ExportSelection {
-                playlists: vec![a, c],
-                tags: vec!["Genre/House".to_owned()],
-                ..ExportSelection::default()
-            })
-        );
-        assert_eq!(get_setting(&conn, LEGACY_RB_SELECTION).expect("gone"), None);
-
-        let smart = save_smart_playlist(
-            &conn,
-            &crate::smart::SmartPlaylist {
-                id: 0,
-                name: "S".into(),
-                rules: crate::smart::Rules::default(),
-            },
-        )
-        .expect("smart")
-        .id;
-        let usb = ExportSelection {
-            playlists: vec![b],
-            tags: vec![],
-            smart: vec![smart],
-            usb_mode: crate::usb_export::Mode::ReplaceAll,
-            usb_outputs: crate::usb_export::Outputs {
-                rekordbox: false,
-                serato: true,
-                virtual_dj: true,
-                gemini: false,
-                playlist_folders: true,
-                rekordbox_formats: crate::usb_export::RekordboxFormats {
-                    device_library: false,
-                    one_library: true,
-                },
-            },
-            usb_folder_file_names: serde_json::from_str(
-                r#"[{"tag":"artist"},{"text":" - "},{"tag":"title"}]"#,
-            )
-            .expect("template"),
-        };
-        set_export_selection(&conn, "usb:1234", &usb).expect("save");
-        set_export_selection(&conn, "usb:1234", &usb).expect("overwrite");
-        assert_eq!(export_selection(&conn, "usb:1234").expect("row"), Some(usb));
     }
 
     #[test]

@@ -37,17 +37,6 @@ pub struct KeepRule {
     pub id: String,
 }
 
-pub fn create(conn: &Connection) -> Result<(), Error> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS keep_rules (
-             kind TEXT NOT NULL CHECK (kind IN ('song', 'playlist')),
-             id   TEXT NOT NULL,
-             PRIMARY KEY (kind, id)
-         );",
-    )?;
-    Ok(())
-}
-
 pub fn add(conn: &Connection, rules: &[KeepRule]) -> Result<(), Error> {
     let mut stmt =
         conn.prepare_cached("INSERT OR IGNORE INTO keep_rules (kind, id) VALUES (?1, ?2)")?;

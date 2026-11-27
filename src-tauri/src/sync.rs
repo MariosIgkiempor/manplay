@@ -3293,12 +3293,6 @@ pub fn library_identity(audio_fp: Option<String>, fingerprint: Option<String>) -
     audio_fp.or_else(|| fingerprint.map(|f| format!("file:{f}")))
 }
 
-/// Whether a stored destination identity was made by [`library_identity`]. Older versions kept
-/// whole-file fingerprints without a marker; those are read again.
-pub fn is_identity(value: &str) -> bool {
-    value.contains(':')
-}
-
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {

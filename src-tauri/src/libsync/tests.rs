@@ -1084,46 +1084,6 @@ async fn a_gap_in_a_devices_chunks_stops_the_reader_there() {
     );
 }
 
-#[test]
-fn legacy_playlists_get_position_keys_and_every_item_a_uid() {
-    let path =
-        std::env::temp_dir().join(format!("manplay-libsync-legacy-{}.db", std::process::id()));
-    let _ = std::fs::remove_file(&path);
-    {
-        let conn = db::open(&path).expect("open");
-        let ids = library(&conn, 3);
-        conn.execute("INSERT INTO playlists (name) VALUES ('Old')", [])
-            .expect("playlist");
-        for (position, id) in ids.iter().enumerate() {
-            conn.execute(
-                "INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (1, ?1, ?2)",
-                params![id, i64::try_from(position).expect("i64")],
-            )
-            .expect("member");
-        }
-        // As a database from before this version looks.
-        conn.execute("UPDATE playlists SET uid = NULL", [])
-            .expect("clear");
-        conn.execute("UPDATE playlist_tracks SET pos = NULL", [])
-            .expect("clear");
-    }
-    let reopened = db::open(&path).expect("reopen");
-    let uid: String = reopened
-        .query_row("SELECT uid FROM playlists", [], |r| r.get(0))
-        .expect("uid");
-    let pos: Vec<String> = reopened
-        .prepare("SELECT pos FROM playlist_tracks ORDER BY position")
-        .expect("stmt")
-        .query_map([], |r| r.get(0))
-        .expect("rows")
-        .map(|r| r.expect("row"))
-        .collect();
-    assert_eq!(uid.len(), 36);
-    assert_eq!(pos.len(), 3);
-    assert!(pos.windows(2).all(|w| w[0] < w[1]), "{pos:?}");
-    let _ = std::fs::remove_file(&path);
-}
-
 // ---- smart playlists, Tag Database values, analysis, waveforms ----------------
 
 fn smart(db: &Mutex<Connection>, name: &str, tags: &[&str]) -> i64 {
@@ -1557,83 +1517,9 @@ async fn hand_made_tag_database_values_travel() {
     assert_eq!(values(&b, "genre"), Vec::<String>::new());
 }
 
-#[test]
-fn switching_sharing_on_covers_smart_playlists_values_and_analysis() {
-    let mut conn = open();
-    library(&conn, 2);
-    tag_direct(&mut conn, "Genre/House", 1);
-    db::save_smart_playlist(
-        &conn,
-        &crate::smart::SmartPlaylist {
-            id: 0,
-            name: "House".into(),
-            rules: crate::smart::Rules {
-                all_tags: vec!["Genre/House".into()],
-                ..crate::smart::Rules::default()
-            },
-        },
-    )
-    .expect("smart");
-    db::create_tag_value(&conn, "artist", "DJ Foo").expect("value");
-    db::store_analysis(&conn, "fp1", &Ok(finished(124.0)), 5, false).expect("analyse");
-    db::set_tempo_key(&conn, 1, Some(Some(125.0)), None).expect("bpm");
-    assert_eq!(
-        count_ops(&conn),
-        0,
-        "nothing is written while sharing is off"
-    );
-
-    share(&mut conn);
-    for (entity, id) in [
-        ("smart_playlist", None),
-        ("tag_custom", Some("artist/dj foo")),
-        ("analysis", Some("fp1")),
-    ] {
-        let n: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM oplog WHERE e = ?1 AND (?2 IS NULL OR id = ?2)",
-                params![entity, id],
-                |r| r.get(0),
-            )
-            .expect("count");
-        assert!(n > 0, "{entity} was not seeded");
-    }
-    let hand: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM oplog WHERE e = 'analysis' AND f IN ('bpm_hand', 'bpm_edited')",
-            [],
-            |r| r.get(0),
-        )
-        .expect("hand");
-    assert_eq!(hand, 2, "the hand-set tempo goes as an edit");
-
-    // A library that shared tags and playlists before these were shared is caught up, once.
-    let before = count_ops(&conn);
-    conn.execute("DELETE FROM settings WHERE key = 'libsync_seeded'", [])
-        .expect("old");
-    conn.execute(
-        "DELETE FROM oplog WHERE e IN ('smart_playlist', 'tag_custom', 'analysis')",
-        [],
-    )
-    .expect("drop");
-    conn.execute(
-        "DELETE FROM op_state WHERE e IN ('smart_playlist', 'tag_custom', 'analysis')",
-        [],
-    )
-    .expect("drop");
-    seed::catch_up(&conn).expect("catch up");
-    assert_eq!(count_ops(&conn), before);
-    seed::catch_up(&conn).expect("again");
-    assert_eq!(count_ops(&conn), before, "only once");
-}
-
 fn count_ops(conn: &Connection) -> i64 {
     conn.query_row("SELECT COUNT(*) FROM oplog", [], |r| r.get(0))
         .expect("count")
-}
-
-fn tag_direct(conn: &mut Connection, name: &str, song: i64) {
-    db::tag_tracks(conn, name, &[song]).expect("tag");
 }
 
 // ---- clashes, sharing and making private ---------------------------------------
@@ -1763,47 +1649,6 @@ async fn renaming_mine_keeps_its_scope_and_moves_its_subtags() {
         text.contains(" Techno shared"),
         "the shared one has its name now: {text}"
     );
-}
-
-#[tokio::test]
-async fn a_stopgap_alias_comes_back_as_a_clash_once() {
-    let mut conn = open();
-    library(&conn, 2);
-    // What step 2 left: two uids with one name in the registers, a row for the lower one.
-    let tx = conn.transaction().expect("tx");
-    for (clk, uid, fp) in [(10, "u-2", "fp1"), (11, "u-1", "fp2")] {
-        for o in [
-            op(clk, DEV_A, "tag", uid, "name", json!("House")),
-            op(
-                clk + 2,
-                DEV_A,
-                "track_tag",
-                &format!("{uid}/{fp}"),
-                "present",
-                json!(true),
-            ),
-        ] {
-            state::put(&tx, &o).expect("put");
-        }
-    }
-    tx.execute(
-        "INSERT INTO tags (uid, name, scope) VALUES ('u-1', 'House', 'shared')",
-        [],
-    )
-    .expect("row");
-    tx.execute(
-        "INSERT INTO track_tags (track_id, tag_id) SELECT id, 1 FROM tracks",
-        [],
-    )
-    .expect("members");
-    tx.execute("DELETE FROM settings WHERE key = 'libsync_clashes'", [])
-        .expect("reset");
-    tx.commit().expect("commit");
-    clashes::migrate(&conn).expect("migrate");
-    assert_eq!(clashes::count(&conn).expect("count"), 1);
-    let again = clashes::migrate(&conn);
-    assert!(again.is_ok());
-    assert_eq!(clashes::count(&conn).expect("count"), 1, "only once");
 }
 
 #[tokio::test]

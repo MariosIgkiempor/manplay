@@ -16,7 +16,7 @@ use crate::db;
 use crate::libsync::clock::{self, Hlc};
 use crate::libsync::membership::{self, JoinChoice};
 use crate::libsync::remote;
-use crate::libsync::{carry, remap, skew, state};
+use crate::libsync::{carry, remap, skew};
 
 const YEAR_MS: i64 = 365 * 24 * 3600 * 1000;
 
@@ -512,77 +512,7 @@ async fn a_tag_deleted_elsewhere_leaves_no_unknown_tag_in_smart_playlists() {
     assert_eq!(everything(&a), everything(&b));
 }
 
-#[test]
-fn export_selections_keep_playlists_by_uid_and_old_ids_are_migrated() {
-    let conn = super::open();
-    let first = db::create_playlist(&conn, "One", None).expect("one");
-    let second = db::create_playlist(&conn, "Two", None).expect("two");
-    // Saved by an older version: integer ids.
-    conn.execute(
-        "INSERT INTO export_selections (destination, playlists, tags, smart)
-         VALUES ('usb:x', ?1, '[\"House\"]', '[]')",
-        params![format!("[{first},{second},999]")],
-    )
-    .expect("legacy");
-    db::migrate_selection_uids(&conn).expect("migrate");
-    let raw: String = conn
-        .query_row("SELECT playlists FROM export_selections", [], |r| r.get(0))
-        .expect("raw");
-    let stored: Vec<String> = serde_json::from_str(&raw).expect("uids");
-    assert_eq!(stored.len(), 2, "a playlist that is gone is dropped: {raw}");
-    let read = db::export_selection(&conn, "usb:x")
-        .expect("read")
-        .expect("some");
-    assert_eq!(read.playlists, vec![first, second]);
-    assert_eq!(read.tags, vec!["House".to_owned()]);
-
-    // The same playlists under other row ids (a restored backup, another install).
-    conn.execute("UPDATE playlists SET id = id + 100", [])
-        .expect("renumber");
-    let read = db::export_selection(&conn, "usb:x")
-        .expect("read")
-        .expect("some");
-    assert_eq!(read.playlists, vec![first + 100, second + 100]);
-}
-
 // ---- gaps from earlier steps ------------------------------------------------------
-
-#[test]
-fn analysis_moved_from_the_old_tables_after_sharing_started_is_sent() {
-    let mut conn = super::open();
-    super::library(&conn, 2);
-    super::share(&mut conn);
-    conn.execute_batch(
-        "CREATE TABLE analysis_legacy (
-             fingerprint TEXT PRIMARY KEY, bpm REAL, musical_key TEXT, error TEXT,
-             version INTEGER, analyzed_at INTEGER, bpm_edited INTEGER, key_edited INTEGER,
-             grid_edited INTEGER, cues_edited INTEGER, grid_bpm REAL, first_beat REAL,
-             bar_offset INTEGER, duration REAL, waveform BLOB
-         );
-         UPDATE tracks SET fingerprint = 'w1' WHERE audio_fp = 'fp1';
-         INSERT INTO analysis_legacy VALUES
-             ('w1', 126.0, 'Gm', NULL, 2, 5, 0, 0, 0, 0, 126.0, 0.1, 1, 200.0, NULL);",
-    )
-    .expect("legacy");
-    db::rekey_legacy(&mut conn).expect("rekey");
-    assert!(
-        state::get(&conn, "analysis", "fp1", "version")
-            .expect("get")
-            .is_some()
-    );
-    assert_eq!(
-        state::get(&conn, "analysis", "fp1", "bpm").expect("get"),
-        Some(json!(126.0))
-    );
-    let unsent: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM oplog WHERE uploaded = 0 AND e = 'analysis'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("count");
-    assert!(unsent > 0);
-}
 
 #[tokio::test]
 async fn the_local_log_forgets_what_a_snapshot_holds() {

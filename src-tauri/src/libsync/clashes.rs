@@ -15,20 +15,6 @@ use super::write::{Batch, active};
 use crate::db;
 use crate::error::Error;
 
-const SETTING_MIGRATED: &str = "libsync_clashes";
-
-/// Once, for a library that merged same-named items by name before clashes existed: the items
-/// that lost then have no row, and come back as clashes. Does nothing without ops.
-pub fn migrate(conn: &Connection) -> Result<(), Error> {
-    if db::get_setting(conn, SETTING_MIGRATED)?.is_some() {
-        return Ok(());
-    }
-    let tx = conn.unchecked_transaction()?;
-    apply::rematerialize_all(&tx)?;
-    db::set_setting(&tx, SETTING_MIGRATED, Some("1"))?;
-    Ok(tx.commit()?)
-}
-
 /// After a local edit that may have freed a name: a held item whose name is free takes it.
 pub fn refresh(conn: &Connection) -> Result<(), Error> {
     if count(conn)? == 0 {
