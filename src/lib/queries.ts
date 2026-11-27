@@ -58,6 +58,7 @@ import {
 	listSyncTargets,
 	listTracks,
 	migrateLibraryTags,
+	newerLibrary,
 	onAnalysisFinished,
 	onLibrarySynced,
 	type PanelTabs,
@@ -115,6 +116,16 @@ import { undoCoverChange, undoTagWrite } from "#/lib/undo-entries.ts";
  * page that shows songs meant moving and checking the whole library again each time. It is still
  * read again when the window comes back, for changes made to the files outside the app.
  */
+/** Whether a newer manplay set up the library, read once: it cannot change while the app runs. */
+export function useNewerLibrary() {
+	return useQuery({
+		queryKey: ["newer-library"],
+		queryFn: newerLibrary,
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+	});
+}
+
 export function useTracks() {
 	return useQuery({
 		queryKey: ["tracks"],

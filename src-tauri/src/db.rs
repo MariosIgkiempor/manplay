@@ -717,9 +717,56 @@ fn convert_smart_rules(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
+/// The layout of the database, kept in SQLite's `user_version`. Raised when a change would let an
+/// older manplay harm what it finds: a song this one streams has no file, and an older one would
+/// take it as removed and tell every device in the shared library so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct SchemaVersion(pub i64);
+
+impl std::fmt::Display for SchemaVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// The newest layout this manplay reads and writes.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion(1);
+
+/// A database a newer manplay set up, which this one leaves untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewerLibrary {
+    pub found: SchemaVersion,
+    pub supported: SchemaVersion,
+}
+
+fn schema_version(conn: &Connection) -> Result<SchemaVersion, Error> {
+    Ok(SchemaVersion(conn.pragma_query_value(
+        None,
+        "user_version",
+        |r| r.get(0),
+    )?))
+}
+
+/// Refuses a database of a newer layout before anything writes to it.
+fn check_schema_version(conn: &Connection) -> Result<(), Error> {
+    let found = schema_version(conn)?;
+    if found > SCHEMA_VERSION {
+        return Err(Error::NewerLibrary(NewerLibrary {
+            found,
+            supported: SCHEMA_VERSION,
+        }));
+    }
+    Ok(())
+}
+
+/// Opens the library database, refusing one a newer manplay set up ([`Error::NewerLibrary`]), and
+/// brings an older one up to [`SCHEMA_VERSION`].
 #[allow(clippy::too_many_lines)]
 pub fn open(path: &Path) -> Result<Connection, Error> {
     let conn = Connection::open(path)?;
+    check_schema_version(&conn)?;
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA foreign_keys = ON;
@@ -923,6 +970,9 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     retry_unnamed_waveforms(&conn)?;
     create_jellyfin(&conn)?;
     create_sync_ignored(&conn)?;
+    if schema_version(&conn)? < SCHEMA_VERSION {
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION.0)?;
+    }
     Ok(conn)
 }
 
@@ -4216,6 +4266,64 @@ pub fn share_auto_grid(
 mod tests {
     use super::*;
     use crate::analysis::Analysis;
+
+    /// A database file of its own in the temp dir, holding `user_version` = `version` and nothing
+    /// else.
+    fn database_at_version(name: &str, version: i64) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "manplay-schema-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("library.db");
+        Connection::open(&path)
+            .and_then(|c| c.pragma_update(None, "user_version", version))
+            .expect("seed db");
+        path
+    }
+
+    #[test]
+    fn a_database_of_this_layout_or_older_opens_and_is_brought_up_to_it() {
+        let cases = [
+            ("new", 0),
+            ("current", SCHEMA_VERSION.0),
+        ];
+        for (name, version) in cases {
+            let path = database_at_version(name, version);
+            let conn = open(&path).expect(name);
+            assert_eq!(schema_version(&conn).expect("version"), SCHEMA_VERSION, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_database_of_a_newer_layout_is_refused_and_left_untouched() {
+        let cases = [
+            ("one-newer", SCHEMA_VERSION.0 + 1),
+            ("much-newer", SCHEMA_VERSION.0 + 100),
+        ];
+        for (name, version) in cases {
+            let path = database_at_version(name, version);
+            match open(&path) {
+                Err(Error::NewerLibrary(newer)) => assert_eq!(
+                    newer,
+                    NewerLibrary {
+                        found: SchemaVersion(version),
+                        supported: SCHEMA_VERSION,
+                    },
+                    "{name}"
+                ),
+                Err(e) => panic!("{name}: wrong error {e}"),
+                Ok(_) => panic!("{name}: opened"),
+            }
+            let conn = Connection::open(&path).expect("reopen");
+            let tables: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sqlite_master", [], |r| r.get(0))
+                .expect("count");
+            assert_eq!(tables, 0, "{name}: tables were created");
+            assert_eq!(schema_version(&conn).expect("version").0, version, "{name}");
+        }
+    }
 
     /// A file whose audio is `audio` (its `audio_fp`).
     fn track(path: &str, audio: &str, tag_bpm: Option<f64>) -> NewTrack {

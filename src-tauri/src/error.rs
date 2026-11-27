@@ -14,6 +14,12 @@ pub enum Error {
     Msg(String),
     #[error("state lock poisoned")]
     Lock,
+    #[error(
+        "this library was set up by a newer manplay (layout {}, this one reads up to {})",
+        .0.found,
+        .0.supported
+    )]
+    NewerLibrary(crate::db::NewerLibrary),
 }
 
 impl Serialize for Error {

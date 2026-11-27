@@ -69,6 +69,7 @@ Windows mode shows the Windows wording (`Ctrl+K`, Recycle Bin). Fonts are still 
 pnpm harness scenario empty   # a first launch: no library folder, no destinations
 pnpm harness scenario large   # about 1,400 songs, the size of a real collection
 pnpm harness scenario full    # the default
+pnpm harness scenario newer-library   # a library a newer manplay set up: only the update notice
 ```
 
 ### Backend events

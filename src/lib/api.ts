@@ -1835,6 +1835,20 @@ export async function fsMove(paths: string[], dest: string): Promise<void> {
 	await invoke("fs_move", { paths, dest });
 }
 
+/** The layout of the library database (`db::SchemaVersion`). */
+const schemaVersionSchema = z.number().int().nonnegative().brand<"SchemaVersion">();
+
+export const newerLibrarySchema = z
+	.object({ found: schemaVersionSchema, supported: schemaVersionSchema })
+	.nullable();
+
+/** Set when a newer manplay set up the library database, so this one did not open it. */
+export type NewerLibrary = NonNullable<z.infer<typeof newerLibrarySchema>>;
+
+export async function newerLibrary(): Promise<NewerLibrary | null> {
+	return newerLibrarySchema.parse(await invoke("newer_library"));
+}
+
 /** Opens System Settings at Full Disk Access (macOS). */
 export async function openPrivacySettings(): Promise<void> {
 	await invoke("open_privacy_settings");

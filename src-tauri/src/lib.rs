@@ -4649,6 +4649,15 @@ async fn playback_needs_decoding(path: PathBuf) -> bool {
         .unwrap_or(false)
 }
 
+/// Set when the library database was set up by a newer manplay and was not opened.
+struct LibraryGate(Option<db::NewerLibrary>);
+
+/// Why the library was not opened, when a newer manplay set it up; `None` when it is open.
+#[tauri::command]
+fn newer_library(gate: State<'_, LibraryGate>) -> Option<db::NewerLibrary> {
+    gate.0
+}
+
 /// Opens the macOS Full Disk Access pane, for when the system blocks the library folder.
 /// Windows has no such permission, so there it does nothing.
 #[tauri::command]
@@ -5938,7 +5947,17 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let conn = db::open(&dir.join("library.db"))?;
+            // A database a newer manplay set up is left alone: the app runs on an empty one in
+            // memory, starts no background work, and the window only says to update.
+            let (conn, newer) = match db::open(&dir.join("library.db")) {
+                Ok(conn) => (conn, None),
+                Err(Error::NewerLibrary(newer)) => {
+                    log::warn!("library.db is of a newer layout: {newer:?}");
+                    (db::open(Path::new(":memory:"))?, Some(newer))
+                }
+                Err(e) => return Err(e.into()),
+            };
+            app.manage(LibraryGate(newer));
             if let Some(root) = db::get_setting(&conn, SETTING_ROOT)? {
                 allow_assets(app.handle(), Path::new(&root));
             }
@@ -5980,6 +5999,9 @@ pub fn run() {
                 libsync_focused: AtomicBool::new(false),
                 libsync_last: Mutex::new(None),
             });
+            if newer.is_some() {
+                return Ok(());
+            }
             tauri::async_runtime::spawn(fill_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(reprint_audio_fps(app.handle().clone()));
             tauri::async_runtime::spawn(scan_worker(app.handle().clone()));
@@ -6134,6 +6156,7 @@ pub fn run() {
             fs_trash,
             trash_duplicates,
             open_privacy_settings,
+            newer_library,
             audit_library,
             tags_read,
             tag_values,

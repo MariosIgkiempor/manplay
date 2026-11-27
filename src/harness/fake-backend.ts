@@ -61,9 +61,9 @@ import {
  * `full`: a library with every source and destination set up. `empty`: a first launch.
  * `large`: `full` with about 1,400 songs, for how the app holds up at a real library's size.
  */
-export type Scenario = "full" | "empty" | "large";
+export type Scenario = "full" | "empty" | "large" | "newer-library";
 
-export const SCENARIOS: readonly Scenario[] = ["full", "empty", "large"];
+export const SCENARIOS: readonly Scenario[] = ["full", "empty", "large", "newer-library"];
 
 /** How many times `large` repeats the library. */
 const LARGE_COPIES = 12;
@@ -72,7 +72,12 @@ const LARGE_COPIES = 12;
 type Args = ReadonlyMap<string, unknown>;
 type Command = (args: Args) => unknown;
 
+/** The layout of the library database the real backend reads (`db::SCHEMA_VERSION`). */
+const SCHEMA_VERSION = 1;
+
 interface State {
+	/** A newer manplay set up the library, so the backend left it closed. */
+	newerLibrary: boolean;
 	root: string | null;
 	tracks: Track[];
 	tags: Tag[];
@@ -97,9 +102,11 @@ interface State {
 }
 
 function createState(scenario: Scenario): State {
-	const setUp = scenario !== "empty";
+	const newerLibrary = scenario === "newer-library";
+	const setUp = scenario !== "empty" && !newerLibrary;
 	const tracks = setUp ? buildTracks(scenario === "large" ? LARGE_COPIES : 1) : [];
 	return {
+		newerLibrary,
 		root: setUp ? LIBRARY_ROOT : null,
 		tracks,
 		tags: setUp ? buildTags(tracks) : [],
@@ -312,6 +319,8 @@ function libraryCommands(state: State): Record<string, Command> {
 	return {
 		list_tracks: () => state.tracks,
 		get_library_root: () => state.root,
+		newer_library: () =>
+			state.newerLibrary ? { found: SCHEMA_VERSION + 1, supported: SCHEMA_VERSION } : null,
 		library_status: () => ({ missing: state.tracks.length > 0 ? 2 : 0, graceDays: 30 }),
 		list_missing: () => buildMissing(state.tracks).filter(() => state.tracks.length > 0),
 		list_duplicates: () => (state.tracks.length > 0 ? buildDuplicates(state.tracks) : []),

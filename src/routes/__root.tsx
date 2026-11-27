@@ -3,6 +3,7 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { Shell } from "#/components/app-shell.tsx";
 import { AutoRefresh } from "#/components/auto-refresh.tsx";
+import { NewerLibraryGate } from "#/components/newer-library-gate.tsx";
 import { FolderLibraryWatch } from "#/components/shared-library.tsx";
 import { StatusBarHost, StatusScopeProvider } from "#/components/status-bar.tsx";
 import { StatusNotices } from "#/components/status-notices.tsx";
@@ -46,31 +47,33 @@ function RootDocument({ children }: { children: ReactNode }) {
 			</head>
 			<body className="flex h-screen flex-col overflow-hidden bg-canvas">
 				<QueryClientProvider client={queryClient}>
-					<PlayerProvider>
-						<SyncProgressProvider>
-							<UndoProvider>
-								<DetailProvider>
-									<SyncActionsProvider>
-										<StatusScopeProvider>
-											<StatusSlotContext.Provider value={statusSlot}>
-												<SaveSlotContext.Provider value={saveSlot}>
-													<AutoRefresh />
-													<SyncScanEvents />
-													<FolderLibraryWatch />
-													<Shell>{children}</Shell>
-													<StatusBarHost
-														setSlot={setStatusSlot}
-														setSaveSlot={setSaveSlot}
-														notices={<StatusNotices />}
-													/>
-												</SaveSlotContext.Provider>
-											</StatusSlotContext.Provider>
-										</StatusScopeProvider>
-									</SyncActionsProvider>
-								</DetailProvider>
-							</UndoProvider>
-						</SyncProgressProvider>
-					</PlayerProvider>
+					<NewerLibraryGate>
+						<PlayerProvider>
+							<SyncProgressProvider>
+								<UndoProvider>
+									<DetailProvider>
+										<SyncActionsProvider>
+											<StatusScopeProvider>
+												<StatusSlotContext.Provider value={statusSlot}>
+													<SaveSlotContext.Provider value={saveSlot}>
+														<AutoRefresh />
+														<SyncScanEvents />
+														<FolderLibraryWatch />
+														<Shell>{children}</Shell>
+														<StatusBarHost
+															setSlot={setStatusSlot}
+															setSaveSlot={setSaveSlot}
+															notices={<StatusNotices />}
+														/>
+													</SaveSlotContext.Provider>
+												</StatusSlotContext.Provider>
+											</StatusScopeProvider>
+										</SyncActionsProvider>
+									</DetailProvider>
+								</UndoProvider>
+							</SyncProgressProvider>
+						</PlayerProvider>
+					</NewerLibraryGate>
 				</QueryClientProvider>
 				<Scripts />
 			</body>
