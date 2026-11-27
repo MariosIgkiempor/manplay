@@ -101,7 +101,7 @@ pub fn held(mount: &Path) -> Option<(usize, usize)> {
 }
 
 /// How the drive's playlist folders name their songs; `None` when the drive has none of
-/// manplay's. A drive whose folders were made before names could be chosen uses the file names.
+/// manplay's. A drive with folders but no saved template uses the file names.
 pub fn template(mount: &Path) -> Option<FileNameTemplate> {
     if !is_on(mount) {
         return None;

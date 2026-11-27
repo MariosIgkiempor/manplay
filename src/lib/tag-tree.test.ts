@@ -13,10 +13,10 @@ describe("tagWithin", () => {
 describe("buildTagTree", () => {
 	it("nests by path, fills missing parents and sorts levels", () => {
 		const tree = buildTagTree([
-			{ id: 1, name: "Mood/Calm", trackCount: 1 },
-			{ id: 2, name: "Genre", trackCount: 3 },
-			{ id: 3, name: "Genre/House", trackCount: 2 },
-			{ id: 4, name: "Genre/Ambient", trackCount: 1 },
+			{ id: 1, name: "Mood/Calm", trackCount: 1, scope: "shared", hidden: false, held: false },
+			{ id: 2, name: "Genre", trackCount: 3, scope: "shared", hidden: false, held: false },
+			{ id: 3, name: "Genre/House", trackCount: 2, scope: "shared", hidden: false, held: false },
+			{ id: 4, name: "Genre/Ambient", trackCount: 1, scope: "shared", hidden: false, held: false },
 		]);
 		expect(tree.map((n) => n.name)).toEqual(["Genre", "Mood"]);
 		expect(tree[0]?.children.map((n) => n.label)).toEqual(["Ambient", "House"]);
@@ -28,10 +28,10 @@ describe("buildTagTree", () => {
 describe("flattenTagTree", () => {
 	it("lists parents before children with their depth", () => {
 		const rows = flattenTagTree([
-			{ id: 1, name: "b", trackCount: 1 },
-			{ id: 2, name: "a/y", trackCount: 1 },
-			{ id: 3, name: "a", trackCount: 1 },
-			{ id: 4, name: "a/x", trackCount: 1 },
+			{ id: 1, name: "b", trackCount: 1, scope: "shared", hidden: false, held: false },
+			{ id: 2, name: "a/y", trackCount: 1, scope: "shared", hidden: false, held: false },
+			{ id: 3, name: "a", trackCount: 1, scope: "shared", hidden: false, held: false },
+			{ id: 4, name: "a/x", trackCount: 1, scope: "shared", hidden: false, held: false },
 		]);
 		expect(rows.map((r) => `${r.depth}:${r.node.name}`)).toEqual(["0:a", "1:a/x", "1:a/y", "0:b"]);
 	});

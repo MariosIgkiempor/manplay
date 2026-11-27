@@ -31,14 +31,12 @@ const trackSchema = z.object({
 	/** BPM and key detection has run on this audio (whether or not it found them). */
 	analyzed: z.boolean(),
 	/** BPM, key, genre, label, ... as stored in the file (see `LISTED` in `src-tauri/src/tags.rs`). */
-	fields: z.record(z.string(), z.string()).default({}),
+	fields: z.record(z.string(), z.string()),
 	/** Which of BPM, key and beat grid were set by hand; re-analysis keeps them unless told not to. */
-	edited: z
-		.object({ bpm: z.boolean(), key: z.boolean(), grid: z.boolean() })
-		.default({ bpm: false, key: false, grid: false }),
-	/** Unix seconds the song came into the library; null for songs from before this was kept. */
-	addedAt: int.nullable().optional(),
-	fileState: fileStateSchema.default("here"),
+	edited: z.object({ bpm: z.boolean(), key: z.boolean(), grid: z.boolean() }),
+	/** Unix seconds the song came into the library. */
+	addedAt: int,
+	fileState: fileStateSchema,
 });
 
 export type Track = z.infer<typeof trackSchema>;
@@ -77,7 +75,7 @@ const analysisSettingsSchema = z.object({
 	/** Key notation in the tags. */
 	keyFormat: z.enum(["musical", "camelot"]),
 	/** Re-analysing replaces BPM, key and beat grids set by hand. */
-	replaceEdits: z.boolean().default(false),
+	replaceEdits: z.boolean(),
 });
 
 export type AnalysisSettings = z.infer<typeof analysisSettingsSchema>;
@@ -430,12 +428,11 @@ export type Scope = z.infer<typeof scopeSchema>;
 
 /** What the sidebar knows about a tag, playlist or smart playlist beyond its name. */
 const sharingFields = {
-	/** Absent counts as shared. */
-	scope: scopeSchema.optional(),
+	scope: scopeSchema,
 	/** Hidden on this device only. */
-	hidden: z.boolean().optional(),
+	hidden: z.boolean(),
 	/** Shown under a held name because another item has the name (see Clashes). */
-	held: z.boolean().optional(),
+	held: z.boolean(),
 };
 
 const playlistSchema = z.object({
@@ -444,7 +441,7 @@ const playlistSchema = z.object({
 	trackCount: int,
 	...sharingFields,
 	/** Its songs are kept on this device instead of streamed, the ones added later too. */
-	kept: z.boolean().optional(),
+	kept: z.boolean(),
 });
 
 export type Playlist = z.infer<typeof playlistSchema>;
@@ -1336,30 +1333,30 @@ export function onSyncProgress(handler: (p: SyncProgress) => void): Promise<() =
 /** rekordbox's two libraries, each for the players that read it. */
 const rekordboxFormatsSchema = z.object({
 	/** `export.pdb`: the CDJ-3000 and older players. */
-	deviceLibrary: z.boolean().default(true),
+	deviceLibrary: z.boolean(),
 	/** `exportLibrary.db`: the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo. */
-	oneLibrary: z.boolean().default(true),
+	oneLibrary: z.boolean(),
 });
 
 export type RekordboxFormats = z.infer<typeof rekordboxFormatsSchema>;
 
-/** Both of rekordbox's libraries, which is what an export wrote before there was a choice. */
+/** Both of rekordbox's libraries: what a new selection starts with. */
 export const BOTH_REKORDBOX_FORMATS: RekordboxFormats = { deviceLibrary: true, oneLibrary: true };
 
 /** The formats a USB export writes onto the drive, each for the players that read it. */
 const usbOutputsSchema = z.object({
 	/** rekordbox's libraries, for Pioneer and AlphaTheta players. */
-	rekordbox: z.boolean().default(true),
+	rekordbox: z.boolean(),
 	/** The playlists as Serato crates. */
-	serato: z.boolean().default(false),
+	serato: z.boolean(),
 	/** The songs, their cues and the playlists as VirtualDJ reads them. */
-	virtualDj: z.boolean().default(false),
+	virtualDj: z.boolean(),
 	/** The library Gemini MDJ players read. */
-	gemini: z.boolean().default(false),
+	gemini: z.boolean(),
 	/** Each playlist as a folder of its songs, for players that only browse folders. */
-	playlistFolders: z.boolean().default(false),
+	playlistFolders: z.boolean(),
 	/** Which of rekordbox's two libraries `rekordbox` writes; at least one. */
-	rekordboxFormats: rekordboxFormatsSchema.default(BOTH_REKORDBOX_FORMATS),
+	rekordboxFormats: rekordboxFormatsSchema,
 });
 
 export type UsbOutputs = z.infer<typeof usbOutputsSchema>;
@@ -1406,7 +1403,7 @@ export const folderFileNamesSchema = z
 
 export type FolderFileNames = z.infer<typeof folderFileNamesSchema>;
 
-/** The song's own file name: what playlist folders held before names could be chosen. */
+/** The song's own file name: what a new selection starts with. */
 export const DEFAULT_FOLDER_FILE_NAMES: FolderFileNames = [{ tag: "fileName" }];
 
 const exportSelectionSchema = z.object({
@@ -1415,20 +1412,13 @@ const exportSelectionSchema = z.object({
 	/** Tags exported as playlists (a tag includes the songs of the tags below it). */
 	tags: z.array(z.string()),
 	/** Smart playlists, by id. */
-	smart: z.array(int).default([]),
+	smart: z.array(int),
 	/** USB drives: what happens to the playlists and songs already there. */
-	usbMode: z.enum(["add", "replacePlaylists", "replaceAll"]).default("add"),
+	usbMode: z.enum(["add", "replacePlaylists", "replaceAll"]),
 	/** USB drives: the formats written onto the drive. */
-	usbOutputs: usbOutputsSchema.default({
-		rekordbox: true,
-		serato: false,
-		virtualDj: false,
-		gemini: false,
-		playlistFolders: false,
-		rekordboxFormats: BOTH_REKORDBOX_FORMATS,
-	}),
+	usbOutputs: usbOutputsSchema,
 	/** USB drives: how songs in playlist folders are named. */
-	usbFolderFileNames: folderFileNamesSchema.default(DEFAULT_FOLDER_FILE_NAMES),
+	usbFolderFileNames: folderFileNamesSchema,
 });
 
 export type UsbMode = ExportSelection["usbMode"];
@@ -1444,7 +1434,7 @@ const jellyfinPushSummarySchema = z.object({
 	updated: int.nonnegative(),
 	renamed: int.nonnegative(),
 	/** Made again for the people now chosen to see them. */
-	reshared: int.nonnegative().default(0),
+	reshared: int.nonnegative(),
 	removed: int.nonnegative(),
 	/** Renames, removals and take-overs left for a review. */
 	waiting: int.nonnegative(),
@@ -1545,29 +1535,31 @@ const addedRuleSchema = z.discriminatedUnion("kind", [
 export type AddedRule = z.infer<typeof addedRuleSchema>;
 
 const smartRulesSchema = z.object({
-	allTags: z.array(z.string()).default([]),
-	anyTags: z.array(z.string()).default([]),
-	noneTags: z.array(z.string()).default([]),
-	added: addedRuleSchema.nullable().default(null),
-	bpmMin: z.number().nullable().default(null),
-	bpmMax: z.number().nullable().default(null),
+	allTags: z.array(z.string()),
+	anyTags: z.array(z.string()),
+	noneTags: z.array(z.string()),
+	added: addedRuleSchema.nullable(),
+	bpmMin: z.number().nullable(),
+	bpmMax: z.number().nullable(),
 });
 
 /** What a song needs to be in a smart playlist; parts left empty are ignored. */
 export type SmartRules = z.infer<typeof smartRulesSchema>;
 
-const smartPlaylistSchema = z.object({
-	id: int,
-	name: z.string(),
-	rules: smartRulesSchema,
-	...sharingFields,
-});
+const smartPlaylistFields = { id: int, name: z.string(), rules: smartRulesSchema };
+
+const smartPlaylistSchema = z.object(smartPlaylistFields);
+
+const smartListingSchema = z.object({ ...smartPlaylistFields, ...sharingFields });
 
 /** A rule-based playlist that belongs to one export destination, never to the library. */
 export type SmartPlaylist = z.infer<typeof smartPlaylistSchema>;
 
-export async function smartPlaylists(): Promise<SmartPlaylist[]> {
-	return z.array(smartPlaylistSchema).parse(await invoke("smart_playlists"));
+/** A smart playlist as the sidebar lists it, with its sharing. */
+export type SmartListing = z.infer<typeof smartListingSchema>;
+
+export async function smartPlaylists(): Promise<SmartListing[]> {
+	return z.array(smartListingSchema).parse(await invoke("smart_playlists"));
 }
 
 /** Adds (id 0) or changes a smart playlist. Only its rules are kept; its songs stay live. */
@@ -1703,8 +1695,6 @@ const smartPreviewSchema = z.object({
 	trackIds: z.array(int),
 	durationMs: int,
 	bytes: int,
-	/** Songs that match everything else but have no added date. */
-	undated: int,
 });
 
 export type SmartPreview = z.infer<typeof smartPreviewSchema>;
@@ -2257,7 +2247,7 @@ const importTrackSchema = z.object({
 	bitrate: int.nullish(),
 	sampleRate: int.nullish(),
 	/** The file carries its own cover picture. */
-	hasArt: z.boolean().default(false),
+	hasArt: z.boolean(),
 });
 
 const importGroupSchema = z.object({
@@ -2286,9 +2276,9 @@ const importReportSchema = z.object({
 	imported: int,
 	images: int,
 	/** Of the songs imported, those converted from AAC to MP3. */
-	converted: z.array(z.object({ source: z.string(), size: int, dest: z.string() })).default([]),
+	converted: z.array(z.object({ source: z.string(), size: int, dest: z.string() })),
 	/** Songs given a cover fetched from Apple. */
-	covers: int.default(0),
+	covers: int,
 	failed: z.array(z.object({ file: z.string(), error: z.string() })),
 });
 
@@ -2321,7 +2311,7 @@ export type ImportFolder = z.infer<typeof importFolderSchema>;
 /** Whose runs an import folder's history lists. */
 export const importActivitySource = (id: ImportFolderId): ActivitySource => `import:${id}`;
 
-/** Every import folder (the Downloads and iTunes sources from before become the first two). */
+/** Every import folder. */
 export async function importFolders(): Promise<ImportFolder[]> {
 	return z.array(importFolderSchema).parse(await invoke("import_folders"));
 }
@@ -2558,18 +2548,18 @@ const usbFormatsSchema = z.object({
 	/** `exportLibrary.db`, read by the CDJ-3000X, Opus Quad, XDJ-AZ and Omnis Duo. */
 	oneLibrary: usbLibrarySummarySchema.nullable(),
 	/** Serato's `database V2` and crates (counted as playlists). */
-	serato: usbLibrarySummarySchema.nullable().default(null),
+	serato: usbLibrarySummarySchema.nullable(),
 	/** VirtualDJ's `database.xml` and lists (counted as playlists). */
-	virtualDj: usbLibrarySummarySchema.nullable().default(null),
+	virtualDj: usbLibrarySummarySchema.nullable(),
 	/** The `GEMINI` library Gemini MDJ players read. */
-	gemini: usbLibrarySummarySchema.nullable().default(null),
+	gemini: usbLibrarySummarySchema.nullable(),
 	/** The playlists as folders of songs; a song counts once for each folder it is in. */
-	playlistFolders: usbLibrarySummarySchema.nullable().default(null),
+	playlistFolders: usbLibrarySummarySchema.nullable(),
 	deviceLibraryError: z.string().nullable(),
 	oneLibraryError: z.string().nullable(),
-	seratoError: z.string().nullable().default(null),
-	virtualDjError: z.string().nullable().default(null),
-	geminiError: z.string().nullable().default(null),
+	seratoError: z.string().nullable(),
+	virtualDjError: z.string().nullable(),
+	geminiError: z.string().nullable(),
 });
 
 export type UsbFormats = z.infer<typeof usbFormatsSchema>;
@@ -2630,44 +2620,44 @@ const usbExportReportSchema = z.object({
 	/** Songs given a beat grid and waveform. */
 	analyzed: int,
 	/** Songs already on the drive whose edited beat grid was written again. */
-	regridded: int.default(0),
+	regridded: int,
 	playlists: int,
 	/** Playlists and folders taken off the drive because they were not exported. */
-	playlistsRemoved: int.default(0),
+	playlistsRemoved: int,
 	/** Songs deleted because no playlist on the drive held them any more. */
-	songsDeleted: int.default(0),
-	bytesFreed: int.default(0),
+	songsDeleted: int,
+	bytesFreed: int,
 	libraryTracks: int,
 	/** Folder on the drive with copies of both previous databases. */
 	backup: z.string().nullable(),
 	/** Whether rekordbox's libraries were written. */
-	rekordbox: z.boolean().default(true),
+	rekordbox: z.boolean(),
 	/** Whether the Device Library (`export.pdb`) was written. */
-	deviceLibrary: z.boolean().default(false),
+	deviceLibrary: z.boolean(),
 	/** Whether the OneLibrary (`exportLibrary.db`) was written. */
 	oneLibrary: z.boolean(),
 	/** Why it was not; the drive's old OneLibrary was then removed. */
 	oneLibraryError: z.string().nullable(),
 	/** Serato crates written; null when the export was not asked to write them. */
-	seratoCrates: int.nullable().default(null),
+	seratoCrates: int.nullable(),
 	/** Serato crates taken off the drive with their playlists. */
-	seratoCratesRemoved: int.default(0),
+	seratoCratesRemoved: int,
 	/** Why the Serato crates could not be written; the rekordbox libraries were. */
-	seratoError: z.string().nullable().default(null),
+	seratoError: z.string().nullable(),
 	/** VirtualDJ lists written; null when the export was not asked to write them. */
-	virtualDjLists: int.nullable().default(null),
+	virtualDjLists: int.nullable(),
 	/** VirtualDJ lists taken off the drive with their playlists. */
-	virtualDjListsRemoved: int.default(0),
+	virtualDjListsRemoved: int,
 	/** Why the VirtualDJ library could not be written; the rekordbox libraries were. */
-	virtualDjError: z.string().nullable().default(null),
+	virtualDjError: z.string().nullable(),
 	/** The Gemini library; null when the export was not asked to write it. */
-	gemini: geminiSummarySchema.nullable().default(null),
+	gemini: geminiSummarySchema.nullable(),
 	/** Why it could not be written; the rekordbox libraries were. */
-	geminiError: z.string().nullable().default(null),
+	geminiError: z.string().nullable(),
 	/** The playlist folders; null when the export was not asked for them. */
-	playlistFolders: playlistFoldersSummarySchema.nullable().default(null),
+	playlistFolders: playlistFoldersSummarySchema.nullable(),
 	/** Why they could not be finished; the rekordbox libraries were written. */
-	playlistFoldersError: z.string().nullable().default(null),
+	playlistFoldersError: z.string().nullable(),
 	failed: z.array(fileFailureSchema),
 });
 
@@ -2692,14 +2682,14 @@ export async function exportToUsb(
 const songRefSchema = z.object({
 	title: z.string(),
 	artist: z.string(),
-	album: z.string().default(""),
-	bpm: z.number().nullable().default(null),
-	key: z.string().nullable().default(null),
-	durationSecs: int.nullable().default(null),
+	album: z.string(),
+	bpm: z.number().nullable(),
+	key: z.string().nullable(),
+	durationSecs: int.nullable(),
 	/** The library song, when there is one (for its artwork). */
-	trackId: int.nullable().default(null),
+	trackId: int.nullable(),
 	/** The file on the drive, for a song only the drive has. */
-	file: z.string().nullable().default(null),
+	file: z.string().nullable(),
 });
 
 export type SongRef = z.infer<typeof songRefSchema>;
@@ -2714,7 +2704,7 @@ const usbDiffSchema = z.object({
 			added: z.array(songRefSchema),
 			removed: z.array(songRefSchema),
 			/** Every song in it afterwards, in order (before, for a removed one). */
-			tracks: z.array(songRefSchema).default([]),
+			tracks: z.array(songRefSchema),
 		}),
 	),
 	/** Songs new to the drive. */
@@ -2783,7 +2773,7 @@ const cueSchema = z.object({
 	name: z.string(),
 	color: z.string(),
 	/** The memory cue the song starts from (rekordbox's main cue on load). */
-	main: z.boolean().default(false),
+	main: z.boolean(),
 });
 
 /** Cues set in manplay for a song; they go onto USB drives. */

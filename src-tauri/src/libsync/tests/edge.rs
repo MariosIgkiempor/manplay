@@ -348,7 +348,7 @@ async fn a_new_audio_fingerprint_is_remapped_and_older_builds_wait() {
 async fn two_devices_starting_a_library_at_once_end_up_in_the_one_that_stands() {
     let store = Memory::default();
     let rival = membership::LibraryFile {
-        format: 1,
+        format: membership::LIBRARY_FORMAT,
         library_id: "the-other-one".into(),
         name: "Theirs".into(),
         created_at: 1,
@@ -379,8 +379,8 @@ async fn two_devices_starting_a_library_at_once_end_up_in_the_one_that_stands() 
 fn add_track(db: &std::sync::Mutex<rusqlite::Connection>, path: &str, fp: &str) -> i64 {
     let conn = db.lock().expect("lock");
     conn.execute(
-        "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-         VALUES (?1, 'a', 'b', 'new', 1, ?2)",
+        "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+         VALUES (?1, 'a', 'b', 'new', 1, ?2, 0)",
         params![path, fp],
     )
     .expect("track");

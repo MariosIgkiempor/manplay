@@ -308,9 +308,8 @@ fn rename(conn: &Connection, c: &Loaded, row: &Row, new_name: Option<&str>) -> R
     let mut moving: Vec<(i64, String, String)> = vec![(row.id, row.uid.clone(), c.name.clone())];
     if c.kind.table == "tags" {
         let prefix = format!("{}/", c.name.to_lowercase());
-        let mut stmt = conn.prepare(
-            "SELECT id, COALESCE(uid, ''), name FROM tags WHERE scope = ?1 AND id <> ?2",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id, uid, name FROM tags WHERE scope = ?1 AND id <> ?2")?;
         let others: Vec<(i64, String, String)> = stmt
             .query_map(params![row.scope, row.id], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))

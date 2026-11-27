@@ -32,7 +32,7 @@ import {
 	type AddedRule,
 	type LocalTagUse,
 	listTags,
-	type SmartPlaylist,
+	type SmartListing,
 	type SmartPreview,
 	type SmartRules,
 	saveSmartPlaylist,
@@ -92,7 +92,7 @@ function PickRow({
 	onToggle,
 	onOpen,
 }: {
-	playlist: SmartPlaylist;
+	playlist: SmartListing;
 	on: boolean;
 	onToggle: (on: boolean) => void;
 	onOpen: () => void;
@@ -744,13 +744,6 @@ export function Readout({
 				{preview === undefined
 					? "Counting songs…"
 					: `${plural(preview.trackIds.length, "song")}, ${duration(preview.durationMs / 1000)}, ${formatBytes(preview.bytes)}`}
-				{preview && preview.undated > 0 && (
-					<>
-						{". "}
-						{plural(preview.undated, "more song")} {preview.undated === 1 ? "matches" : "match"} but{" "}
-						{preview.undated === 1 ? "has" : "have"} no added date
-					</>
-				)}
 			</p>
 		</div>
 	);
@@ -830,7 +823,7 @@ function FilterSection({ rules, setRules }: SectionProps) {
  * A smart playlist's rules, saved as they change. Until the playlist is renamed by hand its name
  * follows the tags, so "instrumental" + "House" names itself.
  */
-export function SmartRulesEditor({ playlist }: { playlist: SmartPlaylist }) {
+export function SmartRulesEditor({ playlist }: { playlist: SmartListing }) {
 	const queryClient = useQueryClient();
 	const [rules, setRules] = useState(playlist.rules);
 	const refresh = useRefreshItems();
@@ -885,8 +878,8 @@ export function SmartRulesEditor({ playlist }: { playlist: SmartPlaylist }) {
 				rules: next,
 				name: named ? now.name : autoName(next),
 			});
-			queryClient.setQueryData<SmartPlaylist[]>(SMART_KEY, (old) =>
-				(old ?? []).map((p) => (p.id === stored.id ? stored : p)),
+			queryClient.setQueryData<SmartListing[]>(SMART_KEY, (old) =>
+				(old ?? []).map((p) => (p.id === stored.id ? { ...p, ...stored } : p)),
 			);
 		},
 	});

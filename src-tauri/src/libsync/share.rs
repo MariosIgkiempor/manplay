@@ -29,7 +29,7 @@ fn kind_of(label: &str) -> Result<Kind, Error> {
 fn item(conn: &Connection, kind: Kind, id: i64) -> Result<Item, Error> {
     conn.query_row(
         &format!(
-            "SELECT id, COALESCE(uid, ''), name, scope FROM {} WHERE id = ?1",
+            "SELECT id, uid, name, scope FROM {} WHERE id = ?1",
             kind.table
         ),
         params![id],
@@ -348,7 +348,7 @@ pub struct PrivatePreview {
 fn shared_smarts_using(conn: &Connection, uid: &str) -> Result<Vec<(i64, String, String)>, Error> {
     let rows: Vec<(i64, String, String, String)> = conn
         .prepare(
-            "SELECT id, COALESCE(uid, ''), name, rules FROM smart_playlists
+            "SELECT id, uid, name, rules FROM smart_playlists
              WHERE scope = 'shared' AND instr(rules, ?1) > 0 ORDER BY name",
         )?
         .query_map(params![uid], |r| {

@@ -10,13 +10,7 @@ use super::ops::{
 };
 use super::state;
 use super::write::Batch;
-use crate::db;
 use crate::error::Error;
-
-/// Which entities a library's ops were last caught up to: 2 is tags and playlists, 3 adds smart
-/// playlists, hand-made Tag Database values and analysis.
-const SEEDED: &str = "3";
-const SETTING_SEEDED: &str = "libsync_seeded";
 
 /// Writes an op for every shared tag, playlist and membership the register store does not have
 /// yet (or holds under another name), and marks the whole log for upload again, since the
@@ -37,7 +31,6 @@ pub fn seed(conn: &mut Connection) -> Result<usize, Error> {
     tx.execute("UPDATE analysis SET wf_pushed = 0", [])?;
     tx.execute("DELETE FROM covers_pushed", [])?;
     tx.execute("DELETE FROM covers_unused", [])?;
-    db::set_setting(&tx, SETTING_SEEDED, Some(SEEDED))?;
     tx.commit()?;
     Ok(written)
 }
@@ -45,7 +38,7 @@ pub fn seed(conn: &mut Connection) -> Result<usize, Error> {
 fn seed_basics(tx: &Connection, batch: &mut Batch) -> Result<(), Error> {
     for (table, entity) in [("tags", "tag"), ("playlists", "playlist")] {
         let mut stmt = tx.prepare(&format!(
-            "SELECT uid, name FROM {table} WHERE scope = 'shared' AND uid IS NOT NULL
+            "SELECT uid, name FROM {table} WHERE scope = 'shared'
              AND uid NOT IN (SELECT held FROM clashes)"
         ))?;
         let rows: Vec<(String, String)> = stmt
@@ -64,7 +57,7 @@ fn seed_basics(tx: &Connection, batch: &mut Batch) -> Result<(), Error> {
     }
     let mut stmt = tx.prepare(
         "SELECT DISTINCT g.uid, t.audio_fp FROM track_tags tt
-         JOIN tags g ON g.id = tt.tag_id AND g.scope = 'shared' AND g.uid IS NOT NULL
+         JOIN tags g ON g.id = tt.tag_id AND g.scope = 'shared'
          JOIN tracks t ON t.id = tt.track_id AND t.audio_fp <> ''
          LEFT JOIN op_state s ON s.e = 'track_tag' AND s.f = 'present'
               AND s.id = g.uid || '/' || t.audio_fp
@@ -79,7 +72,7 @@ fn seed_basics(tx: &Connection, batch: &mut Batch) -> Result<(), Error> {
     }
     let mut stmt = tx.prepare(
         "SELECT g.uid, t.audio_fp, MIN(pt.pos) FROM playlist_tracks pt
-         JOIN playlists g ON g.id = pt.playlist_id AND g.scope = 'shared' AND g.uid IS NOT NULL
+         JOIN playlists g ON g.id = pt.playlist_id AND g.scope = 'shared'
          JOIN tracks t ON t.id = pt.track_id AND t.audio_fp <> ''
          LEFT JOIN op_state s ON s.e = 'playlist_track' AND s.f = 'present'
               AND s.id = g.uid || '/' || t.audio_fp
@@ -105,7 +98,7 @@ fn seed_more(tx: &Connection, batch: &mut Batch) -> Result<(), Error> {
 
 fn seed_smart(tx: &Connection, batch: &mut Batch) -> Result<(), Error> {
     let mut stmt = tx.prepare(
-        "SELECT uid, name, rules FROM smart_playlists WHERE scope = 'shared' AND uid IS NOT NULL
+        "SELECT uid, name, rules FROM smart_playlists WHERE scope = 'shared'
          AND uid NOT IN (SELECT held FROM clashes)",
     )?;
     let rows: Vec<(String, String, String)> = stmt

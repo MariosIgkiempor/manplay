@@ -105,12 +105,9 @@ function numeric(a: number | null, b: number | null, desc: boolean): number {
 	return desc ? b - a : a - b;
 }
 
-/**
- * When two songs came into the library, oldest first. Songs from before dates were kept have none
- * and come first, in the order they were added (their ids).
- */
+/** When two songs came into the library, oldest first; songs added together keep their id order. */
 export function addedOrder(a: Track, b: Track): number {
-	return (a.addedAt ?? 0) - (b.addedAt ?? 0) || a.id - b.id;
+	return a.addedAt - b.addedAt || a.id - b.id;
 }
 
 /** `tracks` ordered by `sort`; the original order when `sort` is null. Stable. */

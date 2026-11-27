@@ -27,8 +27,9 @@ fn library_key(conn: &Connection) -> Result<String, Error> {
     Ok(db::get_setting(conn, "library_id")?.unwrap_or_default())
 }
 
-/// The newest chunk number this install has uploaded to this library. Before the first upload
-/// since this was added it is what the cursor says.
+/// The newest chunk number this install has uploaded to this library. Before its first upload
+/// to this library it is what the cursor says: a snapshot or chunks read on joining can already
+/// cover this ID.
 pub fn sent(conn: &Connection, me: &str) -> Result<u64, Error> {
     if let Some(raw) = db::get_setting(conn, SETTING_SENT)?
         && let Some((library, seq)) = raw.rsplit_once(':')

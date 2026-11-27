@@ -1279,7 +1279,7 @@ pub async fn plan_target(
     let mut pushes: Vec<Differing> = Vec::new();
     let mut updates: Vec<Differing> = Vec::new();
     let mut boths: Vec<Differing> = Vec::new();
-    let mut legacy: Vec<Differing> = Vec::new();
+    let mut unjudged: Vec<Differing> = Vec::new();
     let backend = Backend::for_target(client, target).ok();
     for pair in &pairs {
         let id = pair.item.track_id;
@@ -1319,18 +1319,18 @@ pub async fn plan_target(
                     Verdict::Push => pushes.push(row),
                     Verdict::Update => updates.push(row),
                     Verdict::Both => boths.push(row),
-                    Verdict::Unknown => legacy.push(row),
+                    Verdict::Unknown => unjudged.push(row),
                 }
             }
             // Unreadable: a same-size file counts as matching, as before.
             None if pair.remote_size == pair.item.size => matching.push(pair.item),
-            None => legacy.push(Differing {
+            None => unjudged.push(Differing {
                 pair: *pair,
                 sigs: None,
             }),
         }
     }
-    legacy.extend(
+    unjudged.extend(
         d.replaces
             .iter()
             .filter(|(i, _)| !bases.contains_key(&i.track_id))
@@ -1432,7 +1432,7 @@ pub async fn plan_target(
             ..new(Kind::Upload, &item.rel)
         });
     }
-    for row in &legacy {
+    for row in &unjudged {
         let item = row.pair.item;
         let same_size = row.pair.remote_size == item.size;
         let edited_here = synced_at
@@ -3729,7 +3729,7 @@ mod tests {
             }),
             ..base("s")
         };
-        let legacy = Base {
+        let no_exact_check = Base {
             exact: None,
             ..base("s")
         };
@@ -3784,8 +3784,8 @@ mod tests {
                 sides(false, false),
             ),
             (
-                "base from before exact checks",
-                &legacy,
+                "base with no exact check",
+                &no_exact_check,
                 pair(&moved, Some("v2")),
                 sides(false, false),
                 sides(false, false),

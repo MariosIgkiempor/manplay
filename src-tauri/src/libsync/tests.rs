@@ -32,8 +32,8 @@ fn library(conn: &Connection, n: usize) -> Vec<i64> {
     (1..=n)
         .map(|i| {
             conn.execute(
-                "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-                 VALUES (?1, 'a', 'b', ?2, 1, ?3)",
+                "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+                 VALUES (?1, 'a', 'b', ?2, 1, ?3, 0)",
                 params![format!("/music/{i}.mp3"), format!("s{i}"), format!("fp{i}")],
             )
             .expect("track");
@@ -321,8 +321,8 @@ fn memberships_wait_for_songs_that_arrive_later() {
     assert_eq!(materialize_pending(&mut conn).expect("pending"), 0);
 
     conn.execute(
-        "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-         VALUES ('/new.mp3', 'a', 'b', 'new', 1, 'fp7')",
+        "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+         VALUES ('/new.mp3', 'a', 'b', 'new', 1, 'fp7', 0)",
         [],
     )
     .expect("track");
@@ -2335,7 +2335,7 @@ async fn a_destination_holding_another_library_stops_the_sync() {
 
 fn replace_library_file(store: &Memory) {
     let file = membership::LibraryFile {
-        format: 1,
+        format: membership::LIBRARY_FORMAT,
         library_id: "someone-else".into(),
         name: "Elsewhere".into(),
         created_at: 1,
@@ -2829,7 +2829,7 @@ async fn a_device_that_never_syncs_again_is_cleaned_up_once_covered() {
     }
     store.meta.lock().expect("lock").insert(
         "devices/live0001.json".into(),
-        br#"{"name":"Studio","lastSeen":1,"analysisVersion":2}"#.to_vec(),
+        br#"{"name":"Studio","lastSeen":1,"analysisVersion":2,"skewed":[]}"#.to_vec(),
     );
     sync(&a, &store).await;
     assert!(compacted(&a, &store, 1).await.snapshot.is_some());
@@ -2860,7 +2860,8 @@ async fn compaction_leaves_a_library_of_a_newer_format_alone() {
     sync(&a, &store).await;
     store.meta.lock().expect("lock").insert(
         "library.json".into(),
-        br#"{"format":99,"libraryId":"x","name":"Future","createdAt":1}"#.to_vec(),
+        br#"{"format":99,"libraryId":"x","name":"Future","createdAt":1,"audioFpVersion":1}"#
+            .to_vec(),
     );
     assert_eq!(compacted(&a, &store, 1).await, compact::Outcome::default());
     assert_eq!(snapshots(&store), Vec::<String>::new());
@@ -2898,7 +2899,7 @@ async fn waveforms_nothing_refers_to_are_removed_with_the_snapshot() {
     store.meta.lock().expect("lock").insert(
         "devices/other001.json".into(),
         format!(
-            r#"{{"name":"Laptop","lastSeen":1,"analysisVersion":{}}}"#,
+            r#"{{"name":"Laptop","lastSeen":1,"analysisVersion":{},"skewed":[]}}"#,
             current + 5
         )
         .into_bytes(),

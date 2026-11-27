@@ -1022,7 +1022,7 @@ struct AnalysisProgress {
 const SETTING_ANALYSIS: &str = "analysis";
 
 /// How analysis results are written. Detected BPM and key always go into the files' tags too,
-/// so other apps and players see them; settings saved before that (`writeTags`) are ignored.
+/// so other apps and players see them.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase", default)]
 struct AnalysisSettings {
@@ -6847,15 +6847,9 @@ mod tests {
     }
 
     #[test]
-    fn analysis_settings_read_old_and_new_shapes() {
+    fn analysis_settings_fall_back_to_defaults_for_what_is_not_saved() {
         for (json, format, replace) in [
             ("{}", KeyFormat::Musical, false),
-            // Saved before tags were always written: the old switch is ignored.
-            (
-                r#"{"writeTags":false,"keyFormat":"camelot"}"#,
-                KeyFormat::Camelot,
-                false,
-            ),
             (
                 r#"{"keyFormat":"musical","replaceEdits":true}"#,
                 KeyFormat::Musical,
@@ -6995,8 +6989,8 @@ mod tests {
         ] {
             f.conn
                 .execute(
-                    "INSERT INTO tracks (path, artist, album, title, size, file_state)
-                     VALUES (?1, 'a', 'b', 'c', 1, ?2)",
+                    "INSERT INTO tracks (path, artist, album, title, size, file_state, added_at)
+                     VALUES (?1, 'a', 'b', 'c', 1, ?2, 0)",
                     rusqlite::params![path, state],
                 )
                 .expect("track");
@@ -7072,8 +7066,8 @@ mod tests {
             db::set_setting(&f.conn, SETTING_ROOT, Some("/music")).expect("root");
             f.conn
                 .execute(
-                    "INSERT INTO tracks (path, artist, album, title, size, file_state, audio_fp)
-                     VALUES (?1, 'a', 'b', 'c', 1, ?2, 'a1:01')",
+                    "INSERT INTO tracks (path, artist, album, title, size, file_state, audio_fp, added_at)
+                     VALUES (?1, 'a', 'b', 'c', 1, ?2, 'a1:01', 0)",
                     rusqlite::params![case.path, case.state],
                 )
                 .expect("track");

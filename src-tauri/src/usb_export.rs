@@ -112,7 +112,7 @@ pub struct RekordboxFormats {
 }
 
 impl Default for RekordboxFormats {
-    /// Both, which is what an export wrote before there was a choice.
+    /// Both formats.
     fn default() -> Self {
         Self {
             device_library: true,
@@ -133,7 +133,7 @@ impl RekordboxFormats {
 }
 
 impl Default for Outputs {
-    /// rekordbox alone, which is what an export wrote before there was a choice.
+    /// rekordbox alone.
     fn default() -> Self {
         Self {
             rekordbox: true,

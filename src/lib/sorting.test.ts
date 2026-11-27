@@ -21,6 +21,7 @@ const track = (id: number, artist: string, album: string, extra: Partial<Track> 
 	analyzed: false,
 	fields: {},
 	edited: { bpm: false, key: false, grid: false },
+	addedAt: 0,
 	fileState: "here",
 	...extra,
 });
@@ -29,17 +30,17 @@ describe("sortAlbums", () => {
 	const albums = groupAlbums([
 		track(1, "B", "Old", { fields: { year: "1999" }, addedAt: 100 }),
 		track(2, "A", "New", { fields: { year: "2021" }, addedAt: 300 }),
-		track(3, "C", "Undated", { addedAt: 200 }),
+		track(3, "C", "No year", { addedAt: 200 }),
 	]);
 	it("puts albums without a year last in either direction", () => {
 		const names = (desc: boolean) => sortAlbums(albums, { key: "year", desc }).map((a) => a.album);
-		expect(names(true)).toEqual(["New", "Old", "Undated"]);
-		expect(names(false)).toEqual(["Old", "New", "Undated"]);
+		expect(names(true)).toEqual(["New", "Old", "No year"]);
+		expect(names(false)).toEqual(["Old", "New", "No year"]);
 	});
 	it("orders by the newest song added", () => {
 		expect(sortAlbums(albums, { key: "added", desc: true }).map((a) => a.album)).toEqual([
 			"New",
-			"Undated",
+			"No year",
 			"Old",
 		]);
 	});

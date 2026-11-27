@@ -1,4 +1,4 @@
-import type { Playlist, SmartPlaylist, Tag, Track, TrackAnalysis } from "#/lib/api.ts";
+import type { Playlist, SmartListing, Tag, Track, TrackAnalysis } from "#/lib/api.ts";
 
 /** The made-up library the harness serves: the same songs on every run, so screenshots compare. */
 export const LIBRARY_ROOT = "/Users/dj/Music/Library";
@@ -309,7 +309,7 @@ function buildTrack(spec: AlbumSpec, position: number, id: number, random: () =>
 		edited: { bpm: id % 23 === 0, key: false, grid: id % 31 === 0 },
 		// Some songs only another device has: they stream from the destination.
 		fileState: id % 6 === 5 ? "streamed" : "here",
-		addedAt: id % 29 === 0 ? null : NOW - Math.floor(random() * 400) * DAY,
+		addedAt: NOW - Math.floor(random() * 400) * DAY,
 	};
 }
 
@@ -346,6 +346,8 @@ export function buildTags(tracks: readonly Track[]): Tag[] {
 		name,
 		trackCount,
 		scope: LOCAL_TAGS.has(name) ? "local" : "shared",
+		hidden: false,
+		held: false,
 	}));
 }
 
@@ -377,12 +379,15 @@ export function buildPlaylists(tracks: readonly Track[]): FakePlaylist[] {
 			name: spec.name,
 			trackCount: spec.trackIds.length,
 			scope: spec.scope,
+			hidden: false,
+			held: false,
+			kept: false,
 		},
 		trackIds: spec.trackIds,
 	}));
 }
 
-export function buildSmartPlaylists(): SmartPlaylist[] {
+export function buildSmartPlaylists(): SmartListing[] {
 	const none = { allTags: [], anyTags: [], noneTags: [], added: null, bpmMin: null, bpmMax: null };
 	return [
 		{
@@ -390,18 +395,24 @@ export function buildSmartPlaylists(): SmartPlaylist[] {
 			name: "New This Month",
 			rules: { ...none, added: { kind: "within", amount: 30, unit: "days" } },
 			scope: "shared",
+			hidden: false,
+			held: false,
 		},
 		{
 			id: 2,
 			name: "House 120–126",
 			rules: { ...none, anyTags: ["Genre/House"], bpmMin: 120, bpmMax: 126 },
 			scope: "shared",
+			hidden: false,
+			held: false,
 		},
 		{
 			id: 3,
 			name: "Peak, no vocals",
 			rules: { ...none, allTags: ["Energy/Peak"], noneTags: ["Vocal"] },
 			scope: "local",
+			hidden: false,
+			held: false,
 		},
 	];
 }

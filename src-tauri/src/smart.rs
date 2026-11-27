@@ -106,8 +106,8 @@ impl Rules {
     }
 }
 
-/// Whether a stored tag entry is a tag's uid (rules are kept by uid, so renaming a tag leaves
-/// them intact) rather than a name from before rules were kept by uid.
+/// Whether a tag entry is a tag's uid (rules are kept by uid, so renaming a tag leaves them
+/// intact) rather than a name as the editor shows it.
 pub fn is_uid(entry: &str) -> bool {
     uuid::Uuid::parse_str(entry).is_ok()
 }
@@ -136,13 +136,11 @@ fn has(track: &Track, wanted: &str) -> bool {
     track.tags.iter().any(|t| within(t, wanted))
 }
 
-/// Why a song is left out, when the reason is worth telling.
+/// Why a song is left out.
 #[derive(Debug, PartialEq, Eq)]
 enum Miss {
     /// Fails a rule.
     Rule,
-    /// Matches the tags but has no added date, so a date rule cannot hold.
-    Undated,
 }
 
 fn check(rules: &Rules, track: &Track, now: i64) -> Result<(), Miss> {
@@ -161,11 +159,8 @@ fn check(rules: &Rules, track: &Track, now: i64) -> Result<(), Miss> {
         }
     }
     if let Some(added) = &rules.added {
-        let Some(at) = track.added_at else {
-            return Err(Miss::Undated);
-        };
         let (from, until) = added.window(now);
-        if at < from || at >= until {
+        if track.added_at < from || track.added_at >= until {
             return Err(Miss::Rule);
         }
     }
@@ -188,8 +183,6 @@ pub struct Preview {
     pub track_ids: Vec<i64>,
     pub duration_ms: i64,
     pub bytes: i64,
-    /// Songs that match everything else but have no added date.
-    pub undated: usize,
 }
 
 pub fn preview(rules: &Rules, tracks: &[Track], now: i64) -> Preview {
@@ -201,7 +194,6 @@ pub fn preview(rules: &Rules, tracks: &[Track], now: i64) -> Preview {
                 out.duration_ms += t.duration_ms.unwrap_or(0);
                 out.bytes += t.size;
             }
-            Err(Miss::Undated) => out.undated += 1,
             Err(Miss::Rule) => {}
         }
     }
@@ -214,7 +206,7 @@ mod tests {
     use super::*;
     use crate::db::Edited;
 
-    fn song(id: i64, tags: &[&str], added_at: Option<i64>, bpm: Option<f64>) -> Track {
+    fn song(id: i64, tags: &[&str], added_at: i64, bpm: Option<f64>) -> Track {
         Track {
             id,
             path: format!("/{id}.mp3"),
@@ -239,21 +231,16 @@ mod tests {
 
     fn library() -> Vec<Track> {
         vec![
-            song(
-                1,
-                &["instrumental", "Genre/House"],
-                Some(100 * DAY),
-                Some(124.0),
-            ),
+            song(1, &["instrumental", "Genre/House"], 100 * DAY, Some(124.0)),
             song(
                 2,
                 &["instrumental", "Genre/House/Deep"],
-                Some(10 * DAY),
+                10 * DAY,
                 Some(120.0),
             ),
-            song(3, &["Genre/House", "vocal"], Some(100 * DAY), Some(126.0)),
-            song(4, &["instrumental", "Genre/Techno"], None, Some(130.0)),
-            song(5, &["Instrumental", "genre/house"], None, None),
+            song(3, &["Genre/House", "vocal"], 100 * DAY, Some(126.0)),
+            song(4, &["instrumental", "Genre/Techno"], 10 * DAY, Some(130.0)),
+            song(5, &["Instrumental", "genre/house"], 10 * DAY, None),
         ]
     }
 
@@ -277,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn date_rules_leave_out_undated_songs_and_count_them() {
+    fn date_rules_follow_the_added_date() {
         let now = 101 * DAY;
         let recent = Rules {
             all_tags: vec!["instrumental".into()],
@@ -289,7 +276,7 @@ mod tests {
         };
         assert_eq!(resolve(&recent, &library(), now), [1]);
         let p = preview(&recent, &library(), now);
-        assert_eq!((p.track_ids.len(), p.undated, p.bytes), (1, 2, 10));
+        assert_eq!((p.track_ids.len(), p.bytes), (1, 10));
 
         let after = Rules {
             added: Some(Added::After { date: 50 * DAY }),
@@ -300,7 +287,7 @@ mod tests {
             added: Some(Added::Before { date: 50 * DAY }),
             ..Rules::default()
         };
-        assert_eq!(resolve(&before, &library(), now), [2]);
+        assert_eq!(resolve(&before, &library(), now), [2, 4, 5]);
     }
 
     #[test]

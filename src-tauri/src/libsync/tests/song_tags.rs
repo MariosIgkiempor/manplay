@@ -383,8 +383,8 @@ fn of_two_copies_only_the_one_written_about_is_looked_at() {
     a.lock()
         .expect("lock")
         .execute(
-            "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-             VALUES ('/music/Copy/1.mp3', 'a', 'b', 's', 1, 'fp1')",
+            "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+             VALUES ('/music/Copy/1.mp3', 'a', 'b', 's', 1, 'fp1', 0)",
             [],
         )
         .expect("copy");

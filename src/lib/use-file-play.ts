@@ -25,6 +25,7 @@ function looseTrack(row: TreeRow, path: string): Track {
 		key: null,
 		analyzed: false,
 		edited: { bpm: false, key: false, grid: false },
+		addedAt: 0,
 		fileState: "here",
 	};
 }

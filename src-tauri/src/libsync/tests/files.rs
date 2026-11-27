@@ -201,8 +201,8 @@ fn of_two_copies_one_path_is_written_and_it_stays_while_that_copy_does() {
     {
         let conn = a.lock().expect("lock");
         conn.execute(
-            "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-             VALUES ('/music/0 copy.mp3', 'a', 'b', 's', 1, 'fp1')",
+            "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+             VALUES ('/music/0 copy.mp3', 'a', 'b', 's', 1, 'fp1', 0)",
             [],
         )
         .expect("copy");
@@ -212,8 +212,8 @@ fn of_two_copies_one_path_is_written_and_it_stays_while_that_copy_does() {
     {
         let conn = a.lock().expect("lock");
         conn.execute(
-            "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-             VALUES ('/music/0 another.mp3', 'a', 'b', 's', 1, 'fp1')",
+            "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+             VALUES ('/music/0 another.mp3', 'a', 'b', 's', 1, 'fp1', 0)",
             [],
         )
         .expect("copy");
@@ -245,8 +245,8 @@ fn deleting_in_the_app_removes_the_song_at_once_unless_a_copy_is_left() {
             a.lock()
                 .expect("lock")
                 .execute(
-                    "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-                     VALUES ('/music/z.mp3', 'a', 'b', 's', 1, 'fp1')",
+                    "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+                     VALUES ('/music/z.mp3', 'a', 'b', 's', 1, 'fp1', 0)",
                     [],
                 )
                 .expect("copy");
@@ -699,8 +699,8 @@ async fn a_song_only_another_device_has_is_to_be_fetched() {
     b.lock()
         .expect("lock")
         .execute(
-            "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-             VALUES ('/music/3.mp3', 'a', 'b', 's3', 1, 'fp3')",
+            "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+             VALUES ('/music/3.mp3', 'a', 'b', 's3', 1, 'fp3', 0)",
             [],
         )
         .expect("arrived");
@@ -727,14 +727,14 @@ async fn what_is_not_fetched() {
         Case {
             what: "a song whose file is only missing here, like on an unplugged drive",
             elsewhere: nothing,
-            here: "INSERT INTO tracks (path, artist, album, title, size, audio_fp, missing_since)
-                   VALUES ('/music/3.mp3', 'a', 'b', 's3', 1, ?1, 2000)",
+            here: "INSERT INTO tracks (path, artist, album, title, size, audio_fp, missing_since, added_at)
+                   VALUES ('/music/3.mp3', 'a', 'b', 's3', 1, ?1, 2000, 0)",
         },
         Case {
             what: "a song this library has under another path",
             elsewhere: nothing,
-            here: "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-                   VALUES ('/music/Other name.mp3', 'a', 'b', 's3', 1, ?1)",
+            here: "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+                   VALUES ('/music/Other name.mp3', 'a', 'b', 's3', 1, ?1, 0)",
         },
     ];
     for case in cases {
@@ -813,8 +813,8 @@ async fn a_song_added_elsewhere_is_listed_and_taking_it_back_puts_it_up_for_remo
     b.lock()
         .expect("lock")
         .execute(
-            "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-             VALUES ('/music/3.mp3', 'a', 'b', 's3', 1, 'fp3')",
+            "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+             VALUES ('/music/3.mp3', 'a', 'b', 's3', 1, 'fp3', 0)",
             [],
         )
         .expect("arrived");

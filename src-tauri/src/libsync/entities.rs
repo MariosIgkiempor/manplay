@@ -37,9 +37,6 @@ pub fn materialize_smart_rules(conn: &Connection, uid: &str) -> Result<(), Error
     let rules: crate::smart::Rules = serde_json::from_value(rules).unwrap_or_default();
     let mut failure = None;
     let moved = rules.map_tags(|entry| {
-        if !crate::smart::is_uid(entry) {
-            return entry.to_owned();
-        }
         state::merge_target(conn, "tag", entry).unwrap_or_else(|e| {
             failure = Some(e);
             entry.to_owned()

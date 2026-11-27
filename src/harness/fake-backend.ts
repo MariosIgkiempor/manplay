@@ -6,6 +6,7 @@ import type {
 	IgnoreRule,
 	LibraryChangeBatch,
 	Scope,
+	SmartListing,
 	SmartPlaylist,
 	SmartRules,
 	Tag,
@@ -84,7 +85,7 @@ interface State {
 	tracks: Track[];
 	tags: Tag[];
 	playlists: FakePlaylist[];
-	smart: SmartPlaylist[];
+	smart: SmartListing[];
 	settings: Map<string, string | null>;
 	services: Map<string, string>;
 	/** A Discogs token is saved, so lookups ask Discogs too. */
@@ -159,7 +160,7 @@ function listFolder(tracks: readonly Track[], folder: readonly string[]): FsEntr
 			name,
 			isDir,
 			size: (known?.size ?? 0) + track.size,
-			modified: track.addedAt ?? NOW - 400 * DAY,
+			modified: track.addedAt,
 		});
 	}
 	return [...entries.values()].sort(
@@ -192,8 +193,8 @@ function tagMatches(track: Track, name: string): boolean {
 
 function addedMatches(track: Track, rules: SmartRules): boolean {
 	const added = rules.added;
-	if (added === null || track.addedAt === null || track.addedAt === undefined) {
-		return added === null;
+	if (added === null) {
+		return true;
 	}
 	if (added.kind === "after") {
 		return track.addedAt >= added.date;
@@ -232,7 +233,6 @@ function smartPreview(state: State, rules: SmartRules) {
 		trackIds: matches.map((track) => track.id),
 		durationMs: matches.reduce((sum, track) => sum + (track.durationMs ?? 0), 0),
 		bytes: matches.reduce((sum, track) => sum + track.size, 0),
-		undated: rules.added === null ? 0 : state.tracks.filter((t) => t.addedAt === null).length,
 	};
 }
 
@@ -294,7 +294,14 @@ function recountTags(state: State): void {
 
 function tagTracks(state: State, name: string, trackIds: readonly number[]): void {
 	if (!state.tags.some((tag) => tag.name === name)) {
-		state.tags.push({ id: state.tags.length + 1, name, trackCount: 0, scope: state.defaultScope });
+		state.tags.push({
+			id: state.tags.length + 1,
+			name,
+			trackCount: 0,
+			scope: state.defaultScope,
+			hidden: false,
+			held: false,
+		});
 	}
 	for (const track of state.tracks) {
 		if (trackIds.includes(track.id) && !track.tags.includes(name)) {
@@ -465,7 +472,15 @@ function playlistCommands(state: State): Record<string, Command> {
 			const id = Math.max(0, ...state.playlists.map((entry) => entry.playlist.id)) + 1;
 			const scope = args.get("scope") === "local" ? "local" : state.defaultScope;
 			state.playlists.push({
-				playlist: { id, name: text(args.get("name")), trackCount: 0, scope },
+				playlist: {
+					id,
+					name: text(args.get("name")),
+					trackCount: 0,
+					scope,
+					hidden: false,
+					held: false,
+					kept: false,
+				},
 				trackIds: [],
 			});
 			return id;
@@ -497,9 +512,19 @@ function playlistCommands(state: State): Record<string, Command> {
 		smart_playlist_save: (args) => {
 			const saved = args.get("playlist") as SmartPlaylist;
 			const id = saved.id === 0 ? Math.max(0, ...state.smart.map((s) => s.id)) + 1 : saved.id;
-			const next = { ...saved, id };
-			state.smart = [...state.smart.filter((smart) => smart.id !== id), next];
-			return next;
+			const sharing = state.smart.find((smart) => smart.id === id);
+			state.smart = [
+				...state.smart.filter((smart) => smart.id !== id),
+				{
+					scope: state.defaultScope,
+					hidden: false,
+					held: false,
+					...sharing,
+					...saved,
+					id,
+				},
+			];
+			return { ...saved, id };
 		},
 		smart_playlist_delete: (args) => {
 			state.smart = state.smart.filter((smart) => smart.id !== args.get("id"));
@@ -972,13 +997,27 @@ function exportCommands(state: State): Record<string, Command> {
 			alreadyThere: 36,
 			bytesCopied: 71_200_000,
 			analyzed: 6,
+			regridded: 0,
 			playlists: 4,
+			playlistsRemoved: 0,
+			songsDeleted: 0,
+			bytesFreed: 0,
 			libraryTracks: 48,
 			backup: "PIONEER/manplay-backup/2026-11-21-101500",
+			rekordbox: true,
 			deviceLibrary: true,
 			oneLibrary: true,
 			oneLibraryError: null,
 			seratoCrates: 3,
+			seratoCratesRemoved: 0,
+			seratoError: null,
+			virtualDjLists: null,
+			virtualDjListsRemoved: 0,
+			virtualDjError: null,
+			gemini: null,
+			geminiError: null,
+			playlistFolders: null,
+			playlistFoldersError: null,
 			failed: [],
 		}),
 	};

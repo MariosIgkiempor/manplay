@@ -20,8 +20,8 @@ use crate::libsync::membership::{self, Home, JoinChoice};
 fn install(root: &Path) -> AppState {
     let conn = db::open(Path::new(":memory:")).expect("open");
     conn.execute(
-        "INSERT INTO tracks (path, artist, album, title, size, audio_fp)
-         VALUES ('/music/1.mp3', 'a', 'b', 's1', 1, 'fp1')",
+        "INSERT INTO tracks (path, artist, album, title, size, audio_fp, added_at)
+         VALUES ('/music/1.mp3', 'a', 'b', 's1', 1, 'fp1', 0)",
         [],
     )
     .expect("track");

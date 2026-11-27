@@ -5,9 +5,8 @@ use std::sync::Mutex;
 
 use rusqlite::{Connection, params};
 
-use super::{Memory, open, replace_library_file, run_both, share};
+use super::{Memory, open, run_both, share};
 use crate::libsync::covers::{self, Transfer};
-use crate::libsync::membership::{self, LIBRARY_FILE, LIBRARY_FORMAT, LibraryFile};
 use crate::libsync::song_tags::{self, COVER, TagWrite};
 use crate::libsync::{clock, journal};
 use crate::tags;
@@ -35,8 +34,8 @@ impl Device {
         {
             let mut conn = device.db.lock().expect("lock");
             conn.execute(
-                "INSERT INTO tracks (path, artist, album, title, size, audio_fp, mtime_ms)
-                 VALUES (?1, 'a', 'b', 's', 1, 'fp1', 0)",
+                "INSERT INTO tracks (path, artist, album, title, size, audio_fp, mtime_ms, added_at)
+                 VALUES (?1, 'a', 'b', 's', 1, 'fp1', 0, 0)",
                 params![device.song().to_str()],
             )
             .expect("track");
@@ -357,43 +356,6 @@ async fn a_picture_that_is_not_what_its_name_says_is_not_fetched() {
         assert_eq!(b.transfer(&store).await, Transfer::default(), "{what}");
         assert!(!b.cache().exists(), "{what}");
     }
-}
-
-#[tokio::test]
-async fn a_library_of_the_format_before_is_moved_to_this_one() {
-    let store = Memory::default();
-    let a = Device::new("format", "a");
-    assert!(
-        membership::run_joined(&a.db, &store, "x")
-            .await
-            .error
-            .is_none()
-    );
-    let read = |store: &Memory| -> LibraryFile {
-        let meta = store.meta.lock().expect("lock");
-        serde_json::from_slice(meta.get(LIBRARY_FILE).expect("library.json")).expect("json")
-    };
-    let mine = read(&store);
-    assert_eq!(mine.format, LIBRARY_FORMAT);
-    store.meta.lock().expect("lock").insert(
-        LIBRARY_FILE.to_owned(),
-        serde_json::to_vec(&LibraryFile { format: 1, ..mine }).expect("json"),
-    );
-    assert!(
-        membership::run_joined(&a.db, &store, "x")
-            .await
-            .error
-            .is_none()
-    );
-    assert_eq!(read(&store).format, LIBRARY_FORMAT);
-    // Another library altogether is still refused, whatever its format.
-    replace_library_file(&store);
-    assert!(
-        membership::run_joined(&a.db, &store, "x")
-            .await
-            .error
-            .is_some()
-    );
 }
 
 #[tokio::test]

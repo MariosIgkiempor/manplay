@@ -431,9 +431,9 @@ fn rebuild_rows(conn: &Connection) -> Result<(), Error> {
             &format!(
                 "DELETE FROM {table} WHERE scope = 'shared' AND (
                      NOT EXISTS (SELECT 1 FROM op_state s WHERE s.e = ?1
-                                 AND s.id = COALESCE({table}.uid, '') AND s.f = 'name')
+                                 AND s.id = {table}.uid AND s.f = 'name')
                      OR EXISTS (SELECT 1 FROM op_state s WHERE s.e = ?1
-                                AND s.id = COALESCE({table}.uid, '')
+                                AND s.id = {table}.uid
                                 AND ((s.f = '_delete' AND s.val <> 'false') OR s.f = '_merge')))"
             ),
             params![entity],

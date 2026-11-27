@@ -17,7 +17,7 @@ import {
 	useRowMatch,
 } from "#/components/sidebar-row.ts";
 import { Fact, Facts } from "#/components/ui/facts.tsx";
-import { deleteSmartPlaylist, type SmartPlaylist } from "#/lib/api.ts";
+import { deleteSmartPlaylist, type SmartListing } from "#/lib/api.ts";
 import { useItemSharing } from "#/lib/use-item-sharing.tsx";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 import { SMART_KEY, useCreateSmartPlaylist, useSmartPlaylists } from "#/lib/use-smart.ts";
@@ -29,7 +29,7 @@ export function SidebarSmartPlaylists() {
 	const matchRoute = useRowMatch();
 	const list = useSmartPlaylists();
 	const create = useCreateSmartPlaylist();
-	const [deleting, setDeleting] = useState<SmartPlaylist | null>(null);
+	const [deleting, setDeleting] = useState<SmartListing | null>(null);
 	const [closed, setClosed] = useStoredFlag("manplay.sidebar.smartClosed");
 	const m = matchRoute({ to: "/smart/$id" });
 	const active = m ? Number(m.id) : null;
@@ -46,7 +46,7 @@ export function SidebarSmartPlaylists() {
 	const error = create.error ?? remove.error ?? sharing.error;
 	const everything = list.data ?? [];
 	const visible = everything.filter((p) => !p.hidden);
-	const itemOf = (p: SmartPlaylist) => ({
+	const itemOf = (p: SmartListing) => ({
 		kind: "smart_playlist" as const,
 		id: p.id,
 		name: p.name,

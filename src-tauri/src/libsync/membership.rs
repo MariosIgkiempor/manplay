@@ -31,7 +31,6 @@ pub const IGNORE_FILE: &str = ".ignore";
 const SETTING_LIBRARY_ID: &str = "library_id";
 const SETTING_LIBRARY_NAME: &str = "library_name";
 const SETTING_DEVICE_NAME: &str = "device_name";
-const SETTING_SEEDED: &str = "libsync_seeded";
 /// `"1"` while the library folder itself holds this device's shared library.
 pub(crate) const SETTING_IN_FOLDER: &str = "library_in_folder";
 
@@ -61,12 +60,7 @@ pub struct LibraryFile {
     pub created_at: i64,
     /// The version of the audio fingerprint algorithm every song here is named with. A device
     /// that knows only an older one cannot sync (see `remap.rs`).
-    #[serde(default = "first_fp_version")]
     pub audio_fp_version: i64,
-}
-
-fn first_fp_version() -> i64 {
-    1
 }
 
 /// `.manplay/devices/<id>.json`: who is in the library, and when they last synced.
@@ -80,7 +74,6 @@ pub struct DeviceFile {
     #[serde(default)]
     pub analysis_version: i64,
     /// Devices whose edits this one is holding back because their clock is far ahead.
-    #[serde(default)]
     pub skewed: Vec<String>,
 }
 
@@ -452,13 +445,9 @@ async fn ensure<S: ChunkStore>(
         let conn = lock(db)?;
         remember(&conn, &file)?;
     }
-    let older_format = file.format < LIBRARY_FORMAT;
-    if file.audio_fp_version < local_fp || older_format {
-        // The first device on the new fingerprint: everyone else waits for it. And the first on
-        // a newer format: builds that do not know it stop syncing, since they would not follow
-        // what is said about the songs' files.
-        file.audio_fp_version = file.audio_fp_version.max(local_fp);
-        file.format = LIBRARY_FORMAT;
+    if file.audio_fp_version < local_fp {
+        // The first device on the new fingerprint: everyone else waits for it.
+        file.audio_fp_version = local_fp;
         write_library(store, &file).await?;
     }
     write_device(db, store).await
@@ -671,7 +660,7 @@ pub fn leave_local(conn: &Connection, choice: LeaveChoice) -> Result<(), Error> 
             for kind in [TAGS, PLAYLISTS, SMARTS] {
                 let rows: Vec<(i64, String)> = conn
                     .prepare(&format!(
-                        "SELECT id, COALESCE(uid, '') FROM {} WHERE scope = 'shared'",
+                        "SELECT id, uid FROM {} WHERE scope = 'shared'",
                         kind.table
                     ))?
                     .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -715,12 +704,7 @@ pub fn leave_local(conn: &Connection, choice: LeaveChoice) -> Result<(), Error> 
          UPDATE analysis SET wf_pushed = 0;
          UPDATE sync_targets SET libsync = 0;",
     )?;
-    for key in [
-        SETTING_LIBRARY_ID,
-        SETTING_LIBRARY_NAME,
-        SETTING_SEEDED,
-        SETTING_IN_FOLDER,
-    ] {
+    for key in [SETTING_LIBRARY_ID, SETTING_LIBRARY_NAME, SETTING_IN_FOLDER] {
         db::set_setting(conn, key, None)?;
     }
     snapshot::forget(conn)?;

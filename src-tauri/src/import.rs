@@ -237,7 +237,6 @@ struct CachedFile {
     fingerprint: Option<String>,
     meta: Option<Meta>,
     /// Fingerprint of the audio alone; `Some("")` when the file could not be fingerprinted.
-    #[serde(default)]
     audio_fp: Option<String>,
 }
 
@@ -524,13 +523,8 @@ impl Opener {
     }
 }
 
-/// Bumped when [`Meta`] learns new fields, so files cached by older scans are read again.
-const META_VERSION: u32 = 1;
-
 #[derive(Default, Clone, Serialize, Deserialize)]
-#[serde(default)]
 struct Meta {
-    version: u32,
     title: Option<String>,
     artist: Option<String>,
     album_artist: Option<String>,
@@ -550,12 +544,6 @@ struct Meta {
     has_art: bool,
 }
 
-impl Meta {
-    fn current(&self) -> bool {
-        self.version >= META_VERSION
-    }
-}
-
 fn text(s: Option<impl AsRef<str>>) -> Option<String> {
     s.map(|s| s.as_ref().trim().to_owned())
         .filter(|s| !s.is_empty())
@@ -565,7 +553,6 @@ fn meta_from(tagged: &TaggedFile) -> Meta {
     let props = tagged.properties();
     let duration = props.duration().as_millis();
     let audio = Meta {
-        version: META_VERSION,
         duration_ms: (duration > 0).then(|| u64::try_from(duration).unwrap_or(u64::MAX)),
         bitrate: props.audio_bitrate().filter(|&b| b > 0),
         sample_rate: props.sample_rate().filter(|&r| r > 0),
@@ -610,13 +597,9 @@ fn read_meta(opener: &mut Opener, e: &Entry) -> Meta {
             probe.read().ok()
         })
     };
-    tagged.as_ref().map_or(
-        Meta {
-            version: META_VERSION,
-            ..Meta::default()
-        },
-        meta_from,
-    )
+    tagged
+        .as_ref()
+        .map_or(Meta { ..Meta::default() }, meta_from)
 }
 
 // ---- grouping ----------------------------------------------------------------
@@ -1068,9 +1051,7 @@ fn meta_of(
     cached: &mut HashMap<usize, CachedFile>,
     tags: &mut TagProgress<'_>,
 ) -> Meta {
-    if let Some(m) = cached.get(&i).and_then(|c| c.meta.clone())
-        && (m.current() || tags.opts.cached_only)
-    {
+    if let Some(m) = cached.get(&i).and_then(|c| c.meta.clone()) {
         return m;
     }
     if tags.opts.cached_only {
@@ -1119,7 +1100,7 @@ pub fn scan(
 
     let missing_tags = status
         .iter()
-        .filter(|&(i, s)| *s == Status::New && !cached[i].meta.as_ref().is_some_and(Meta::current))
+        .filter(|&(i, s)| *s == Status::New && cached[i].meta.is_none())
         .count();
     let mut tags = TagProgress {
         opts,
@@ -1842,7 +1823,6 @@ mod tests {
         let mut cache = Cache::from_json(&cache.to_json());
         for f in cache.files.values_mut() {
             f.meta = Some(Meta {
-                version: META_VERSION,
                 title: Some("FROM CACHE".to_owned()),
                 ..Meta::default()
             });

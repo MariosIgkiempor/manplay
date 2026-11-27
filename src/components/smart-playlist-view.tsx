@@ -15,7 +15,7 @@ import {
 import { SharingControl } from "#/components/sharing-control.tsx";
 import { SmartRulesEditor } from "#/components/smart-playlists.tsx";
 import { Fact, Facts, MoreInfo } from "#/components/ui/facts.tsx";
-import { deleteSmartPlaylist, type SmartPlaylist, saveSmartPlaylist } from "#/lib/api.ts";
+import { deleteSmartPlaylist, type SmartListing, saveSmartPlaylist } from "#/lib/api.ts";
 import { duration } from "#/lib/format.ts";
 import { PAGE_BODY } from "#/lib/page-layout.ts";
 import { useTracks } from "#/lib/queries.ts";
@@ -23,7 +23,7 @@ import { typeScale } from "#/lib/type-scale.ts";
 import { SMART_KEY, useSmartPreview } from "#/lib/use-smart.ts";
 
 /** A smart playlist: its rules, and the songs they pick from the library right now. */
-export function SmartPlaylistView({ playlist }: { playlist: SmartPlaylist }) {
+export function SmartPlaylistView({ playlist }: { playlist: SmartListing }) {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const tracks = useTracks();

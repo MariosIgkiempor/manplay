@@ -34,8 +34,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
-/// Bump when the algorithm changes in a way that makes old results worth redoing.
-/// 2: beat grid and waveform kept alongside BPM and key.
+/// Bump when the algorithm changes in a way that makes earlier results worth redoing.
 pub const VERSION: i64 = 2;
 
 /// Results outside this range are halved or doubled into it (rekordbox's default is similar).

@@ -250,7 +250,7 @@ pub fn carry_over(conn: &mut Connection, old_fp: &str, track_id: i64) -> Result<
     for &carrier in &carriers {
         let tags: Vec<(i64, String, String)> = tx
             .prepare(
-                "SELECT g.id, COALESCE(g.uid, ''), g.scope FROM track_tags tt
+                "SELECT g.id, g.uid, g.scope FROM track_tags tt
                  JOIN tags g ON g.id = tt.tag_id WHERE tt.track_id = ?1",
             )?
             .query_map(params![carrier], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
@@ -269,7 +269,7 @@ pub fn carry_over(conn: &mut Connection, old_fp: &str, track_id: i64) -> Result<
             } else if !changed_in_place {
                 continue;
             }
-            if scope == "shared" && !uid.is_empty() {
+            if scope == "shared" {
                 ops.track_tag(&uid, old_fp, false);
                 ops.track_tag(&uid, &new_fp, true);
             }
@@ -277,7 +277,7 @@ pub fn carry_over(conn: &mut Connection, old_fp: &str, track_id: i64) -> Result<
         }
         let lists: Vec<(i64, String, String, i64, Option<String>)> = tx
             .prepare(
-                "SELECT p.id, COALESCE(p.uid, ''), p.scope, pt.position, pt.pos
+                "SELECT p.id, p.uid, p.scope, pt.position, pt.pos
                  FROM playlist_tracks pt JOIN playlists p ON p.id = pt.playlist_id
                  WHERE pt.track_id = ?1",
             )?
@@ -300,7 +300,6 @@ pub fn carry_over(conn: &mut Connection, old_fp: &str, track_id: i64) -> Result<
                 continue;
             }
             if scope == "shared"
-                && !uid.is_empty()
                 && let Some(pos) = pos
             {
                 ops.playlist_remove(&uid, old_fp);

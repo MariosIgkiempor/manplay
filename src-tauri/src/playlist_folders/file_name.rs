@@ -61,7 +61,7 @@ impl std::fmt::Display for TemplateError {
 pub struct FileNameTemplate(Vec<NamePart>);
 
 impl Default for FileNameTemplate {
-    /// The song's own file name, which is what the folders held before names could be chosen.
+    /// The song's own file name.
     fn default() -> Self {
         Self(vec![NamePart::Tag(NameTag::FileName)])
     }

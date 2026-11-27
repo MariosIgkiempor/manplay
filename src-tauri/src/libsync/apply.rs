@@ -91,7 +91,7 @@ pub fn find(
     Ok(conn
         .query_row(
             &format!(
-                "SELECT id, COALESCE(uid, ''), name, scope FROM {} WHERE {column} = ?1",
+                "SELECT id, uid, name, scope FROM {} WHERE {column} = ?1",
                 kind.table
             ),
             params![value],
@@ -243,8 +243,8 @@ fn holder_of(conn: &Connection, kind: Kind, name: &str, uid: &str) -> Result<Opt
     Ok(conn
         .query_row(
             &format!(
-                "SELECT id, COALESCE(uid, ''), name, scope FROM {}
-                 WHERE name = ?1 AND COALESCE(uid, '') <> ?2
+                "SELECT id, uid, name, scope FROM {}
+                 WHERE name = ?1 AND uid <> ?2
                  ORDER BY scope = 'local' DESC, uid LIMIT 1",
                 kind.table
             ),

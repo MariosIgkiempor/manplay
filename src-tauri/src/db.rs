@@ -32,8 +32,8 @@ pub struct Track {
     pub fields: std::collections::BTreeMap<String, String>,
     /// Which of BPM, key and beat grid were set by hand.
     pub edited: Edited,
-    /// Unix seconds the song came into the library, when known.
-    pub added_at: Option<i64>,
+    /// Unix seconds the song came into the library.
+    pub added_at: i64,
     /// Whether its file is here or the song is streamed.
     pub file_state: FileState,
 }
@@ -164,8 +164,6 @@ fn ids_from_stored(conn: &Connection, table: &str, raw: &str) -> Result<Vec<i64>
                     |r| r.get(0),
                 )
                 .optional()?,
-            // Saved before selections held uids; `migrate_selection_uids` rewrites these.
-            serde_json::Value::Number(n) => n.as_i64(),
             _ => None,
         };
         if let Some(id) = id {
@@ -179,14 +177,14 @@ fn ids_from_stored(conn: &Connection, table: &str, raw: &str) -> Result<Vec<i64>
 fn uids_for(conn: &Connection, table: &str, ids: &[i64]) -> Result<Vec<String>, Error> {
     let mut uids = Vec::new();
     for id in ids {
-        let uid: Option<Option<String>> = conn
+        let uid: Option<String> = conn
             .query_row(
                 &format!("SELECT uid FROM {table} WHERE id = ?1"),
                 params![id],
                 |r| r.get(0),
             )
             .optional()?;
-        if let Some(Some(uid)) = uid {
+        if let Some(uid) = uid {
             uids.push(uid);
         }
     }
@@ -249,7 +247,7 @@ pub fn set_export_selection(
 }
 
 /// Rules as the editor sees them (tag names) turned into what is stored and shared (tag uids).
-/// A name that is no tag here stays as typed; an unknown-tag marker goes back to its uid.
+/// A name that is no tag here is refused; an unknown-tag marker goes back to its uid.
 pub(crate) fn rules_to_stored(
     conn: &Connection,
     rules: &crate::smart::Rules,
@@ -266,20 +264,28 @@ pub(crate) fn rules_to_stored(
         }
         match conn
             .query_row(
-                "SELECT uid FROM tags WHERE name = ?1 AND uid IS NOT NULL",
+                "SELECT uid FROM tags WHERE name = ?1",
                 params![entry],
                 |r| r.get::<_, String>(0),
             )
             .optional()
         {
-            Ok(uid) => uid.unwrap_or_else(|| entry.to_owned()),
+            Ok(Some(uid)) => uid,
+            Ok(None) => {
+                failure.get_or_insert_with(|| {
+                    Error::Msg(format!(
+                        "The tag “{entry}” no longer exists; choose the tags again."
+                    ))
+                });
+                entry.to_owned()
+            }
             Err(e) => {
-                failure = Some(e);
+                failure.get_or_insert_with(|| e.into());
                 entry.to_owned()
             }
         }
     });
-    failure.map_or(Ok(out), |e| Err(e.into()))
+    failure.map_or(Ok(out), Err)
 }
 
 /// Stored rules turned into tag names for the editor and for working out songs. A uid this
@@ -291,9 +297,6 @@ fn rules_from_stored(
 ) -> Result<crate::smart::Rules, Error> {
     let mut failure = None;
     let out = rules.map_tags(|entry| {
-        if !crate::smart::is_uid(entry) {
-            return entry.to_owned();
-        }
         match conn
             .query_row(
                 "SELECT name FROM tags WHERE uid = ?1",
@@ -402,7 +405,7 @@ pub fn save_smart_playlist(
     } else {
         let old: Option<(String, String, String, String)> = tx
             .query_row(
-                "SELECT COALESCE(uid, ''), scope, name, rules FROM smart_playlists WHERE id = ?1",
+                "SELECT uid, scope, name, rules FROM smart_playlists WHERE id = ?1",
                 params![playlist.id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
@@ -417,7 +420,7 @@ pub fn save_smart_playlist(
             "UPDATE smart_playlists SET name = ?2, rules = ?3 WHERE id = ?1",
             params![playlist.id, playlist.name, rules],
         )?;
-        if scope == "shared" && !uid.is_empty() {
+        if scope == "shared" {
             if old_name != playlist.name {
                 ops.smart_playlist(&uid, &playlist.name, &value);
             } else if serde_json::from_str::<serde_json::Value>(&old_rules)
@@ -443,7 +446,7 @@ pub fn delete_smart_playlist(conn: &Connection, id: i64) -> Result<(), Error> {
     let tx = conn.unchecked_transaction()?;
     let ident: Option<(String, String)> = tx
         .query_row(
-            "SELECT COALESCE(uid, ''), scope FROM smart_playlists WHERE id = ?1",
+            "SELECT uid, scope FROM smart_playlists WHERE id = ?1",
             params![id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -451,7 +454,6 @@ pub fn delete_smart_playlist(conn: &Connection, id: i64) -> Result<(), Error> {
     tx.execute("DELETE FROM smart_playlists WHERE id = ?1", params![id])?;
     if let Some((uid, scope)) = ident
         && scope == "shared"
-        && !uid.is_empty()
     {
         let mut ops = crate::libsync::Batch::new(&tx)?;
         ops.smart_playlist_deleted(&uid);
@@ -475,7 +477,7 @@ pub(crate) fn repoint_smart_rules(
     }
     let rows: Vec<(i64, String, String, String)> = conn
         .prepare(
-            "SELECT id, COALESCE(uid, ''), scope, rules FROM smart_playlists
+            "SELECT id, uid, scope, rules FROM smart_playlists
              WHERE instr(rules, ?1) > 0",
         )?
         .query_map(params![from], |r| {
@@ -499,7 +501,7 @@ pub(crate) fn repoint_smart_rules(
             "UPDATE smart_playlists SET rules = ?2 WHERE id = ?1",
             params![id, value.to_string()],
         )?;
-        if scope == "shared" && !uid.is_empty() {
+        if scope == "shared" {
             ops.smart_playlist_rules(&uid, &value);
         }
     }
@@ -615,9 +617,6 @@ fn check_schema_version(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
-/// Opens the library database, refusing one a newer manplay set up ([`Error::NewerLibrary`]), and
-/// brings an older one up to [`SCHEMA_VERSION`].
-/// Every table and index of the library database (`schema.sql`).
 /// Every table and index of the library database at [`SCHEMA_VERSION`] (`schema.sql`).
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -1257,7 +1256,7 @@ pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>, Error> {
 /// `(uid, scope)` of a playlist.
 fn playlist_ident(conn: &Connection, id: i64) -> Result<(String, String), Error> {
     conn.query_row(
-        "SELECT COALESCE(uid, ''), scope FROM playlists WHERE id = ?1",
+        "SELECT uid, scope FROM playlists WHERE id = ?1",
         params![id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )
@@ -1575,7 +1574,7 @@ pub fn list_tags(conn: &Connection) -> Result<Vec<Tag>, Error> {
 fn tag_by_name(conn: &Connection, name: &str) -> Result<Option<(i64, String, String)>, Error> {
     Ok(conn
         .query_row(
-            "SELECT id, COALESCE(uid, ''), scope FROM tags WHERE name = ?1",
+            "SELECT id, uid, scope FROM tags WHERE name = ?1",
             params![name],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
@@ -1607,7 +1606,7 @@ pub fn tag_tracks(conn: &mut Connection, name: &str, track_ids: &[i64]) -> Resul
     let mut ops = crate::libsync::Batch::new(&tx)?;
     let tag_id = ensure_tag(&tx, &name, &mut ops)?;
     let (uid, scope): (String, String) = tx.query_row(
-        "SELECT COALESCE(uid, ''), scope FROM tags WHERE id = ?1",
+        "SELECT uid, scope FROM tags WHERE id = ?1",
         params![tag_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -1670,7 +1669,7 @@ fn move_tag(
     ops: &mut crate::libsync::Batch,
 ) -> Result<(), Error> {
     let (current, uid, scope): (String, String, String) = tx.query_row(
-        "SELECT name, COALESCE(uid, ''), scope FROM tags WHERE id = ?1",
+        "SELECT name, uid, scope FROM tags WHERE id = ?1",
         params![id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
@@ -1693,7 +1692,7 @@ fn move_tag(
     }
     let target = ensure_tag(tx, to, ops)?;
     let (target_uid, target_scope): (String, String) = tx.query_row(
-        "SELECT COALESCE(uid, ''), scope FROM tags WHERE id = ?1",
+        "SELECT uid, scope FROM tags WHERE id = ?1",
         params![target],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
@@ -1781,7 +1780,7 @@ pub fn delete_tag(conn: &Connection, id: i64) -> Result<(), Error> {
     let tx = conn.unchecked_transaction()?;
     let ident: Option<(String, String)> = tx
         .query_row(
-            "SELECT COALESCE(uid, ''), scope FROM tags WHERE id = ?1",
+            "SELECT uid, scope FROM tags WHERE id = ?1",
             params![id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -1888,7 +1887,7 @@ pub struct Base {
     pub remote_sig: String,
     /// JSON of the tag fields (`tags::fields_json`); `None` when they could not be read.
     pub tags: Option<String>,
-    /// `None` for bases stored before exact checks, until the next sync or read renews them.
+    /// `None` when no exact check was taken for this file; the next sync or read takes one.
     pub exact: Option<Exact>,
 }
 
@@ -2427,10 +2426,7 @@ pub fn list_targets(conn: &Connection) -> Result<Vec<SyncTarget>, Error> {
 }
 
 /// The services a user can switch on or off.
-pub const SERVICES: [&str; 7] = [
-    // Before import folders: kept so their old switches still read during the move to them.
-    "downloads",
-    "itunes",
+pub const SERVICES: [&str; 5] = [
     crate::apple_art::SERVICE,
     "tailscale",
     "r2",
@@ -3557,9 +3553,8 @@ fn analysis_candidates(
         if wanted.as_ref().is_some_and(|w| !w.contains(&id)) {
             continue;
         }
-        // Up to date, or failed with the current version: nothing new to learn. Audio analysed
-        // before the beat grid and waveform were kept (or whose kept files were lost) is done
-        // again for them.
+        // Up to date, or failed with the current version: nothing new to learn. Audio without a
+        // kept waveform (its file was lost) is analysed again for it.
         if !force && version.is_some_and(|v| v >= crate::analysis::VERSION) && !no_waveform {
             continue;
         }
@@ -3779,8 +3774,8 @@ mod tests {
         ];
         for (path, state, missing, fields) in rows {
             conn.execute(
-                "INSERT INTO tracks (path, artist, album, title, size, file_state, missing_since, fields)
-                 VALUES (?1, 'a', 'b', 'c', 1, ?2, ?3, ?4)",
+                "INSERT INTO tracks (path, artist, album, title, size, file_state, missing_since, fields, added_at)
+                 VALUES (?1, 'a', 'b', 'c', 1, ?2, ?3, ?4, 0)",
                 params![path, state, missing, fields],
             )
             .expect("track");
@@ -3810,8 +3805,8 @@ mod tests {
             ("/m/streamed.mp3", "a1:02", FileState::Streamed),
         ] {
             conn.execute(
-                "INSERT INTO tracks (path, artist, album, title, size, audio_fp, file_state)
-                 VALUES (?1, 'a', 'b', 'c', 1, ?2, ?3)",
+                "INSERT INTO tracks (path, artist, album, title, size, audio_fp, file_state, added_at)
+                 VALUES (?1, 'a', 'b', 'c', 1, ?2, ?3, 0)",
                 params![path, fp, state],
             )
             .expect("track");
@@ -3852,8 +3847,10 @@ mod tests {
     #[test]
     fn the_migrations_bring_the_first_layout_to_the_newest() {
         let mut old = Connection::open_in_memory().expect("old");
-        old.execute_batch(include_str!("schema_v2.sql")).expect("first layout");
-        old.pragma_update(None, "user_version", FIRST_LAYOUT.0).expect("version");
+        old.execute_batch(include_str!("schema_v2.sql"))
+            .expect("first layout");
+        old.pragma_update(None, "user_version", FIRST_LAYOUT.0)
+            .expect("version");
         migrate(&mut old, MIGRATIONS).expect("migrate");
         let new = open(Path::new(":memory:")).expect("new");
         assert_eq!(layout(&old), layout(&new));
@@ -3877,24 +3874,42 @@ mod tests {
             Err(Error::Msg("stopped".to_owned()))
         }
         let steps = [
-            Migration { to: SchemaVersion(3), run: add_note },
-            Migration { to: SchemaVersion(4), run: fail },
+            Migration {
+                to: SchemaVersion(3),
+                run: add_note,
+            },
+            Migration {
+                to: SchemaVersion(4),
+                run: fail,
+            },
         ];
         let mut conn = Connection::open_in_memory().expect("db");
-        conn.execute_batch(include_str!("schema_v2.sql")).expect("first layout");
-        conn.pragma_update(None, "user_version", 2).expect("version");
+        conn.execute_batch(include_str!("schema_v2.sql"))
+            .expect("first layout");
+        conn.pragma_update(None, "user_version", 2)
+            .expect("version");
         assert!(migrate(&mut conn, &steps).is_err());
         assert_eq!(schema_version(&conn).expect("version"), SchemaVersion(3));
         let columns = layout(&conn).join("\n");
-        assert!(columns.contains("settings.note"), "the first step stays done");
-        assert!(!columns.contains("settings.half"), "the failed step is undone");
-        assert!(migrate(&mut conn, &steps[..1]).is_ok(), "a step already run is not run again");
+        assert!(
+            columns.contains("settings.note"),
+            "the first step stays done"
+        );
+        assert!(
+            !columns.contains("settings.half"),
+            "the failed step is undone"
+        );
+        assert!(
+            migrate(&mut conn, &steps[..1]).is_ok(),
+            "a step already run is not run again"
+        );
     }
 
     #[test]
     fn a_library_older_than_the_first_layout_is_refused() {
         let mut conn = Connection::open_in_memory().expect("db");
-        conn.execute_batch("CREATE TABLE tracks (id INTEGER PRIMARY KEY);").expect("old");
+        conn.execute_batch("CREATE TABLE tracks (id INTEGER PRIMARY KEY);")
+            .expect("old");
         assert!(migrate(&mut conn, MIGRATIONS).is_err());
     }
 
@@ -4110,7 +4125,7 @@ mod tests {
     fn audio_analysed_without_a_waveform_is_analysed_again() {
         let mut conn = open(Path::new(":memory:")).expect("db");
         upsert(&mut conn, &[track("/a.mp3", "x", None)]).expect("upsert");
-        // BPM and key from before the waveform was kept in the database.
+        // A result that has BPM and key but no waveform.
         conn.execute(
             "INSERT INTO analysis (audio_fp, bpm, version, analyzed_at) VALUES ('x', 120, ?1, 1)",
             params![crate::analysis::VERSION],
@@ -4483,5 +4498,60 @@ mod tests {
         );
         remove_target(&conn, target).expect("remove");
         assert_eq!(jellyfin_settings(&conn, target).expect("read"), None);
+    }
+
+    #[test]
+    fn rules_naming_a_tag_that_is_not_here_are_refused() {
+        use crate::smart::Rules;
+        let mut conn = open(Path::new(":memory:")).expect("db");
+        create_tag(&mut conn, "House", None).expect("tag");
+        let missing = "The tag “Gone” no longer exists; choose the tags again.";
+        let cases = [
+            (
+                "all of",
+                Rules {
+                    all_tags: vec!["Gone".into()],
+                    ..Rules::default()
+                },
+                Some(missing),
+            ),
+            (
+                "any of",
+                Rules {
+                    any_tags: vec!["House".into(), "Gone".into()],
+                    ..Rules::default()
+                },
+                Some(missing),
+            ),
+            (
+                "none of",
+                Rules {
+                    none_tags: vec!["Gone".into()],
+                    ..Rules::default()
+                },
+                Some(missing),
+            ),
+            (
+                "a tag that exists",
+                Rules {
+                    all_tags: vec!["House".into()],
+                    ..Rules::default()
+                },
+                None,
+            ),
+        ];
+        for (what, rules, refusal) in cases {
+            let result = rules_to_stored(&conn, &rules);
+            if let Some(message) = refusal {
+                let error = result.expect_err(what).to_string();
+                assert!(error.contains(message), "{what}: {error}");
+            } else {
+                let stored = result.expect(what);
+                assert!(
+                    stored.all_tags.iter().all(|t| crate::smart::is_uid(t)),
+                    "{what}"
+                );
+            }
+        }
     }
 }

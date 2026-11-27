@@ -19,6 +19,7 @@ const track = (id: number, artist: string, title: string, tags: string[] = []): 
 	key: null,
 	analyzed: false,
 	edited: { bpm: false, key: false, grid: false },
+	addedAt: 0,
 	fileState: "here",
 });
 
@@ -64,8 +65,20 @@ describe("filterTracks", () => {
 });
 
 describe("suggest", () => {
-	const playlists: Playlist[] = [{ id: 7, name: "Friday", trackCount: 2 }];
-	const tags: Tag[] = [{ id: 1, name: "chill", trackCount: 2 }];
+	const playlists: Playlist[] = [
+		{
+			id: 7,
+			name: "Friday",
+			trackCount: 2,
+			scope: "shared",
+			hidden: false,
+			held: false,
+			kept: false,
+		},
+	];
+	const tags: Tag[] = [
+		{ id: 1, name: "chill", trackCount: 2, scope: "shared", hidden: false, held: false },
+	];
 
 	it("offers only playlists and tags before anything is typed", () => {
 		expect(suggest("", tracks, playlists, tags, []).map((g) => g.title)).toEqual([

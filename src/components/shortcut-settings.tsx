@@ -198,8 +198,6 @@ function ShortcutRow({
 	const keys = bindings.get(def.id) ?? [];
 	const isOpen = (replacing: Chord | null) =>
 		editing?.id === def.id && editing.replacing === replacing;
-	// Two actions on one key (left by an older version or a hand edit): the first listed wins.
-	const shared = keys.flatMap((k) => conflictsWith(bindings, def.id, k));
 
 	return (
 		<div className="px-4 py-2">
@@ -247,12 +245,6 @@ function ShortcutRow({
 					/>
 				</div>
 			</div>
-			{shared.length > 0 && (
-				<p className="mt-1 flex items-center gap-1.5 text-warning text-xs">
-					<TriangleAlert className="size-3.5 shrink-0" />
-					Shares a key with {shared.map((id) => `“${shortcutDef(id).label}”`).join(", ")}.
-				</p>
-			)}
 		</div>
 	);
 }

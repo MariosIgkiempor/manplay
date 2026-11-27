@@ -70,8 +70,7 @@ const text = compareText;
 function newest(tracks: readonly Track[]): number {
 	let best = 0;
 	for (const t of tracks) {
-		// Unknown dates order by id below any real date, as with single songs.
-		best = Math.max(best, t.addedAt ?? t.id / 1e9);
+		best = Math.max(best, t.addedAt);
 	}
 	return best;
 }

@@ -3,9 +3,9 @@ import { setTagTree, tagCheck } from "#/lib/rekordbox-selection.ts";
 import { buildTagTree } from "#/lib/tag-tree.ts";
 
 const tree = buildTagTree([
-	{ id: 1, name: "Genre", trackCount: 3 },
-	{ id: 2, name: "Genre/House", trackCount: 2 },
-	{ id: 3, name: "Genre/House/Deep", trackCount: 1 },
+	{ id: 1, name: "Genre", trackCount: 3, scope: "shared", hidden: false, held: false },
+	{ id: 2, name: "Genre/House", trackCount: 2, scope: "shared", hidden: false, held: false },
+	{ id: 3, name: "Genre/House/Deep", trackCount: 1, scope: "shared", hidden: false, held: false },
 ]);
 const genre = tree[0];
 if (!genre) {

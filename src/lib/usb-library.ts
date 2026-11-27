@@ -100,6 +100,7 @@ function asTrack(u: UsbTrack, mount: string, known: Track | undefined): Track {
 		analyzed: u.analyzePath !== "",
 		fields: known?.fields ?? {},
 		edited: known?.edited ?? { bpm: false, key: false, grid: false },
+		addedAt: known?.addedAt ?? 0,
 		fileState: "here",
 	};
 }
