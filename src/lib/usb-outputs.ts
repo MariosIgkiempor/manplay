@@ -133,14 +133,22 @@ export function reviewNotes(outputs: UsbOutputs, mode: UsbMode): string[] {
 	});
 }
 
-/** What an export does, in order, given the formats it was asked to write. */
-export function exportSteps(outputs: UsbOutputs): [UsbExportProgress["phase"], string][] {
+/** What an export does, in order, given the formats it was asked to write; `streaming` when this
+ * device streams songs from a shared library, whose chosen ones come down first. */
+export function exportSteps(
+	outputs: UsbOutputs,
+	streaming = false,
+): [UsbExportProgress["phase"], string][] {
 	const libraries = [
 		outputs.serato && "Serato crates",
 		outputs.virtualDj && "the VirtualDJ library",
 		outputs.gemini && "the Gemini library",
 	].filter((name): name is string => Boolean(name));
-	const steps: [UsbExportProgress["phase"], string][] = [["copying", "Copy songs"]];
+	const steps: [UsbExportProgress["phase"], string][] = [];
+	if (streaming) {
+		steps.push(["downloading", "Download streamed songs"]);
+	}
+	steps.push(["copying", "Copy songs"]);
 	// Only rekordbox's players and the Gemini library read beat grids from the drive.
 	if (outputs.rekordbox || outputs.gemini) {
 		steps.push(["analyzing", "Beat grids and waveforms"]);

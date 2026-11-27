@@ -160,11 +160,12 @@ Windows AIFF/ALAC through `pcm://`, and covers of streamed songs from the cached
   the library. Results are written into files only for kept songs.
 - Export: `db::export_data` includes streamed songs with their `file_state`. A USB export takes a streamed
   song's cached copy, under the song's own file name (`usb_export::Source::name`), and leaves
-  out one that is not cached; Jellyfin playlists keep every song.
+  out one that is not cached; Jellyfin playlists keep every song. Since then a USB export downloads
+  every chosen streamed song into the cache first (`download_streamed_for_usb`, the "Download
+  streamed songs" step), and its preview counts them as if cached.
 
 Not done: changing a streamed song's cover (the cover card writes into the file, so it fails on
-a streamed song); a USB export does not download streamed songs that are not cached: keep them,
-or their playlist, first.
+a streamed song).
 
 ## Playback
 

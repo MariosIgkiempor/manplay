@@ -52,7 +52,7 @@ import { EMPTY_SELECTION, plural, tagPlaylistName } from "#/lib/export-selection
 import { formatBytes } from "#/lib/format.ts";
 import { baseName } from "#/lib/fs-path.ts";
 import { WELL } from "#/lib/page-layout.ts";
-import { useTracks } from "#/lib/queries.ts";
+import { useLibraryHome, useTracks } from "#/lib/queries.ts";
 import { trackHasTag } from "#/lib/tag-tree.ts";
 import { exportSteps, outputProblems, outputResults } from "#/lib/usb-outputs.ts";
 import { useSmartPlaylists } from "#/lib/use-smart.ts";
@@ -240,7 +240,7 @@ function StepProgress({ progress }: { progress: UsbExportProgress | null }) {
 
 /** What an export does, in order, with the current step's progress. */
 function Steps({ progress, outputs }: { progress: UsbExportProgress | null; outputs: UsbOutputs }) {
-	const all = exportSteps(outputs);
+	const all = exportSteps(outputs, useLibraryHome().data?.kind === "target");
 	// Before the first report the drive is being read, which is part of the first step.
 	const at = progress ? all.findIndex(([p]) => p === progress.phase) : 0;
 	return (

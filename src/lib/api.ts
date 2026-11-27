@@ -2581,7 +2581,7 @@ export async function usbFormats(mount: string): Promise<UsbFormats> {
 }
 
 const usbExportProgressSchema = z.object({
-	phase: z.enum(["copying", "analyzing", "writing", "folders", "libraries"]),
+	phase: z.enum(["downloading", "copying", "analyzing", "writing", "folders", "libraries"]),
 	done: int,
 	total: int,
 	current: z.string(),

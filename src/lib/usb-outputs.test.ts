@@ -71,6 +71,14 @@ describe("exportSteps", () => {
 		expect(exportSteps(outputs).map(([phase]) => phase)).toEqual(phases);
 	});
 
+	it.each([
+		["streaming", true, ["downloading", "copying"]],
+		["not streaming", false, ["copying"]],
+	] as const)("downloads streamed songs first only when %s", (_name, streaming, first) => {
+		const phases = exportSteps({ ...none, playlistFolders: true }, streaming).map(([p]) => p);
+		expect(phases.slice(0, first.length)).toEqual(first);
+	});
+
 	it("names what each writing step writes", () => {
 		const labels = (outputs: UsbOutputs) => exportSteps(outputs).map(([, label]) => label);
 		expect(labels({ ...rekordbox, serato: true, gemini: true })).toEqual([

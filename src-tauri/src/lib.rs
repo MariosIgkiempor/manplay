@@ -2984,12 +2984,21 @@ fn smart_playlist_preview(
     )))
 }
 
+/// Which streamed songs a USB export or its preview takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamedForUsb {
+    /// The ones in the stream cache: an export, after `download_streamed_for_usb`.
+    Cached,
+    /// Every one, as if cached: a preview, before anything is downloaded.
+    Planned,
+}
+
 /// The library's songs and the chosen playlists, as a USB export or its preview takes them. A
-/// streamed song goes from its copy in the stream cache; one that is not there is left out (keep
-/// it, or play it once, to take it along).
+/// streamed song goes from its copy in the stream cache (see [`StreamedForUsb`]).
 fn usb_inputs(
     state: &AppState,
     cache: Option<&stream_cache::StreamCache>,
+    streamed: StreamedForUsb,
     selection: &db::ExportSelection,
 ) -> Result<
     (
@@ -3010,7 +3019,11 @@ fn usb_inputs(
                 db::FileState::Here => (path, None),
                 db::FileState::Streamed => {
                     let ext = path.extension()?.to_str()?;
-                    let cached = cache?.peek(t.audio_fp.as_deref()?, ext)?;
+                    let fp = t.audio_fp.as_deref()?;
+                    let cached = match streamed {
+                        StreamedForUsb::Cached => cache?.peek(fp, ext)?,
+                        StreamedForUsb::Planned => cache?.file_for(fp, ext)?,
+                    };
                     let name = path.file_name()?.to_string_lossy().into_owned();
                     (cached, Some(name))
                 }
@@ -3065,11 +3078,77 @@ async fn usb_export_preview(
         usb::check_mount(&mount).map_err(Error::Msg)?;
         let state = app.state::<AppState>();
         let cache = stream_cache_of(&app).ok();
-        let (sources, playlists, _) = usb_inputs(&state, cache.as_ref(), &selection)?;
+        let (sources, playlists, _) =
+            usb_inputs(&state, cache.as_ref(), StreamedForUsb::Planned, &selection)?;
         usb_export::preview(&mount, &sources, &playlists, selection.usb_mode).map_err(Error::Msg)
     })
     .await
     .map_err(|e| Error::Msg(e.to_string()))?
+}
+
+/// Downloads into the stream cache the songs of `selection` this device streams and has not
+/// cached, so a USB export takes every chosen song. Emits `usb-export-progress` in the
+/// `Downloading` phase while the shared library is on a destination. Returns the songs that could
+/// not be downloaded (the export leaves them out).
+async fn download_streamed_for_usb(
+    app: &AppHandle,
+    state: &AppState,
+    selection: &db::ExportSelection,
+) -> Result<Vec<usb_export::Failure>, Error> {
+    let (streaming, songs) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let streaming = library_destination(&conn)?.is_some();
+        let (tracks, lists) = db::export_data(&conn)?;
+        let chosen: HashSet<i64> = usb_playlists(&conn, &lists, selection)?
+            .into_iter()
+            .flat_map(|p| p.track_ids)
+            .collect();
+        let mut songs = Vec::new();
+        for t in tracks.iter().filter(|t| t.file_state == db::FileState::Streamed) {
+            if chosen.contains(&t.id)
+                && let Source::Streamed(song) = source_of(&conn, t.id)?
+            {
+                songs.push((t.title.clone(), song));
+            }
+        }
+        (streaming, songs)
+    };
+    if !streaming {
+        return Ok(Vec::new());
+    }
+    let cache = stream_cache_of(app)?;
+    let wanted: Vec<(String, StreamedFile)> = songs
+        .into_iter()
+        .filter(|(_, song)| cache.peek(&song.audio_fp, song.extension()).is_none())
+        .collect();
+    let total = wanted.len();
+    let report = |done: usize, current: &str| {
+        let _ = app.emit(
+            "usb-export-progress",
+            usb_export::Progress {
+                phase: usb_export::Phase::Downloading,
+                done,
+                total,
+                current: current.to_owned(),
+            },
+        );
+    };
+    let mut failed = Vec::new();
+    for (done, (title, song)) in wanted.iter().enumerate() {
+        report(done, title);
+        let got = fill_stream_cache(app, song).await;
+        if !matches!(got, Ok(Some(_))) {
+            failed.push(usb_export::Failure {
+                path: song.rel.parts().join("/"),
+                error: match got {
+                    Err(e) => format!("could not download it: {e}"),
+                    Ok(_) => "the destination does not have it".to_owned(),
+                },
+            });
+        }
+    }
+    report(total, "");
+    Ok(failed)
 }
 
 /// Copies the chosen playlists and their songs onto a USB drive and rewrites its rekordbox
@@ -3089,7 +3168,9 @@ async fn export_to_usb(
     }
     let _guard = SyncGuard(&state.usb_exporting);
     let cache = stream_cache_of(&app).ok();
-    let (sources, playlists, camelot) = usb_inputs(&state, cache.as_ref(), &selection)?;
+    let not_downloaded = download_streamed_for_usb(&app, &state, &selection).await?;
+    let (sources, playlists, camelot) =
+        usb_inputs(&state, cache.as_ref(), StreamedForUsb::Cached, &selection)?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let drive = usb::list()
@@ -3122,6 +3203,8 @@ async fn export_to_usb(
             let _ = app.emit("usb-export-progress", p);
         })?;
         remember_usb_selection(&state, &drive.id, selection)?;
+        let mut report = report;
+        report.failed.extend(not_downloaded);
         Ok(report)
     })
     .await

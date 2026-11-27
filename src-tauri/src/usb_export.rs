@@ -66,6 +66,9 @@ pub struct SourcePlaylist {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
+    /// Downloading the chosen songs this device streams, into the stream cache (before the
+    /// export proper, by `export_to_usb` in `lib.rs`).
+    Downloading,
     Copying,
     /// Working out beat grids and waveforms for songs new to the drive.
     Analyzing,
