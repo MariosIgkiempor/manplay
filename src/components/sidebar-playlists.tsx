@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Copy, ListMusic, PencilLine, Play, Trash2 } from "lucide-react";
+import { CloudDownload, Copy, ListMusic, PencilLine, Play, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "#/components/confirm-dialog.tsx";
 import { InlineInput } from "#/components/inline-edit.tsx";
@@ -27,6 +27,7 @@ import {
 	playlistTracks,
 	renamePlaylist,
 } from "#/lib/api.ts";
+import { useLibraryHome, useSetPlaylistKept } from "#/lib/queries.ts";
 import { useItemSharing, useNewItemScope } from "#/lib/use-item-sharing.tsx";
 import { useStoredFlag } from "#/lib/use-pane-width.ts";
 
@@ -95,6 +96,8 @@ export function SidebarPlaylists() {
 	const [deleting, setDeleting] = useState<Playlist | null>(null);
 	const [closed, setClosed] = useStoredFlag("manplay.sidebar.playlistsClosed");
 	const sharing = useItemSharing();
+	const streaming = useLibraryHome().data?.kind === "target";
+	const setKept = useSetPlaylistKept();
 	const newScope = useNewItemScope();
 	const everything = playlists.data ?? [];
 	const all = everything.filter((p) => !p.hidden);
@@ -168,6 +171,11 @@ export function SidebarPlaylists() {
 								onSelect: () => actions.duplicate.mutate({ p, all: everything }),
 							},
 							"separator",
+							streaming && {
+								label: p.kept ? "Stop keeping songs on this device" : "Keep songs on this device",
+								icon: <CloudDownload />,
+								onSelect: () => setKept.mutate({ id: p.id, kept: !p.kept }),
+							},
 							...sharing.entries(itemOf(p)),
 							"separator",
 							{

@@ -9,6 +9,7 @@ import { FieldRow, FrameSection } from "#/components/frame.tsx";
 import { ScopeSwitch } from "#/components/item-sharing.tsx";
 import { ErrorLine, LoadingLine } from "#/components/page.tsx";
 import { StatusIcon } from "#/components/status-icon.tsx";
+import { StreamingSettings } from "#/components/streaming-settings.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { Fact, Facts, MoreInfo } from "#/components/ui/facts.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
@@ -753,6 +754,7 @@ export function SharedLibrarySettings() {
 					/>
 				)}
 			</FrameSection>
+			{home?.kind === "target" && <StreamingSettings />}
 			<ClashPanel />
 		</>
 	);

@@ -1020,6 +1020,7 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     retry_unnamed_waveforms(&conn)?;
     create_jellyfin(&conn)?;
     create_sync_ignored(&conn)?;
+    crate::libsync::keep::create(&conn)?;
     if schema_version(&conn)? < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION.0)?;
     }
@@ -1816,6 +1817,8 @@ pub struct Playlist {
     pub hidden: bool,
     /// Shown under a held name because another playlist has the name (see Clashes).
     pub held: bool,
+    /// Its songs are kept on this device, not streamed (`libsync::keep`).
+    pub kept: bool,
 }
 
 /// Extra condition for queries over `playlist_tracks pt JOIN tracks t`: a song whose audio
@@ -1829,7 +1832,8 @@ const ONE_PER_AUDIO: &str = "AND NOT EXISTS (
 pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>, Error> {
     let mut stmt = conn.prepare(
         "SELECT p.id, p.name, COUNT(t.id), p.scope, p.hidden,
-                EXISTS (SELECT 1 FROM clashes c WHERE c.kind = 'playlist' AND c.held = p.uid)
+                EXISTS (SELECT 1 FROM clashes c WHERE c.kind = 'playlist' AND c.held = p.uid),
+                EXISTS (SELECT 1 FROM keep_rules k WHERE k.kind = 'playlist' AND k.id = p.uid)
          FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
          LEFT JOIN tracks t ON t.id = pt.track_id AND t.missing_since IS NULL
              AND NOT EXISTS (
@@ -1846,6 +1850,7 @@ pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>, Error> {
             scope: r.get(3)?,
             hidden: r.get(4)?,
             held: r.get(5)?,
+            kept: r.get(6)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -3324,9 +3329,7 @@ pub fn history(conn: &Connection, limit: i64) -> Result<Vec<RunView>, Error> {
 // ---- missing files: soft delete, grace period, backups ---------------------
 
 /// `(id, path)` of every track that is currently present (not marked missing).
-/// Sets whether a song's file is in the library folder or the song is streamed. Only tests set it
-/// until Keep and Stream only exist (streaming step 9.5).
-#[cfg(test)]
+/// Sets whether a song's file is in the library folder or the song is streamed.
 pub fn set_file_state(conn: &Connection, track_id: i64, state: FileState) -> Result<(), Error> {
     conn.execute(
         "UPDATE tracks SET file_state = ?2 WHERE id = ?1",

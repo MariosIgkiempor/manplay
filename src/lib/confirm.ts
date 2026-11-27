@@ -69,6 +69,21 @@ export function confirmTrash(names: readonly string[]): Promise<boolean> {
 	});
 }
 
+/** Asks before kept songs' files go to the Trash so the songs stream instead. */
+export function confirmStreamOnly(count: number): Promise<boolean> {
+	const what = count === 1 ? "this song" : `${count.toLocaleString()} songs`;
+	return askConfirm({
+		title: `Stream ${what} only?`,
+		lines: [
+			`${count === 1 ? "Its file goes" : "Their files go"} to the ${TRASH}.`,
+			"The songs stay in the library and play from the shared library's destination.",
+			"A song the destination does not have yet is left kept.",
+		],
+		confirmLabel: "Stream only",
+		destructive: true,
+	});
+}
+
 /** Asks before library issues are fixed; `lines` say what will change. */
 export function confirmFix(lines: readonly string[]): Promise<boolean> {
 	return askConfirm({ title: "Fix library issues?", lines, confirmLabel: "Fix" });

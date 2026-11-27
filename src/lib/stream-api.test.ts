@@ -7,9 +7,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
-const { fileStateSchema, newSongsSchema, streamCacheUsageSchema, trackUrl } = await import(
-	"#/lib/api.ts"
-);
+const {
+	fileStateSchema,
+	newSongsSchema,
+	streamCacheUsageSchema,
+	streamOnlyReportSchema,
+	trackUrl,
+} = await import("#/lib/api.ts");
 const invoked = vi.mocked(invoke);
 
 describe("fileStateSchema", () => {
@@ -52,8 +56,8 @@ describe("trackUrl", () => {
 
 describe("streamCacheUsageSchema", () => {
 	it.each([
-		["an empty cache", { used: 0, limit: 5_000_000_000 }],
-		["a full one", { used: 5_000_000_000, limit: 5_000_000_000 }],
+		["an empty cache", { used: 0, limit: 5_368_709_120 }],
+		["a full one", { used: 5_368_709_120, limit: 5_368_709_120 }],
 	])("takes %s", (_name, usage) => {
 		expect(streamCacheUsageSchema.parse(usage)).toEqual(usage);
 	});
@@ -78,5 +82,19 @@ describe("newSongsSchema", () => {
 		["nothing", null],
 	])("refuses %s", (_name, value) => {
 		expect(newSongsSchema.safeParse(value).success).toBe(false);
+	});
+});
+
+describe("streamOnlyReportSchema", () => {
+	it("takes a report", () => {
+		const report = { streamed: 3, keptByPlaylist: 1, notOnDestination: 0 };
+		expect(streamOnlyReportSchema.parse(report)).toEqual(report);
+	});
+
+	it.each([
+		["a negative count", { streamed: -1, keptByPlaylist: 0, notOnDestination: 0 }],
+		["a missing count", { streamed: 1, keptByPlaylist: 0 }],
+	])("refuses %s", (_name, report) => {
+		expect(streamOnlyReportSchema.safeParse(report).success).toBe(false);
 	});
 });

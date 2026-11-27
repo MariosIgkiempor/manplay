@@ -9,6 +9,7 @@ use super::{Memory, device, run_both, tag};
 use crate::db::FileState;
 use crate::libsync::files::{self, UnixSeconds};
 use crate::libsync::song_tags::{self, Fields};
+use crate::libsync::keep::{self, KeepKind, KeepRule};
 use crate::libsync::streamed::{self, NewSongs, Refreshed};
 
 const ROOT: &str = "/music";
@@ -267,4 +268,96 @@ fn the_new_songs_setting_reads_back_and_defaults_to_stream() {
         want.set(&conn).expect("set");
         assert_eq!(NewSongs::get(&conn).expect("get"), want);
     }
+}
+
+fn rule(kind: KeepKind, id: &str) -> KeepRule {
+    KeepRule {
+        kind,
+        id: id.to_owned(),
+    }
+}
+
+fn to_download(db: &Mutex<Connection>) -> Vec<String> {
+    keep::to_download(&lock(db), Path::new(ROOT))
+        .expect("to download")
+        .iter()
+        .map(|rel| rel.parts().join("/"))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_kept_song_or_a_kept_playlists_songs_are_downloaded_and_nothing_else() {
+    struct Case {
+        what: &'static str,
+        keep: fn(&Mutex<Connection>),
+        want: &'static [&'static str],
+    }
+    let cases = [
+        Case {
+            what: "nothing kept",
+            keep: |_| {},
+            want: &[],
+        },
+        Case {
+            what: "the song kept",
+            keep: |b| keep::add(&lock(b), &[rule(KeepKind::Song, "fp3")]).expect("keep"),
+            want: &["Artist/Album/3.mp3"],
+        },
+        Case {
+            what: "a playlist with it kept",
+            keep: |b| {
+                let conn = lock(b);
+                let uid: String = conn
+                    .query_row("SELECT uid FROM playlists WHERE name = 'Set'", [], |r| {
+                        r.get(0)
+                    })
+                    .expect("uid");
+                keep::add(&conn, &[rule(KeepKind::Playlist, &uid)]).expect("keep");
+            },
+            want: &["Artist/Album/3.mp3"],
+        },
+        Case {
+            what: "a song that is kept already",
+            keep: |b| keep::add(&lock(b), &[rule(KeepKind::Song, "fp1")]).expect("keep"),
+            want: &[],
+        },
+    ];
+    for case in cases {
+        let store = Memory::default();
+        let (a, b) = one_more(&store).await;
+        super::playlist(&a, "Set", &[3]);
+        assert!(run_both(&a, &b, &store).await, "{}", case.what);
+        refresh(&b);
+        (case.keep)(&b);
+        assert_eq!(to_download(&b), case.want, "{}", case.what);
+    }
+}
+
+#[tokio::test]
+async fn a_song_in_a_kept_playlist_is_kept_by_it_and_a_rule_can_be_taken_back() {
+    let store = Memory::default();
+    let (a, b) = one_more(&store).await;
+    super::playlist(&a, "Set", &[3]);
+    assert!(run_both(&a, &b, &store).await);
+    refresh(&b);
+    let conn = lock(&b);
+    let (uid, kept_before): (String, bool) = conn
+        .query_row(
+            "SELECT uid, EXISTS (SELECT 1 FROM keep_rules) FROM playlists WHERE name = 'Set'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("uid");
+    assert!(!kept_before);
+    let id: i64 = conn
+        .query_row("SELECT id FROM tracks WHERE audio_fp = 'fp3'", [], |r| r.get(0))
+        .expect("id");
+    keep::add(&conn, &[rule(KeepKind::Playlist, &uid)]).expect("keep");
+    assert!(keep::kept_by_playlist(&conn, id).expect("kept"));
+    let listed = crate::db::list_playlists(&conn).expect("playlists");
+    assert!(listed.iter().any(|p| p.name == "Set" && p.kept));
+    keep::remove(&conn, &[rule(KeepKind::Playlist, &uid)]).expect("unkeep");
+    assert!(!keep::kept_by_playlist(&conn, id).expect("kept"));
+    drop(conn);
+    assert_eq!(to_download(&b), Vec::<String>::new());
 }

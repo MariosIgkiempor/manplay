@@ -477,19 +477,14 @@ async fn fetch_shared_songs(app: AppHandle, target: db::SyncTarget) {
     let Ok(root) = library_root(&state) else {
         return;
     };
-    // While new songs stream, the ones not streamed yet wait for the next look instead.
     let wanted = match state.db.lock().map_err(|_| Error::Lock) {
-        Ok(conn) => match libsync::streamed::NewSongs::get(&conn) {
-            Ok(libsync::streamed::NewSongs::Stream) => Ok(Vec::new()),
-            Ok(libsync::streamed::NewSongs::Download) => libsync::files::arrivals_wanted(&conn),
-            Err(e) => Err(e),
-        },
+        Ok(conn) => songs_to_fetch(&conn, &root),
         Err(e) => Err(e),
     };
     let wanted: Vec<Vec<String>> = match wanted {
         Ok(wanted) => wanted
             .into_iter()
-            .map(|w| w.path.parts().to_vec())
+            .map(|path| path.parts().to_vec())
             .collect(),
         Err(e) => {
             log::warn!("could not tell which songs to fetch: {e}");
@@ -521,6 +516,41 @@ async fn fetch_shared_songs(app: AppHandle, target: db::SyncTarget) {
     }
     // After the library was read again, so the songs are in the lists when the bar goes.
     report(sync::FetchProgress::default());
+}
+
+/// The songs to download from the shared library's destination: the streamed songs this device
+/// keeps (`libsync::keep`), and, while new songs are set to download, the songs other devices
+/// added. While new songs stream, those are streamed rows instead (`libsync::streamed`).
+fn songs_to_fetch(conn: &Connection, root: &Path) -> Result<Vec<libsync::files::RelPath>, Error> {
+    let mut wanted = libsync::keep::to_download(conn, root)?;
+    if libsync::streamed::NewSongs::get(conn)? == libsync::streamed::NewSongs::Download {
+        wanted.extend(
+            libsync::files::arrivals_wanted(conn)?
+                .into_iter()
+                .map(|arrival| arrival.path),
+        );
+    }
+    wanted.sort();
+    wanted.dedup();
+    Ok(wanted)
+}
+
+/// The shared library's destination, when the shared library is kept on one.
+fn library_destination(conn: &Connection) -> Result<Option<db::SyncTarget>, Error> {
+    let Some(libsync::membership::Home::Target(id)) = libsync::membership::home(conn)? else {
+        return Ok(None);
+    };
+    Ok(db::get_targets(conn, Some(&[id]))?.into_iter().next())
+}
+
+/// Downloads the songs this device keeps now, without waiting for the next sync.
+fn fetch_kept_songs(app: &AppHandle) -> Result<(), Error> {
+    let state = app.state::<AppState>();
+    let target = library_destination(&*state.db.lock().map_err(|_| Error::Lock)?)?;
+    if let Some(target) = target {
+        tauri::async_runtime::spawn(fetch_shared_songs(app.clone(), target));
+    }
+    Ok(())
 }
 
 /// Where cover pictures fetched from the shared library wait to be written into the files.
@@ -1521,6 +1551,156 @@ macro_rules! with_db {
         let $conn = &mut *guard;
         $body
     }};
+}
+
+/// Keeps these streamed songs on this device: their files are downloaded now and stay.
+#[tauri::command]
+fn keep_songs(app: AppHandle, state: State<'_, AppState>, track_ids: Vec<i64>) -> Result<(), Error> {
+    with_db!(state, |c| {
+        let rules: Vec<libsync::keep::KeepRule> = track_ids
+            .iter()
+            .filter_map(|id| db::track_place(c, *id).ok().flatten())
+            .filter(|place| place.file_state == db::FileState::Streamed)
+            .filter_map(|place| place.audio_fp.filter(|fp| !fp.is_empty()))
+            .map(|id| libsync::keep::KeepRule {
+                kind: libsync::keep::KeepKind::Song,
+                id,
+            })
+            .collect();
+        libsync::keep::add(c, &rules)
+    })?;
+    fetch_kept_songs(&app)
+}
+
+/// Keeps a playlist's songs on this device, the ones added later too, or stops keeping them (the
+/// files already here stay until Stream only).
+#[tauri::command]
+fn set_playlist_kept(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    playlist_id: i64,
+    kept: bool,
+) -> Result<(), Error> {
+    with_db!(state, |c| {
+        let uid: String = c.query_row(
+            "SELECT uid FROM playlists WHERE id = ?1",
+            rusqlite::params![playlist_id],
+            |r| r.get(0),
+        )?;
+        let rule = [libsync::keep::KeepRule {
+            kind: libsync::keep::KeepKind::Playlist,
+            id: uid,
+        }];
+        if kept {
+            libsync::keep::add(c, &rule)
+        } else {
+            libsync::keep::remove(c, &rule)
+        }
+    })?;
+    if kept {
+        fetch_kept_songs(&app)?;
+    }
+    Ok(())
+}
+
+/// What Stream only did to the songs it was given.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamOnlyReport {
+    /// Files moved to the trash; the songs stream from now on.
+    streamed: usize,
+    /// Left kept: a playlist this device keeps has them.
+    kept_by_playlist: usize,
+    /// Left kept: the destination does not have their file (yet), so this is the only copy.
+    not_on_destination: usize,
+}
+
+/// A kept song Stream only may make streamed: its row, file and place on the destination.
+struct Streamable {
+    track_id: i64,
+    file: PathBuf,
+    rel: libsync::files::RelPath,
+}
+
+/// Streams these kept songs instead of keeping them: each file whose song the shared library's
+/// destination has goes to the trash, and the song stays in the library, streamed. Never tells
+/// other devices the song was removed (`files::record` sees it streamed).
+#[tauri::command]
+async fn stream_only(
+    state: State<'_, AppState>,
+    track_ids: Vec<i64>,
+) -> Result<StreamOnlyReport, Error> {
+    let root = library_root(&state)?;
+    let mut report = StreamOnlyReport::default();
+    let (target, candidates) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let target = library_destination(&conn)?.ok_or_else(|| {
+            Error::Msg("songs stream only from a shared library on a destination".to_owned())
+        })?;
+        let mut candidates = Vec::new();
+        for id in &track_ids {
+            let Some(place) = db::track_place(&conn, *id)? else {
+                continue;
+            };
+            let Some(fp) = place.audio_fp.filter(|fp| !fp.is_empty()) else {
+                report.not_on_destination += 1;
+                continue;
+            };
+            if place.file_state != db::FileState::Here {
+                continue;
+            }
+            libsync::keep::remove(
+                &conn,
+                &[libsync::keep::KeepRule {
+                    kind: libsync::keep::KeepKind::Song,
+                    id: fp.clone(),
+                }],
+            )?;
+            if libsync::keep::kept_by_playlist(&conn, *id)? {
+                report.kept_by_playlist += 1;
+                continue;
+            }
+            match libsync::files::shared_path(&conn, &fp)? {
+                Some(rel) => candidates.push(Streamable {
+                    track_id: *id,
+                    file: PathBuf::from(place.path),
+                    rel,
+                }),
+                None => report.not_on_destination += 1,
+            }
+        }
+        (target, candidates)
+    };
+    for song in candidates {
+        // Only a song whose file is on the destination loses its copy here.
+        if sync::remote_file_size(&state.http, &target, song.rel.parts())
+            .await?
+            .is_none()
+        {
+            report.not_on_destination += 1;
+            continue;
+        }
+        {
+            // Streamed first, so a scan meanwhile does not take the song as missing.
+            let conn = state.db.lock().map_err(|_| Error::Lock)?;
+            db::set_file_state(&conn, song.track_id, db::FileState::Streamed)?;
+        }
+        let (r, file) = (root.clone(), song.file.clone());
+        let trashed = tauri::async_runtime::spawn_blocking(move || fsops::trash(&r, &[file]))
+            .await
+            .map_err(|e| Error::Msg(e.to_string()))
+            .and_then(|done| done);
+        if let Err(e) = trashed {
+            let conn = state.db.lock().map_err(|_| Error::Lock)?;
+            db::set_file_state(&conn, song.track_id, db::FileState::Here)?;
+            return Err(e);
+        }
+        report.streamed += 1;
+    }
+    if report.streamed > 0 {
+        library_changed(&state);
+    }
+    Ok(report)
 }
 
 /// What becomes of songs other devices add to the shared library: streamed or downloaded.
@@ -6444,6 +6624,9 @@ pub fn run() {
             stream_cache_usage,
             set_stream_cache_limit,
             empty_stream_cache,
+            keep_songs,
+            set_playlist_kept,
+            stream_only,
             set_new_shared_songs,
             audit_library,
             tags_read,

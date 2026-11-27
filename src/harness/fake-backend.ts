@@ -111,7 +111,7 @@ function createState(scenario: Scenario): State {
 	return {
 		newerLibrary,
 		streamCacheUsed: setUp ? 1_830_000_000 : 0,
-		streamCacheLimit: 5_000_000_000,
+		streamCacheLimit: 5 * 1024 * 1024 * 1024,
 		newSharedSongs: "stream",
 		root: setUp ? LIBRARY_ROOT : null,
 		tracks,
@@ -351,6 +351,27 @@ function libraryCommands(state: State): Record<string, Command> {
 		audit_fix: () => FIX_NOTHING,
 		playback_needs_decoding: () => false,
 		stream_prefetch: () => null,
+		keep_songs: (args) => {
+			const ids = numbers(args.get("trackIds"));
+			for (const track of state.tracks) {
+				if (ids.includes(track.id)) {
+					track.fileState = "here";
+				}
+			}
+			return null;
+		},
+		stream_only: (args) => {
+			const ids = numbers(args.get("trackIds"));
+			let streamed = 0;
+			for (const track of state.tracks) {
+				if (ids.includes(track.id) && track.fileState === "here") {
+					track.fileState = "streamed";
+					streamed += 1;
+				}
+			}
+			return { streamed, keptByPlaylist: 0, notOnDestination: 0 };
+		},
+		set_playlist_kept: () => null,
 		stream_cache_usage: () => ({ used: state.streamCacheUsed, limit: state.streamCacheLimit }),
 		set_stream_cache_limit: (args) => {
 			state.streamCacheLimit = count(args.get("bytes"));

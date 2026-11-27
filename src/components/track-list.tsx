@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Activity, ArrowRight, Clock, Disc3, KeyRound, Pause, Play, X } from "lucide-react";
+import { Activity, ArrowRight, Clock, Cloud, Disc3, KeyRound, Pause, Play, X } from "lucide-react";
 import { type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useState } from "react";
 import { AddToPlaylistMenu } from "#/components/add-to-playlist-menu.tsx";
 import { AlbumArt } from "#/components/album-art.tsx";
@@ -245,12 +245,9 @@ function SongCell({
 				</div>
 			)}
 			<div className="min-w-0 flex-1 leading-tight">
-				<div
-					className={cn("truncate text-sm", (isCurrent || isOpen) && "font-medium text-primary")}
-					data-hint={track.title}
-				>
+				<TitleLine track={track} highlighted={isCurrent || isOpen}>
 					{title}
-				</div>
+				</TitleLine>
 				{(showArtist || showAlbum) && (
 					<div className="mt-0.5 flex min-w-0 items-center gap-2 text-muted-foreground text-xs">
 						{showArtist && <ArtistLinks artist={track.artist} icon />}
@@ -458,6 +455,45 @@ function PlayButton({
 		>
 			<Icon className={onArt ? "size-5" : "size-4"} />
 		</button>
+	);
+}
+
+/** A song's title, and a mark when it is streamed. */
+function TitleLine({
+	track,
+	highlighted,
+	children,
+}: {
+	track: Track;
+	highlighted: boolean;
+	children: ReactNode;
+}) {
+	return (
+		<div
+			className={cn(
+				"flex min-w-0 items-center gap-1.5 text-sm",
+				highlighted && "font-medium text-primary",
+			)}
+		>
+			<div className="min-w-0 truncate" data-hint={track.title}>
+				{children}
+			</div>
+			{track.fileState === "streamed" && <StreamedMark />}
+		</div>
+	);
+}
+
+/** Marks a song that has no file here and plays from the shared library's destination. */
+function StreamedMark() {
+	return (
+		<span
+			role="img"
+			aria-label="Streamed"
+			data-hint="Streamed from the shared library. Right-click to keep it on this device."
+			className="shrink-0 text-muted-foreground"
+		>
+			<Cloud aria-hidden="true" className="size-3.5" />
+		</span>
 	);
 }
 

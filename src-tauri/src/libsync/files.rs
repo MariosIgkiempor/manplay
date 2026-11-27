@@ -509,6 +509,15 @@ pub fn moves_wanted(conn: &Connection) -> Result<Vec<Move>, Error> {
     Ok(out)
 }
 
+/// Where the shared library says the song with audio `fp` is, while it says the song is there.
+pub fn shared_path(conn: &Connection, fp: &str) -> Result<Option<RelPath>, Error> {
+    let get = |f: &str| super::state::get(conn, E_FILE, fp, f);
+    if get(F_PRESENT)? != Some(json!(true)) {
+        return Ok(None);
+    }
+    Ok(get(F_PATH)?.as_ref().and_then(RelPath::from_value))
+}
+
 /// A song the shared library has that this library does not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Arrival {

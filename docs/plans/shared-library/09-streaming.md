@@ -132,6 +132,22 @@ Windows AIFF/ALAC through `pcm://`, and covers of streamed songs from the cached
   through `pcm://`. The player asks for the next streamed song ahead (`stream_prefetch`).
 - A streamed song's cover comes from its cached file, once it was played.
 
+### Done in 9.5
+
+- `libsync/keep.rs`: keep rules (`keep_rules`: a song by `audio_fp`, a playlist by uid; local
+  only). `fetch_shared_songs` downloads the streamed songs a rule keeps, and the songs other
+  devices add when set to Download. **Albums:** "Keep" on an album keeps its songs now (song
+  rules); there is no album rule, so a song added to the album later streams.
+- Commands `keep_songs`, `set_playlist_kept`, `stream_only`. Stream only sets the row streamed
+  first, then moves the file to the Trash (Recycle Bin), and puts the row back if that fails. It
+  leaves a song kept when a kept playlist has it or the destination does not have its file, and
+  says how many.
+- Song menu: "Keep on this device" for streamed songs, "Stream only" (asks first) for kept ones;
+  "Show in Finder" only for kept songs. Playlist menu: "Keep songs on this device". A cloud
+  mark next to a streamed song's title.
+- Settings, Library: a Streaming group (shown when the shared library is on a destination) with
+  Songs other devices add, Stream cache size and Empty cache.
+
 ## Playback
 
 - `audioUrl` takes a track, not a path: kept → local file as now; streamed → `remote:` URL for

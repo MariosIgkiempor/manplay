@@ -18,12 +18,14 @@ use crate::error::Error;
 /// A size in bytes.
 pub type Bytes = u64;
 
+/// One GB as the app shows sizes (`formatBytes` in `format.ts`): 1024³ bytes.
+pub const GB: Bytes = 1024 * 1024 * 1024;
 /// 5 GB.
-pub const DEFAULT_LIMIT: Bytes = 5_000_000_000;
-/// The smallest cache that may be set: room for a long mix.
-pub const MIN_LIMIT: Bytes = 500_000_000;
+pub const DEFAULT_LIMIT: Bytes = 5 * GB;
+/// The smallest cache that may be set: room for a few long mixes.
+pub const MIN_LIMIT: Bytes = GB;
 /// The largest: 1 TB.
-pub const MAX_LIMIT: Bytes = 1_000_000_000_000;
+pub const MAX_LIMIT: Bytes = 1024 * GB;
 
 const SETTING_LIMIT: &str = "stream_cache_bytes";
 
@@ -42,8 +44,8 @@ pub fn set_limit(conn: &Connection, bytes: Bytes) -> Result<(), Error> {
     if !(MIN_LIMIT..=MAX_LIMIT).contains(&bytes) {
         return Err(Error::Msg(format!(
             "the stream cache can be {} to {} GB",
-            MIN_LIMIT / 1_000_000_000,
-            MAX_LIMIT / 1_000_000_000
+            MIN_LIMIT / GB,
+            MAX_LIMIT / GB
         )));
     }
     db::set_setting(conn, SETTING_LIMIT, Some(&bytes.to_string()))
@@ -267,7 +269,7 @@ mod tests {
         assert_eq!(limit(&conn).expect("limit"), DEFAULT_LIMIT);
         let cases: [(Bytes, bool); 5] = [
             (MIN_LIMIT, true),
-            (20_000_000_000, true),
+            (20 * GB, true),
             (MAX_LIMIT, true),
             (MIN_LIMIT - 1, false),
             (MAX_LIMIT + 1, false),

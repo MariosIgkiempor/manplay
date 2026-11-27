@@ -21,6 +21,7 @@ pub mod folder;
 pub mod frac;
 pub mod identity;
 pub mod journal;
+pub mod keep;
 pub mod membership;
 pub mod ops;
 pub mod recent;

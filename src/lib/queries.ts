@@ -19,6 +19,7 @@ import {
 	discogsTokenSave,
 	discogsTokenSaved,
 	dismissCarry,
+	emptyStreamCache,
 	type FixReport,
 	fsCopy,
 	fsMakeDir,
@@ -38,6 +39,7 @@ import {
 	jellyfinDestinations,
 	jellyfinSettings,
 	keepFileRemovals,
+	keepSongs,
 	type LeaveChoice,
 	libraryStatus,
 	libsyncDecideDeletes,
@@ -59,6 +61,7 @@ import {
 	listTracks,
 	migrateLibraryTags,
 	newerLibrary,
+	newSharedSongs,
 	onAnalysisFinished,
 	onLibrarySynced,
 	type PanelTabs,
@@ -71,6 +74,7 @@ import {
 	resetLibrary,
 	restoreDeleted,
 	type ServiceId,
+	type StreamCacheUsage,
 	type SyncTarget,
 	saveAnalysisToFiles,
 	serviceFlags,
@@ -78,10 +82,15 @@ import {
 	setDefaultScope,
 	setDeviceName,
 	setLibraryView,
+	setNewSharedSongs,
 	setPanelTabs,
+	setPlaylistKept,
 	setServiceEnabled,
+	setStreamCacheLimit,
 	setTagClipboard,
 	setUiSetting,
+	streamCacheUsage,
+	streamOnly,
 	syncApply,
 	syncHistory,
 	syncIgnore,
@@ -399,6 +408,56 @@ export function useDeviceName() {
 		onSuccess: (next) => queryClient.setQueryData(["device-name"], next),
 	});
 	return { name, save };
+}
+
+/** What becomes of songs other devices add to the shared library, and the means to change it. */
+export function useNewSharedSongs() {
+	const queryClient = useQueryClient();
+	const choice = useQuery({ queryKey: ["new-shared-songs"], queryFn: newSharedSongs });
+	const save = useMutation({
+		mutationFn: setNewSharedSongs,
+		onSuccess: (_, next) => queryClient.setQueryData(["new-shared-songs"], next),
+	});
+	return { choice, save };
+}
+
+const STREAM_CACHE_KEY = ["stream-cache"] as const;
+
+/** How full the stream cache is, and the means to resize or empty it. */
+export function useStreamCache() {
+	const queryClient = useQueryClient();
+	const usage = useQuery({ queryKey: STREAM_CACHE_KEY, queryFn: streamCacheUsage });
+	const store = (next: StreamCacheUsage) => queryClient.setQueryData(STREAM_CACHE_KEY, next);
+	const resize = useMutation({ mutationFn: setStreamCacheLimit, onSuccess: store });
+	const empty = useMutation({ mutationFn: emptyStreamCache, onSuccess: store });
+	return { usage, resize, empty };
+}
+
+/** Keeps streamed songs on this device; the list shows them kept once their files are in. */
+export function useKeepSongs() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: keepSongs,
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tracks"] }),
+	});
+}
+
+/** Streams kept songs instead: their files go to the trash. */
+export function useStreamOnly() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: streamOnly,
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tracks"] }),
+	});
+}
+
+/** Keeps a playlist's songs on this device, or stops. */
+export function useSetPlaylistKept() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ id, kept }: { id: number; kept: boolean }) => setPlaylistKept(id, kept),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["playlists"] }),
+	});
 }
 
 /** The scope new tags and playlists get, and the means to change it. */

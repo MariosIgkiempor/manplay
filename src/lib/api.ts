@@ -368,9 +368,11 @@ export const streamCacheUsageSchema = z.object({
 });
 export type StreamCacheUsage = z.infer<typeof streamCacheUsageSchema>;
 
-/** Smallest and largest stream cache the backend takes (`stream_cache::MIN_LIMIT`, `MAX_LIMIT`). */
-export const STREAM_CACHE_MIN_BYTES = 500_000_000;
-export const STREAM_CACHE_MAX_BYTES = 1_000_000_000_000;
+/** One GB as sizes are shown (`formatBytes`), and the stream cache sizes the backend takes
+ * (`stream_cache::MIN_LIMIT`, `MAX_LIMIT`). */
+export const GB = 1024 * 1024 * 1024;
+export const STREAM_CACHE_MIN_BYTES = GB;
+export const STREAM_CACHE_MAX_BYTES = 1024 * GB;
 
 export async function streamCacheUsage(): Promise<StreamCacheUsage> {
 	return streamCacheUsageSchema.parse(await invoke("stream_cache_usage"));
@@ -382,6 +384,29 @@ export async function setStreamCacheLimit(bytes: number): Promise<StreamCacheUsa
 
 export async function emptyStreamCache(): Promise<StreamCacheUsage> {
 	return streamCacheUsageSchema.parse(await invoke("empty_stream_cache"));
+}
+
+/** Keeps these streamed songs on this device: their files download now and stay. */
+export async function keepSongs(trackIds: readonly number[]): Promise<void> {
+	await invoke("keep_songs", { trackIds });
+}
+
+/** Keeps a playlist's songs on this device, later ones too, or stops (files already here stay). */
+export async function setPlaylistKept(playlistId: number, kept: boolean): Promise<void> {
+	await invoke("set_playlist_kept", { playlistId, kept });
+}
+
+/** What Stream only did (`StreamOnlyReport` in `lib.rs`). */
+export const streamOnlyReportSchema = z.object({
+	streamed: int.nonnegative(),
+	keptByPlaylist: int.nonnegative(),
+	notOnDestination: int.nonnegative(),
+});
+export type StreamOnlyReport = z.infer<typeof streamOnlyReportSchema>;
+
+/** Moves these kept songs' files to the trash; the songs stay in the library and stream. */
+export async function streamOnly(trackIds: readonly number[]): Promise<StreamOnlyReport> {
+	return streamOnlyReportSchema.parse(await invoke("stream_only", { trackIds }));
 }
 
 /** What becomes of songs other devices add to the shared library (`streamed::NewSongs`). */
@@ -418,6 +443,8 @@ const playlistSchema = z.object({
 	name: z.string(),
 	trackCount: int,
 	...sharingFields,
+	/** Its songs are kept on this device instead of streamed, the ones added later too. */
+	kept: z.boolean().optional(),
 });
 
 export type Playlist = z.infer<typeof playlistSchema>;

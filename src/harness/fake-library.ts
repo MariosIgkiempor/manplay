@@ -307,7 +307,8 @@ function buildTrack(spec: AlbumSpec, position: number, id: number, random: () =>
 		analyzed,
 		fields,
 		edited: { bpm: id % 23 === 0, key: false, grid: id % 31 === 0 },
-		fileState: "here",
+		// Some songs only another device has: they stream from the destination.
+		fileState: id % 6 === 5 ? "streamed" : "here",
 		addedAt: id % 29 === 0 ? null : NOW - Math.floor(random() * 400) * DAY,
 	};
 }

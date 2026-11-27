@@ -2,6 +2,8 @@ import { useIsMutating, useQueryClient } from "@tanstack/react-query";
 import { MenuContextTrigger } from "@ui-sdk/react/menu";
 import {
 	AudioWaveform,
+	CloudDownload,
+	CloudUpload,
 	Copy,
 	Disc3,
 	FolderOpen,
@@ -25,10 +27,18 @@ import { usePlayer } from "#/context/player-context.ts";
 import { TrackOrderContext } from "#/context/track-order.ts";
 import { albumKey } from "#/lib/albums.ts";
 import { fsReveal, type Track } from "#/lib/api.ts";
+import { confirmStreamOnly } from "#/lib/confirm.ts";
 import { loadForEditing } from "#/lib/load-for-editing.ts";
 import { popup } from "#/lib/menu-styles.ts";
 import { FILE_MANAGER } from "#/lib/platform.ts";
-import { ANALYSIS_KEY, useAnalyze, useRedetect } from "#/lib/queries.ts";
+import {
+	ANALYSIS_KEY,
+	useAnalyze,
+	useKeepSongs,
+	useLibraryHome,
+	useRedetect,
+	useStreamOnly,
+} from "#/lib/queries.ts";
 import { tagTargetFor } from "#/lib/tag-target.ts";
 import { useShortcutLabel } from "#/lib/use-shortcuts.ts";
 
@@ -62,10 +72,11 @@ function shared(tracks: readonly Track[]) {
 	};
 }
 
-/** For one song: find its file, and copy its name to paste elsewhere (a set list, a search). */
+/** For one song: find its file (a streamed song has none here), and copy its name to paste
+ * elsewhere (a set list, a search). */
 function fileEntries(song: Track): MenuEntry[] {
 	return [
-		{
+		song.fileState === "here" && {
 			label: `Show in ${FILE_MANAGER}`,
 			icon: <FolderOpen />,
 			onSelect: () => void fsReveal(song.path),
@@ -77,6 +88,33 @@ function fileEntries(song: Track): MenuEntry[] {
 				void navigator.clipboard.writeText(
 					song.artist === "" ? song.title : `${song.artist} - ${song.title}`,
 				),
+		},
+	];
+}
+
+/** Keep streamed songs on this device, or stream kept ones only, while the shared library is on
+ * a destination. */
+function useKeepEntries(tracks: readonly Track[]): MenuEntry[] {
+	const home = useLibraryHome().data;
+	const keep = useKeepSongs();
+	const streamOnly = useStreamOnly();
+	if (home?.kind !== "target") {
+		return [];
+	}
+	const streamed = tracks.filter((t) => t.fileState === "streamed").map((t) => t.id);
+	const kept = tracks.filter((t) => t.fileState === "here").map((t) => t.id);
+	const some = (n: number) => (n === tracks.length ? "" : ` ${n.toLocaleString()}`);
+	return [
+		streamed.length > 0 && {
+			label: `Keep${some(streamed.length)} on this device`,
+			icon: <CloudDownload />,
+			onSelect: () => keep.mutate(streamed),
+		},
+		kept.length > 0 && {
+			label: `Stream${some(kept.length)} only`,
+			icon: <CloudUpload />,
+			onSelect: () =>
+				void confirmStreamOnly(kept.length).then((yes) => yes && streamOnly.mutate(kept)),
 		},
 	];
 }
@@ -128,6 +166,7 @@ function TrackMenuPopup({
 	const { album, artist } = noGoTo ? { album: null, artist: null } : shared(tracks);
 	const target = tagTargetFor(tracks);
 	const song = tracks.length === 1 ? tracks[0] : undefined;
+	const keepEntries = useKeepEntries(tracks);
 	const edits: MenuEntry[] = [
 		onRename && {
 			label: "Rename",
@@ -181,6 +220,8 @@ function TrackMenuPopup({
 			icon: <UserRound />,
 			onSelect: () => go({ kind: "artist", name: artist }),
 		},
+		"separator",
+		...keepEntries,
 		"separator",
 		...(song ? fileEntries(song) : []),
 		"separator",
