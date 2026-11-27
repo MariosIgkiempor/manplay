@@ -86,11 +86,11 @@ impl LibraryDigest {
         }
         let mut planned_known: Vec<(&Vec<String>, &Known)> = known
             .iter()
-            .filter(|(_, k)| track_ids.contains(&k.track_id))
+            .filter(|(_, k)| k.streamed || track_ids.contains(&k.track_id))
             .collect();
         planned_known.sort_by(|a, b| a.0.cmp(b.0));
         for (rel, k) in planned_known {
-            (rel, k.track_id, k.missing, k.in_grace).hash(&mut hasher);
+            (rel, k.track_id, k.missing, k.in_grace, k.streamed).hash(&mut hasher);
         }
         hasher.finish()
     }
@@ -617,6 +617,7 @@ mod tests {
                 track_id: 1,
                 missing: true,
                 in_grace: true,
+                streamed: false,
             },
         )]);
         let digest = LibraryDigest::of(&[], &known);

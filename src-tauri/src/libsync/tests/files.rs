@@ -833,3 +833,48 @@ async fn a_song_added_elsewhere_is_listed_and_taking_it_back_puts_it_up_for_remo
     assert_eq!(waiting(&a).len(), 1, "and on the device that added it");
     assert!(!taken_back_here(&a), "to A, another device removed it");
 }
+
+/// A streamed song has no file here: neither streaming one this library had nor one it never had
+/// tells anyone it was removed.
+#[test]
+fn a_streamed_song_is_never_written_as_removed() {
+    struct Case {
+        what: &'static str,
+        /// Whether the library wrote about the song before it was streamed.
+        recorded_first: bool,
+        present: Option<Value>,
+    }
+    let cases = [
+        Case {
+            what: "kept, then streamed only",
+            recorded_first: true,
+            present: Some(json!(true)),
+        },
+        Case {
+            what: "streamed from the start",
+            recorded_first: false,
+            present: None,
+        },
+    ];
+    for case in cases {
+        let a = device(2);
+        if case.recorded_first {
+            record(&a);
+        }
+        sql(
+            &a,
+            "UPDATE tracks SET file_state = 'streamed', missing_since = NULL WHERE audio_fp = ?1",
+            1,
+        );
+        let written = record(&a);
+        assert_eq!(
+            written,
+            // Streamed from the start: only the other song's path and presence.
+            if case.recorded_first { 0 } else { 2 },
+            "{}",
+            case.what
+        );
+        assert_eq!(register(&a, 1, "present"), case.present, "{}", case.what);
+        assert_eq!(record(&a), 0, "{}: said once", case.what);
+    }
+}

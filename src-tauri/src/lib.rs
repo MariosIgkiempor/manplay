@@ -294,7 +294,7 @@ fn detect_moves(
 
     // fingerprint -> tracks that have vanished from disk
     let mut vanished: HashMap<&str, Vec<&db::Known>> = HashMap::new();
-    for k in &known {
+    for k in known.iter().filter(|k| k.can_vanish()) {
         if let Some(fp) = k
             .fingerprint
             .as_deref()
@@ -349,9 +349,9 @@ fn audio_moves<'k, 's>(
     let audio_of = |fp: Option<&'k str>| fp.filter(|fp| !fp.is_empty());
 
     let mut vanished: HashMap<&str, Vec<&db::Known>> = HashMap::new();
-    for k in known
-        .iter()
-        .filter(|k| !found.contains(k.path.as_str()) && !claimed_old.contains(&k.id))
+    for k in known.iter().filter(|k| {
+        k.can_vanish() && !found.contains(k.path.as_str()) && !claimed_old.contains(&k.id)
+    })
     {
         if let Some(fp) = audio_of(k.audio_fp.as_deref()) {
             vanished.entry(fp).or_default().push(k);
@@ -3152,7 +3152,7 @@ fn collect_items(conn: &Connection) -> Result<Vec<sync::Item>, Error> {
     let root = Path::new(&root);
     let mut items: Vec<sync::Item> = db::all_track_rows(conn)?
         .into_iter()
-        .filter(|t| t.missing_since.is_none())
+        .filter(|t| t.missing_since.is_none() && t.file_state == db::FileState::Here)
         .filter_map(|t| {
             let local = PathBuf::from(&t.path);
             // Files deleted since the last scan are skipped rather than reported as failures.
@@ -3173,6 +3173,15 @@ fn collect_items(conn: &Connection) -> Result<Vec<sync::Item>, Error> {
     Ok(items)
 }
 
+/// The identities of the songs this device streams ([`sync::library_identity`]).
+fn collect_streamed(conn: &Connection) -> Result<HashSet<String>, Error> {
+    Ok(db::all_track_rows(conn)?
+        .into_iter()
+        .filter(|t| t.file_state == db::FileState::Streamed)
+        .filter_map(|t| sync::library_identity(t.audio_fp, t.fingerprint))
+        .collect())
+}
+
 /// Every library path (present or missing) that maps onto a destination, for recognising which
 /// destination files belong to tracks that are only missing for now.
 fn collect_known(conn: &Connection) -> Result<HashMap<Vec<String>, sync::Known>, Error> {
@@ -3188,6 +3197,7 @@ fn collect_known(conn: &Connection) -> Result<HashMap<Vec<String>, sync::Known>,
                 track_id: t.id,
                 missing: t.missing_since.is_some(),
                 in_grace: t.missing_since.is_some_and(|m| m > cutoff),
+                streamed: t.file_state == db::FileState::Streamed,
             };
             Some((rel_path(root, &t.path)?, known))
         })
@@ -3361,6 +3371,8 @@ struct ScanInputs {
     root: PathBuf,
     items: Vec<sync::Item>,
     known: HashMap<Vec<String>, sync::Known>,
+    /// Identities of the songs this device streams.
+    streamed: HashSet<String>,
     synced_at: HashMap<i64, i64>,
     cached: HashMap<(String, u64), String>,
     bases: HashMap<i64, db::Base>,
@@ -3396,6 +3408,7 @@ fn scan_inputs(conn: &Connection, target_id: i64) -> Result<ScanInputs, Error> {
         ));
     }
     let known = collect_known(conn)?;
+    let streamed = collect_streamed(conn)?;
     let synced_at = db::synced_times(conn, target_id)?;
     let bases = db::synced_bases(conn, target_id)?;
     let present = db::present_sizes(conn)?;
@@ -3403,6 +3416,7 @@ fn scan_inputs(conn: &Connection, target_id: i64) -> Result<ScanInputs, Error> {
         root: PathBuf::from(root),
         items,
         known,
+        streamed,
         synced_at,
         cached: db::remote_prints(conn, target_id)?
             .into_iter()
@@ -3526,6 +3540,7 @@ async fn scan_target(
             cached: &inputs.cached,
             bases: &inputs.bases,
             signatures: &inputs.signatures,
+            streamed: &inputs.streamed,
         },
         listing.as_deref(),
         &mut next_id,
@@ -6318,6 +6333,53 @@ mod tests {
         assert_eq!(f.visible(), 2);
         assert_eq!(db::missing_count(&f.conn).expect("count"), 1);
         assert_eq!(f.backups(), 1);
+    }
+
+    fn file_state_at(f: &Fixture, name: &str) -> Option<db::FileState> {
+        db::all_track_rows(&f.conn)
+            .expect("rows")
+            .into_iter()
+            .find(|t| t.path == format!("/music/{name}"))
+            .map(|t| t.file_state)
+    }
+
+    fn stream(f: &Fixture, name: &str) {
+        let id = db::all_track_rows(&f.conn)
+            .expect("rows")
+            .into_iter()
+            .find(|t| t.path == format!("/music/{name}"))
+            .expect("track")
+            .id;
+        db::set_file_state(&f.conn, id, db::FileState::Streamed).expect("stream");
+    }
+
+    /// A streamed song has no file here: a scan that does not find it says nothing about it.
+    #[test]
+    fn a_streamed_song_is_never_marked_missing_or_moved() {
+        let mut f = Fixture::new("streamed-stays");
+        f.apply(&f.scan_of(&["1", "2", "3"], 0));
+        stream(&f, "3");
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        assert_eq!(db::missing_count(&f.conn).expect("count"), 0);
+        assert_eq!(f.visible(), 3);
+        assert_eq!(file_state_at(&f, "3"), Some(db::FileState::Streamed));
+
+        // A copy of its audio found elsewhere is a song of its own, not the streamed one moved.
+        f.apply(&f.scan_of(&["1", "2", "elsewhere/3"], 0));
+        assert_eq!(file_state_at(&f, "3"), Some(db::FileState::Streamed));
+        assert_eq!(file_state_at(&f, "elsewhere/3"), Some(db::FileState::Here));
+    }
+
+    /// Keeping a streamed song puts its file at its path; the next scan makes it kept.
+    #[test]
+    fn a_file_found_at_a_streamed_songs_path_makes_it_kept() {
+        let mut f = Fixture::new("streamed-kept");
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        stream(&f, "2");
+        f.apply(&f.scan_of(&["1", "2"], 0));
+        assert_eq!(file_state_at(&f, "2"), Some(db::FileState::Here));
+        assert_eq!(f.visible(), 2);
     }
 
     /// A file that changed bytes and path together is followed by its audio, but only when the

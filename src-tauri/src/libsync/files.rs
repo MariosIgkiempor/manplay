@@ -24,6 +24,7 @@ use super::clock;
 use super::ops::{F_PATH, F_PRESENT};
 use super::recent;
 use super::write::{self, Field, active};
+use crate::db::FileState;
 use crate::error::Error;
 
 pub const E_FILE: &str = "file";
@@ -98,6 +99,8 @@ struct Copies {
     /// A copy is missing and may still come back: its grace period is not over, or it was never
     /// below the library folder.
     awaited: bool,
+    /// The song is streamed here: having no file is not removing it.
+    streamed: bool,
 }
 
 /// What this device had of one audio when it last wrote ops.
@@ -113,7 +116,7 @@ fn copies(
     expired_before: UnixSeconds,
 ) -> Result<BTreeMap<String, Copies>, Error> {
     let mut stmt = conn.prepare(
-        "SELECT audio_fp, path, missing_since FROM tracks
+        "SELECT audio_fp, path, missing_since, file_state FROM tracks
          WHERE audio_fp IS NOT NULL AND audio_fp <> ''",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -121,13 +124,18 @@ fn copies(
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, Option<UnixSeconds>>(2)?,
+            r.get::<_, FileState>(3)?,
         ))
     })?;
     let mut out: BTreeMap<String, Copies> = BTreeMap::new();
     for row in rows {
-        let (fp, path, missing_since) = row?;
+        let (fp, path, missing_since, file_state) = row?;
         let rel = RelPath::below(root, Path::new(&path));
         let of = out.entry(fp).or_default();
+        if file_state == FileState::Streamed {
+            of.streamed = true;
+            continue;
+        }
         match (missing_since, rel) {
             (None, Some(rel)) => of.here.push(rel),
             (None, None) => of.elsewhere = true,
@@ -291,6 +299,7 @@ pub fn record(conn: &Connection, root: &Path, expired_before: UnixSeconds) -> Re
         } else if let Some(before) = before.filter(|b| b.present)
             && !of.elsewhere
             && !of.awaited
+            && !of.streamed
         {
             pending.field(&registers, fp, F_PRESENT, json!(false), true);
             remember(
@@ -358,7 +367,8 @@ pub fn deleted_here(
     let mut pending = Pending::of(E_FILE);
     for (fp, path) in gone {
         let copy_left: bool = tx.query_row(
-            "SELECT EXISTS (SELECT 1 FROM tracks WHERE audio_fp = ?1 AND missing_since IS NULL)",
+            "SELECT EXISTS (SELECT 1 FROM tracks
+                            WHERE audio_fp = ?1 AND missing_since IS NULL AND file_state = 'here')",
             params![fp],
             |r| r.get(0),
         )?;
@@ -573,7 +583,8 @@ pub fn removals_waiting(conn: &Connection, root: &Path) -> Result<Vec<Removal>, 
         let copy: Option<(i64, String, String, String)> = conn
             .prepare_cached(
                 "SELECT id, title, artist, path FROM tracks
-                 WHERE audio_fp = ?1 AND missing_since IS NULL ORDER BY path LIMIT 1",
+                 WHERE audio_fp = ?1 AND missing_since IS NULL AND file_state = 'here'
+                 ORDER BY path LIMIT 1",
             )?
             .query_map(params![fp], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
@@ -625,7 +636,8 @@ pub fn keep(conn: &Connection, root: &Path, audio_fps: &[String]) -> Result<usiz
 /// Every copy this library has of the audio in `audio_fps`, as `(track id, file)`.
 pub fn copies_here(conn: &Connection, audio_fps: &[String]) -> Result<Vec<(i64, PathBuf)>, Error> {
     let mut stmt = conn.prepare_cached(
-        "SELECT id, path FROM tracks WHERE audio_fp = ?1 AND missing_since IS NULL",
+        "SELECT id, path FROM tracks
+         WHERE audio_fp = ?1 AND missing_since IS NULL AND file_state = 'here'",
     )?;
     let mut out = Vec::new();
     for fp in audio_fps {

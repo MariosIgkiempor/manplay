@@ -94,7 +94,7 @@ pub fn unread(conn: &Connection, limit: usize) -> Result<Vec<Unread>, Error> {
     let mut stmt = conn.prepare(
         "SELECT t.id, t.path, t.mtime_ms, t.size FROM tracks t
          LEFT JOIN tags_read r ON r.track_id = t.id
-         WHERE t.missing_since IS NULL AND t.audio_fp IS NOT NULL AND t.audio_fp <> ''
+         WHERE t.missing_since IS NULL AND t.file_state = 'here' AND t.audio_fp IS NOT NULL AND t.audio_fp <> ''
            AND (r.track_id IS NULL OR r.size <> t.size OR r.mtime_ms IS NOT t.mtime_ms)
          ORDER BY t.id LIMIT ?1",
     )?;
@@ -150,7 +150,7 @@ pub(super) fn tracked(conn: &Connection, root: &Path) -> Result<BTreeMap<String,
     let mut stmt = conn.prepare(
         "SELECT t.audio_fp, t.path, r.fields FROM tracks t
          JOIN tags_read r ON r.track_id = t.id
-         WHERE t.missing_since IS NULL AND t.audio_fp IS NOT NULL AND t.audio_fp <> ''
+         WHERE t.missing_since IS NULL AND t.file_state = 'here' AND t.audio_fp IS NOT NULL AND t.audio_fp <> ''
            AND r.fields IS NOT NULL AND r.size = t.size AND r.mtime_ms IS t.mtime_ms",
     )?;
     let rows = stmt.query_map([], |r| {

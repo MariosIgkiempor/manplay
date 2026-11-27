@@ -67,6 +67,31 @@ Getting one of these wrong deletes songs for every device.
 
 Each rule gets a test in `libsync/tests` or `sync.rs` tests.
 
+### Done in 9.1
+
+- Rule 1: `db::present_tracks` and move detection (`db::Known::can_vanish`) skip streamed songs.
+  A file found at a streamed song's path makes it kept (`db::upsert`).
+- Rule 2: `files::record` treats a streamed song as still had (`Copies::streamed`).
+- Rule 3: `sync::not_streamed_paths` and `not_streamed_prints` take a streamed song's file out of
+  the plan's extras, by path and by audio. `db::present_sizes` keeps streamed songs, so their files
+  are not offered for pull either.
+- Rule 4: everything that reads, writes, exports or trashes a song's file skips streamed songs:
+  analysis jobs, audio fingerprint fill, scan cache, duplicates, rekordbox export, the tag reading
+  for the shared library (`song_tags::unread`, `tracked`), replaced-file candidates (`carry.rs`),
+  and the "another copy is still here" checks in `files.rs`. Commands that take a path from the
+  UI (tag editor, trash, convert, USB export) fail on a streamed song's missing file without
+  changing anything; 9.3 and 9.6 give them a proper answer.
+- Song lists, playlists, tags, import's "already in the library" and Jellyfin matching keep
+  streamed songs.
+
+Left for later steps:
+
+- `files::arrivals_wanted` counts a streamed row as "here", so a streamed song is not downloaded.
+  That is what Stream wants; 9.5 adds the download for kept songs.
+- `ONE_PER_AUDIO` may pick the streamed row when one audio is both kept and streamed; an export
+  then leaves that song out. Rare; revisit in 9.6.
+- The frontend does not see `file_state` yet (9.3).
+
 ## Playback
 
 - `audioUrl` takes a track, not a path: kept → local file as now; streamed → `remote:` URL for

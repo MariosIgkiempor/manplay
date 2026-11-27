@@ -730,8 +730,48 @@ impl std::fmt::Display for SchemaVersion {
     }
 }
 
-/// The newest layout this manplay reads and writes.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion(1);
+/// The newest layout this manplay reads and writes. 2: songs can be streamed (`FileState`).
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion(2);
+
+/// Where a song's audio is for this device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileState {
+    /// The file is in the library folder, at the song's `path`.
+    #[default]
+    Here,
+    /// The file is only on the shared library's destination and plays from there; `path` is
+    /// where it would go in the library folder. No file here does not mean the song was removed.
+    Streamed,
+}
+
+impl FileState {
+    const HERE: &'static str = "here";
+    const STREAMED: &'static str = "streamed";
+
+    fn as_sql(self) -> &'static str {
+        match self {
+            Self::Here => Self::HERE,
+            Self::Streamed => Self::STREAMED,
+        }
+    }
+}
+
+impl rusqlite::types::ToSql for FileState {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(self.as_sql().into())
+    }
+}
+
+impl rusqlite::types::FromSql for FileState {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        match value.as_str()? {
+            Self::HERE => Ok(Self::Here),
+            Self::STREAMED => Ok(Self::Streamed),
+            _ => Err(rusqlite::types::FromSqlError::InvalidType),
+        }
+    }
+}
 
 /// A database a newer manplay set up, which this one leaves untouched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -843,6 +883,14 @@ pub fn open(path: &Path) -> Result<Connection, Error> {
     // The file's modification time when it was last read (Unix milliseconds); NULL for rows from
     // before this column, which the next scan reads once more.
     add_column(&conn, "tracks", "mtime_ms", "INTEGER")?;
+    // Whether the song's file is in the library folder or the song is played from the shared
+    // library's destination (`FileState`).
+    add_column(
+        &conn,
+        "tracks",
+        "file_state",
+        "TEXT NOT NULL DEFAULT 'here' CHECK (file_state IN ('here', 'streamed'))",
+    )?;
     retire_fingerprint_keys(&conn)?;
     // What each side of a destination looked like at the last successful sync (see `Base`).
     add_column(&conn, "synced_files", "local_sig", "TEXT")?;
@@ -1533,7 +1581,8 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                  audio_fp = CASE WHEN excluded.audio_fp <> '' THEN excluded.audio_fp
                      ELSE COALESCE(audio_fp, excluded.audio_fp) END,
                  mtime_ms = excluded.mtime_ms,
-                 missing_since = NULL",
+                 missing_since = NULL,
+                 file_state = 'here'",
         )?;
         for t in tracks {
             note_audio_change(&tx, &t.path, t.audio_fp.as_deref())?;
@@ -2369,7 +2418,8 @@ pub fn set_setting(conn: &Connection, key: &str, value: Option<&str>) -> Result<
     Ok(())
 }
 
-/// `(path, size)` of every track currently on disk.
+/// `(path, size)` of every track the library has, kept or streamed: a destination file at one of
+/// these paths is not offered for pull.
 pub fn present_sizes(conn: &Connection) -> Result<Vec<(String, i64)>, Error> {
     let mut stmt = conn.prepare("SELECT path, size FROM tracks WHERE missing_since IS NULL")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
@@ -2393,11 +2443,12 @@ pub struct TrackRow {
     pub fingerprint: Option<String>,
     pub audio_fp: Option<String>,
     pub missing_since: Option<i64>,
+    pub file_state: FileState,
 }
 
 pub fn all_track_rows(conn: &Connection) -> Result<Vec<TrackRow>, Error> {
     let mut stmt =
-        conn.prepare("SELECT id, path, fingerprint, audio_fp, missing_since FROM tracks")?;
+        conn.prepare("SELECT id, path, fingerprint, audio_fp, missing_since, file_state FROM tracks")?;
     let rows = stmt.query_map([], |r| {
         Ok(TrackRow {
             id: r.get(0)?,
@@ -2405,6 +2456,7 @@ pub fn all_track_rows(conn: &Connection) -> Result<Vec<TrackRow>, Error> {
             fingerprint: r.get(2)?,
             audio_fp: r.get(3)?,
             missing_since: r.get(4)?,
+            file_state: r.get(5)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -3245,8 +3297,23 @@ pub fn history(conn: &Connection, limit: i64) -> Result<Vec<RunView>, Error> {
 // ---- missing files: soft delete, grace period, backups ---------------------
 
 /// `(id, path)` of every track that is currently present (not marked missing).
+/// Sets whether a song's file is in the library folder or the song is streamed. Only tests set it
+/// until Keep and Stream only exist (streaming step 9.5).
+#[cfg(test)]
+pub fn set_file_state(conn: &Connection, track_id: i64, state: FileState) -> Result<(), Error> {
+    conn.execute(
+        "UPDATE tracks SET file_state = ?2 WHERE id = ?1",
+        params![track_id, state],
+    )?;
+    Ok(())
+}
+
+/// The songs whose files should be in the library folder: not missing, and not streamed (a
+/// streamed song has no file here, and a scan must not take it as gone).
 pub fn present_tracks(conn: &Connection) -> Result<Vec<(i64, String)>, Error> {
-    let mut stmt = conn.prepare("SELECT id, path FROM tracks WHERE missing_since IS NULL")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, path FROM tracks WHERE missing_since IS NULL AND file_state = 'here'",
+    )?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
@@ -3366,7 +3433,7 @@ pub fn scanned_tracks(conn: &Connection) -> Result<HashMap<String, NewTrack>, Er
         "SELECT path, artist, album, title, size, fingerprint, audio_fp, duration_ms, bitrate,
                 sample_rate, tag_bpm, tag_key, fields, mtime_ms
          FROM tracks
-         WHERE missing_since IS NULL AND mtime_ms IS NOT NULL AND audio_fp IS NOT NULL",
+         WHERE missing_since IS NULL AND file_state = 'here' AND mtime_ms IS NOT NULL AND audio_fp IS NOT NULL",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(NewTrack {
@@ -3402,17 +3469,27 @@ pub struct Known {
     pub fingerprint: Option<String>,
     /// The audio's own fingerprint; `None` or empty when it could not be read.
     pub audio_fp: Option<String>,
+    pub file_state: FileState,
 }
 
-/// Every track row, present or soft-deleted.
+impl Known {
+    /// Whether its file can be missing from where it was: a streamed song has none here to lose.
+    pub fn can_vanish(&self) -> bool {
+        self.file_state == FileState::Here
+    }
+}
+
+/// Every track row, present, soft-deleted or streamed.
 pub fn all_known(conn: &Connection) -> Result<Vec<Known>, Error> {
-    let mut stmt = conn.prepare("SELECT id, path, fingerprint, audio_fp FROM tracks")?;
+    let mut stmt =
+        conn.prepare("SELECT id, path, fingerprint, audio_fp, file_state FROM tracks")?;
     let rows = stmt.query_map([], |r| {
         Ok(Known {
             id: r.get(0)?,
             path: r.get(1)?,
             fingerprint: r.get(2)?,
             audio_fp: r.get(3)?,
+            file_state: r.get(4)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -3526,7 +3603,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
                 t.sample_rate, COALESCE(a.bpm, t.tag_bpm), COALESCE(a.musical_key, t.tag_key),
                 NULLIF(t.audio_fp, ''), COALESCE(a.grid_edited, 0)
          FROM tracks t LEFT JOIN analysis a ON a.audio_fp = t.audio_fp
-         WHERE t.missing_since IS NULL ORDER BY t.artist, t.album, t.path",
+         WHERE t.missing_since IS NULL AND t.file_state = 'here' ORDER BY t.artist, t.album, t.path",
     )?;
     let tracks = stmt
         .query_map([], |r| {
@@ -3557,7 +3634,7 @@ pub fn export_data(conn: &Connection) -> Result<(Vec<ExportTrack>, Vec<ExportPla
         .collect::<Result<Vec<_>, _>>()?;
     let mut member_stmt = conn.prepare(&format!(
         "SELECT pt.track_id FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
-         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL {ONE_PER_AUDIO}
+         WHERE pt.playlist_id = ?1 AND t.missing_since IS NULL AND t.file_state = 'here' {ONE_PER_AUDIO}
          ORDER BY pt.position"
     ))?;
     let mut playlists = Vec::new();
@@ -3585,7 +3662,7 @@ pub fn export_tag_playlists(
         "SELECT DISTINCT t.id FROM tags g
          JOIN tags c ON {IN_SUBTREE}
          JOIN track_tags tt ON tt.tag_id = c.id
-         JOIN tracks t ON t.id = tt.track_id AND t.missing_since IS NULL
+         JOIN tracks t ON t.id = tt.track_id AND t.missing_since IS NULL AND t.file_state = 'here'
          WHERE g.id = ?1 ORDER BY t.artist, t.album, t.path"
     ))?;
     let mut out = Vec::new();
@@ -3694,7 +3771,7 @@ pub fn duplicate_groups(conn: &Connection) -> Result<Vec<DuplicateGroup>, Error>
     let mut stmt = conn.prepare(
         "SELECT t.id, t.path, t.artist, t.album, t.title, t.size, COALESCE(t.audio_fp, ''),
                 (SELECT MIN(i.source) FROM itunes_imported i WHERE i.dest = t.path)
-         FROM tracks t WHERE t.missing_since IS NULL ORDER BY t.path",
+         FROM tracks t WHERE t.missing_since IS NULL AND t.file_state = 'here' ORDER BY t.path",
     )?;
     let rows = stmt
         .query_map([], |r| {
@@ -3774,7 +3851,7 @@ pub fn converted_from(conn: &Connection) -> Result<HashMap<String, String>, Erro
 pub fn tracks_with_audio_fp(conn: &Connection) -> Result<Vec<(i64, String, String)>, Error> {
     let mut stmt = conn.prepare(
         "SELECT id, path, audio_fp FROM tracks
-         WHERE missing_since IS NULL AND audio_fp IS NOT NULL AND audio_fp <> ''",
+         WHERE missing_since IS NULL AND file_state = 'here' AND audio_fp IS NOT NULL AND audio_fp <> ''",
     )?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -3783,7 +3860,7 @@ pub fn tracks_with_audio_fp(conn: &Connection) -> Result<Vec<(i64, String, Strin
 /// Present library songs whose audio has not been fingerprinted yet.
 pub fn tracks_without_audio_fp(conn: &Connection) -> Result<Vec<(i64, String)>, Error> {
     let mut stmt = conn
-        .prepare("SELECT id, path FROM tracks WHERE missing_since IS NULL AND audio_fp IS NULL")?;
+        .prepare("SELECT id, path FROM tracks WHERE missing_since IS NULL AND file_state = 'here' AND audio_fp IS NULL")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<Result<_, _>>()?)
 }
@@ -4044,7 +4121,7 @@ pub fn analysis_jobs(
         "SELECT t.id, t.path, t.audio_fp, a.version, a.waveform IS NULL AND a.error IS NULL
          FROM tracks t
          LEFT JOIN analysis a ON a.audio_fp = t.audio_fp
-         WHERE t.missing_since IS NULL AND t.audio_fp <> ''
+         WHERE t.missing_since IS NULL AND t.file_state = 'here' AND t.audio_fp <> ''
          ORDER BY t.artist, t.album, t.path",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -4304,18 +4381,18 @@ mod tests {
         ];
         for (name, version) in cases {
             let path = database_at_version(name, version);
-            match open(&path) {
-                Err(Error::NewerLibrary(newer)) => assert_eq!(
-                    newer,
-                    NewerLibrary {
-                        found: SchemaVersion(version),
-                        supported: SCHEMA_VERSION,
-                    },
-                    "{name}"
-                ),
-                Err(e) => panic!("{name}: wrong error {e}"),
-                Ok(_) => panic!("{name}: opened"),
-            }
+            let refused = match open(&path) {
+                Err(Error::NewerLibrary(newer)) => Some(newer),
+                _ => None,
+            };
+            assert_eq!(
+                refused,
+                Some(NewerLibrary {
+                    found: SchemaVersion(version),
+                    supported: SCHEMA_VERSION,
+                }),
+                "{name}"
+            );
             let conn = Connection::open(&path).expect("reopen");
             let tables: i64 = conn
                 .query_row("SELECT COUNT(*) FROM sqlite_master", [], |r| r.get(0))

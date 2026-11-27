@@ -42,13 +42,16 @@ pub struct Item {
 }
 
 /// What the library knows about a destination path: a track record, and whether it is only
-/// missing for now (still inside the grace period).
+/// missing for now (still inside the grace period) or streamed.
 #[derive(Clone, Copy)]
 pub struct Known {
     pub track_id: i64,
     /// Marked missing by a scan (whether or not still inside the grace period).
     pub missing: bool,
     pub in_grace: bool,
+    /// Played from the destination, with no file here (`db::FileState::Streamed`): its file there
+    /// is the song itself, never offered for removal or pull.
+    pub streamed: bool,
 }
 
 const MAX_REPORTED_FAILURES: usize = 20;
@@ -1112,6 +1115,31 @@ fn pair<'a>(
     out
 }
 
+/// The `extras` that are not at the path of a song this device streams: the file there is the
+/// song itself, so it is neither removed from the destination nor offered for pull.
+fn not_streamed_paths<'a>(
+    extras: &[&'a Remote],
+    known: &HashMap<Vec<String>, Known>,
+) -> Vec<&'a Remote> {
+    extras
+        .iter()
+        .copied()
+        .filter(|r| !known.get(&r.rel).is_some_and(|k| k.streamed))
+        .collect()
+}
+
+/// The `extras` whose fingerprint is not that of a song this device streams: a streamed song's
+/// file at another path than this device expects (another device just moved it) is still it.
+fn not_streamed_prints<'a>(
+    extras: Vec<(&'a Remote, Option<String>)>,
+    streamed: &HashSet<String>,
+) -> Vec<(&'a Remote, Option<String>)> {
+    extras
+        .into_iter()
+        .filter(|(_, print)| !print.as_ref().is_some_and(|p| streamed.contains(p)))
+        .collect()
+}
+
 /// Paths of the `extras` whose fingerprint equals some library file's.
 fn in_library(items: &[Item], extras: &[(&Remote, Option<String>)]) -> HashSet<Vec<String>> {
     let prints: HashSet<&str> = items.iter().filter_map(|i| i.identity.as_deref()).collect();
@@ -1151,6 +1179,9 @@ pub struct Inputs<'a> {
     pub bases: &'a HashMap<i64, Base>,
     /// Destination signatures read on earlier runs, by path.
     pub signatures: &'a SignatureCache,
+    /// The identities ([`library_identity`]) of the songs this device streams, so their files are
+    /// recognised wherever another device put them.
+    pub streamed: &'a HashSet<String>,
 }
 
 /// A [`remote_signature`] read earlier, valid while the file keeps its size and change marker.
@@ -1202,6 +1233,7 @@ pub async fn plan_target(
         cached,
         bases,
         signatures,
+        streamed,
     } = *inputs;
     let mut plan = TargetPlan::empty(target);
     let remote = match listing {
@@ -1317,9 +1349,9 @@ pub async fn plan_target(
         .map(|i| (i.track_id, i64::try_from(i.size).unwrap_or(i64::MAX)))
         .collect();
 
+    let unstreamed = not_streamed_paths(&d.extras, known);
     // Files of tracks that went missing only recently are kept: the drive may just be unplugged.
-    let (held, candidates): (Vec<&Remote>, Vec<&Remote>) = d
-        .extras
+    let (held, candidates): (Vec<&Remote>, Vec<&Remote>) = unstreamed
         .iter()
         .partition(|r| known.get(&r.rel).is_some_and(|k| k.in_grace));
     plan.held = held
@@ -1366,7 +1398,7 @@ pub async fn plan_target(
     for r in known_audio {
         by_rel.insert(r.rel.as_slice(), cached.get(&cache_key(r)).cloned());
     }
-    let extras = with_prints(&candidates, &by_rel);
+    let extras = not_streamed_prints(with_prints(&candidates, &by_rel), streamed);
     plan.unchecked = extras
         .iter()
         .filter(|(r, p)| p.is_none() && is_audio_name(&r.rel))
@@ -3355,6 +3387,57 @@ mod tests {
             rel: rel(p),
             size,
             version: None,
+        }
+    }
+
+    fn known_at(track_id: i64, streamed: bool, in_grace: bool) -> Known {
+        Known {
+            track_id,
+            missing: in_grace,
+            in_grace,
+            streamed,
+        }
+    }
+
+    #[test]
+    fn a_destination_file_at_a_streamed_songs_path_is_never_an_extra() {
+        let files = [
+            remote("a/streamed.mp3", 1),
+            remote("a/kept-missing.mp3", 1),
+            remote("a/unknown.mp3", 1),
+        ];
+        let known = HashMap::from([
+            (rel("a/streamed.mp3"), known_at(1, true, false)),
+            (rel("a/kept-missing.mp3"), known_at(2, false, true)),
+        ]);
+        let extras: Vec<&Remote> = files.iter().collect();
+        let left: Vec<&[String]> = not_streamed_paths(&extras, &known)
+            .iter()
+            .map(|r| r.rel.as_slice())
+            .collect();
+        assert_eq!(
+            left,
+            [rel("a/kept-missing.mp3"), rel("a/unknown.mp3")],
+            "only the streamed song's file is taken out; the missing one is held elsewhere"
+        );
+    }
+
+    #[test]
+    fn a_destination_file_with_a_streamed_songs_audio_is_never_an_extra() {
+        let files = [
+            remote("moved/streamed.mp3", 1),
+            remote("other.mp3", 1),
+            remote("unread.mp3", 1),
+        ];
+        let streamed = HashSet::from(["audio-streamed".to_owned()]);
+        let cases: [(&Remote, Option<&str>, bool); 3] = [
+            (&files[0], Some("audio-streamed"), false),
+            (&files[1], Some("audio-other"), true),
+            (&files[2], None, true),
+        ];
+        for (file, print, stays) in cases {
+            let left = not_streamed_prints(vec![(file, print.map(str::to_owned))], &streamed);
+            assert_eq!(!left.is_empty(), stays, "{:?}", file.rel);
         }
     }
 

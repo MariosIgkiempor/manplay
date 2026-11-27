@@ -95,7 +95,7 @@ fn dismissed(conn: &Connection, old_fp: &str) -> Result<bool, Error> {
 fn still_held(conn: &Connection, fp: &str, except: i64) -> Result<bool, Error> {
     Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM tracks WHERE audio_fp = ?1 AND id <> ?2
-                        AND missing_since IS NULL)",
+                        AND missing_since IS NULL AND file_state = 'here')",
         params![fp, except],
         |r| r.get(0),
     )?)
@@ -168,8 +168,8 @@ pub fn candidates(conn: &Connection) -> Result<Vec<Candidate>, Error> {
         let found: Option<(i64, String, String, String)> = conn
             .query_row(
                 "SELECT id, path, title, artist FROM tracks
-                 WHERE missing_since IS NULL AND audio_fp IS NOT NULL AND audio_fp <> ''
-                   AND audio_fp <> ?1 AND lower(substr(path, 1, length(?2) + 1)) = lower(?2 || '.')
+                 WHERE missing_since IS NULL AND file_state = 'here'
+                   AND audio_fp IS NOT NULL AND audio_fp <> '' AND audio_fp <> ?1 AND lower(substr(path, 1, length(?2) + 1)) = lower(?2 || '.')
                    AND instr(substr(path, length(?2) + 2), '.') = 0
                  ORDER BY path LIMIT 1",
                 params![old_fp, stem],
