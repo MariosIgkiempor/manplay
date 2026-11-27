@@ -5588,7 +5588,11 @@ async fn tags_set_cover(
 }
 
 /// Writes `bytes` as the front cover of the songs at or under `paths`, then drops their saved
-/// thumbnails and rescans.
+/// thumbnails and rescans. A kept song's cover goes into its file; a streamed song's goes to the
+/// shared library, which sends the picture and has every device that keeps the song write it in.
+/// A folder every one of whose songs gets the cover also gets it as `cover.jpg` (or `.png`): in
+/// the library folder, or on the shared library's destination for streamed songs; a cover file
+/// already there is saved under `cover-backups` first.
 async fn write_cover(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -5596,18 +5600,169 @@ async fn write_cover(
     bytes: Vec<u8>,
 ) -> Result<tags::CoverReport, Error> {
     let root = library_root(state)?;
+    let name = tags::CoverBackupName::of_image(&bytes)?;
     if state.fixing.swap(true, Ordering::SeqCst) {
         return Err(Error::Msg("a fix is already running".to_owned()));
     }
     let _guard = SyncGuard(&state.fixing);
-    let (r, backups) = (root.clone(), cover_backups(state));
-    let (files, report) = tauri::async_runtime::spawn_blocking(move || {
-        tags::write_cover(&r, &paths, &bytes, &backups)
+    let (streamed, rest) = split_streamed(&*state.db.lock().map_err(|_| Error::Lock)?, paths)?;
+    let (r, backups, b) = (root.clone(), cover_backups(state), bytes.clone());
+    let (files, mut report) =
+        tauri::async_runtime::spawn_blocking(move || tags::write_cover(&r, &rest, &b, &backups))
+            .await
+            .map_err(|e| Error::Msg(e.to_string()))??;
+
+    let covered: HashSet<PathBuf> = files
+        .iter()
+        .cloned()
+        .chain(streamed.iter().map(|s| s.path.clone()))
+        .collect();
+    let (here, there) = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        whole_folders(&conn, &covered)?
+    };
+    let (backups, b) = (cover_backups(state), bytes.clone());
+    let folder_report = tauri::async_runtime::spawn_blocking(move || {
+        let mut previous = Vec::new();
+        let mut failed = Vec::new();
+        for dir in here {
+            match tags::write_folder_cover(&dir, &b, &backups) {
+                Ok(p) => previous.extend(p),
+                Err(e) => failed.push(audit::FixFailure {
+                    path: dir.to_string_lossy().into_owned(),
+                    error: e.to_string(),
+                }),
+            }
+        }
+        (previous, failed)
     })
     .await
-    .map_err(|e| Error::Msg(e.to_string()))??;
-    covers_changed(app, state, &files, root).await;
+    .map_err(|e| Error::Msg(e.to_string()))?;
+    report.previous.extend(folder_report.0);
+    report.failed.extend(folder_report.1);
+
+    if !streamed.is_empty() {
+        cover_streamed_songs(
+            app,
+            state,
+            &root,
+            &streamed,
+            &there,
+            &name,
+            &bytes,
+            &mut report,
+        )
+        .await?;
+    }
+    // A streamed song's thumbnail is filed under its own folder, like a kept one's.
+    let shown: Vec<PathBuf> = covered.into_iter().collect();
+    covers_changed(app, state, &shown, root).await;
     Ok(report)
+}
+
+/// The folders where every song (kept or streamed, not missing) is in `covered`: the ones that
+/// hold a kept song, in the library folder, and the ones that hold a streamed song, below it.
+fn whole_folders(
+    conn: &Connection,
+    covered: &HashSet<PathBuf>,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Error> {
+    let mut stmt =
+        conn.prepare("SELECT path, file_state FROM tracks WHERE missing_since IS NULL")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, db::FileState>(1)?))
+    })?;
+    // folder -> (every song covered, holds a kept one, holds a streamed one)
+    let mut folders: HashMap<PathBuf, (bool, bool, bool)> = HashMap::new();
+    for row in rows {
+        let (path, file_state) = row?;
+        let path = PathBuf::from(path);
+        let Some(dir) = path.parent() else { continue };
+        let entry = folders
+            .entry(dir.to_path_buf())
+            .or_insert((true, false, false));
+        entry.0 &= covered.contains(&path);
+        match file_state {
+            db::FileState::Here => entry.1 |= covered.contains(&path),
+            db::FileState::Streamed => entry.2 |= covered.contains(&path),
+        }
+    }
+    let mut here = Vec::new();
+    let mut there = Vec::new();
+    for (dir, (whole, kept, streamed)) in folders {
+        if whole && kept {
+            here.push(dir.clone());
+        }
+        if whole && streamed {
+            there.push(dir);
+        }
+    }
+    here.sort();
+    there.sort();
+    Ok((here, there))
+}
+
+/// Sets the cover of streamed songs in the shared library and, for the folders in `folders`
+/// (below `root`), puts it on the destination as the folder's cover file, after saving the one
+/// there. Then sends the picture.
+#[allow(clippy::too_many_arguments)]
+async fn cover_streamed_songs(
+    app: &AppHandle,
+    state: &AppState,
+    root: &Path,
+    songs: &[StreamedTags],
+    folders: &[PathBuf],
+    name: &tags::CoverBackupName,
+    bytes: &[u8],
+    report: &mut tags::CoverReport,
+) -> Result<(), Error> {
+    let kept = shared_covers(state);
+    std::fs::create_dir_all(&kept)?;
+    std::fs::write(kept.join(name.as_str()), bytes)?;
+    let target = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        for song in songs {
+            libsync::song_tags::set_streamed_cover(&conn, &song.audio_fp, name)?;
+            report.fixed += 1;
+        }
+        library_destination(&conn)?
+    };
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let file_name = tags::folder_cover_name(bytes)?;
+    let upload = kept.join(name.as_str());
+    for dir in folders {
+        let Some(rel) = libsync::files::RelPath::below(root, &dir.join(file_name)) else {
+            continue;
+        };
+        if let Err(e) = put_folder_cover(state, &target, &rel, &upload).await {
+            report.failed.push(audit::FixFailure {
+                path: rel.parts().join("/"),
+                error: format!("not put on the destination: {e}"),
+            });
+        }
+    }
+    tauri::async_runtime::spawn(transfer_covers(app.clone(), SharedPlace::Target(target)));
+    Ok(())
+}
+
+/// Puts the picture `upload` at `rel` on the destination, after saving the file there under
+/// `cover-backups`.
+async fn put_folder_cover(
+    state: &AppState,
+    target: &db::SyncTarget,
+    rel: &libsync::files::RelPath,
+    upload: &Path,
+) -> Result<(), Error> {
+    let backups = cover_backups(state);
+    std::fs::create_dir_all(&backups)?;
+    let incoming = backups.join(format!("incoming-{}", unix_now()));
+    if sync::fetch_file(&state.http, target, rel.parts(), &incoming).await? {
+        let held = std::fs::read(&incoming)?;
+        let saved = tags::CoverBackupName::of_image(&held)?;
+        std::fs::rename(&incoming, backups.join(saved.as_str()))?;
+    }
+    sync::replace_file(&state.http, target, rel.parts(), upload).await
 }
 
 /// Where the covers that were replaced are kept, so a cover change can be undone.
@@ -6277,6 +6432,37 @@ fn fs_art_source(state: &AppState, path: &Path) -> Option<String> {
     track.to_str().map(str::to_owned)
 }
 
+/// A streamed song's cover: the picture set for it in the shared library when this device has
+/// it, else the one in its file in the stream cache, once it was played. Filed under the song's
+/// own folder, not the cache's.
+fn streamed_art(
+    app: &AppHandle,
+    state: &AppState,
+    song: &StreamedFile,
+    cache: &Path,
+) -> Option<Vec<u8>> {
+    let root = library_root(state).ok()?;
+    let folder = song.rel.under(&root).parent()?.to_path_buf();
+    let set = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|c| {
+            libsync::song_tags::cover_of(&c, &song.audio_fp)
+                .ok()
+                .flatten()
+        })
+        .map(|name| shared_covers(state).join(name.as_str()))
+        .filter(|picture| picture.is_file());
+    if let Some(picture) = set {
+        return art::picture_thumbnail(&picture, &folder, cache);
+    }
+    let file = stream_cache_of(app)
+        .ok()?
+        .peek(&song.audio_fp, song.extension())?;
+    art::thumbnail_in(&file, &folder, cache)
+}
+
 fn art_response(app: &AppHandle, target: ArtTarget) -> tauri::http::Response<Vec<u8>> {
     let not_found = || {
         tauri::http::Response::builder()
@@ -6285,26 +6471,23 @@ fn art_response(app: &AppHandle, target: ArtTarget) -> tauri::http::Response<Vec
             .unwrap_or_default()
     };
     let state = app.state::<AppState>();
-    let path = match target {
+    let Ok(cache) = app.path().app_cache_dir().map(|d| d.join("art")) else {
+        return not_found();
+    };
+    let bytes = match target {
         ArtTarget::None => None,
         ArtTarget::Track(id) => {
             let source = state.db.lock().ok().and_then(|c| source_of(&c, id).ok());
             match source {
-                Some(Source::File(path)) => Some(path),
-                // A streamed song's picture is in its cached file, once it was played.
-                Some(Source::Streamed(song)) => stream_cache_of(app)
-                    .ok()
-                    .and_then(|cache| cache.peek(&song.audio_fp, song.extension()))
-                    .map(|file| file.to_string_lossy().into_owned()),
+                Some(Source::File(path)) => art::thumbnail(Path::new(&path), &cache),
+                Some(Source::Streamed(song)) => streamed_art(app, &state, &song, &cache),
                 None => None,
             }
         }
-        ArtTarget::Path(p) => fs_art_source(&state, &p),
+        ArtTarget::Path(p) => {
+            fs_art_source(&state, &p).and_then(|p| art::thumbnail(Path::new(&p), &cache))
+        }
     };
-    let cache = app.path().app_cache_dir().map(|d| d.join("art"));
-    let bytes = path
-        .zip(cache.ok())
-        .and_then(|(p, dir)| art::thumbnail(Path::new(&p), &dir));
     bytes.map_or_else(not_found, |b| {
         tauri::http::Response::builder()
             .header("Content-Type", "image/jpeg")
@@ -6794,6 +6977,53 @@ mod tests {
         f.apply(&f.scan_of(&["1", "2", "elsewhere/3"], 0));
         assert_eq!(file_state_at(&f, "3"), Some(db::FileState::Streamed));
         assert_eq!(file_state_at(&f, "elsewhere/3"), Some(db::FileState::Here));
+    }
+
+    /// A folder gets a cover file only when the cover goes to every song in it, here for kept
+    /// songs and on the destination for streamed ones.
+    #[test]
+    fn a_folder_cover_goes_only_where_every_song_gets_the_cover() {
+        /// What is covered, and the folders that get the cover here and on the destination.
+        type Case<'a> = (&'a str, &'a [&'a str], &'a [&'a str], &'a [&'a str]);
+        let f = Fixture::new("whole-folders");
+        for (path, state) in [
+            ("/music/A/1.mp3", "here"),
+            ("/music/A/2.mp3", "here"),
+            ("/music/B/1.mp3", "streamed"),
+            ("/music/C/1.mp3", "here"),
+            ("/music/C/2.mp3", "streamed"),
+        ] {
+            f.conn
+                .execute(
+                    "INSERT INTO tracks (path, artist, album, title, size, file_state)
+                     VALUES (?1, 'a', 'b', 'c', 1, ?2)",
+                    rusqlite::params![path, state],
+                )
+                .expect("track");
+        }
+        let cases: [Case; 4] = [
+            ("one of two songs", &["/music/A/1.mp3"], &[], &[]),
+            (
+                "both songs",
+                &["/music/A/1.mp3", "/music/A/2.mp3"],
+                &["/music/A"],
+                &[],
+            ),
+            ("a streamed album", &["/music/B/1.mp3"], &[], &["/music/B"]),
+            (
+                "a folder of both",
+                &["/music/C/1.mp3", "/music/C/2.mp3"],
+                &["/music/C"],
+                &["/music/C"],
+            ),
+        ];
+        for (what, covered, here, there) in cases {
+            let covered: HashSet<PathBuf> = covered.iter().map(PathBuf::from).collect();
+            let (local, remote) = whole_folders(&f.conn, &covered).expect("folders");
+            let paths = |v: &[&str]| v.iter().map(PathBuf::from).collect::<Vec<_>>();
+            assert_eq!(local, paths(here), "{what}");
+            assert_eq!(remote, paths(there), "{what}");
+        }
     }
 
     /// Where the player loads a song from, for each place a song can be.

@@ -406,3 +406,23 @@ async fn a_tag_edit_on_a_streamed_song_goes_to_the_log_and_the_row_and_reaches_t
         "the device with the file is to write it in"
     );
 }
+
+#[tokio::test]
+async fn a_cover_set_on_a_streamed_song_is_named_in_the_log_for_the_device_with_the_file() {
+    let store = Memory::default();
+    let (a, b) = one_more(&store).await;
+    refresh(&b);
+    let name =
+        crate::tags::CoverBackupName::of_image(&crate::tags::tests::picture(42)).expect("name");
+    song_tags::set_streamed_cover(&lock(&b), "fp3", &name).expect("cover");
+    assert_eq!(
+        song_tags::cover_of(&lock(&b), "fp3").expect("cover"),
+        Some(name.clone())
+    );
+    assert!(run_both(&a, &b, &store).await);
+    let wanted = song_tags::wanted(&lock(&a), Path::new(ROOT)).expect("wanted");
+    assert!(
+        wanted.iter().any(|w| w.cover().as_ref() == Some(&name)),
+        "the device with the file is to put the picture in"
+    );
+}

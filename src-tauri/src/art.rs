@@ -84,7 +84,37 @@ fn encode_thumbnail(raw: &[u8]) -> Option<Vec<u8>> {
 /// are retried next time so a permissions hiccup cannot hide artwork forever.
 pub fn thumbnail(track: &Path, cache_dir: &Path) -> Option<Vec<u8>> {
     let dir = track.parent()?;
-    let key = cache_key(dir);
+    // Embedded art first: it is what the tag editor sets, so edits show up even when a
+    // stale cover.jpg sits in the folder.
+    thumbnail_filed(dir, cache_dir, || match embedded_image(track) {
+        Lookup::Absent => folder_image(dir),
+        found => found,
+    })
+}
+
+/// [`thumbnail`] of a song whose file is kept elsewhere than its folder (a streamed song's copy
+/// in the stream cache): the art is read from `file`, and filed under `folder`, the song's own,
+/// so songs from different albums kept side by side keep their own covers.
+pub fn thumbnail_in(file: &Path, folder: &Path, cache_dir: &Path) -> Option<Vec<u8>> {
+    thumbnail_filed(folder, cache_dir, || embedded_image(file))
+}
+
+/// The thumbnail of the picture file `picture`, filed under `folder` (a streamed song's cover
+/// set on this device, before any file of it is here).
+pub fn picture_thumbnail(picture: &Path, folder: &Path, cache_dir: &Path) -> Option<Vec<u8>> {
+    thumbnail_filed(folder, cache_dir, || match fs::read(picture) {
+        Ok(bytes) => Lookup::Found(bytes),
+        Err(_) => Lookup::Unreadable,
+    })
+}
+
+/// The cached thumbnail filed under `folder`, else the art `read` finds, encoded and cached.
+fn thumbnail_filed(
+    folder: &Path,
+    cache_dir: &Path,
+    read: impl FnOnce() -> Lookup,
+) -> Option<Vec<u8>> {
+    let key = cache_key(folder);
     let hit = cache_dir.join(format!("{key}.jpg"));
     let miss = cache_dir.join(format!("{key}.none"));
     if let Ok(bytes) = fs::read(&hit) {
@@ -93,15 +123,7 @@ pub fn thumbnail(track: &Path, cache_dir: &Path) -> Option<Vec<u8>> {
     if miss.exists() {
         return None;
     }
-
-    // Embedded art first: it is what the tag editor sets, so edits show up even when a
-    // stale cover.jpg sits in the folder.
-    let raw = match embedded_image(track) {
-        Lookup::Found(bytes) => Lookup::Found(bytes),
-        Lookup::Unreadable => Lookup::Unreadable,
-        Lookup::Absent => folder_image(dir),
-    };
-
+    let raw = read();
     // Cache writes are best-effort; failing to cache must not hide the art.
     let _ = fs::create_dir_all(cache_dir);
     match raw {
@@ -131,8 +153,27 @@ pub fn forget(track: &Path, cache_dir: &Path) {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Two pictures kept side by side (as streamed songs' files are, in the stream cache) keep
+    /// their own thumbnails when filed under their songs' own folders.
+    #[test]
+    fn pictures_kept_side_by_side_are_filed_under_their_own_folders() {
+        let dir = std::env::temp_dir().join(format!("manplay-art-filed-{}", std::process::id()));
+        let cache = dir.join("cache");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir");
+        let one = dir.join("a1_01.png");
+        let two = dir.join("a1_02.png");
+        fs::write(&one, crate::tags::tests::picture(10)).expect("one");
+        fs::write(&two, crate::tags::tests::picture(200)).expect("two");
+        let first = picture_thumbnail(&one, Path::new("/music/A/One"), &cache).expect("first");
+        let second = picture_thumbnail(&two, Path::new("/music/B/Two"), &cache).expect("second");
+        assert_ne!(first, second, "each album has its own cover");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// Runs only when `MANPLAY_ART_TRACK` points at an audio file.
     #[test]

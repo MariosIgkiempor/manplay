@@ -11,7 +11,7 @@ import { Button } from "#/components/ui/button.tsx";
 import { useDetail, useDetailNav } from "#/context/detail-context.ts";
 import { PanelBarActions, useHasPanelBar } from "#/context/panel-bar.tsx";
 import { usePlayer } from "#/context/player-context.ts";
-import { albumKey, syncState } from "#/lib/albums.ts";
+import { albumKey, albumOfSong, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
 import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
@@ -37,6 +37,7 @@ export function SongPanel({
 	if (!track) {
 		return <NotThere what="song" pending={tracks.isPending} />;
 	}
+	const coverAlbum = albumOfSong(track, tracks.data ?? []);
 	const facts = [
 		track.durationMs !== null && {
 			icon: <Clock />,
@@ -76,7 +77,7 @@ export function SongPanel({
 					</>
 				}
 				art={
-					<CoverPicker paths={track.path} name={track.title}>
+					<CoverPicker paths={track.path} name={track.title} album={coverAlbum}>
 						<AlbumArt trackId={track.id} className={PANEL_ART} />
 					</CoverPicker>
 				}

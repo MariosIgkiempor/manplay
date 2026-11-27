@@ -402,3 +402,31 @@ pub fn edit_streamed(
         .map(|(field, _)| field.clone())
         .collect())
 }
+
+/// Sets the front cover of a song this device streams to the picture `name` (kept in the shared
+/// covers folder, from where `covers::transfer` sends it): an edit in the shared library, which
+/// every device that keeps the song writes into its file.
+pub fn set_streamed_cover(
+    conn: &Connection,
+    fp: &str,
+    name: &CoverBackupName,
+) -> Result<(), Error> {
+    write::stamp(
+        conn,
+        &[write::Field {
+            e: E_SONG_TAGS.to_owned(),
+            id: fp.to_owned(),
+            f: COVER.to_owned(),
+            val: json!(name.as_str()),
+        }],
+    )?;
+    Ok(())
+}
+
+/// The picture the shared library names as the front cover of the song with audio `fp`.
+pub fn cover_of(conn: &Connection, fp: &str) -> Result<Option<CoverBackupName>, Error> {
+    Ok(super::state::get(conn, E_SONG_TAGS, fp, COVER)?
+        .as_ref()
+        .and_then(Value::as_str)
+        .and_then(cover_named))
+}

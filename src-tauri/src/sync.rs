@@ -3224,6 +3224,22 @@ pub async fn fetch_file(
     pull_file(&backend, &base, &file, dest).await
 }
 
+/// Puts `file` at `rel` below the destination folder, whole, replacing what is there. The caller
+/// saves what was there first.
+pub async fn replace_file(
+    client: &Client,
+    target: &SyncTarget,
+    rel: &[String],
+    file: &Path,
+) -> Result<(), Error> {
+    if !safe_rel(rel) {
+        return Err(Error::Msg("unsafe path on destination".to_owned()));
+    }
+    let base = base_of(target);
+    let backend = Backend::for_target(client, target)?;
+    backend.put_whole(&dest_of(&base, rel), file, true).await
+}
+
 /// Fingerprints of remote files, fetched with small range reads (never the whole file).
 /// Each entry is `None` when that file could not be sampled.
 pub async fn fingerprint_remote(

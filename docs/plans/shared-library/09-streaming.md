@@ -165,8 +165,13 @@ Windows AIFF/ALAC through `pcm://`, and covers of streamed songs from the cached
   every chosen streamed song into the cache first (`download_streamed_for_usb`, the "Download
   streamed songs" step), and its preview counts them as if cached.
 
-Not done: changing a streamed song's cover (the cover card writes into the file, so it fails on
-a streamed song).
+Covers (since): a streamed song's new cover goes to the shared library (the `cover` field names
+the picture, kept in `shared-covers` until `transfer_covers` sends it), and every device that
+keeps the song writes it into its file. A folder all of whose songs get the cover also gets it
+as `cover.jpg` or `cover.png`: in the library folder, or on the destination for streamed songs;
+a cover file already there is saved under `cover-backups` first (undo puts a local one back).
+Picking a cover for a song on an album with other songs asks: this song, or all of them.
+Thumbnails of streamed songs are filed under the song's own folder, not the stream cache's.
 
 ## Playback
 

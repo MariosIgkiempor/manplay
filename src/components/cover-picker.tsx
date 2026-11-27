@@ -1,7 +1,7 @@
 import { Popover, PopoverTrigger } from "@ui-sdk/react/popover";
 import { ImagePlus, LoaderCircle } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { CoverCard } from "#/components/cover-card.tsx";
+import { type CoverAlbum, CoverCard } from "#/components/cover-card.tsx";
 import { SaveState } from "#/components/save-state.tsx";
 import { PopoverPopup } from "#/components/ui/popup.tsx";
 import { bumpArt } from "#/lib/art-version.ts";
@@ -22,6 +22,7 @@ const COVER_CARD_PX = 240;
 export function CoverPicker({
 	paths,
 	name,
+	album,
 	children,
 	className,
 }: {
@@ -29,6 +30,8 @@ export function CoverPicker({
 	paths: string | readonly string[];
 	/** What the cover belongs to, for its label. */
 	name: string;
+	/** The album of the one song in `paths`, when it has others: the card asks which to cover. */
+	album?: CoverAlbum | undefined;
 	children: ReactNode;
 	className?: string;
 }) {
@@ -136,7 +139,7 @@ export function CoverPicker({
 					aria-label={`Change the cover of ${name}`}
 					className="size-60 max-w-[calc(100vw-2rem)] origin-center overflow-hidden rounded-xl bg-muted shadow-2xl outline-none ring-1 ring-foreground/15 transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.3,0,0.2,1)] data-[ending-style]:scale-[0.4] data-[starting-style]:scale-[0.4] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none"
 				>
-					<CoverCard paths={paths} name={name} onDone={() => setOpen(false)} />
+					<CoverCard paths={paths} name={name} album={album} onDone={() => setOpen(false)} />
 				</PopoverPopup>
 			</Popover>
 		</>

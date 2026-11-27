@@ -43,3 +43,17 @@ export function syncState(tracks: readonly Track[], targetCount: number): SyncSt
 export function albumKey(artist: string, album: string): string {
 	return `${artist}\u0000${album}`;
 }
+
+/** The album `track` is on with every song of it, when it has others: what a cover picked for the
+ * song can go to as well. `undefined` for a song with no album or alone on it. */
+export function albumOfSong(
+	track: Pick<Track, "artist" | "album">,
+	all: readonly Pick<Track, "artist" | "album" | "path">[],
+): { name: string; paths: string[] } | undefined {
+	if (track.album === "") {
+		return undefined;
+	}
+	const key = albumKey(track.artist, track.album);
+	const paths = all.filter((t) => albumKey(t.artist, t.album) === key).map((t) => t.path);
+	return paths.length > 1 ? { name: track.album, paths } : undefined;
+}

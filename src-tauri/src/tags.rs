@@ -652,6 +652,23 @@ impl CoverBackupName {
 }
 
 impl CoverBackupName {
+    /// The name of the JPEG or PNG picture `bytes`.
+    pub fn of_image(bytes: &[u8]) -> Result<Self, Error> {
+        let extension = match cover_mime(bytes)? {
+            MimeType::Png => "png",
+            _ => "jpg",
+        };
+        Ok(Self(format!(
+            "{}.{extension}",
+            blake3::hash(bytes).to_hex()
+        )))
+    }
+
+    /// The picture's file extension: `jpg` or `png`.
+    pub fn extension(&self) -> &str {
+        self.0.rsplit('.').next().unwrap_or("jpg")
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -869,7 +886,21 @@ pub fn restore_covers(
     let mut files = Vec::with_capacity(previous.len());
     let mut report = FixReport::default();
     for item in previous {
-        let file = fsops::inside(root, Path::new(&item.path))?;
+        let wanted = Path::new(&item.path);
+        if is_folder_cover(wanted) {
+            // The file may be gone (a cover of the other kind took its place): the folder is
+            // what must be inside the library.
+            let (Some(dir), Some(name)) = (wanted.parent(), wanted.file_name()) else {
+                continue;
+            };
+            let file = fsops::inside(root, dir)?.join(name);
+            match restore_folder_cover(&file, item.backup.as_ref(), backups) {
+                Ok(()) => report.fixed += 1,
+                Err(e) => report.failed.push(failure(&file, &e)),
+            }
+            continue;
+        }
+        let file = fsops::inside(root, wanted)?;
         let restored = match &item.backup {
             None => set_front_cover(&file, None),
             Some(name) => std::fs::read(backups.join(&name.0))
@@ -886,6 +917,87 @@ pub fn restore_covers(
         files.push(file);
     }
     Ok((files, report))
+}
+
+/// The names an album's cover picture has in its folder, for the players and apps that read one.
+pub const FOLDER_COVERS: [&str; 2] = ["cover.jpg", "cover.png"];
+
+fn is_folder_cover(file: &Path) -> bool {
+    file.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| FOLDER_COVERS.contains(&n))
+}
+
+/// The folder cover file `bytes` goes into: `cover.jpg` or `cover.png`, by its kind.
+pub fn folder_cover_name(bytes: &[u8]) -> Result<&'static str, Error> {
+    Ok(match cover_mime(bytes)? {
+        MimeType::Png => "cover.png",
+        _ => "cover.jpg",
+    })
+}
+
+/// Writes `bytes` as the cover picture of the folder `dir`, as `cover.jpg` or `cover.png`.
+/// A cover file already there (of either kind) is saved into `backups` and removed first. Returns
+/// what the folder held, so [`restore_covers`] can put it back: the new file with no backup (to
+/// be removed), and each file it replaced with its saved picture.
+pub fn write_folder_cover(
+    dir: &Path,
+    bytes: &[u8],
+    backups: &Path,
+) -> Result<Vec<PreviousCover>, Error> {
+    let new_name = folder_cover_name(bytes)?;
+    std::fs::create_dir_all(backups)?;
+    let mut previous = Vec::new();
+    for name in FOLDER_COVERS {
+        let old = dir.join(name);
+        let Ok(held) = std::fs::read(&old) else {
+            continue;
+        };
+        let saved = CoverBackupName::of_image(&held)
+            .unwrap_or_else(|_| CoverBackupName(format!("{}.jpg", blake3::hash(&held).to_hex())));
+        std::fs::write(backups.join(&saved.0), &held)?;
+        if name != new_name {
+            std::fs::remove_file(&old)?;
+        }
+        previous.push(PreviousCover {
+            path: old.to_string_lossy().into_owned(),
+            backup: Some(saved),
+        });
+    }
+    let new_file = dir.join(new_name);
+    if !previous.iter().any(|p| Path::new(&p.path) == new_file) {
+        previous.push(PreviousCover {
+            path: new_file.to_string_lossy().into_owned(),
+            backup: None,
+        });
+    }
+    let mut part = new_file.as_os_str().to_owned();
+    part.push(".manplay-part");
+    let part = PathBuf::from(part);
+    std::fs::write(&part, bytes)?;
+    std::fs::rename(&part, &new_file)?;
+    Ok(previous)
+}
+
+/// Puts a folder cover file back as [`write_folder_cover`] found it: its saved picture, or no
+/// file when there was none.
+fn restore_folder_cover(
+    file: &Path,
+    backup: Option<&CoverBackupName>,
+    backups: &Path,
+) -> Result<(), Error> {
+    match backup {
+        Some(name) => {
+            let bytes = std::fs::read(backups.join(&name.0))
+                .map_err(|e| err(format!("the saved cover is gone: {e}")))?;
+            std::fs::write(file, bytes)?;
+        }
+        None => match std::fs::remove_file(file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        },
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1119,6 +1231,89 @@ pub(crate) mod tests {
         let edits = BTreeMap::from([("bogus".to_owned(), "x".to_owned())]);
         assert!(write(&dir, std::slice::from_ref(&dir), &edits).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn jpeg(red: u8) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(2, 2, image::Rgb([red, 0, 0]))
+            .write_to(&mut out, image::ImageFormat::Jpeg)
+            .expect("jpeg");
+        out.into_inner()
+    }
+
+    /// The folder's cover file is written by kind, what was there is saved, and undo puts the
+    /// folder back as it was.
+    #[test]
+    fn a_folder_cover_replaces_what_was_there_and_undo_puts_it_back() {
+        struct Case {
+            what: &'static str,
+            before: &'static [(&'static str, u8)],
+            new_png: bool,
+            after: &'static [&'static str],
+        }
+        let cases = [
+            Case {
+                what: "no cover yet",
+                before: &[],
+                new_png: false,
+                after: &["cover.jpg"],
+            },
+            Case {
+                what: "the same kind there",
+                before: &[("cover.jpg", 1)],
+                new_png: false,
+                after: &["cover.jpg"],
+            },
+            Case {
+                what: "the other kind there",
+                before: &[("cover.jpg", 1)],
+                new_png: true,
+                after: &["cover.png"],
+            },
+        ];
+        for case in cases {
+            let root = std::env::temp_dir().join(format!(
+                "manplay-folder-cover-{}-{}",
+                std::process::id(),
+                case.what.len()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let dir = root.join("Album");
+            let backups = root.join("backups");
+            std::fs::create_dir_all(&dir).expect("dir");
+            for (name, red) in case.before {
+                std::fs::write(dir.join(name), jpeg(*red)).expect("before");
+            }
+            let bytes = if case.new_png { picture(99) } else { jpeg(99) };
+            let previous = write_folder_cover(&dir, &bytes, &backups).expect("write");
+            let mut there: Vec<String> = std::fs::read_dir(&dir)
+                .expect("list")
+                .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+                .collect();
+            there.sort();
+            assert_eq!(there, case.after, "{}", case.what);
+            let written = dir.join(case.after[0]);
+            assert_eq!(
+                std::fs::read(&written).expect("new"),
+                bytes,
+                "{}",
+                case.what
+            );
+
+            restore_covers(&root, &previous, &backups).expect("undo");
+            for (name, red) in case.before {
+                assert_eq!(
+                    std::fs::read(dir.join(name)).expect("back"),
+                    jpeg(*red),
+                    "{}",
+                    case.what
+                );
+            }
+            if !case.before.iter().any(|(name, _)| *name == case.after[0]) {
+                assert!(!written.exists(), "{}: the new file goes again", case.what);
+            }
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 
     /// A small PNG picture; another `red` gives another picture.
