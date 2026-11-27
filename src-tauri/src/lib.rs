@@ -30,6 +30,7 @@ mod scan;
 mod serato;
 mod smart;
 mod stream;
+mod stream_cache;
 mod sync;
 mod sync_ignore;
 mod sync_scans;
@@ -351,8 +352,7 @@ fn audio_moves<'k, 's>(
     let mut vanished: HashMap<&str, Vec<&db::Known>> = HashMap::new();
     for k in known.iter().filter(|k| {
         k.can_vanish() && !found.contains(k.path.as_str()) && !claimed_old.contains(&k.id)
-    })
-    {
+    }) {
         if let Some(fp) = audio_of(k.audio_fp.as_deref()) {
             vanished.entry(fp).or_default().push(k);
         }
@@ -4699,19 +4699,49 @@ async fn fs_move(
     Ok(())
 }
 
-/// Where the player loads a song from: its file when it is kept, else the shared library's
-/// destination, as `remote:<destination id>/<path below the library folder>` (see `stream.rs`).
-#[tauri::command]
-fn stream_source(state: State<'_, AppState>, track_id: i64) -> Result<String, Error> {
-    with_db!(state, |c| source_of(c, track_id))
+/// Where a song plays from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Source {
+    /// Its file in the library folder.
+    File(String),
+    /// The shared library's destination.
+    Streamed(StreamedFile),
 }
 
-/// [`stream_source`] of one song.
-fn source_of(conn: &Connection, track_id: i64) -> Result<String, Error> {
-    let (path, file_state) =
+/// A streamed song's file on the shared library's destination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StreamedFile {
+    target_id: i64,
+    rel: libsync::files::RelPath,
+    audio_fp: String,
+}
+
+impl StreamedFile {
+    /// The player's name for it (`remoteTrackPath` in `api.ts`).
+    fn remote(&self) -> String {
+        format!("remote:{}/{}", self.target_id, self.rel.parts().join("/"))
+    }
+
+    fn extension(&self) -> &str {
+        self.rel
+            .parts()
+            .last()
+            .and_then(|name| name.rsplit_once('.'))
+            .map_or("", |(_, ext)| ext)
+    }
+
+    /// Where it is or would be kept in the stream cache.
+    fn cache_file(&self, cache: &stream_cache::StreamCache) -> Option<PathBuf> {
+        cache.file_for(&self.audio_fp, self.extension())
+    }
+}
+
+/// Where song `track_id` plays from.
+fn source_of(conn: &Connection, track_id: i64) -> Result<Source, Error> {
+    let place =
         db::track_place(conn, track_id)?.ok_or_else(|| Error::Msg("song not found".to_owned()))?;
-    if file_state == db::FileState::Here {
-        return Ok(path);
+    if place.file_state == db::FileState::Here {
+        return Ok(Source::File(place.path));
     }
     let Some(libsync::membership::Home::Target(target_id)) = libsync::membership::home(conn)?
     else {
@@ -4721,14 +4751,162 @@ fn source_of(conn: &Connection, track_id: i64) -> Result<String, Error> {
     };
     let root = db::get_setting(conn, SETTING_ROOT)?
         .ok_or_else(|| Error::Msg("library folder unknown".to_owned()))?;
-    let rel = libsync::files::RelPath::below(Path::new(&root), Path::new(&path))
+    let rel = libsync::files::RelPath::below(Path::new(&root), Path::new(&place.path))
         .ok_or_else(|| Error::Msg("this song is outside the library folder".to_owned()))?;
-    Ok(remote_source(target_id, &rel))
+    let audio_fp = place
+        .audio_fp
+        .filter(|fp| !fp.is_empty())
+        .ok_or_else(|| Error::Msg("this streamed song has no audio print".to_owned()))?;
+    Ok(Source::Streamed(StreamedFile {
+        target_id,
+        rel,
+        audio_fp,
+    }))
 }
 
-/// The player's name for a file on destination `target_id` (`remoteTrackPath` in `api.ts`).
-fn remote_source(target_id: i64, rel: &libsync::files::RelPath) -> String {
-    format!("remote:{target_id}/{}", rel.parts().join("/"))
+/// The stream cache, in the app's cache folder.
+fn stream_cache_of(app: &AppHandle) -> Result<stream_cache::StreamCache, Error> {
+    let dir = app.path().app_cache_dir()?.join("stream-cache");
+    std::fs::create_dir_all(&dir)?;
+    Ok(stream_cache::StreamCache::new(dir))
+}
+
+/// Downloads a streamed song's whole file into the stream cache, then trims the cache to its
+/// size. One download per song at a time; `None` when another one is under way or the
+/// destination does not have the file.
+async fn fill_stream_cache(app: &AppHandle, song: &StreamedFile) -> Result<Option<PathBuf>, Error> {
+    static FILLING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let cache = stream_cache_of(app)?;
+    let dest = song
+        .cache_file(&cache)
+        .ok_or_else(|| Error::Msg("this song cannot be cached".to_owned()))?;
+    if let Some(cached) = cache.cached(&song.audio_fp, song.extension()) {
+        return Ok(Some(cached));
+    }
+    {
+        let mut filling = FILLING.lock().map_err(|_| Error::Lock)?;
+        if filling.contains(&song.audio_fp) {
+            return Ok(None);
+        }
+        filling.push(song.audio_fp.clone());
+    }
+    let state = app.state::<AppState>();
+    let fetched = async {
+        let target = {
+            let conn = state.db.lock().map_err(|_| Error::Lock)?;
+            db::get_targets(&conn, Some(&[song.target_id]))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| Error::Msg("the shared library's destination is gone".to_owned()))?
+        };
+        sync::fetch_file(&state.http, &target, song.rel.parts(), &dest).await
+    }
+    .await;
+    if let Ok(mut filling) = FILLING.lock() {
+        filling.retain(|fp| *fp != song.audio_fp);
+    }
+    if !fetched? {
+        return Ok(None);
+    }
+    let limit = {
+        let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        stream_cache::limit(&conn)?
+    };
+    cache.trim(limit, Some(&dest));
+    Ok(Some(dest))
+}
+
+/// Whether the webview may be unable to play a file of this kind straight from the destination:
+/// AIFF and ALAC on Windows go through `pcm://`, which needs a local file.
+fn needs_local_file(song: &StreamedFile) -> bool {
+    cfg!(windows)
+        && matches!(
+            song.extension().to_ascii_lowercase().as_str(),
+            "aif" | "aiff" | "aifc" | "m4a" | "mp4" | "alac"
+        )
+}
+
+/// Where the player loads a song from: its file when it is kept; for a streamed song, its copy in
+/// the stream cache when there is one, else the shared library's destination as
+/// `remote:<destination id>/<path>` (see `stream.rs`) while the whole file comes down into the
+/// cache in the background. A song the webview cannot play from the destination is fetched first.
+#[tauri::command]
+async fn stream_source(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<String, Error> {
+    let source = with_db!(state, |c| source_of(c, track_id))?;
+    let song = match source {
+        Source::File(path) => return Ok(path),
+        Source::Streamed(song) => song,
+    };
+    let cache = stream_cache_of(&app)?;
+    if let Some(cached) = cache.cached(&song.audio_fp, song.extension()) {
+        return Ok(cached.to_string_lossy().into_owned());
+    }
+    if needs_local_file(&song) {
+        return fill_stream_cache(&app, &song)
+            .await?
+            .map(|file| file.to_string_lossy().into_owned())
+            .ok_or_else(|| Error::Msg("this song is not on the destination yet".to_owned()));
+    }
+    let remote = song.remote();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = fill_stream_cache(&app, &song).await {
+            log::info!("could not cache a streamed song: {e}");
+        }
+    });
+    Ok(remote)
+}
+
+/// Starts fetching a streamed song into the stream cache ahead of playing it (the next song in
+/// the queue). Does nothing for a kept song.
+#[tauri::command]
+fn stream_prefetch(app: AppHandle, state: State<'_, AppState>, track_id: i64) -> Result<(), Error> {
+    if let Source::Streamed(song) = with_db!(state, |c| source_of(c, track_id))? {
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = fill_stream_cache(&app, &song).await {
+                log::info!("could not fetch the next streamed song ahead: {e}");
+            }
+        });
+    }
+    Ok(())
+}
+
+/// How full the stream cache is and how big it may grow.
+#[tauri::command]
+fn stream_cache_usage(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<stream_cache::Usage, Error> {
+    let limit = with_db!(state, |c| stream_cache::limit(c))?;
+    Ok(stream_cache_of(&app)?.usage(limit))
+}
+
+/// Sets how big the stream cache may grow, and trims it to that at once.
+#[tauri::command]
+fn set_stream_cache_limit(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    bytes: stream_cache::Bytes,
+) -> Result<stream_cache::Usage, Error> {
+    with_db!(state, |c| stream_cache::set_limit(c, bytes))?;
+    let cache = stream_cache_of(&app)?;
+    cache.trim(bytes, None);
+    Ok(cache.usage(bytes))
+}
+
+/// Removes every song from the stream cache; they stream from the destination again.
+#[tauri::command]
+fn empty_stream_cache(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<stream_cache::Usage, Error> {
+    let limit = with_db!(state, |c| stream_cache::limit(c))?;
+    let cache = stream_cache_of(&app)?;
+    cache.empty()?;
+    Ok(cache.usage(limit))
 }
 
 /// Whether the player should load `path` through `pcm://` (AIFF and ALAC on Windows, whose
@@ -5953,11 +6131,18 @@ fn art_response(app: &AppHandle, target: ArtTarget) -> tauri::http::Response<Vec
     let state = app.state::<AppState>();
     let path = match target {
         ArtTarget::None => None,
-        ArtTarget::Track(id) => state
-            .db
-            .lock()
-            .ok()
-            .and_then(|c| db::track_path(&c, id).ok().flatten()),
+        ArtTarget::Track(id) => {
+            let source = state.db.lock().ok().and_then(|c| source_of(&c, id).ok());
+            match source {
+                Some(Source::File(path)) => Some(path),
+                // A streamed song's picture is in its cached file, once it was played.
+                Some(Source::Streamed(song)) => stream_cache_of(app)
+                    .ok()
+                    .and_then(|cache| cache.peek(&song.audio_fp, song.extension()))
+                    .map(|file| file.to_string_lossy().into_owned()),
+                None => None,
+            }
+        }
         ArtTarget::Path(p) => fs_art_source(&state, &p),
     };
     let cache = app.path().app_cache_dir().map(|d| d.join("art"));
@@ -6051,6 +6236,11 @@ pub fn run() {
             app.manage(LibraryGate(newer));
             if let Some(root) = db::get_setting(&conn, SETTING_ROOT)? {
                 allow_assets(app.handle(), Path::new(&root));
+            }
+            // The stream cache's files play like the library's own.
+            match stream_cache_of(app.handle()) {
+                Ok(cache) => allow_assets(app.handle(), cache.dir()),
+                Err(e) => log::warn!("no stream cache: {e}"),
             }
             let http = reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(5))
@@ -6250,6 +6440,10 @@ pub fn run() {
             newer_library,
             new_shared_songs,
             stream_source,
+            stream_prefetch,
+            stream_cache_usage,
+            set_stream_cache_limit,
+            empty_stream_cache,
             set_new_shared_songs,
             audit_library,
             tags_read,
@@ -6496,8 +6690,8 @@ mod tests {
             db::set_setting(&f.conn, SETTING_ROOT, Some("/music")).expect("root");
             f.conn
                 .execute(
-                    "INSERT INTO tracks (path, artist, album, title, size, file_state)
-                     VALUES (?1, 'a', 'b', 'c', 1, ?2)",
+                    "INSERT INTO tracks (path, artist, album, title, size, file_state, audio_fp)
+                     VALUES (?1, 'a', 'b', 'c', 1, ?2, 'a1:01')",
                     rusqlite::params![case.path, case.state],
                 )
                 .expect("track");
@@ -6515,8 +6709,14 @@ mod tests {
             } else {
                 0
             };
-            let want = case.want.map(|w| w.replace("{target}", &target.to_string()));
-            assert_eq!(source_of(&f.conn, id).ok(), want, "{}", case.what);
+            let want = case
+                .want
+                .map(|w| w.replace("{target}", &target.to_string()));
+            let got = source_of(&f.conn, id).ok().map(|source| match source {
+                Source::File(path) => path,
+                Source::Streamed(song) => song.remote(),
+            });
+            assert_eq!(got, want, "{}", case.what);
         }
     }
 

@@ -7,7 +7,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
-const { fileStateSchema, trackUrl } = await import("#/lib/api.ts");
+const { fileStateSchema, newSongsSchema, streamCacheUsageSchema, trackUrl } = await import(
+	"#/lib/api.ts"
+);
 const invoked = vi.mocked(invoke);
 
 describe("fileStateSchema", () => {
@@ -45,5 +47,36 @@ describe("trackUrl", () => {
 		await expect(
 			trackUrl({ id: 3, path: "/music/b.mp3", fileState: "streamed" }),
 		).rejects.toThrow();
+	});
+});
+
+describe("streamCacheUsageSchema", () => {
+	it.each([
+		["an empty cache", { used: 0, limit: 5_000_000_000 }],
+		["a full one", { used: 5_000_000_000, limit: 5_000_000_000 }],
+	])("takes %s", (_name, usage) => {
+		expect(streamCacheUsageSchema.parse(usage)).toEqual(usage);
+	});
+
+	it.each([
+		["a negative size", { used: -1, limit: 5_000_000_000 }],
+		["no room at all", { used: 0, limit: 0 }],
+		["a size that is not whole", { used: 1.5, limit: 5_000_000_000 }],
+		["no limit", { used: 0 }],
+	])("refuses %s", (_name, usage) => {
+		expect(streamCacheUsageSchema.safeParse(usage).success).toBe(false);
+	});
+});
+
+describe("newSongsSchema", () => {
+	it.each(["stream", "download"])("takes %s", (choice) => {
+		expect(newSongsSchema.parse(choice)).toBe(choice);
+	});
+
+	it.each([
+		["another word", "keep"],
+		["nothing", null],
+	])("refuses %s", (_name, value) => {
+		expect(newSongsSchema.safeParse(value).success).toBe(false);
 	});
 });

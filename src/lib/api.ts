@@ -356,6 +356,46 @@ export async function trackUrl(track: Pick<Track, "id" | "path" | "fileState">):
 	return playableUrl(z.string().parse(await invoke("stream_source", { trackId: track.id })));
 }
 
+/** Starts fetching a streamed song into the stream cache ahead of playing it. */
+export async function streamPrefetch(trackId: number): Promise<void> {
+	await invoke("stream_prefetch", { trackId });
+}
+
+/** How full the stream cache is and how big it may grow, in bytes (`stream_cache::Usage`). */
+export const streamCacheUsageSchema = z.object({
+	used: int.nonnegative(),
+	limit: int.positive(),
+});
+export type StreamCacheUsage = z.infer<typeof streamCacheUsageSchema>;
+
+/** Smallest and largest stream cache the backend takes (`stream_cache::MIN_LIMIT`, `MAX_LIMIT`). */
+export const STREAM_CACHE_MIN_BYTES = 500_000_000;
+export const STREAM_CACHE_MAX_BYTES = 1_000_000_000_000;
+
+export async function streamCacheUsage(): Promise<StreamCacheUsage> {
+	return streamCacheUsageSchema.parse(await invoke("stream_cache_usage"));
+}
+
+export async function setStreamCacheLimit(bytes: number): Promise<StreamCacheUsage> {
+	return streamCacheUsageSchema.parse(await invoke("set_stream_cache_limit", { bytes }));
+}
+
+export async function emptyStreamCache(): Promise<StreamCacheUsage> {
+	return streamCacheUsageSchema.parse(await invoke("empty_stream_cache"));
+}
+
+/** What becomes of songs other devices add to the shared library (`streamed::NewSongs`). */
+export const newSongsSchema = z.enum(["stream", "download"]);
+export type NewSongs = z.infer<typeof newSongsSchema>;
+
+export async function newSharedSongs(): Promise<NewSongs> {
+	return newSongsSchema.parse(await invoke("new_shared_songs"));
+}
+
+export async function setNewSharedSongs(choice: NewSongs): Promise<void> {
+	await invoke("set_new_shared_songs", { choice });
+}
+
 // ---- playlists ------------------------------------------------------------
 
 /** Whether an item is shared with everyone on the destination or stays on this device. */

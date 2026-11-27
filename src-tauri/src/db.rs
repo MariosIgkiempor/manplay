@@ -2450,8 +2450,8 @@ pub struct TrackRow {
 }
 
 pub fn all_track_rows(conn: &Connection) -> Result<Vec<TrackRow>, Error> {
-    let mut stmt =
-        conn.prepare("SELECT id, path, fingerprint, audio_fp, missing_since, file_state FROM tracks")?;
+    let mut stmt = conn
+        .prepare("SELECT id, path, fingerprint, audio_fp, missing_since, file_state FROM tracks")?;
     let rows = stmt.query_map([], |r| {
         Ok(TrackRow {
             id: r.get(0)?,
@@ -2860,13 +2860,26 @@ pub fn mark_grid_edited(conn: &Connection, id: i64) -> Result<(), Error> {
     Ok(())
 }
 
-/// A song's path and whether its file is there.
-pub fn track_place(conn: &Connection, id: i64) -> Result<Option<(String, FileState)>, Error> {
+/// Where a song is: its path, whether its file is there, and its audio.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackPlace {
+    pub path: String,
+    pub file_state: FileState,
+    pub audio_fp: Option<String>,
+}
+
+pub fn track_place(conn: &Connection, id: i64) -> Result<Option<TrackPlace>, Error> {
     Ok(conn
         .query_row(
-            "SELECT path, file_state FROM tracks WHERE id = ?1",
+            "SELECT path, file_state, audio_fp FROM tracks WHERE id = ?1",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| {
+                Ok(TrackPlace {
+                    path: r.get(0)?,
+                    file_state: r.get(1)?,
+                    audio_fp: r.get(2)?,
+                })
+            },
         )
         .optional()?)
 }
@@ -4361,10 +4374,8 @@ mod tests {
     /// A database file of its own in the temp dir, holding `user_version` = `version` and nothing
     /// else.
     fn database_at_version(name: &str, version: i64) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "manplay-schema-{name}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("manplay-schema-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("library.db");
@@ -4376,14 +4387,15 @@ mod tests {
 
     #[test]
     fn a_database_of_this_layout_or_older_opens_and_is_brought_up_to_it() {
-        let cases = [
-            ("new", 0),
-            ("current", SCHEMA_VERSION.0),
-        ];
+        let cases = [("new", 0), ("current", SCHEMA_VERSION.0)];
         for (name, version) in cases {
             let path = database_at_version(name, version);
             let conn = open(&path).expect(name);
-            assert_eq!(schema_version(&conn).expect("version"), SCHEMA_VERSION, "{name}");
+            assert_eq!(
+                schema_version(&conn).expect("version"),
+                SCHEMA_VERSION,
+                "{name}"
+            );
         }
     }
 

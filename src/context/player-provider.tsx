@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type PlayerApi, PlayerContext, PlayerTimeContext } from "#/context/player-context.ts";
-import { type Track, trackUrl } from "#/lib/api.ts";
+import { streamPrefetch, type Track, trackUrl } from "#/lib/api.ts";
 import { withAdded, withNext } from "#/lib/queue.ts";
 import { useMediaSession } from "#/lib/use-media-session.ts";
 
@@ -67,6 +67,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 			audioRef.current.volume = volume;
 		}
 	}, [volume]);
+
+	// The next song, when it is streamed, comes down while this one plays, so it starts at once.
+	const following = queue[index + 1];
+	const nextStreamedId = following?.fileState === "streamed" ? following.id : null;
+	useEffect(() => {
+		if (nextStreamedId !== null) {
+			streamPrefetch(nextStreamedId).catch(() => {});
+		}
+	}, [nextStreamedId]);
 
 	const play = useCallback(
 		(nextQueue: readonly Track[], startIndex: number) => {

@@ -3199,6 +3199,31 @@ pub async fn fetch_songs(
     Ok(out)
 }
 
+/// Downloads the file at `rel` below the destination folder to `dest`, by way of a part file next
+/// to it. False when the destination does not have it, or a file appeared at `dest` meanwhile
+/// (that file stays).
+pub async fn fetch_file(
+    client: &Client,
+    target: &SyncTarget,
+    rel: &[String],
+    dest: &Path,
+) -> Result<bool, Error> {
+    if !safe_rel(rel) {
+        return Err(Error::Msg("unsafe path on destination".to_owned()));
+    }
+    let base = base_of(target);
+    let backend = Backend::for_target(client, target)?;
+    let Some(size) = backend.remote_size(&dest_of(&base, rel)).await? else {
+        return Ok(false);
+    };
+    let file = Remote {
+        rel: rel.to_vec(),
+        size,
+        version: None,
+    };
+    pull_file(&backend, &base, &file, dest).await
+}
+
 /// Fingerprints of remote files, fetched with small range reads (never the whole file).
 /// Each entry is `None` when that file could not be sampled.
 pub async fn fingerprint_remote(

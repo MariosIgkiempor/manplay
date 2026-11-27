@@ -66,7 +66,16 @@ fn row(db: &Mutex<Connection>, song: usize) -> Option<Row> {
             "SELECT path, artist, album, title, duration_ms, file_state FROM tracks
              WHERE audio_fp = ?1",
             params![format!("fp{song}")],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .ok()
 }
@@ -88,7 +97,15 @@ async fn one_more(store: &Memory) -> (Mutex<Connection>, Mutex<Connection>) {
          WHERE audio_fp = ?1",
         3,
     );
-    retag(&a, 3, &[("title", "Night Drive"), ("artist", "Kas"), ("genre", "House")]);
+    retag(
+        &a,
+        3,
+        &[
+            ("title", "Night Drive"),
+            ("artist", "Kas"),
+            ("genre", "House"),
+        ],
+    );
     record(&a);
     record(&b);
     assert!(run_both(&a, &b, store).await);
@@ -112,9 +129,15 @@ async fn a_song_only_another_device_has_is_streamed_with_its_tags_and_details() 
         )),
         "the album comes from the folder when the log has no album tag"
     );
-    assert_eq!(refresh(&b), Refreshed::default(), "nothing changed, nothing to do");
+    assert_eq!(
+        refresh(&b),
+        Refreshed::default(),
+        "nothing changed, nothing to do"
+    );
     assert!(
-        files::arrivals_wanted(&lock(&b)).expect("arrivals").is_empty(),
+        files::arrivals_wanted(&lock(&b))
+            .expect("arrivals")
+            .is_empty(),
         "a streamed song is not downloaded"
     );
 }
@@ -142,7 +165,11 @@ async fn a_streamed_song_follows_renames_and_tag_edits_from_other_devices() {
     let store = Memory::default();
     let (a, b) = one_more(&store).await;
     refresh(&b);
-    sql(&a, "UPDATE tracks SET path = '/music/Kas/3.mp3' WHERE audio_fp = ?1", 3);
+    sql(
+        &a,
+        "UPDATE tracks SET path = '/music/Kas/3.mp3' WHERE audio_fp = ?1",
+        3,
+    );
     retag(&a, 3, &[("title", "Night Drive (Edit)"), ("artist", "Kas")]);
     record(&a);
     assert!(run_both(&a, &b, &store).await);
@@ -212,7 +239,10 @@ async fn new_songs_set_to_download_are_not_streamed_but_streamed_ones_stay() {
     let (a, b) = one_more(&store).await;
     NewSongs::Download.set(&lock(&b)).expect("set");
     assert_eq!(refresh(&b).added, 0);
-    assert_eq!(files::arrivals_wanted(&lock(&b)).expect("arrivals").len(), 1);
+    assert_eq!(
+        files::arrivals_wanted(&lock(&b)).expect("arrivals").len(),
+        1
+    );
 
     NewSongs::Stream.set(&lock(&b)).expect("set");
     assert_eq!(refresh(&b).added, 1);
@@ -220,7 +250,11 @@ async fn new_songs_set_to_download_are_not_streamed_but_streamed_ones_stay() {
     retag(&a, 3, &[("title", "Renamed")]);
     record(&a);
     assert!(run_both(&a, &b, &store).await);
-    assert_eq!(refresh(&b).updated, 1, "a song already streamed stays and follows the log");
+    assert_eq!(
+        refresh(&b).updated,
+        1,
+        "a song already streamed stays and follows the log"
+    );
     assert_eq!(row(&b, 3).map(|r| r.5), Some(FileState::Streamed));
 }
 

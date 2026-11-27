@@ -120,6 +120,18 @@ not offered in pick lists until some file here has it.
 Left for 9.4: the stream cache (so `stream_source` answers a local file once a song is cached),
 Windows AIFF/ALAC through `pcm://`, and covers of streamed songs from the cached file.
 
+### Done in 9.4
+
+- `stream_cache.rs`: whole files of streamed songs under the app's cache folder
+  (`stream-cache/<audio_fp>.<ext>`), trimmed to the limit (`stream_cache_bytes`, 0.5 GB to 1 TB,
+  default 5 GB) by when each was last played; a file name is made only from a safe audio print
+  and extension. Commands `stream_cache_usage`, `set_stream_cache_limit` (trims at once),
+  `empty_stream_cache`.
+- `stream_source` answers the cached file when there is one, else the destination while the whole
+  file downloads into the cache in the background. AIFF/ALAC on Windows download first, then play
+  through `pcm://`. The player asks for the next streamed song ahead (`stream_prefetch`).
+- A streamed song's cover comes from its cached file, once it was played.
+
 ## Playback
 
 - `audioUrl` takes a track, not a path: kept → local file as now; streamed → `remote:` URL for

@@ -903,7 +903,10 @@ fn a_files_details_are_written_once_and_never_as_an_edit() {
     for (field, want) in cases {
         assert_eq!(register(&a, 1, field), want, "{field}");
         if want.is_some() {
-            assert!(written_at(&a, 1, field) < EARLY_MS, "{field} is not an edit");
+            assert!(
+                written_at(&a, 1, field) < EARLY_MS,
+                "{field} is not an edit"
+            );
         }
     }
     sql(&a, "UPDATE tracks SET size = 9100 WHERE audio_fp = ?1", 1);

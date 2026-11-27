@@ -78,6 +78,9 @@ const SCHEMA_VERSION = 1;
 interface State {
 	/** A newer manplay set up the library, so the backend left it closed. */
 	newerLibrary: boolean;
+	streamCacheUsed: number;
+	streamCacheLimit: number;
+	newSharedSongs: "stream" | "download";
 	root: string | null;
 	tracks: Track[];
 	tags: Tag[];
@@ -107,6 +110,9 @@ function createState(scenario: Scenario): State {
 	const tracks = setUp ? buildTracks(scenario === "large" ? LARGE_COPIES : 1) : [];
 	return {
 		newerLibrary,
+		streamCacheUsed: setUp ? 1_830_000_000 : 0,
+		streamCacheLimit: 5_000_000_000,
+		newSharedSongs: "stream",
 		root: setUp ? LIBRARY_ROOT : null,
 		tracks,
 		tags: setUp ? buildTags(tracks) : [],
@@ -344,6 +350,22 @@ function libraryCommands(state: State): Record<string, Command> {
 		audit_library: () => (state.tracks.length > 0 ? buildAuditIssues(state.tracks) : []),
 		audit_fix: () => FIX_NOTHING,
 		playback_needs_decoding: () => false,
+		stream_prefetch: () => null,
+		stream_cache_usage: () => ({ used: state.streamCacheUsed, limit: state.streamCacheLimit }),
+		set_stream_cache_limit: (args) => {
+			state.streamCacheLimit = count(args.get("bytes"));
+			state.streamCacheUsed = Math.min(state.streamCacheUsed, state.streamCacheLimit);
+			return { used: state.streamCacheUsed, limit: state.streamCacheLimit };
+		},
+		empty_stream_cache: () => {
+			state.streamCacheUsed = 0;
+			return { used: 0, limit: state.streamCacheLimit };
+		},
+		new_shared_songs: () => state.newSharedSongs,
+		set_new_shared_songs: (args) => {
+			state.newSharedSongs = args.get("choice") === "download" ? "download" : "stream";
+			return null;
+		},
 		stream_source: (args) => state.tracks.find((t) => t.id === args.get("trackId"))?.path ?? "",
 		get_library_view: () => state.settings.get("library_view") ?? null,
 		set_library_view: (args) => state.settings.set("library_view", text(args.get("view"))),

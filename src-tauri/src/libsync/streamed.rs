@@ -223,7 +223,10 @@ fn path_taken(conn: &Connection, path: &str, except: Option<i64>) -> Result<bool
 /// Adds a streamed row; false when another song's row holds its path.
 fn insert(conn: &Connection, fp: &str, song: &Described) -> Result<bool, Error> {
     if path_taken(conn, &song.path, None)? {
-        log::info!("a streamed song's place is taken by another song: {}", song.path);
+        log::info!(
+            "a streamed song's place is taken by another song: {}",
+            song.path
+        );
         return Ok(false);
     }
     conn.execute(
