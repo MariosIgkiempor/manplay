@@ -31,7 +31,7 @@ export function Switch({
 		>
 			<SwitchThumb
 				className={cn(
-					"size-3.5 translate-x-0.5 rounded-full bg-foreground/85 shadow-sm transition-transform motion-reduce:transition-none",
+					"size-3.5 translate-x-0.5 rounded-full bg-foreground/85 shadow-sm transition-transform motion-pop motion-reduce:transition-none",
 					"data-checked:translate-x-[1.125rem] data-checked:bg-primary-foreground",
 				)}
 			/>

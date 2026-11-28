@@ -7,6 +7,11 @@ import { EmptyState } from "#/components/page.tsx";
 import { SyncBadge } from "#/components/sync-badge.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import { type Album, syncState } from "#/lib/albums.ts";
+import {
+	GROW_CELL_ATTRIBUTE,
+	GROW_FROM_ATTRIBUTE,
+	GROW_OPENER_ATTRIBUTE,
+} from "#/lib/grow-card.ts";
 import { GRID_PAGE_SIZE, useProgressive } from "#/lib/use-progressive.ts";
 import { GRID_ITEM_ATTRIBUTE, useTileGridKeys } from "#/lib/use-tile-grid-keys.ts";
 
@@ -32,7 +37,7 @@ function AlbumTile({
 			label={`${album.album} · ${album.tracks.length} songs`}
 		>
 			{/* Lifts a little under the pointer; the cover grows inside its frame and Play rises in. */}
-			<div className="group min-w-0">
+			<div className="group min-w-0" {...{ [GROW_CELL_ATTRIBUTE]: "" }}>
 				<div className="relative transition-transform duration-200 ease-out group-hover:-translate-y-0.5 motion-reduce:transition-none motion-reduce:group-hover:translate-y-0">
 					<button
 						type="button"
@@ -42,10 +47,12 @@ function AlbumTile({
 						aria-label={`Open ${album.album}`}
 						{...{ [GRID_ITEM_ATTRIBUTE]: "" }}
 					>
-						<AlbumArt
-							trackId={album.coverTrackId}
-							className="w-full transition-[scale] duration-500 ease-out group-hover:scale-[1.04] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
-						/>
+						<span className="block" {...{ [GROW_FROM_ATTRIBUTE]: "" }}>
+							<AlbumArt
+								trackId={album.coverTrackId}
+								className="w-full transition-[scale] duration-500 ease-out group-hover:scale-[1.04] motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+							/>
+						</span>
 					</button>
 					<button
 						type="button"
@@ -63,6 +70,7 @@ function AlbumTile({
 							className="block max-w-full truncate text-left font-medium text-sm hover:underline"
 							data-hint={album.album}
 							onClick={onOpen}
+							{...{ [GROW_OPENER_ATTRIBUTE]: "" }}
 						>
 							{album.album}
 						</button>

@@ -13,6 +13,11 @@ import { TrackOrderContext } from "#/context/track-order.ts";
 import type { Track, TrackAnalysis } from "#/lib/api.ts";
 import { type Cue, START_COLOR } from "#/lib/cues.ts";
 import { clock } from "#/lib/format.ts";
+import {
+	GROW_CELL_ATTRIBUTE,
+	GROW_FROM_ATTRIBUTE,
+	GROW_OPENER_ATTRIBUTE,
+} from "#/lib/grow-card.ts";
 import { camelot, formatBpm, keyName } from "#/lib/musical-key.ts";
 import { DECK_COLUMNS } from "#/lib/page-layout.ts";
 import { NOW_PLAYING_ATTRIBUTE } from "#/lib/playing-picker.ts";
@@ -62,13 +67,19 @@ function NowPlaying({ track, error }: { track: Track; error: string | null }) {
 	return (
 		<TrackOrderContext.Provider value={p.queue.map((t) => t.id)}>
 			<AddToPlaylistMenu tracks={[track]} label={track.title}>
-				<div className="flex min-w-0 items-center gap-3" {...{ [NOW_PLAYING_ATTRIBUTE]: "" }}>
-					<AlbumArt trackId={track.id} className="size-10 shrink-0 rounded-md" />
+				<div
+					className="flex min-w-0 items-center gap-3"
+					{...{ [NOW_PLAYING_ATTRIBUTE]: "", [GROW_CELL_ATTRIBUTE]: "" }}
+				>
+					<span className="block shrink-0" {...{ [GROW_FROM_ATTRIBUTE]: "" }}>
+						<AlbumArt trackId={track.id} className="size-10 rounded-md" />
+					</span>
 					<div className="min-w-0 flex-1">
 						<Marquee>
 							<button
 								type="button"
 								data-hint={`${track.title} · open song`}
+								{...{ [GROW_OPENER_ATTRIBUTE]: "" }}
 								onClick={() =>
 									detail.open({
 										kind: "song",
@@ -221,7 +232,7 @@ export function PlayerBar() {
 		<div
 			inert={!open}
 			className={cn(
-				"grid shrink-0 transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.3,0,0.2,1)] motion-reduce:transition-none",
+				"grid shrink-0 transition-[grid-template-rows,opacity] duration-300 motion-travel motion-reduce:transition-none",
 				open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
 			)}
 		>

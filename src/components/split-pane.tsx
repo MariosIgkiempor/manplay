@@ -1,53 +1,12 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { AlbumPanel } from "#/components/album-panel.tsx";
-import { ArtistPanel } from "#/components/artist-panel.tsx";
-import { DuplicatesPanel } from "#/components/duplicates.tsx";
-import { EditTagsPanel } from "#/components/edit-tags-panel.tsx";
-import { IssuesPanel } from "#/components/issues-drawer.tsx";
-import { MissingPanel } from "#/components/missing-files.tsx";
+import { DetailBody } from "#/components/detail-content.tsx";
 import { PanelBar } from "#/components/panel-header.tsx";
 import { ResizeHandle } from "#/components/resize-handle.tsx";
-import { SongPanel } from "#/components/song-panel.tsx";
-import { UsbExportPanel } from "#/components/usb-export.tsx";
-import { ValuePanel } from "#/components/value-panel.tsx";
-import { type DetailView, PanelScopeContext, useDetail } from "#/context/detail-context.ts";
-import { PanelBarContext } from "#/context/panel-bar.tsx";
-import { StatusScopeContext, useStatusScopeHandlers } from "#/context/status-context.ts";
+import { useDetail } from "#/context/detail-context.ts";
+import { useStatusScopeHandlers } from "#/context/status-context.ts";
+import { detailViewKey } from "#/lib/detail-views.ts";
 import { usePanePresence } from "#/lib/use-pane-presence.ts";
 import { usePaneWidth } from "#/lib/use-pane-width.ts";
-
-function Content({ view }: { view: DetailView }) {
-	switch (view.kind) {
-		case "song":
-			return <SongPanel trackId={view.trackId} list={view.list} />;
-		case "album":
-			return <AlbumPanel albumKey={view.key} />;
-		case "artist":
-			return <ArtistPanel name={view.name} />;
-		case "value":
-			return <ValuePanel field={view.field} value={view.value} />;
-		case "edit":
-			return <EditTagsPanel target={view.target} />;
-		case "missing":
-			return <MissingPanel />;
-		case "issues":
-			return <IssuesPanel />;
-		case "duplicates":
-			return <DuplicatesPanel />;
-		case "usbExport":
-			return <UsbExportPanel mount={view.mount} />;
-	}
-}
-
-/** Swapping what the panel shows keeps its scroll at the top; a song's tab or list does not count. */
-const viewKey = (v: DetailView) =>
-	v.kind === "song"
-		? `song:${v.trackId}`
-		: v.kind === "album"
-			? `album:${v.key}`
-			: v.kind === "artist"
-				? `artist:${v.name}`
-				: JSON.stringify(v);
 
 /** Songs, albums and artists are browsed beside the page, so Escape leaves them open. */
 const BROWSED = new Set<string>(["song", "album", "artist"]);
@@ -60,9 +19,9 @@ function isTyping(target: EventTarget | null): boolean {
 const PAGE_ROOM = 480;
 
 /**
- * The one side panel beside the page: songs, albums, artists, tag values and tag editing, with
- * back-history across all of them. The page stays usable next to it:
- * picking another song title swaps what the panel shows.
+ * The side panel beside the page, where a detail card goes when it is pinned: songs, albums,
+ * artists, tag values and tag editing, with back-history across all of them. The page stays
+ * usable next to it: picking another song title swaps what the panel shows.
  */
 export function SplitPane(): ReactNode {
 	const detail = useDetail();
@@ -77,15 +36,16 @@ export function SplitPane(): ReactNode {
 	const [scroller, setScroller] = useState<HTMLElement | null>(null);
 	// Slides open and shut; while shutting it keeps showing the last view.
 	const paneRef = useRef<HTMLElement>(null);
-	const view = usePanePresence(detail.view, paneRef);
+	const pinnedView = detail.pinned ? detail.view : null;
+	const view = usePanePresence(pinnedView, paneRef);
 	const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
 	const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
 	const barSlots = useMemo(
 		() => ({ title: titleSlot, actions: actionsSlot }),
 		[titleSlot, actionsSlot],
 	);
-	const key = view ? viewKey(view) : null;
-	const closesOnEscape = detail.view !== null && !BROWSED.has(detail.view.kind);
+	const key = view ? detailViewKey(view) : null;
+	const closesOnEscape = pinnedView !== null && !BROWSED.has(pinnedView.kind);
 
 	// A different thing starts at the top; switching a song's tab does not.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll when the shown thing changes
@@ -148,21 +108,7 @@ export function SplitPane(): ReactNode {
 						ref={setScroller}
 						className="@container/split min-h-0 flex-1 overflow-y-auto px-5 pt-5"
 					>
-						<PanelBarContext.Provider value={barSlots}>
-							<PanelScopeContext.Provider value>
-								<StatusScopeContext.Provider value="panel">
-									<detail.UnsavedScope>
-										{/* Each new thing eases in; switching a song's tab does not. */}
-										<div
-											key={key}
-											className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200 motion-reduce:animate-none"
-										>
-											<Content view={view} />
-										</div>
-									</detail.UnsavedScope>
-								</StatusScopeContext.Provider>
-							</PanelScopeContext.Provider>
-						</PanelBarContext.Provider>
+						<DetailBody view={view} slots={barSlots} />
 					</div>
 				</div>
 			</div>

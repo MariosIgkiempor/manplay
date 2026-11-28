@@ -152,7 +152,7 @@ export function CoverPicker({
 					sideOffset={-COVER_CARD_PX / 2}
 					collisionPadding={12}
 					aria-label={`Change the cover of ${name}`}
-					className="size-60 max-w-[calc(100vw-2rem)] origin-center overflow-hidden rounded-xl bg-muted shadow-2xl outline-none ring-1 ring-foreground/15 transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.3,0,0.2,1)] data-[ending-style]:scale-[0.4] data-[starting-style]:scale-[0.4] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none"
+					className="size-60 max-w-[calc(100vw-2rem)] origin-center overflow-hidden rounded-xl bg-muted shadow-2xl outline-none ring-1 ring-foreground/15 transition-[transform,opacity] motion-pop data-[ending-style]:motion-leave data-[ending-style]:scale-[0.4] data-[starting-style]:scale-[0.4] data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 motion-reduce:transition-none"
 				>
 					<CoverCard
 						paths={paths}

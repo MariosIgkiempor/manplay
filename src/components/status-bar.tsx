@@ -102,10 +102,10 @@ function StatusErrors() {
 function PanelToggle() {
 	const detail = useDetail();
 	const { current, queue } = usePlayer();
-	const open = detail.view !== null;
+	const open = detail.view !== null && detail.pinned;
 	const next: DetailView | null = current
 		? { kind: "song", trackId: current.id, list: queue.map((t) => t.id) }
-		: detail.last;
+		: (detail.view ?? detail.last);
 	const label = open ? "Close the side panel" : "Open the side panel";
 	return (
 		<button
@@ -114,7 +114,7 @@ function PanelToggle() {
 			aria-pressed={open}
 			data-hint={label}
 			disabled={!open && next === null}
-			onClick={() => (open ? detail.close() : next && detail.open(next))}
+			onClick={() => (open ? detail.close() : next && detail.openPinned(next))}
 			className={cn(
 				"-mr-1.5 grid size-6 shrink-0 place-items-center rounded-md outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5",
 				open ? "text-primary" : "text-muted-foreground",

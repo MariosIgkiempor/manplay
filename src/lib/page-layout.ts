@@ -29,7 +29,7 @@ export const DIALOG_BACKDROP =
 	"absolute inset-0 animate-in bg-canvas/70 backdrop-blur-sm fade-in-0 duration-150 motion-reduce:animate-none";
 /** A dialog's own frame: a touch brighter edge than a page's, rising slightly as it opens. */
 export const DIALOG_FRAME =
-	"relative animate-in rounded-2xl border border-foreground/10 bg-background shadow-2xl fade-in-0 zoom-in-[0.97] duration-150 motion-reduce:animate-none";
+	"relative animate-in rounded-2xl border border-foreground/10 bg-background shadow-2xl fade-in-0 zoom-in-[0.9] motion-pop motion-reduce:animate-none";
 
 /**
  * A card set into the window's canvas: the page, and any pane opened beside it. A hairline a

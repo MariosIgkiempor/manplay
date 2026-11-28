@@ -205,7 +205,7 @@ export function TagChanges({
 				<span className="truncate">{summary(changes)}</span>
 			</button>
 			{open && (
-				<span className="mt-1.5 block">
+				<span className="fold-in mt-1.5 block">
 					<TagDiff changes={changes} keep={keep} />
 				</span>
 			)}

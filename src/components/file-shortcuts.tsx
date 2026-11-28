@@ -64,7 +64,7 @@ export function FileShortcuts({ onClose }: { onClose: () => void }) {
 				aria-label="Keyboard shortcuts"
 				className={cn(
 					FLOATING_FRAME,
-					"pointer-events-auto flex max-h-full w-[44rem] max-w-full origin-bottom-right animate-in flex-col duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] fade-in-0 zoom-in-[0.9] slide-in-from-bottom-2 motion-reduce:animate-none",
+					"pointer-events-auto flex max-h-full w-[44rem] max-w-full origin-bottom-right animate-in flex-col motion-pop fade-in-0 zoom-in-[0.9] slide-in-from-bottom-2 motion-reduce:animate-none",
 				)}
 			>
 				<div className="flex items-center justify-between py-0.5 pr-1 pl-3">

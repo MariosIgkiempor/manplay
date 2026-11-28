@@ -29,6 +29,7 @@ import { SidebarSmartPlaylists } from "#/components/sidebar-smart-playlists.tsx"
 import { SidebarSync } from "#/components/sidebar-sync.tsx";
 import { SidebarTagTree } from "#/components/sidebar-tag-tree.tsx";
 import { useSyncProgress } from "#/context/sync-progress-context.ts";
+import { TRAVEL_MOTION } from "#/lib/motion.ts";
 import { SIDEBAR_TOGGLE_SLOT } from "#/lib/page-layout.ts";
 import { useClashes, useTracks } from "#/lib/queries.ts";
 import { useUpdateCheck } from "#/lib/updater.ts";
@@ -149,8 +150,7 @@ function useFoldGlide(aside: React.RefObject<HTMLElement | null>): () => void {
 		const end = el.getBoundingClientRect().width;
 		el.style.overflow = "hidden";
 		const motion = el.animate([{ width: `${start}px` }, { width: `${end}px` }], {
-			duration: 240,
-			easing: "cubic-bezier(0.3, 0, 0.2, 1)",
+			...TRAVEL_MOTION,
 		});
 		motion.onfinish = () => {
 			el.style.overflow = "";

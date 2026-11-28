@@ -1,9 +1,7 @@
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { LEAVE_MOTION, popMotion } from "#/lib/motion.ts";
 
 /** How long a side pane takes to open or shut. */
-const PANE_MS = 220;
-const EASE_IN = "cubic-bezier(0.2, 0.8, 0.2, 1)";
-const EASE_OUT = "cubic-bezier(0.4, 0, 1, 1)";
 /** How far the pane travels as it slides, in pixels: enough to read as coming from the edge. */
 const SLIDE_PX = 48;
 
@@ -39,12 +37,11 @@ function slide(el: HTMLElement, opening: boolean): Animation | null {
 	const open = { translate: "0 0", opacity: 1 };
 	const shut = { translate: `${SLIDE_PX}px 0`, opacity: 0 };
 	if (opening) {
-		return el.animate([shut, open], { duration: PANE_MS, easing: EASE_IN });
+		return el.animate([shut, open], popMotion());
 	}
 	const putBack = liftOut(el);
 	const motion = el.animate([open, shut], {
-		duration: PANE_MS - 60,
-		easing: EASE_OUT,
+		...LEAVE_MOTION,
 		fill: "forwards",
 	});
 	const restore = () => putBack();

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { TagTarget } from "#/components/tag-editor.tsx";
 import { Button } from "#/components/ui/button.tsx";
 import { useExitGhost } from "#/lib/exit-ghost.ts";
@@ -6,6 +6,7 @@ import { DIALOG_BACKDROP, DIALOG_FRAME } from "#/lib/page-layout.ts";
 import { useTagsRead } from "#/lib/queries.ts";
 import type { TagClipboard } from "#/lib/tag-clipboard.ts";
 import { TAG_GROUPS } from "#/lib/tag-fields.ts";
+import { useGrowFromAction } from "#/lib/use-grow-from-action.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** Pick which tags of a song or folder to copy. Tags that differ between its songs can't be copied. */
@@ -52,10 +53,14 @@ export function TagCopyDialog({
 		onClose();
 	};
 
+	const frame = useRef<HTMLDivElement>(null);
+	useGrowFromAction(frame);
+
 	return (
 		<div ref={overlay} className="fixed inset-0 z-50 flex items-center justify-center">
 			<div aria-hidden="true" onMouseDown={onClose} className={DIALOG_BACKDROP} />
 			<div
+				ref={frame}
 				role="dialog"
 				data-exit
 				aria-label="Copy metadata"

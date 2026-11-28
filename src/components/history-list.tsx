@@ -318,7 +318,7 @@ function Row({
 				</Button>
 			</div>
 			{open && (
-				<div className="animate-in space-y-4 border-hairline border-t bg-foreground/[0.03] py-3 pl-7 fade-in-0 slide-in-from-top-1 duration-150 [--diff-inset:1rem] motion-reduce:animate-none">
+				<div className="fold-in space-y-4 border-hairline border-t bg-foreground/[0.03] py-3 pl-7 [--diff-inset:1rem]">
 					{entry.parts.map((p) => (
 						<PartDetail key={p.id} part={p} titled={entry.parts.length > 1} />
 					))}

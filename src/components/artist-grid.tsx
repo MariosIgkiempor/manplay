@@ -5,6 +5,11 @@ import { LoadMore } from "#/components/load-more.tsx";
 import { EmptyState } from "#/components/page.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import type { Artist } from "#/lib/artists.ts";
+import {
+	GROW_CELL_ATTRIBUTE,
+	GROW_FROM_ATTRIBUTE,
+	GROW_OPENER_ATTRIBUTE,
+} from "#/lib/grow-card.ts";
 import { GRID_PAGE_SIZE, useProgressive } from "#/lib/use-progressive.ts";
 import { GRID_ITEM_ATTRIBUTE, useTileGridKeys } from "#/lib/use-tile-grid-keys.ts";
 
@@ -18,7 +23,7 @@ function ArtistTile({ artist, onOpen }: { artist: Artist; onOpen: () => void }) 
 			tracks={artist.tracks}
 			label={`${label} · ${plural(artist.tracks.length, "song", "songs")}`}
 		>
-			<div className="group min-w-0 text-center">
+			<div className="group min-w-0 text-center" {...{ [GROW_CELL_ATTRIBUTE]: "" }}>
 				<div className="relative mx-auto w-full max-w-40">
 					<button
 						type="button"
@@ -27,10 +32,12 @@ function ArtistTile({ artist, onOpen }: { artist: Artist; onOpen: () => void }) 
 						aria-label={`Open ${label}`}
 						{...{ [GRID_ITEM_ATTRIBUTE]: "" }}
 					>
-						<AlbumArt
-							trackId={artist.coverTrackId}
-							className="w-full transition group-hover:scale-[1.03]"
-						/>
+						<span className="block" {...{ [GROW_FROM_ATTRIBUTE]: "" }}>
+							<AlbumArt
+								trackId={artist.coverTrackId}
+								className="w-full transition group-hover:scale-[1.03]"
+							/>
+						</span>
 					</button>
 					<button
 						type="button"
@@ -46,6 +53,7 @@ function ArtistTile({ artist, onOpen }: { artist: Artist; onOpen: () => void }) 
 					className="mx-auto mt-2 block max-w-full truncate text-center font-medium text-sm hover:underline"
 					data-hint={label}
 					onClick={onOpen}
+					{...{ [GROW_OPENER_ATTRIBUTE]: "" }}
 				>
 					{label}
 				</button>

@@ -1,6 +1,7 @@
 import { useRouterState } from "@tanstack/react-router";
 import { useLayoutEffect } from "react";
 import { currentRow, PAGE_ROW_ATTRIBUTE } from "#/components/sidebar-row.ts";
+import { TRAVEL_MOTION } from "#/lib/motion.ts";
 import { CARD } from "#/lib/page-layout.ts";
 
 /**
@@ -74,7 +75,7 @@ export function passedPagesToShow(count: number, most: number = MOST_PASSED_PAGE
 
 /** A card's height and the canvas's gap, `n` times over, as a vertical move. */
 const cards = (n: number) => `translateY(calc(${n} * (100% + 0.5rem)))`;
-const SCROLL_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
+const SCROLL_EASING = TRAVEL_MOTION.easing;
 
 /** The sidebar rows that open a page, top to bottom; rows inside folded groups are not drawn. */
 function pageRows(): HTMLElement[] {

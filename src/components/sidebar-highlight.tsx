@@ -92,7 +92,7 @@ export function SidebarHighlight({ aside }: { aside: RefObject<HTMLElement | nul
 				height: box.height,
 				translate: `${box.left}px ${box.top}px`,
 				transition: gliding
-					? "translate 240ms cubic-bezier(0.3, 0, 0.2, 1), height 240ms cubic-bezier(0.3, 0, 0.2, 1), width 240ms cubic-bezier(0.3, 0, 0.2, 1)"
+					? "translate var(--spring-pop-ms) var(--spring-pop), height 240ms var(--ease-travel), width 240ms var(--ease-travel)"
 					: "none",
 			}}
 		/>

@@ -4,6 +4,7 @@ import { BrandGlyph } from "#/components/brand-icon.tsx";
 import { FieldRow, FrameSection } from "#/components/frame.tsx";
 import { ErrorLine } from "#/components/page.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { Fact, Facts } from "#/components/ui/facts.tsx";
 import { Input } from "#/components/ui/input.tsx";
 import { Switch } from "#/components/ui/switch.tsx";
@@ -91,14 +92,16 @@ function DiscogsToken() {
 			{token.saved ? (
 				<>
 					<span className="text-success text-sm">Token saved</span>
-					<Button
+					<ConfirmButton
 						variant="outline"
 						size="sm"
 						disabled={token.forget.isPending}
-						onClick={() => token.forget.mutate()}
+						confirmLabel="Remove the token"
+						consequence="Discogs is no longer searched until a token is saved again."
+						onConfirm={() => token.forget.mutate()}
 					>
 						Remove
-					</Button>
+					</ConfirmButton>
 				</>
 			) : (
 				<form

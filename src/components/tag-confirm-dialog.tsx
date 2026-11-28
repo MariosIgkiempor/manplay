@@ -9,6 +9,7 @@ import { useExitGhost } from "#/lib/exit-ghost.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME, WELL_ROWS } from "#/lib/page-layout.ts";
 import { keyLabel } from "#/lib/platform.ts";
 import { type FieldSummary, type FileChanges, summarize } from "#/lib/tag-preview.ts";
+import { useGrowFromAction } from "#/lib/use-grow-from-action.ts";
 import type { TagConfirmRequest } from "#/lib/use-tag-confirm.tsx";
 import { cn } from "#/lib/utils.ts";
 
@@ -61,10 +62,14 @@ export function TagConfirmDialog({
 		}
 	}, [ready]);
 
+	const frame = useRef<HTMLDivElement>(null);
+	useGrowFromAction(frame);
+
 	return (
 		<div ref={overlay} className="fixed inset-0 z-50 flex items-center justify-center">
 			<div aria-hidden="true" onMouseDown={() => onDone(false)} className={DIALOG_BACKDROP} />
 			<div
+				ref={frame}
 				role="dialog"
 				data-exit
 				aria-modal="true"

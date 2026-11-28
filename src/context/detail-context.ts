@@ -19,9 +19,29 @@ export type DetailView =
 	/** Exporting playlists and tags to the USB drive at `mount`. */
 	| { kind: "usbExport"; mount: string };
 
-/** The side panel's navigation: the view on show and the history behind it. */
+/** What a detail card grows out of: the thing pressed, and where it was. */
+export interface DetailOrigin {
+	element: Element | null;
+	box: { left: number; top: number; width: number; height: number } | null;
+}
+
+/**
+ * Navigation for details (a song, an album, a review): the view on show and the history behind
+ * it. A view opens as a card grown out of what was pressed; pinned, it sits in the side panel
+ * beside the page instead, and stays there while other things are opened.
+ */
 export interface DetailApi {
 	view: DetailView | null;
+	/** True while details show in the side panel instead of a card. */
+	pinned: boolean;
+	/** What the card on show grew out of. */
+	origin: DetailOrigin;
+	/** Counts the cards opened, so a new one is told apart from a new view in the same card. */
+	opened: number;
+	/** Moves the card on show into the side panel. */
+	pin: () => void;
+	/** Shows a view in the side panel. */
+	openPinned: (view: DetailView) => void;
 	/** The view shown most recently, kept after the panel closes, so it can open there again. */
 	last: DetailView | null;
 	canGoBack: boolean;
@@ -29,7 +49,7 @@ export interface DetailApi {
 	close: () => void;
 	/** Wraps the panel's content so its unsaved changes are saved or confirmed on leaving. */
 	UnsavedScope: ComponentType<{ children: ReactNode }>;
-	/** Show a view fresh in the panel, discarding its history. */
+	/** Show a view fresh, discarding the history: in the side panel when pinned, else as a card. */
 	open: (view: DetailView) => void;
 	/** Navigate deeper from inside the panel, keeping back-history. */
 	push: (view: DetailView) => void;

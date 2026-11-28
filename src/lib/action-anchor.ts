@@ -41,6 +41,24 @@ const SELECTION_SCOPE = "[role=listbox], [role=grid], [role=tree], [role=list], 
 
 let last: ActionAnchor | null = null;
 
+/**
+ * The control or row the user last acted on, whatever its size, and where it was: what a card
+ * opened by that action grows out of.
+ */
+export interface ActionOrigin {
+	element: Element | null;
+	box: Box;
+	at: number;
+}
+
+let lastOrigin: ActionOrigin | null = null;
+
+/** What the action happening now started from, or null when it is not known. */
+export function currentActionOrigin(): ActionOrigin | null {
+	const now = performance.now();
+	return lastOrigin !== null && now - lastOrigin.at <= ANCHOR_FRESH_MS ? lastOrigin : null;
+}
+
 function boxOf(element: Element): Box {
 	const { left, top, width, height } = element.getBoundingClientRect();
 	return { left, top, width, height };
@@ -107,7 +125,9 @@ function keyAnchor(focused: Element | null, at: number): ActionAnchor | null {
  * ⋯ button), since the menu is gone by the time the question shows.
  */
 function insideOpenedList(target: EventTarget | null): boolean {
-	return target instanceof Element && target.closest(OPENED_LIST) !== null;
+	const list = target instanceof Element ? target.closest(OPENED_LIST) : null;
+	// A list that is part of the page (the songs) is where the thing acted on is, not a popup.
+	return list !== null && list.closest("main") === null;
 }
 
 /** Starts noting where the user acts. Returns the function that stops it. */
@@ -118,12 +138,15 @@ export function trackActionAnchors(): () => void {
 		}
 		const target = event.target instanceof Element ? event.target : null;
 		last = pressAnchor(target, event.clientX, event.clientY, performance.now());
+		const pressed = target?.closest(PRESSABLE) ?? null;
+		lastOrigin = { element: pressed, box: pressed ? boxOf(pressed) : last.box, at: last.at };
 	};
 	const onKey = (event: KeyboardEvent) => {
 		if (event.repeat || insideOpenedList(event.target)) {
 			return;
 		}
 		last = keyAnchor(document.activeElement, performance.now());
+		lastOrigin = last && { element: last.target, box: last.box, at: last.at };
 	};
 	document.addEventListener("pointerdown", onPress, true);
 	document.addEventListener("contextmenu", onPress, true);

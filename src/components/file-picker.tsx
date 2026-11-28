@@ -42,6 +42,7 @@ import {
 import { formatBytes } from "#/lib/format.ts";
 import { baseName, isAudioName, isInside, joinPath } from "#/lib/fs-path.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME, WELL } from "#/lib/page-layout.ts";
+import { useGrowFromAction } from "#/lib/use-grow-from-action.ts";
 import { cn } from "#/lib/utils.ts";
 
 /** How many folders of the way down the picker names; the ones above fold into one "…". */
@@ -238,10 +239,14 @@ function FilePicker({
 	const cancel = () => onDone(null);
 	useEscapeKey(choice.namingFolder ? () => choice.setNamingFolder(false) : cancel);
 
+	const frame = useRef<HTMLDivElement>(null);
+	useGrowFromAction(frame);
+
 	return (
 		<div ref={overlay} className="fixed inset-0 z-[60] flex items-center justify-center">
 			<div aria-hidden="true" onMouseDown={cancel} className={DIALOG_BACKDROP} />
 			<div
+				ref={frame}
 				role="dialog"
 				data-exit
 				aria-modal="true"

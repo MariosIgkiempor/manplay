@@ -1,6 +1,7 @@
 import { type ComponentProps, type ReactNode, useLayoutEffect, useRef } from "react";
 import { Bubble, HintCard } from "#/components/ui/bubble.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { popMotion } from "#/lib/motion.ts";
 import { useTwoPress } from "#/lib/two-press.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -30,9 +31,6 @@ const ARMED_COLOUR = {
 		"border-transparent! bg-primary! text-primary-foreground! ring-3 ring-primary/30 hover:bg-primary/85!",
 };
 
-const MORPH_MS = 220;
-const MORPH_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
-
 /**
  * Eases `element` from its last width to its new one whenever `state` changes, so a button that
  * changes its words grows or shrinks into them instead of jumping.
@@ -51,10 +49,7 @@ function useWidthMorph(element: HTMLElement | null, state: unknown) {
 		if (from === null || from === to || still) {
 			return;
 		}
-		const morph = element.animate([{ width: `${from}px` }, { width: `${to}px` }], {
-			duration: MORPH_MS,
-			easing: MORPH_EASING,
-		});
+		const morph = element.animate([{ width: `${from}px` }, { width: `${to}px` }], popMotion());
 		return () => morph.cancel();
 	}, [element, state]);
 }

@@ -326,6 +326,111 @@ input[type="range"].slider {
 }
 
 /*
+ * Motion (`src/lib/motion.ts` has the same for scripted animations). Things that grow or arrive
+ * ride one spring, which goes a little past its mark and settles; things that leave go quickly
+ * with no bounce; things that travel (a page, a pane) ease without one. Nothing else in the app
+ * names a curve.
+ */
+:root {
+	--spring-pop: linear(
+		0,
+		0.0213,
+		0.0771,
+		0.1566,
+		0.2507,
+		0.3521,
+		0.4547,
+		0.5542,
+		0.6472,
+		0.7316,
+		0.8061,
+		0.87,
+		0.9235,
+		0.9668,
+		1.0008,
+		1.0264,
+		1.0446,
+		1.0565,
+		1.0631,
+		1.0656,
+		1.0648,
+		1.0615,
+		1.0566,
+		1.0506,
+		1.044,
+		1.0372,
+		1.0306,
+		1.0244,
+		1.0187,
+		1.0137,
+		1.0094,
+		1.0057,
+		1.0027,
+		1.0004,
+		0.9986,
+		0.9973,
+		0.9964,
+		0.9959,
+		0.9957,
+		0.9957,
+		0.9959,
+		0.9962,
+		0.9966,
+		0.997,
+		0.9975,
+		0.9979,
+		0.9983,
+		0.9987,
+		1
+	);
+	--spring-pop-ms: 439ms;
+	--ease-leave: cubic-bezier(0.3, 0, 0.2, 1);
+	--leave-ms: 160ms;
+	--ease-travel: cubic-bezier(0.32, 0.72, 0, 1);
+	--ease-shake: cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+/* A webview too old for `linear()` curves (macOS 11 to 13) gets one overshoot, close enough. */
+@supports not (transition-timing-function: linear(0, 1)) {
+	:root {
+		--spring-pop: cubic-bezier(0.34, 1.4, 0.64, 1);
+		--spring-pop-ms: 340ms;
+	}
+}
+
+/* Rides the spring: for what grows, arrives or changes place under the pointer. */
+@utility motion-pop {
+	transition-timing-function: var(--spring-pop);
+	transition-duration: var(--spring-pop-ms);
+	animation-timing-function: var(--spring-pop);
+	animation-duration: var(--spring-pop-ms);
+}
+/* Leaves quickly, with no bounce. */
+@utility motion-leave {
+	transition-timing-function: var(--ease-leave);
+	transition-duration: var(--leave-ms);
+}
+/* Travels without a bounce: a pane, a row changing place. */
+@utility motion-travel {
+	transition-timing-function: var(--ease-travel);
+}
+/* Gives a little under a press and springs back. */
+@utility press-squash {
+	transition-property: scale, color, background-color, border-color, box-shadow, opacity;
+	transition-timing-function: var(--spring-pop);
+	transition-duration: var(--spring-pop-ms);
+	&:active {
+		scale: 0.96;
+		transition-duration: 80ms;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		transition: none;
+		&:active {
+			scale: 1;
+		}
+	}
+}
+
+/*
  * The look of everything that floats over the page: menus, lists, popovers and hints. It is the
  * floating card (`FLOATING_FRAME` round a `WELL`, as `GrowPopup` draws it) on one element: the
  * well is the element itself, and the frame's lip and outer hairline are drawn round it as
@@ -353,7 +458,7 @@ input[type="range"].slider {
 	transform-origin: var(--transform-origin);
 	transition:
 		opacity 120ms ease-out,
-		scale 120ms ease-out;
+		scale var(--spring-pop-ms) var(--spring-pop);
 	/* Drawn once at full size and scaled on the compositor, so text does not re-raster each frame. */
 	will-change: opacity, scale;
 }
@@ -362,7 +467,15 @@ input[type="range"].slider {
 .floating-card[data-side][data-starting-style],
 .floating-card[data-side][data-ending-style] {
 	opacity: 0;
-	scale: 0.97;
+	scale: 0.92;
+}
+/* Closing, they shrink away quickly and do not bounce. */
+.card-surface[data-side][data-ending-style],
+.floating-card[data-side][data-ending-style],
+.grows-from-trigger[data-side][data-ending-style] {
+	transition:
+		opacity var(--leave-ms) var(--ease-leave),
+		scale var(--leave-ms) var(--ease-leave);
 }
 @media (prefers-reduced-motion: reduce) {
 	.card-surface[data-side],
@@ -380,7 +493,7 @@ input[type="range"].slider {
 	transform-origin: var(--transform-origin);
 	transition:
 		opacity 160ms ease-out,
-		scale 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+		scale var(--spring-pop-ms) var(--spring-pop);
 	will-change: opacity, scale;
 }
 .grows-from-trigger[data-side][data-starting-style],
@@ -414,7 +527,7 @@ input[type="range"].slider {
 }
 .animate-keycap-shake {
 	display: inline-block;
-	animation: keycap-shake 320ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+	animation: keycap-shake 320ms var(--ease-shake) both;
 }
 
 /*
@@ -442,7 +555,7 @@ input[type="range"].slider {
 }
 ::view-transition-old(page),
 ::view-transition-old(pane) {
-	animation: page-leave 140ms cubic-bezier(0.4, 0, 1, 1) both;
+	animation: page-leave 140ms var(--ease-leave) both;
 }
 ::view-transition-new(page),
 ::view-transition-new(pane) {
@@ -452,7 +565,7 @@ input[type="range"].slider {
 @media (prefers-reduced-motion: no-preference) {
 	:root[data-page-move]::view-transition-old(page),
 	:root[data-page-move]::view-transition-old(pane) {
-		animation: page-scroll var(--page-scroll-ms, 380ms) cubic-bezier(0.32, 0.72, 0, 1) both;
+		animation: page-scroll var(--page-scroll-ms, 380ms) var(--ease-travel) both;
 		will-change: transform;
 	}
 	:root[data-page-move="down"]::view-transition-old(page),
@@ -507,5 +620,31 @@ input[type="range"].slider {
 	}
 }
 .animate-undo-arrive {
-	animation: undo-arrive 700ms cubic-bezier(0.32, 0.72, 0, 1) both;
+	animation: undo-arrive 700ms var(--ease-travel) both;
+}
+
+/*
+ * While a card is out of a tile or a row (`GrowCard`), the picture that flew into it is not shown
+ * twice: the cell keeps its room and shows the picture again once the card has shrunk back.
+ */
+[data-grow-lifted] [data-grow-from] {
+	visibility: hidden;
+}
+
+/* Content that appears in place (a fold opening, a new view in a card): it fades and rises. */
+@keyframes fold-in {
+	from {
+		opacity: 0;
+		translate: 0 6px;
+	}
+}
+.fold-in,
+details[open] > :not(summary) {
+	animation: fold-in var(--spring-pop-ms) var(--spring-pop) both;
+}
+@media (prefers-reduced-motion: reduce) {
+	.fold-in,
+	details[open] > :not(summary) {
+		animation: none;
+	}
 }

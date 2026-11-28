@@ -10,6 +10,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { popMotion } from "#/lib/motion.ts";
 import { joinNames, splitNames } from "#/lib/names.ts";
 import { cn } from "#/lib/utils.ts";
 
@@ -422,8 +423,7 @@ function slideFrom(el: HTMLElement, was: DOMRect | undefined, now: DOMRect) {
 	}
 	const from = `translate(${was.left - now.left}px, ${was.top - now.top}px)`;
 	el.animate([{ transform: from }, { transform: "translate(0, 0)" }], {
-		duration: 200,
-		easing: "cubic-bezier(0.2, 0, 0, 1)",
+		...popMotion(),
 	});
 }
 

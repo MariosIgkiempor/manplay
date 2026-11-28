@@ -93,7 +93,7 @@ export function Segmented<T extends string>({
 						)}
 					</TabsTab>
 				))}
-				<TabsIndicator className="absolute bottom-0 left-0 h-0.5 w-(--active-tab-width) translate-x-(--active-tab-left) rounded-full bg-primary transition-[translate,width] duration-200 ease-out motion-reduce:transition-none" />
+				<TabsIndicator className="absolute bottom-0 left-0 h-0.5 w-(--active-tab-width) translate-x-(--active-tab-left) rounded-full bg-primary transition-[translate,width] motion-pop motion-reduce:transition-none" />
 			</TabsList>
 		</Tabs>
 	);

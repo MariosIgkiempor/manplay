@@ -17,7 +17,11 @@ import {
 import { type Box, type BubblePosition, bubblePosition } from "#/lib/bubble-position.ts";
 import { useExitGhost } from "#/lib/exit-ghost.ts";
 import { DIALOG_BACKDROP, DIALOG_FRAME, WELL } from "#/lib/page-layout.ts";
+import { useGrowFromAction } from "#/lib/use-grow-from-action.ts";
 import { cn } from "#/lib/utils.ts";
+
+/** Stands in for the card where it does not grow from the middle of the window. */
+const NO_CARD = { current: null };
 
 /** The space kept clear round the thing a question is about, so its own edge still shows. */
 const SPOTLIGHT_PAD = 3;
@@ -80,7 +84,7 @@ function cardLook(anchored: boolean, placed: Placed | null): string {
 		return "w-[28rem] max-w-[calc(100%-2rem)]";
 	}
 	return cn(
-		"w-[22rem] max-w-[calc(100%-1rem)] shadow-xl duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]",
+		"w-[22rem] max-w-[calc(100%-1rem)] shadow-xl motion-pop",
 		placed === null && "invisible animate-none",
 		placed?.side === "bottom" && "slide-in-from-top-1",
 		placed?.side === "top" && "slide-in-from-bottom-1",
@@ -88,29 +92,34 @@ function cardLook(anchored: boolean, placed: Placed | null): string {
 }
 
 /**
- * The modal frame: a title, a body and a footer row. Escape or a click outside cancels. Given an
- * `anchor`, it opens as a card beside the thing it asks about, which stays lit while the rest of
- * the window dims; without one it opens in the middle of the window.
+ * A question's frame: a title, a body and a footer row. Escape or a click outside cancels. It
+ * opens as a card beside the thing the user just acted on (or `anchor`), which is outlined; the
+ * window behind is not dimmed. With nothing acted on just now (`anchor` null, or a question
+ * that opens by itself) it opens in the middle of the window, grown from there, over a dimmed one.
  */
 export function Dialog({
 	title,
 	children,
 	footer,
 	onCancel,
-	anchor = null,
+	anchor: given,
 	destructive = false,
 }: {
 	title: string;
 	children?: ReactNode;
 	footer: ReactNode;
 	onCancel: () => void;
-	anchor?: ActionAnchor | null;
+	/** Where the question sits; left out, beside what the user just acted on. */
+	anchor?: ActionAnchor | null | undefined;
 	/** Marks the lit thing in the destructive colour: what the answer will remove. */
 	destructive?: boolean;
 }) {
 	const overlay = useExitGhost();
 	const card = useRef<HTMLDivElement>(null);
+	// Taken once, as the question opens: later presses are on the question itself.
+	const [anchor] = useState(() => (given === undefined ? currentActionAnchor() : given));
 	const [placed, setPlaced] = useState<Placed | null>(null);
+	useGrowFromAction(anchor === null ? card : NO_CARD);
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCancel();
 		window.addEventListener("keydown", onKey);
@@ -132,7 +141,7 @@ export function Dialog({
 			<div
 				aria-hidden="true"
 				onMouseDown={onCancel}
-				className={cn(DIALOG_BACKDROP, anchored && "bg-canvas/45 backdrop-blur-[2px]")}
+				className={anchored ? "absolute inset-0" : DIALOG_BACKDROP}
 				style={lit.length > 0 ? { clipPath: spotlightClip(lit) } : undefined}
 			/>
 			{placed &&

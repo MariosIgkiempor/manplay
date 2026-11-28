@@ -17,6 +17,7 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { FrameSection } from "#/components/frame.tsx";
 import { Button } from "#/components/ui/button.tsx";
+import { ConfirmButton } from "#/components/ui/confirm-button.tsx";
 import { GrowPopup } from "#/components/ui/popup.tsx";
 import { keyLabel } from "#/lib/platform.ts";
 import {
@@ -127,9 +128,15 @@ export function ShortcutSettings() {
 					Click a shortcut to record a new one. Kept on this computer only.
 				</p>
 				{customised && (
-					<Button variant="ghost" size="sm" onClick={() => setOverrides({})}>
+					<ConfirmButton
+						variant="ghost"
+						size="sm"
+						confirmLabel="Reset all shortcuts"
+						consequence="Every shortcut you recorded goes back to its default."
+						onConfirm={() => setOverrides({})}
+					>
 						<RotateCcw /> Reset all
-					</Button>
+					</ConfirmButton>
 				)}
 			</div>
 			{SECTIONS.map((section) => (

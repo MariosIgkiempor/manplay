@@ -439,7 +439,7 @@ function AlbumCard({
 					"flex h-full min-w-0 overflow-hidden rounded-xl border border-hairline bg-well transition-colors",
 					floating && (open ? "z-20" : "z-10"),
 					floating &&
-						"h-auto shadow-2xl transition-[clip-path] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none",
+						"h-auto shadow-2xl transition-[clip-path] duration-300 motion-travel motion-reduce:transition-none",
 				)}
 				style={floating ? floatStyle(cell, revealed) : undefined}
 				onTransitionEnd={onTransitionEnd}

@@ -15,6 +15,11 @@ import { TrackOrderContext } from "#/context/track-order.ts";
 import { albumKey, syncState } from "#/lib/albums.ts";
 import type { Track } from "#/lib/api.ts";
 import { clock } from "#/lib/format.ts";
+import {
+	GROW_CELL_ATTRIBUTE,
+	GROW_FROM_ATTRIBUTE,
+	GROW_OPENER_ATTRIBUTE,
+} from "#/lib/grow-card.ts";
 import { KEY_LIST_ATTRIBUTE, typingKey } from "#/lib/keyboard.ts";
 import { camelot, formatBpm, keyName, normalizeKey } from "#/lib/musical-key.ts";
 import { FRAME, WELL_ROWS } from "#/lib/page-layout.ts";
@@ -227,6 +232,7 @@ function SongCell({
 			<button
 				type="button"
 				className="max-w-full truncate text-left hover:underline"
+				{...{ [GROW_OPENER_ATTRIBUTE]: "" }}
 				onClick={(e) => {
 					e.stopPropagation();
 					open();
@@ -240,7 +246,9 @@ function SongCell({
 		<div className="flex min-w-0 items-center gap-3">
 			{!hideArt && (
 				<div className="relative size-12 shrink-0">
-					<AlbumArt trackId={track.id} className="size-12 rounded-md" />
+					<span className="block" {...{ [GROW_FROM_ATTRIBUTE]: "" }}>
+						<AlbumArt trackId={track.id} className="size-12 rounded-md" />
+					</span>
 					{playButton}
 				</div>
 			)}
@@ -557,6 +565,7 @@ function TrackRow({
 				role="option"
 				aria-selected={isSelected}
 				tabIndex={0}
+				{...{ [GROW_CELL_ATTRIBUTE]: "", [GROW_OPENER_ATTRIBUTE]: "" }}
 				className={cn(
 					"group grid min-h-16 cursor-default items-center gap-3 px-3 py-1.5 text-sm outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-ring/70 focus-visible:ring-inset",
 					rowColumns(layout),

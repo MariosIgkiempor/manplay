@@ -5,6 +5,7 @@ import { Button } from "#/components/ui/button.tsx";
 import { PanelBarTitle, useHasPanelBar } from "#/context/panel-bar.tsx";
 import { usePlayer } from "#/context/player-context.ts";
 import type { Track } from "#/lib/api.ts";
+import { GROW_HERO_ATTRIBUTE } from "#/lib/grow-card.ts";
 
 /** The artwork frame every panel header uses, so songs, albums and artists line up. */
 export const PANEL_ART = "size-full rounded-lg shadow-lg ring-1 ring-foreground/10";
@@ -82,7 +83,17 @@ export function PanelHeader({
 			)}
 			<PageHeader
 				variant={plain ? "plain" : "panel"}
-				art={art && <div className="size-24 shrink-0 @lg/split:size-28">{art}</div>}
+				art={
+					art && (
+						// Where a cover flying in from a tile or a row lands (`GrowCard`).
+						<div
+							className="size-24 shrink-0 rounded-lg @lg/split:size-28 @xl/split:size-44"
+							{...{ [GROW_HERO_ATTRIBUTE]: "" }}
+						>
+							{art}
+						</div>
+					)
+				}
 				kind={inBar ? undefined : kind}
 				badge={badge}
 				title={title}
@@ -122,6 +133,7 @@ export function PanelBar({
 	closeLabel,
 	onTitleSlot,
 	onActionsSlot,
+	extra,
 }: {
 	canGoBack: boolean;
 	onBack: () => void;
@@ -131,6 +143,8 @@ export function PanelBar({
 	onTitleSlot?: (el: HTMLElement | null) => void;
 	/** Where the content puts its buttons (`PanelBarActions`). */
 	onActionsSlot?: (el: HTMLElement | null) => void;
+	/** Buttons of the bar's own, just before Close. */
+	extra?: ReactNode;
 }) {
 	return (
 		<div className="flex h-9 shrink-0 items-center gap-1 px-2">
@@ -144,6 +158,7 @@ export function PanelBar({
 				className="min-w-0 flex-1 truncate pl-2 font-medium text-muted-foreground text-sm"
 			/>
 			<div ref={onActionsSlot} className="flex shrink-0 items-center gap-1 empty:hidden" />
+			{extra}
 			<Button variant="ghost" size="icon-sm" aria-label={closeLabel} onClick={onClose}>
 				<X />
 			</Button>

@@ -135,7 +135,7 @@ function OutputRow({
 						/>
 					</button>
 					{open && (
-						<div id={panelId} className="border-t px-3 py-3">
+						<div id={panelId} className="fold-in border-t px-3 py-3">
 							{extra.controls}
 						</div>
 					)}

@@ -2,6 +2,7 @@ import { type ReactNode, useState } from "react";
 import { AppShortcuts } from "#/components/app-shortcuts.tsx";
 import { CommandPalette } from "#/components/command-palette.tsx";
 import { ConfirmHost } from "#/components/confirm-host.tsx";
+import { DetailCard } from "#/components/detail-card.tsx";
 import { FilePickerHost } from "#/components/file-picker.tsx";
 import { HintLayer } from "#/components/hint-layer.tsx";
 import { HistorySwipe } from "#/components/history-swipe.tsx";
@@ -13,6 +14,7 @@ import { SyncRequests } from "#/components/sync-flow.tsx";
 import { TextFieldMenu } from "#/components/text-field-menu.tsx";
 import { SplitSlotContext } from "#/context/split-slot.ts";
 import { useStatusScopeHandlers } from "#/context/status-context.ts";
+import { GROW_LAYER_ATTRIBUTE } from "#/lib/grow-card.ts";
 import { CARD } from "#/lib/page-layout.ts";
 import { PAGE_MOTION_ATTRIBUTE, usePageDirection } from "#/lib/page-transition.ts";
 import { useAnalysisResults } from "#/lib/queries.ts";
@@ -46,13 +48,18 @@ export function Shell({ children }: { children: ReactNode }) {
 							{...mainScope}
 						>
 							{/* The scrollbar's lane is kept on every page, so the page's right edge never shifts. */}
-							<div className="@container/main h-full overflow-y-auto [scrollbar-gutter:stable]">
+							{/* A card grown out of something on the page is laid out here and scrolls with it. */}
+							<div
+								className="@container/main relative h-full overflow-y-auto [scrollbar-gutter:stable]"
+								{...{ [GROW_LAYER_ATTRIBUTE]: "" }}
+							>
 								{children}
 							</div>
 							<SyncRequests />
 						</div>
 						<div ref={setSplitSlot} className="contents" />
 						<SplitPane />
+						<DetailCard />
 					</div>
 				</div>
 				<PlayerBar />
