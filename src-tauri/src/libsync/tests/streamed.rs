@@ -15,6 +15,16 @@ use crate::libsync::streamed::{self, NewSongs, Refreshed};
 const ROOT: &str = "/music";
 const EXPIRED_BEFORE: UnixSeconds = 1_000;
 
+/// Where a song below the library folder is, written the way this platform writes paths (as the
+/// scan does), so the tests pass on Windows too.
+fn native(below_root: &str) -> String {
+    below_root
+        .split('/')
+        .fold(std::path::PathBuf::from(ROOT), |path, part| path.join(part))
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn lock(db: &Mutex<Connection>) -> std::sync::MutexGuard<'_, Connection> {
     db.lock().expect("lock")
 }
@@ -135,7 +145,7 @@ async fn a_song_only_another_device_has_is_streamed_with_its_tags_and_details() 
     assert_eq!(
         row(&b, 3),
         Some((
-            "/music/Artist/Album/3.mp3".to_owned(),
+            native("Artist/Album/3.mp3"),
             "Kas".to_owned(),
             "Album".to_owned(),
             "Night Drive".to_owned(),
@@ -190,7 +200,7 @@ async fn a_streamed_song_follows_renames_and_tag_edits_from_other_devices() {
     assert!(run_both(&a, &b, &store).await);
     assert_eq!(refresh(&b).updated, 1);
     let (path, _, _, title, _, state) = row(&b, 3).expect("row");
-    assert_eq!(path, "/music/Kas/3.mp3");
+    assert_eq!(path, native("Kas/3.mp3"));
     assert_eq!(title, "Night Drive (Edit)");
     assert_eq!(state, FileState::Streamed);
     assert!(
