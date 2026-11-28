@@ -1629,7 +1629,7 @@ mod tests {
     #[test]
     fn songs_converted_before_count_as_imported() {
         let root = temp("converted");
-        let src = root.join("Artist/Album/01 one.m4a");
+        let src = root.join("Artist").join("Album").join("01 one.m4a");
         if !aac(&src, 440, "One") {
             return;
         }
@@ -1699,7 +1699,7 @@ mod tests {
             return;
         };
         let root = temp("aac");
-        let src = root.join("Artist/Album/01 one.m4a");
+        let src = root.join("Artist").join("Album").join("01 one.m4a");
         fs::create_dir_all(src.parent().expect("parent")).expect("dirs");
         let made = crate::process::command(&ffmpeg)
             .args([
@@ -1725,7 +1725,7 @@ mod tests {
         };
         let report = run(&root, &lib, &[req], &opts);
         assert!(report.failed.is_empty(), "{:?}", report.failed);
-        let dest = lib.join("Artist/Album/01 one.mp3");
+        let dest = lib.join("Artist").join("Album").join("01 one.mp3");
         assert!(dest.is_file());
         assert_eq!(
             report.converted,

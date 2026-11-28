@@ -77,6 +77,30 @@ pub fn find_ffmpeg() -> Option<PathBuf> {
         .chain(from_path)
         .map(|d| d.join(&name))
         .find(|p| p.is_file())
+        .or_else(fetched_for_tests)
+}
+
+/// In tests, the ffmpeg `pnpm install` fetched into `binaries/` (named for the platform, e.g.
+/// `ffmpeg-aarch64-apple-darwin`), for when no build has copied it next to the test binary, as
+/// on CI.
+#[cfg(test)]
+fn fetched_for_tests() -> Option<PathBuf> {
+    let binaries = Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
+    std::fs::read_dir(binaries)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .find(|path| {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            name.starts_with("ffmpeg-")
+                && Path::new(&*name)
+                    .extension()
+                    .is_none_or(|extension| extension == std::env::consts::EXE_EXTENSION)
+        })
+}
+
+#[cfg(not(test))]
+fn fetched_for_tests() -> Option<PathBuf> {
+    None
 }
 
 /// Arguments for a highest-quality (320 kbps CBR) MP3 with tags and cover art carried over.
@@ -139,6 +163,16 @@ pub fn to_mp3(ffmpeg: &Path, src: &Path, dest: &Path) -> Result<(), String> {
 #[allow(clippy::expect_used, clippy::unwrap_used)] // tests: panicking is the failure mode
 mod tests {
     use super::*;
+
+    #[test]
+    fn tests_find_the_ffmpeg_pnpm_install_fetched() {
+        let ffmpeg = fetched_for_tests().expect("run pnpm install to fetch ffmpeg");
+        let ran = crate::process::command(&ffmpeg)
+            .arg("-version")
+            .output()
+            .expect("ffmpeg runs");
+        assert!(ran.status.success());
+    }
 
     #[test]
     fn avoids_windows_device_names() {
