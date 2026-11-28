@@ -2,7 +2,7 @@
 //! one file or to every song under a folder. Writes follow the same rule as library health
 //! fixes: the new file is built beside the old one, checked, then swapped in.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use lofty::config::WriteOptions;
@@ -798,10 +798,19 @@ pub(crate) fn back_up_cover(file: &Path, backups: &Path) -> Result<Option<CoverB
 /// Deletes backups older than [`COVER_BACKUPS_KEPT_FOR`]. Best effort: a backup that cannot
 /// be read or deleted is left for next time.
 pub(crate) fn prune_cover_backups(backups: &Path) {
+    prune_cover_backups_except(backups, &BTreeSet::new());
+}
+
+/// As [`prune_cover_backups`], but never a file named in `protected`: pictures that are the
+/// only copy until they are sent to the shared library.
+pub(crate) fn prune_cover_backups_except(backups: &Path, protected: &BTreeSet<String>) {
     let Ok(entries) = std::fs::read_dir(backups) else {
         return;
     };
     for entry in entries.filter_map(Result::ok) {
+        if protected.contains(entry.file_name().to_string_lossy().as_ref()) {
+            continue;
+        }
         let old = entry
             .metadata()
             .and_then(|m| m.modified())

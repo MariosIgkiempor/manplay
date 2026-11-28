@@ -373,15 +373,29 @@ pub fn streamed_values(conn: &Connection, fp: &str) -> Result<crate::tags::Field
     Ok(out)
 }
 
+fn require_shared_library(conn: &Connection) -> Result<(), Error> {
+    if write::active(conn)? {
+        Ok(())
+    } else {
+        Err(Error::Msg(
+            "this device is not in a shared library, so a song that only plays from one cannot be \
+             changed"
+                .to_owned(),
+        ))
+    }
+}
+
 /// Writes tag edits (field -> value, empty clears) to a song this device streams: it has no file
 /// here, so the edits go to the shared library as edits, and every device that keeps the song
 /// writes them into its file. BPM and key are not shared as tags and are left out. Returns the
-/// fields left out.
+/// fields left out. Fails when this device is in no shared library: the edit would wait in the
+/// log and go into whichever library it joins next.
 pub fn edit_streamed(
     conn: &Connection,
     fp: &str,
     edits: &BTreeMap<String, String>,
 ) -> Result<Vec<String>, Error> {
+    require_shared_library(conn)?;
     let (shared, left_out): (Vec<_>, Vec<_>) = edits
         .iter()
         .partition(|(field, _)| shared_field(field) && field.as_str() != COVER);
@@ -411,6 +425,7 @@ pub fn set_streamed_cover(
     fp: &str,
     name: &CoverBackupName,
 ) -> Result<(), Error> {
+    require_shared_library(conn)?;
     write::stamp(
         conn,
         &[write::Field {

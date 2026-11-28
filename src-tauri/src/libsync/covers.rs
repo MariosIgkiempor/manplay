@@ -134,6 +134,25 @@ pub fn to_send(
         .collect())
 }
 
+/// The pictures the log names as a song's cover that are not known to be on the destination.
+/// A picture set on this device can exist only as a file of the pictures kept here until it is
+/// sent, so those files are never removed for being old.
+pub fn unsent_names(conn: &Connection) -> Result<BTreeSet<String>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT val FROM op_state
+         WHERE e = ?1 AND f = ?2
+           AND json_extract(val, '$') NOT IN (SELECT name FROM covers_pushed)",
+    )?;
+    let rows = stmt.query_map(params![E_SONG_TAGS, COVER], |r| r.get::<_, String>(0))?;
+    let mut names = BTreeSet::new();
+    for row in rows {
+        if let Ok(name) = serde_json::from_str::<String>(&row?) {
+            names.insert(name);
+        }
+    }
+    Ok(names)
+}
+
 /// The pictures to fetch: covers other devices set for songs of this library that are not in
 /// `cache` yet.
 pub fn to_fetch(

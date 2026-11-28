@@ -192,6 +192,17 @@ Streaming must never lose a song, a playlist place or a tag.
   only when its file is there.
 - Downloads (cache, keep, leaving) must hold the audio the song was listed with, or nothing is
   placed. Migrations run after a backup, with foreign keys off and a foreign key check.
+- Copies of the database taken before something destructive (a migration, removing streamed
+  songs, merging rows, reset, removing missing songs) are `safety-` copies: the newest 10 and
+  every one under 30 days stay, whatever the ordinary `library-` copies do. No copy is removed
+  while the clock may be wrong, and the copy just made is never the one removed.
+- A cover picture the log names and the destination does not have yet is never removed from
+  `shared-covers` for being old. A cover file replaced on a destination is saved under
+  `destination-cover-backups/<destination>/<folder>/`, which is never emptied automatically.
+- A scanned file whose audio differs from a streamed row at its path does not take the row. A
+  streamed row folds only into a kept row that is not missing.
+- Tag and cover edits on streamed songs are refused (and reported per song) when the device is in
+  no shared library; a folder among the paths brings its streamed songs along.
 
 ## Playback
 

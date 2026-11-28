@@ -537,6 +537,35 @@ pub fn shared_path(conn: &Connection, fp: &str) -> Result<Option<RelPath>, Error
     Ok(get(F_PATH)?.as_ref().and_then(RelPath::from_value))
 }
 
+/// Where the shared library last said the song with audio `fp` was, whether or not it says the
+/// song is there now. A song another device removed has no place by [`shared_path`], yet the
+/// destination may still hold its file.
+pub fn last_known_path(conn: &Connection, fp: &str) -> Result<Option<RelPath>, Error> {
+    Ok(super::state::get(conn, E_FILE, fp, F_PATH)?
+        .as_ref()
+        .and_then(RelPath::from_value))
+}
+
+/// The removals waiting among `audio_fps`, and for each one this device only streams, the
+/// place the destination last had its file: what keeping it has to check.
+pub fn waiting_with_paths(
+    conn: &Connection,
+    root: &Path,
+    audio_fps: &[String],
+) -> Result<(Vec<Removal>, std::collections::HashMap<String, RelPath>), Error> {
+    let asked: Vec<Removal> = removals_waiting(conn, root)?
+        .into_iter()
+        .filter(|w| audio_fps.contains(&w.audio_fp))
+        .collect();
+    let mut paths = std::collections::HashMap::new();
+    for removal in asked.iter().filter(|w| w.streamed) {
+        if let Some(rel) = last_known_path(conn, &removal.audio_fp)? {
+            paths.insert(removal.audio_fp.clone(), rel);
+        }
+    }
+    Ok((asked, paths))
+}
+
 /// A song the shared library has that this library does not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Arrival {

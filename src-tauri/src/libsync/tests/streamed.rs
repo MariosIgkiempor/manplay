@@ -347,6 +347,34 @@ async fn a_streamed_row_of_a_song_kept_elsewhere_hands_its_playlists_and_tags_to
 }
 
 #[tokio::test]
+async fn a_streamed_row_never_folds_into_a_row_that_is_only_missing() {
+    let store = Memory::default();
+    let (_a, b) = streamed_in_a_playlist_and_a_tag(&store).await;
+    let before = memberships_of_song_3(&b);
+    assert_eq!(before.len(), 2);
+    lock(&b)
+        .execute(
+            "INSERT INTO tracks (path, artist, album, title, size, audio_fp, missing_since, added_at)
+             VALUES ('/music/Other/3.mp3', 'a', 'b', 'kept', 1, 'fp3', 5, 0)",
+            [],
+        )
+        .expect("missing row");
+    let dir = backups_named("missing kept row");
+    let refreshed = streamed::refresh(&lock(&b), Path::new(ROOT), &dir).expect("refresh");
+    assert_eq!(refreshed.removed, 0);
+    crate::db::purge_expired(&lock(&b), i64::MAX).expect("purge");
+    assert_eq!(memberships_of_song_3(&b), before);
+    let streamed_rows: i64 = lock(&b)
+        .query_row(
+            "SELECT COUNT(*) FROM tracks WHERE audio_fp = 'fp3' AND file_state = 'streamed'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(streamed_rows, 1);
+}
+
+#[tokio::test]
 async fn a_streamed_song_another_device_removed_is_listed_for_review_and_applying_it_saves_a_copy()
 {
     let store = Memory::default();
@@ -383,6 +411,31 @@ async fn a_streamed_song_another_device_removed_is_listed_for_review_and_applyin
             .expect("waiting")
             .len(),
         0
+    );
+}
+
+#[tokio::test]
+async fn a_removed_streamed_song_still_has_the_place_its_file_was_at_for_keeping_it() {
+    let store = Memory::default();
+    let (a, b) = one_more(&store).await;
+    refresh(&b);
+    sql(
+        &a,
+        "UPDATE tracks SET missing_since = 0 WHERE audio_fp = ?1",
+        3,
+    );
+    record(&a);
+    assert!(run_both(&a, &b, &store).await);
+    refresh(&b);
+    let conn = lock(&b);
+    assert_eq!(files::shared_path(&conn, "fp3").expect("path"), None);
+    let asked = ["fp3".to_owned(), "fp1".to_owned()];
+    let (waiting, paths) =
+        files::waiting_with_paths(&conn, Path::new(ROOT), &asked).expect("waiting");
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(
+        paths.get("fp3").map(|rel| rel.parts().join("/")),
+        Some("Artist/Album/3.mp3".to_owned())
     );
 }
 
@@ -649,4 +702,45 @@ async fn a_cover_set_on_a_streamed_song_is_named_in_the_log_for_the_device_with_
         wanted.iter().any(|w| w.cover().as_ref() == Some(&name)),
         "the device with the file is to put the picture in"
     );
+}
+
+#[test]
+fn a_streamed_song_cannot_be_edited_by_a_device_that_is_in_no_shared_library() {
+    let conn = super::open();
+    let edits: std::collections::BTreeMap<String, String> =
+        [("title".to_owned(), "New".to_owned())].into();
+    let name =
+        crate::tags::CoverBackupName::of_image(&crate::tags::tests::picture(7)).expect("name");
+    let ops = |conn: &Connection| -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM oplog", [], |r| r.get(0))
+            .expect("count")
+    };
+    let results = [
+        song_tags::edit_streamed(&conn, "fp1", &edits).is_err(),
+        song_tags::set_streamed_cover(&conn, "fp1", &name).is_err(),
+    ];
+    assert_eq!(results, [true, true]);
+    assert_eq!(ops(&conn), 0, "nothing waits in the log for another library");
+}
+
+#[test]
+fn streamed_songs_without_a_recorded_audio_or_a_place_in_the_library_cannot_be_downloaded() {
+    // (audio, path, counts as one that cannot be downloaded)
+    let cases = [
+        (Some("fp1"), "/music/a.mp3", false),
+        (None, "/music/b.mp3", true),
+        (Some(""), "/music/c.mp3", true),
+        (Some("fp4"), "/elsewhere/d.mp3", true),
+    ];
+    for (audio, path, cannot) in cases {
+        let conn = super::open();
+        conn.execute(
+            "INSERT INTO tracks (path, artist, album, title, size, audio_fp, file_state, added_at)
+             VALUES (?1, 'a', 'b', 't', 1, ?2, 'streamed', 0)",
+            params![path, audio],
+        )
+        .expect("track");
+        let found = streamed::cannot_be_downloaded(&conn, Path::new(ROOT)).expect("count");
+        assert_eq!(found, usize::from(cannot), "{path}");
+    }
 }

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -688,7 +688,7 @@ fn migrate(
         return Ok(());
     }
     if let Some(dir) = backups {
-        backup(conn, dir, crate::unix_now(), crate::BACKUPS_KEEP)?;
+        safety_backup(conn, dir, crate::unix_now())?;
     }
     conn.pragma_update(None, "foreign_keys", false)?;
     let ran = due.into_iter().try_for_each(|step| run_step(conn, step));
@@ -1008,14 +1008,29 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
                  file_state = 'here'",
         )?;
         for t in tracks {
-            let streamed_before = streamed_row_at(&tx, &t.path)?;
-            // A scan that listed a file before it went to the Trash (Stream only) must not bring
-            // the streamed song back as one with a file: it would be missing next.
-            if streamed_before && !Path::new(&t.path).is_file() {
-                continue;
+            let streamed_before = streamed_audio_at(&tx, &t.path)?;
+            if let Some(row_audio) = &streamed_before {
+                // A scan that listed a file before it went to the Trash (Stream only) must not
+                // bring the streamed song back as one with a file: it would be missing next.
+                if !Path::new(&t.path).is_file() {
+                    continue;
+                }
+                // Other audio at a streamed song's place is not that song: taking the row would
+                // turn it into another song that keeps this one's playlists and tags. The row
+                // stays as it is, and the file waits for a place of its own.
+                let same_audio = t.audio_fp.as_deref().is_some_and(|scanned| {
+                    !scanned.is_empty() && row_audio == scanned
+                });
+                if !same_audio {
+                    log::warn!(
+                        "{} is not the audio of the streamed song with that place; left alone",
+                        t.path
+                    );
+                    continue;
+                }
             }
             // A file that came to a streamed song's place is not that song's audio changing.
-            if !streamed_before {
+            if streamed_before.is_none() {
                 note_audio_change(&tx, &t.path, t.audio_fp.as_deref())?;
             }
             stmt.execute(params![
@@ -1040,16 +1055,16 @@ pub fn upsert(conn: &mut Connection, tracks: &[NewTrack]) -> Result<(), Error> {
     Ok(())
 }
 
-/// Whether the row at `path` is a streamed song.
-fn streamed_row_at(conn: &Connection, path: &str) -> Result<bool, Error> {
+/// When the row at `path` is a streamed song, the audio it was listed with (empty when it has
+/// none recorded).
+fn streamed_audio_at(conn: &Connection, path: &str) -> Result<Option<String>, Error> {
     Ok(conn
         .query_row(
-            "SELECT file_state = 'streamed' FROM tracks WHERE path = ?1",
+            "SELECT COALESCE(audio_fp, '') FROM tracks WHERE path = ?1 AND file_state = 'streamed'",
             params![path],
             |r| r.get(0),
         )
-        .optional()?
-        .unwrap_or(false))
+        .optional()?)
 }
 
 /// A file whose audio changed in place (re-encoded over the same path) keeps its row, so its
@@ -2858,6 +2873,7 @@ pub fn expire_missing_now(conn: &Connection) -> Result<(), Error> {
 }
 
 const PURGEABLE: &str = "missing_since IS NOT NULL AND missing_since <= ?1
+    AND file_state = 'here'
     AND NOT EXISTS (SELECT 1 FROM synced_files sf WHERE sf.track_id = tracks.id)";
 
 /// Expired missing tracks with no remaining remote copies; removing them also drops
@@ -2877,34 +2893,106 @@ pub fn purge_expired(conn: &Connection, cutoff: i64) -> Result<usize, Error> {
     )?)
 }
 
+/// How many safety copies (see [`safety_backup`]) are always kept, however old.
+pub const SAFETY_BACKUPS_KEEP: usize = 10;
+/// How long a safety copy is kept at least, in seconds.
+pub const SAFETY_BACKUP_MIN_AGE_SECS: i64 = 30 * 24 * 60 * 60;
+
+const ORDINARY_PREFIX: &str = "library-";
+const SAFETY_PREFIX: &str = "safety-";
+
 /// Copies the database to `dir/library-<stamp>-<n>.db` and keeps only the newest `keep` copies.
+///
+/// The copy just made is never removed, and nothing is removed while this device's clock may be
+/// wrong: the names carry the clock's time, so they cannot say which copy is the newest.
 pub fn backup(conn: &Connection, dir: &Path, stamp: i64, keep: usize) -> Result<(), Error> {
+    let target = copy_database(conn, dir, ORDINARY_PREFIX, stamp)?;
+    if !clock_allows_pruning(conn, stamp) {
+        return Ok(());
+    }
+    let mut older = copies_with_prefix(dir, ORDINARY_PREFIX, &target)?;
+    // The new copy takes one of the `keep` places.
+    let excess = (older.len() + 1).saturating_sub(keep.max(1));
+    older.sort_by(|a, b| a.0.cmp(&b.0));
+    for (_, old) in older.into_iter().take(excess) {
+        // Pruning old backups is best-effort.
+        let _ = std::fs::remove_file(old);
+    }
+    Ok(())
+}
+
+/// A copy of the database taken before something that could lose data (a migration, removing
+/// streamed songs, merging rows). It lives beside the ordinary copies but under its own name and
+/// is not rotated out by them: the newest [`SAFETY_BACKUPS_KEEP`] stay, and so does every copy
+/// younger than [`SAFETY_BACKUP_MIN_AGE_SECS`]. Nothing is removed while the clock may be wrong.
+pub fn safety_backup(conn: &Connection, dir: &Path, stamp: i64) -> Result<(), Error> {
+    let target = copy_database(conn, dir, SAFETY_PREFIX, stamp)?;
+    if !clock_allows_pruning(conn, stamp) {
+        return Ok(());
+    }
+    let mut older = copies_with_prefix(dir, SAFETY_PREFIX, &target)?;
+    older.sort_by(|a, b| b.0.cmp(&a.0));
+    let now = std::time::SystemTime::now();
+    let minimum_age = std::time::Duration::from_secs(SAFETY_BACKUP_MIN_AGE_SECS.unsigned_abs());
+    // The newest copies stay; the new one counts as one of them.
+    for ((modified, _), old) in older.into_iter().skip(SAFETY_BACKUPS_KEEP.saturating_sub(1)) {
+        let old_enough = now
+            .duration_since(modified)
+            .is_ok_and(|age| age >= minimum_age);
+        if old_enough {
+            let _ = std::fs::remove_file(old);
+        }
+    }
+    Ok(())
+}
+
+fn clock_allows_pruning(conn: &Connection, stamp: i64) -> bool {
+    stamp > 0 && crate::libsync::skew::old_things_may_go(conn, stamp * 1000).unwrap_or(false)
+}
+
+/// A copy's place in time: when its file was written, then its name for copies written at the
+/// same moment. Unlike the stamp in the name, the file's time does not depend on the clock the
+/// copy was named with.
+type CopyOrder = (std::time::SystemTime, String);
+
+fn copy_database(
+    conn: &Connection,
+    dir: &Path,
+    prefix: &str,
+    stamp: i64,
+) -> Result<PathBuf, Error> {
     std::fs::create_dir_all(dir)?;
     // Several backups can happen within one second (a move, then a purge), so never reuse a name.
     let target = (0_u32..1000)
-        .map(|n| dir.join(format!("library-{stamp:012}-{n:03}.db")))
+        .map(|n| dir.join(format!("{prefix}{stamp:012}-{n:03}.db")))
         .find(|p| !p.exists())
         .ok_or_else(|| {
             Error::Msg("no free backup file name (1000 backups in one second?)".to_owned())
         })?;
     conn.execute("VACUUM INTO ?1", params![target.to_string_lossy()])?;
+    Ok(target)
+}
 
-    let mut backups: Vec<_> = std::fs::read_dir(dir)?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("library-"))
-        })
-        .collect();
-    backups.sort();
-    let excess = backups.len().saturating_sub(keep);
-    for old in backups.into_iter().take(excess) {
-        // Pruning old backups is best-effort.
-        let _ = std::fs::remove_file(old);
+/// The copies in `dir` whose names start with `prefix`, other than `except`, with their order.
+fn copies_with_prefix(
+    dir: &Path,
+    prefix: &str,
+    except: &Path,
+) -> Result<Vec<(CopyOrder, PathBuf)>, Error> {
+    let mut copies = Vec::new();
+    for entry in std::fs::read_dir(dir)?.filter_map(Result::ok) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if path == except || !name.starts_with(prefix) {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        copies.push(((modified, name), path));
     }
-    Ok(())
+    Ok(copies)
 }
 
 /// What the last scan read from each file still in the library, by path, so the next scan can
@@ -4068,6 +4156,94 @@ mod tests {
         assert_eq!(copies(), 1, "no copy when nothing is due");
     }
 
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("manplay-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .expect("dir")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Copies written in this order, each one later than the one before.
+    #[test]
+    fn the_copy_just_made_is_never_the_one_pruned() {
+        // (stamps of the copies made, in order, then how many are kept, then the stamp that must
+        // still be there)
+        let cases: [(&[i64], usize, i64); 4] = [
+            (&[100, 101, 102, 103, 104, 105], 3, 105),
+            (&[100, 101, 102, 103, 104, 5], 3, 5),
+            (&[100, 101, 102, 103, 104, 0], 3, 0),
+            (&[100, 101, 102, 103, 104, 2_000_000_000], 3, 2_000_000_000),
+        ];
+        for (stamps, keep, last) in cases {
+            let dir = scratch_dir("backup-order");
+            let conn = open(Path::new(":memory:")).expect("db");
+            for stamp in stamps {
+                backup(&conn, &dir, *stamp, keep).expect("backup");
+            }
+            let wanted = format!("library-{last:012}-000.db");
+            let kept = names(&dir);
+            assert!(kept.contains(&wanted), "{last}: {kept:?}");
+            // A clock that may be wrong prunes nothing, so the copy made then is one extra.
+            assert!(kept.len() <= keep + 1, "{last}: {kept:?}");
+        }
+    }
+
+    #[test]
+    fn safety_copies_outlive_a_run_of_ordinary_ones() {
+        let dir = scratch_dir("safety-copies");
+        let conn = open(Path::new(":memory:")).expect("db");
+        safety_backup(&conn, &dir, 100).expect("safety");
+        for stamp in 101..120 {
+            backup(&conn, &dir, stamp, 5).expect("backup");
+        }
+        let kept = names(&dir);
+        assert_eq!(
+            kept.iter().filter(|n| n.starts_with("safety-")).count(),
+            1,
+            "{kept:?}"
+        );
+        assert_eq!(
+            kept.iter().filter(|n| n.starts_with("library-")).count(),
+            5,
+            "{kept:?}"
+        );
+    }
+
+    #[test]
+    fn safety_copies_are_pruned_only_when_old_and_beyond_the_newest_ten() {
+        let dir = scratch_dir("safety-prune");
+        let conn = open(Path::new(":memory:")).expect("db");
+        for stamp in 1..=12 {
+            safety_backup(&conn, &dir, stamp).expect("safety");
+        }
+        // All twelve are young, so all stay.
+        assert_eq!(names(&dir).len(), 12);
+        let long_ago = std::time::SystemTime::now()
+            - std::time::Duration::from_secs(40 * 24 * 60 * 60);
+        for name in names(&dir).into_iter().take(4) {
+            std::fs::File::options()
+                .write(true)
+                .open(dir.join(name))
+                .expect("open")
+                .set_modified(long_ago)
+                .expect("age");
+        }
+        safety_backup(&conn, &dir, 13).expect("safety");
+        let kept = names(&dir);
+        // Thirteen copies, four old: the old ones beyond the newest ten go.
+        assert_eq!(kept.len(), 10, "{kept:?}");
+        assert!(kept.contains(&format!("safety-{:012}-000.db", 13)));
+    }
+
     #[test]
     fn a_library_older_than_the_first_layout_is_refused() {
         let mut conn = Connection::open_in_memory().expect("db");
@@ -4193,8 +4369,8 @@ mod tests {
         let cases = [
             ("no-file", false, "fp-song", FileState::Streamed, 0),
             ("file", true, "fp-song", FileState::Here, 0),
-            // Other audio at a streamed song's place is not that song's audio changing.
-            ("other-audio", true, "fp-other", FileState::Here, 0),
+            // Other audio at a streamed song's place leaves the song streamed.
+            ("other-audio", true, "fp-other", FileState::Streamed, 0),
         ];
         for (name, file_there, audio, expected, changes) in cases {
             let (mut conn, path) = streamed_song(name, file_there);
@@ -4204,6 +4380,33 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM audio_changes", [], |r| r.get(0))
                 .expect("count");
             assert_eq!(recorded, changes, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_file_of_other_audio_at_a_streamed_songs_place_does_not_take_the_row() {
+        // (name, audio the scan read, the row keeps its audio and stays streamed)
+        let cases = [
+            ("same", "fp-song", false),
+            ("other", "fp-other", true),
+            ("empty", "", true),
+        ];
+        for (name, audio, untouched) in cases {
+            let (mut conn, path) = streamed_song(&format!("memberships-{name}"), true);
+            conn.execute_batch(
+                "INSERT INTO playlists (id, name) VALUES (1, 'local');
+                 INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (1, 1, 0);",
+            )
+            .expect("playlist");
+            upsert(&mut conn, &[track(&path, audio, None)]).expect("scan");
+            let (state, kept_audio): (FileState, Option<String>) = conn
+                .query_row("SELECT file_state, audio_fp FROM tracks", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .expect("row");
+            assert_eq!(state == FileState::Streamed, untouched, "{name}");
+            assert_eq!(kept_audio.as_deref(), Some("fp-song"), "{name}");
+            assert_eq!(playlist_rows(&conn), 1, "{name}");
         }
     }
 

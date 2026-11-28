@@ -445,3 +445,49 @@ async fn a_picture_used_again_is_kept_thirty_days_from_when_it_is_next_unused() 
         );
     }
 }
+
+#[test]
+fn an_old_picture_is_removed_unless_the_log_names_it_and_it_is_not_sent() {
+    let named_unsent = format!("{}.jpg", "a".repeat(64));
+    let named_sent = format!("{}.jpg", "b".repeat(64));
+    let unnamed = format!("{}.jpg", "c".repeat(64));
+    let conn = open();
+    for name in [&named_unsent, &named_sent] {
+        conn.execute(
+            "INSERT INTO op_state (e, id, f, clock, val) VALUES (?1, ?2, ?3, 'c', ?4)",
+            params![
+                song_tags::E_SONG_TAGS,
+                name,
+                COVER,
+                serde_json::to_string(name).expect("json")
+            ],
+        )
+        .expect("op");
+    }
+    conn.execute("INSERT INTO covers_pushed (name) VALUES (?1)", [&named_sent])
+        .expect("pushed");
+    let dir = std::env::temp_dir().join(format!("manplay-covers-prune-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 86_400);
+    for name in [&named_unsent, &named_sent, &unnamed] {
+        let file = dir.join(name);
+        std::fs::write(&file, b"x").expect("picture");
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .expect("open")
+            .set_modified(long_ago)
+            .expect("age");
+    }
+    tags::prune_cover_backups_except(&dir, &covers::unsent_names(&conn).expect("unsent"));
+    let cases = [
+        (&named_unsent, true),
+        (&named_sent, false),
+        (&unnamed, false),
+    ];
+    for (name, kept) in cases {
+        assert_eq!(dir.join(name).exists(), kept, "{name}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

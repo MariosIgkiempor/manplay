@@ -44,12 +44,12 @@ mod usb_files;
 mod virtualdj;
 mod webdav;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{NewTarget, Playlist, RunView, SyncTarget, Tag, Track};
@@ -429,12 +429,24 @@ async fn follow_file_moves(state: &AppState) -> Result<usize, Error> {
     Ok(moved)
 }
 
+/// Set while songs are downloaded from the shared library's destination into the library folder
+/// ([`fetch_shared_songs`], [`download_every_streamed_song`]): two downloads of one song would
+/// write the same part file.
+static FETCHING: AtomicBool = AtomicBool::new(false);
+
+/// Waits for a download in the background to finish, then holds [`FETCHING`].
+async fn claim_fetching() -> SyncGuard<'static> {
+    while FETCHING.swap(true, Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    SyncGuard(&FETCHING)
+}
+
 /// Downloads the songs other devices added to the shared library from the destination it is
 /// kept on, in the background, then reads the library again; the status bar shows how far it
 /// is. One run at a time; what a run
 /// could not get (the destination does not have it yet) is tried after the next sync.
 async fn fetch_shared_songs(app: AppHandle, target: db::SyncTarget) {
-    static FETCHING: AtomicBool = AtomicBool::new(false);
     if FETCHING.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -567,7 +579,15 @@ async fn transfer_covers(app: AppHandle, place: SharedPlace) {
     };
     let cache = shared_covers(&state);
     if old_things_may_go(&state, unix_now()) {
-        tags::prune_cover_backups(&cache);
+        // A picture not sent yet may be the only copy; if the log cannot be read, none goes.
+        let unsent = state
+            .db
+            .lock()
+            .ok()
+            .and_then(|conn| libsync::covers::unsent_names(&conn).ok());
+        if let Some(unsent) = unsent {
+            tags::prune_cover_backups_except(&cache, &unsent);
+        }
     }
     let moved = match &place {
         SharedPlace::Target(target) => {
@@ -757,16 +777,7 @@ async fn keep_file_removals(
     let root = library_root(&state)?;
     let (target, asked, paths) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        let asked: Vec<libsync::files::Removal> = libsync::files::removals_waiting(&conn, &root)?
-            .into_iter()
-            .filter(|w| audio_fps.contains(&w.audio_fp))
-            .collect();
-        let mut paths = HashMap::new();
-        for removal in asked.iter().filter(|w| w.streamed) {
-            if let Some(rel) = libsync::files::shared_path(&conn, &removal.audio_fp)? {
-                paths.insert(removal.audio_fp.clone(), rel);
-            }
-        }
+        let (asked, paths) = libsync::files::waiting_with_paths(&conn, &root, &audio_fps)?;
         (library_destination(&conn)?, asked, paths)
     };
     let mut report = KeepRemovalsReport::default();
@@ -984,12 +995,7 @@ fn list_missing(state: State<'_, AppState>) -> Result<Vec<MissingTrackView>, Err
 #[tauri::command]
 fn remove_missing_now(state: State<'_, AppState>) -> Result<(), Error> {
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
-    db::backup(
-        &conn,
-        &state.data_dir.join("backups"),
-        unix_now(),
-        BACKUPS_KEEP,
-    )?;
+    db::safety_backup(&conn, &state.data_dir.join("backups"), unix_now())?;
     db::expire_missing_now(&conn)?;
     purge_expired(&conn, &state.data_dir.join("backups"), unix_now())
 }
@@ -1063,12 +1069,7 @@ async fn reset_library(state: State<'_, AppState>) -> Result<Option<usize>, Erro
     }
     {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
-        db::backup(
-            &conn,
-            &state.data_dir.join("backups"),
-            unix_now(),
-            BACKUPS_KEEP,
-        )?;
+        db::safety_backup(&conn, &state.data_dir.join("backups"), unix_now())?;
         db::clear_tracks(&conn)?;
     }
     rescan_library(state, None).await
@@ -4631,10 +4632,19 @@ async fn download_every_streamed_song(
     app: &AppHandle,
     target: &db::SyncTarget,
 ) -> Result<(), Error> {
+    let _fetching = claim_fetching().await;
     let state = app.state::<AppState>();
     let root = library_root(&state)?;
     let (wanted, total) = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
+        let unfetchable = libsync::streamed::cannot_be_downloaded(&conn, &root)?;
+        if unfetchable > 0 {
+            return Err(Error::Msg(format!(
+                "{unfetchable} of the streamed songs have no recorded audio to download, so \
+                 nothing was changed. Choose to keep them as unplayable entries or to remove \
+                 them instead."
+            )));
+        }
         let wanted: Vec<sync::SongToFetch> = libsync::streamed::all(&conn, &root)?
             .into_iter()
             .map(|song| sync::SongToFetch {
@@ -5702,26 +5712,43 @@ struct StreamedTags {
     audio_fp: String,
 }
 
-/// Splits `paths` into the streamed songs among them and the rest (files and folders).
+/// Splits `paths` into the streamed songs among them and the rest (files and folders). A folder
+/// stays in the rest, to be read for its kept files, and its streamed songs come out as well:
+/// they have no file under it to find. A folder that exists only as the place of streamed songs
+/// is not left in the rest: there is nothing on disk to read.
 fn split_streamed(
     conn: &Connection,
     paths: Vec<PathBuf>,
 ) -> Result<(Vec<StreamedTags>, Vec<PathBuf>), Error> {
     let mut stmt = conn.prepare_cached(
-        "SELECT audio_fp FROM tracks
-         WHERE path = ?1 AND file_state = 'streamed' AND audio_fp IS NOT NULL AND audio_fp <> ''",
+        "SELECT path, audio_fp FROM tracks
+         WHERE file_state = 'streamed' AND audio_fp IS NOT NULL AND audio_fp <> ''",
     )?;
-    let mut streamed = Vec::new();
+    let all_streamed: Vec<(PathBuf, String)> = stmt
+        .query_map([], |r| Ok((PathBuf::from(r.get::<_, String>(0)?), r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut streamed: BTreeMap<PathBuf, String> = BTreeMap::new();
     let mut rest = Vec::new();
     for path in paths {
-        let fp: Option<String> = stmt
-            .query_row(rusqlite::params![path.to_string_lossy()], |r| r.get(0))
-            .optional()?;
-        match fp {
-            Some(audio_fp) => streamed.push(StreamedTags { path, audio_fp }),
-            None => rest.push(path),
+        if let Some((_, audio_fp)) = all_streamed.iter().find(|(own, _)| *own == path) {
+            streamed.insert(path, audio_fp.clone());
+            continue;
+        }
+        let below: Vec<&(PathBuf, String)> = all_streamed
+            .iter()
+            .filter(|(own, _)| own.starts_with(&path))
+            .collect();
+        for (own, audio_fp) in &below {
+            streamed.insert(own.clone(), audio_fp.clone());
+        }
+        if below.is_empty() || path.exists() {
+            rest.push(path);
         }
     }
+    let streamed = streamed
+        .into_iter()
+        .map(|(path, audio_fp)| StreamedTags { path, audio_fp })
+        .collect();
     Ok((streamed, rest))
 }
 
@@ -5785,17 +5812,17 @@ async fn write_tags(
     }
     let conn = state.db.lock().map_err(|_| Error::Lock)?;
     for song in streamed {
-        let left_out = libsync::song_tags::edit_streamed(&conn, &song.audio_fp, &edits)?;
-        if left_out.is_empty() {
-            report.fixed += 1;
-        } else {
-            report.failed.push(audit::FixFailure {
-                path: song.path.to_string_lossy().into_owned(),
-                error: format!(
-                    "a streamed song keeps {} in its analysis, not in tags",
-                    left_out.join(" and ")
-                ),
-            });
+        let failed = |error: String| audit::FixFailure {
+            path: song.path.to_string_lossy().into_owned(),
+            error,
+        };
+        match libsync::song_tags::edit_streamed(&conn, &song.audio_fp, &edits) {
+            Ok(left_out) if left_out.is_empty() => report.fixed += 1,
+            Ok(left_out) => report.failed.push(failed(format!(
+                "a streamed song keeps {} in its analysis, not in tags",
+                left_out.join(" and ")
+            ))),
+            Err(e) => report.failed.push(failed(e.to_string())),
         }
     }
     libsync::streamed::refresh(&conn, root, &state.data_dir.join("backups"))?;
@@ -6115,8 +6142,13 @@ async fn cover_streamed_songs(
     let target = {
         let conn = state.db.lock().map_err(|_| Error::Lock)?;
         for song in songs {
-            libsync::song_tags::set_streamed_cover(&conn, &song.audio_fp, name)?;
-            report.fixed += 1;
+            match libsync::song_tags::set_streamed_cover(&conn, &song.audio_fp, name) {
+                Ok(()) => report.fixed += 1,
+                Err(e) => report.failed.push(audit::FixFailure {
+                    path: song.path.to_string_lossy().into_owned(),
+                    error: e.to_string(),
+                }),
+            }
         }
         library_destination(&conn)?
     };
@@ -6141,16 +6173,17 @@ async fn cover_streamed_songs(
 }
 
 /// Puts the picture `upload` at `rel` on the destination, after saving the file there under
-/// `cover-backups`. A cover on the destination that could not be saved is not replaced. (Undo
-/// puts back covers in the library folder only; the saved copy of one on the destination stays
-/// in `cover-backups` for a person to put back.)
+/// `destination-cover-backups`, in a folder named for the destination and the folder the cover
+/// was in. A cover on the destination that could not be saved is not replaced. (Undo puts back
+/// covers in the library folder only; the saved copy of one on the destination stays there, never
+/// removed by the app, for a person to put back.)
 async fn put_folder_cover(
     state: &AppState,
     target: &db::SyncTarget,
     rel: &libsync::files::RelPath,
     upload: &Path,
 ) -> Result<(), Error> {
-    let backups = cover_backups(state);
+    let backups = destination_cover_backups(state);
     std::fs::create_dir_all(&backups)?;
     let incoming = backups.join(unique_incoming_name());
     let fetched = sync::fetch_file(&state.http, target, rel.parts(), &incoming, None).await?;
@@ -6159,7 +6192,9 @@ async fn put_folder_cover(
             .map_err(Error::from)
             .and_then(|held| {
                 let saved = tags::CoverBackupName::of_image(&held)?;
-                std::fs::rename(&incoming, backups.join(saved.as_str()))?;
+                let folder = destination_cover_backup_folder(&backups, target.id, rel);
+                std::fs::create_dir_all(&folder)?;
+                std::fs::rename(&incoming, folder.join(saved.as_str()))?;
                 Ok(())
             });
         if let Err(e) = saved {
@@ -6184,7 +6219,7 @@ fn must_save_before_replacing(fetched: sync::Fetch) -> Result<bool, Error> {
     }
 }
 
-/// A file name no other download in `cover-backups` has, even within the same second or from
+/// A file name no other download in `destination-cover-backups` has, even within the same second or from
 /// another run.
 fn unique_incoming_name() -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -6199,6 +6234,44 @@ fn unique_incoming_name() -> String {
 /// Where the covers that were replaced are kept, so a cover change can be undone.
 fn cover_backups(state: &AppState) -> PathBuf {
     state.data_dir.join("cover-backups")
+}
+
+/// Where the covers that were replaced on destinations are kept. Nothing removes them.
+fn destination_cover_backups(state: &AppState) -> PathBuf {
+    state.data_dir.join("destination-cover-backups")
+}
+
+/// The folder under `base` that holds the covers saved from the destination folder of `rel`:
+/// the destination's id, then the folder's path with everything but letters and digits written
+/// as `%` and the byte in hex, so the person can tell where each came from. A long path keeps
+/// its end and gains a hash of the whole, so two folders never share one.
+fn destination_cover_backup_folder(
+    base: &Path,
+    target_id: i64,
+    rel: &libsync::files::RelPath,
+) -> PathBuf {
+    use std::fmt::Write;
+    const LONGEST: usize = 100;
+    let parts = rel.parts();
+    let folder = parts.split_last().map_or(&[][..], |(_, folder)| folder);
+    let mut encoded = String::new();
+    for byte in folder.join("/").bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b' ') {
+            encoded.push(char::from(byte));
+        } else {
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    if encoded.len() > LONGEST {
+        let hash = blake3::hash(folder.join("/").as_bytes()).to_hex();
+        let end = encoded.len() - LONGEST;
+        // The cut is on a byte boundary of ASCII text: `encoded` is ASCII.
+        encoded = format!("{}-{}", &hash.as_str()[..16], &encoded[end..]);
+    }
+    if encoded.is_empty() {
+        encoded.push_str("(top)");
+    }
+    base.join(target_id.to_string()).join(encoded)
 }
 
 /// After covers were rewritten: drops the songs' saved thumbnails and rescans.
@@ -7638,6 +7711,88 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_folder_among_the_paths_of_a_tag_command_brings_its_streamed_songs_along() {
+        let dir = std::env::temp_dir().join(format!("manplay-split-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("kept-folder")).expect("dir");
+        let at = |name: &str| dir.join(name).to_string_lossy().into_owned();
+        let conn = db::open(Path::new(":memory:")).expect("db");
+        for (name, fp, state) in [
+            ("kept-folder/a.mp3", "fp-a", "here"),
+            ("kept-folder/b.mp3", "fp-b", "streamed"),
+            ("only-streamed/c.mp3", "fp-c", "streamed"),
+            ("only-streamed/deep/d.mp3", "fp-d", "streamed"),
+            ("other/e.mp3", "fp-e", "streamed"),
+        ] {
+            conn.execute(
+                "INSERT INTO tracks (path, artist, album, title, size, audio_fp, file_state, added_at)
+                 VALUES (?1, 'a', 'b', 't', 1, ?2, ?3, 0)",
+                rusqlite::params![at(name), fp, state],
+            )
+            .expect("track");
+        }
+        // (selection, streamed songs found, paths left for the files)
+        let cases: [(&[&str], &[&str], &[&str]); 4] = [
+            (&["kept-folder/b.mp3"], &["kept-folder/b.mp3"], &[]),
+            (&["kept-folder"], &["kept-folder/b.mp3"], &["kept-folder"]),
+            (
+                &["only-streamed"],
+                &["only-streamed/c.mp3", "only-streamed/deep/d.mp3"],
+                &[],
+            ),
+            (
+                &["only-streamed", "only-streamed/c.mp3"],
+                &["only-streamed/c.mp3", "only-streamed/deep/d.mp3"],
+                &[],
+            ),
+        ];
+        for (selected, found, left) in cases {
+            let paths = selected.iter().map(|p| dir.join(p)).collect();
+            let (streamed, rest) = split_streamed(&conn, paths).expect("split");
+            let streamed: Vec<PathBuf> = streamed.into_iter().map(|s| s.path).collect();
+            assert_eq!(
+                streamed,
+                found.iter().map(|p| dir.join(p)).collect::<Vec<_>>(),
+                "{selected:?}"
+            );
+            assert_eq!(
+                rest,
+                left.iter().map(|p| dir.join(p)).collect::<Vec<_>>(),
+                "{selected:?}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replaced_destination_covers_are_saved_under_a_name_that_says_where_they_were() {
+        let base = Path::new("/data/destination-cover-backups");
+        let root = Path::new("/music");
+        let long = "x".repeat(150);
+        // (destination, path below the library folder, expected folder under `base`)
+        let cases = [
+            (3, "Album/cover.jpg", Some("3/Album")),
+            (3, "A/B/cover.jpg", Some("3/A%2FB")),
+            (4, "Album/cover.jpg", Some("4/Album")),
+            (3, "Beyoncé/Lemonade/cover.jpg", Some("3/Beyonc%C3%A9%2FLemonade")),
+            (3, "cover.jpg", Some("3/(top)")),
+            (3, &format!("{long}/cover.jpg"), None),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for (target, below, expected) in cases {
+            let rel = libsync::files::RelPath::below(root, &root.join(below)).expect("below");
+            let folder = destination_cover_backup_folder(base, target, &rel);
+            if let Some(expected) = expected {
+                assert_eq!(folder, base.join(expected), "{below}");
+            } else {
+                let name = folder.file_name().expect("name").to_string_lossy().into_owned();
+                assert!(name.len() <= 117, "{name}");
+            }
+            assert!(seen.insert(folder), "{below} shares a folder");
+        }
+    }
+
     /// Keeping a streamed song puts its file at its path; the next scan makes it kept. A scan that
     /// lists a file that is not there (it went to the Trash after the scan listed it) does not.
     #[test]
@@ -7655,6 +7810,7 @@ mod tests {
             let mut scan = f.scan_of(&["1"], 0);
             scan.tracks.push(NewTrack {
                 path: song.to_string_lossy().into_owned(),
+                audio_fp: Some("a1:2".to_owned()),
                 ..f.scan_of(&["2"], 0).tracks.remove(0)
             });
             f.apply(&scan);

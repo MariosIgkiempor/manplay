@@ -100,7 +100,7 @@ pub fn refresh(conn: &Connection, root: &Path, backups: &Path) -> Result<Refresh
     }
     let doubled = doubled_by_a_kept_row(conn)?;
     if !doubled.is_empty() {
-        db::backup(conn, backups, crate::unix_now(), crate::BACKUPS_KEEP)?;
+        db::safety_backup(conn, backups, crate::unix_now())?;
     }
     let tx = conn.unchecked_transaction()?;
     let wanted = described(&tx, root)?;
@@ -136,16 +136,19 @@ pub fn refresh(conn: &Connection, root: &Path, backups: &Path) -> Result<Refresh
 }
 
 /// The streamed rows of songs this library has a file of as well, each with the row that has the
-/// file, as `(streamed row, kept row)`.
+/// file (one not missing: a missing row is purged later, with its playlists and tags), as `(streamed row, kept row)`.
 fn doubled_by_a_kept_row(conn: &Connection) -> Result<Vec<(i64, i64)>, Error> {
     let mut stmt = conn.prepare(
         "SELECT s.id,
-                (SELECT k.id FROM tracks k WHERE k.file_state = 'here' AND k.audio_fp = s.audio_fp
-                 ORDER BY k.missing_since IS NOT NULL, k.path LIMIT 1)
+                (SELECT k.id FROM tracks k
+                 WHERE k.file_state = 'here' AND k.missing_since IS NULL
+                   AND k.audio_fp = s.audio_fp
+                 ORDER BY k.path LIMIT 1)
          FROM tracks s
          WHERE s.file_state = 'streamed' AND s.audio_fp IS NOT NULL AND s.audio_fp <> ''
            AND EXISTS (SELECT 1 FROM tracks k
-                       WHERE k.file_state = 'here' AND k.audio_fp = s.audio_fp)",
+                       WHERE k.file_state = 'here' AND k.missing_since IS NULL
+                         AND k.audio_fp = s.audio_fp)",
     )?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, Option<i64>>(1)?)))?;
     let mut out = Vec::new();
@@ -233,6 +236,12 @@ pub fn all(conn: &Connection, root: &Path) -> Result<Vec<super::keep::ToDownload
     Ok(out)
 }
 
+/// How many streamed songs [`all`] leaves out: those with no recorded audio, or a place outside
+/// `root`. Downloading every streamed song cannot succeed while there are any.
+pub fn cannot_be_downloaded(conn: &Connection, root: &Path) -> Result<usize, Error> {
+    Ok(count(conn)?.saturating_sub(all(conn, root)?.len()))
+}
+
 /// Removes the streamed rows of these songs (`audio_fps`; every streamed song when `None`) from
 /// the library, with their playlist places and tags, after a copy of the database was saved
 /// into `backups`. No file is touched: a streamed song has none. Returns how many rows went.
@@ -259,7 +268,7 @@ pub fn remove(
     if ids.is_empty() {
         return Ok(0);
     }
-    db::backup(conn, backups, crate::unix_now(), crate::BACKUPS_KEEP)?;
+    db::safety_backup(conn, backups, crate::unix_now())?;
     let tx = conn.unchecked_transaction()?;
     for id in &ids {
         tx.execute(
